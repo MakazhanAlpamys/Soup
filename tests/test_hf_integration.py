@@ -687,7 +687,10 @@ class TestDeployHfSpace:
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "token" in result.output.lower()
 
-    def test_hf_space_happy_path_gradio_chat(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("template", ["gradio-chat", "streamlit-chat"])
+    def test_hf_space_happy_path(self, tmp_path, monkeypatch, template):
+        from soup_cli.commands.deploy import render_space_template
+
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("HF_TOKEN", "t1")
 
@@ -704,12 +707,62 @@ class TestDeployHfSpace:
                 "--space",
                 "user/my-space",
                 "--template",
-                "gradio-chat",
+                template,
                 "--yes",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert fake_api.create_repo.called
+        fake_api.create_repo.assert_called_once()
+        fake_api.create_commit.assert_called_once()
+        args = fake_api.create_commit.call_args.kwargs
+        assert args["repo_id"] == "user/my-space"
+        assert args["repo_type"] == "space"
+        expected = render_space_template(template, model_repo="user/my-model")
+        assert [(op.path_in_repo, op.path_or_fileobj) for op in args["operations"]] == [
+            (name, content.encode("utf-8")) for name, content in expected.items()
+        ]
+        fake_api.upload_file.assert_not_called()
+
+
+    @pytest.mark.parametrize("rejected_path", ["README.md", "app.py"])
+    def test_hf_space_rejected_commit_preserves_existing_files(self, monkeypatch, rejected_path):
+        monkeypatch.setenv("HF_TOKEN", "t1")
+        original = {
+            "app.py": b"old app",
+            "README.md": b"old readme",
+            "requirements.txt": b"old requirements",
+        }
+        published = original.copy()
+
+        def upload_file(*, path_in_repo, path_or_fileobj, **_):
+            if path_in_repo == rejected_path:
+                raise RuntimeError("Hub rejected Space update")
+            published[path_in_repo] = path_or_fileobj
+
+        def create_commit(*, operations, **_):
+            files = {op.path_in_repo: op.path_or_fileobj for op in operations}
+            if rejected_path in files:
+                raise RuntimeError("Hub rejected Space update")
+            published.update(files)
+
+        fake_api = MagicMock()
+        fake_api.upload_file.side_effect = upload_file
+        fake_api.create_commit.side_effect = create_commit
+        monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
+
+        result = runner.invoke(
+            app,
+            [
+                "deploy", "hf-space", "--model", "user/my-model",
+                "--space", "user/my-space", "--yes",
+            ],
+        )
+
+        assert published == original
+        assert result.exit_code == 1, result.output
+        assert "Hub rejected Space update" in result.output
+        fake_api.create_commit.assert_called_once()
+        fake_api.upload_file.assert_not_called()
 
     def test_render_gradio_chat_template(self):
         from soup_cli.commands.deploy import render_space_template
