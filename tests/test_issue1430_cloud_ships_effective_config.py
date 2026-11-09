@@ -136,6 +136,7 @@ def test_minillm_on_policy_reaches_the_remote_config(chat_config, cloud):
     cfg = load_config(chat_config)
     cfg.data.train = "teknium/OpenHermes-2.5"
     cfg.task = "distill"
+    cfg.training.quantization = "none"  # distill never quantises the base
     cfg.training.teacher_model = "HuggingFaceTB/SmolLM2-360M"
     cfg.training.minillm_enabled = True
     cfg.training.minillm_teacher_mix_ratio = 0.5
