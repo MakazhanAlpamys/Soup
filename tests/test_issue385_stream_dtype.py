@@ -46,7 +46,7 @@ class _FakeCuda:
     def is_available(self) -> bool:
         return self._available
 
-    def device(self, device):
+    def device(self, device: str) -> nullcontext:
         return nullcontext()
 
     def is_bf16_supported(self, including_emulation: bool = True) -> bool:

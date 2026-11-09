@@ -68,7 +68,7 @@ def _wide_console(monkeypatch):
 @pytest.fixture
 def fake_model(monkeypatch):
     """Replace the generator factory; ``state['profile']`` is correct-answers per task."""
-    from soup_cli.utils import live_eval
+    from soup_cli.utils import gpu, live_eval
 
     state = {
         "profile": {}, "loads": [], "on_load": None,
@@ -102,6 +102,11 @@ def fake_model(monkeypatch):
 
     monkeypatch.setattr(live_eval, "make_generator", factory)
     monkeypatch.setattr(live_eval, "resolve_device", lambda device=None: device or "cpu")
+    # This fixture models a BF16-capable CUDA card even on CPU-only CI. The
+    # requested-card capability policy itself is tested in test_ship_precision.
+    monkeypatch.setattr(
+        gpu, "bf16_fp16_flags", lambda device: (str(device).startswith("cuda"), False),
+    )
     return state
 
 

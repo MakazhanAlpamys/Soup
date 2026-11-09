@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -20,7 +21,9 @@ from tests.conftest import strip_ansi
 class _CudaCards:
     """Two different cards; emulated bf16 deliberately gives a false positive."""
 
-    def __init__(self, majors=(8, 7), *, available=True, legacy=False):
+    def __init__(
+        self, majors: tuple[int, int] = (8, 7), *, available: bool = True, legacy: bool = False,
+    ) -> None:
         self.majors = majors
         self.available = available
         self.legacy = legacy
@@ -28,11 +31,11 @@ class _CudaCards:
         self.probes = []
         self.fail_probe = False
 
-    def is_available(self):
+    def is_available(self) -> bool:
         return self.available
 
     @contextmanager
-    def device(self, device):
+    def device(self, device: str) -> Iterator[None]:
         previous = self.current
         self.current = int(str(device).split(":")[-1]) if ":" in str(device) else previous
         try:
@@ -40,7 +43,7 @@ class _CudaCards:
         finally:
             self.current = previous
 
-    def is_bf16_supported(self, including_emulation=True):
+    def is_bf16_supported(self, including_emulation: bool = True) -> bool:
         self.probes.append((self.current, including_emulation))
         if self.fail_probe:
             raise RuntimeError("unavailable capability probe")
@@ -48,16 +51,18 @@ class _CudaCards:
             raise TypeError("unexpected keyword argument 'including_emulation'")
         return including_emulation or self.majors[self.current] >= 8
 
-    def get_device_capability(self, device=None):
+    def get_device_capability(self, device: str | None = None) -> tuple[int, int]:
         index = self.current if device is None else int(str(device).split(":")[-1])
         return self.majors[index], 0
 
 
 @pytest.fixture
-def cards(monkeypatch):
+def cards(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _CudaCards]:
     import torch
 
-    def install(majors=(8, 7), *, available=True, legacy=False):
+    def install(
+        majors: tuple[int, int] = (8, 7), *, available: bool = True, legacy: bool = False,
+    ) -> _CudaCards:
         cuda = _CudaCards(majors, available=available, legacy=legacy)
         monkeypatch.setattr(torch, "cuda", cuda)
         return cuda
@@ -70,7 +75,9 @@ def _plain(text: str) -> str:
 
 
 @pytest.mark.parametrize("majors, expected", [((8, 7), True), ((7, 8), False)])
-def test_unqualified_capability_keeps_current_device_semantics(cards, majors, expected):
+def test_unqualified_capability_keeps_current_device_semantics(
+    cards: Callable[..., _CudaCards], majors: tuple[int, int], expected: bool,
+) -> None:
     from soup_cli.utils.gpu import cuda_supports_bf16
 
     cuda = cards(majors)
@@ -82,8 +89,8 @@ def test_unqualified_capability_keeps_current_device_semantics(cards, majors, ex
 @pytest.mark.parametrize("legacy", [False, True], ids=["native-probe", "older-torch"])
 @pytest.mark.parametrize("majors, expected", [((8, 7), False), ((7, 8), True)])
 def test_indexed_capability_uses_requested_card_and_restores_current(
-    cards, majors, expected, legacy,
-):
+    cards: Callable[..., _CudaCards], majors: tuple[int, int], expected: bool, legacy: bool,
+) -> None:
     from soup_cli.utils.gpu import bf16_fp16_flags, cuda_supports_bf16
 
     cuda = cards(majors, legacy=legacy)
@@ -94,7 +101,9 @@ def test_indexed_capability_uses_requested_card_and_restores_current(
     assert all(index == 1 and emulation is False for index, emulation in cuda.probes)
 
 
-def test_indexed_probe_restores_current_device_after_runtime_error(cards):
+def test_indexed_probe_restores_current_device_after_runtime_error(
+    cards: Callable[..., _CudaCards],
+) -> None:
     from soup_cli.utils.gpu import cuda_supports_bf16
 
     cuda = cards()
@@ -119,7 +128,10 @@ def test_indexed_probe_restores_current_device_after_runtime_error(cards):
         ("cuda:1", (8, 7), False, "float32"),
     ],
 )
-def test_live_dtype_respects_runtime_and_resolved_card(cards, device, majors, available, expected):
+def test_live_dtype_respects_runtime_and_resolved_card(
+    cards: Callable[..., _CudaCards], device: str | None, majors: tuple[int, int],
+    available: bool, expected: str,
+) -> None:
     from soup_cli.commands.ship import _live_eval_numerics
 
     cuda = cards(majors, available=available)
@@ -132,7 +144,9 @@ def test_live_dtype_respects_runtime_and_resolved_card(cards, device, majors, av
 
 
 @pytest.mark.parametrize("quantization", ["4bit", "8bit"])
-def test_quantized_stamp_never_probes_cuda(cards, quantization):
+def test_quantized_stamp_never_probes_cuda(
+    cards: Callable[..., _CudaCards], quantization: str,
+) -> None:
     from soup_cli.commands.ship import _live_eval_numerics
 
     cuda = cards()
@@ -141,7 +155,7 @@ def test_quantized_stamp_never_probes_cuda(cards, quantization):
     assert cuda.probes == []
 
 
-def test_explicit_cuda_without_torch_uses_float32(tmp_path):
+def test_explicit_cuda_without_torch_uses_float32(tmp_path: Path) -> None:
     script = """
 import sys
 sys.modules['torch'] = None
@@ -168,8 +182,9 @@ assert cuda_supports_bf16() is False
     ],
 )
 def test_dtype_reaches_both_from_pretrained_calls(
-    cards, monkeypatch, device, majors, available, expected, adapter,
-):
+    cards: Callable[..., _CudaCards], monkeypatch: pytest.MonkeyPatch, device: str,
+    majors: tuple[int, int], available: bool, expected: str, adapter: bool,
+) -> None:
     from soup_cli.commands.ship import _resolve_generators
 
     # Mock only the external model/tokenizer constructors, keeping Soup's
@@ -216,15 +231,16 @@ def test_dtype_reaches_both_from_pretrained_calls(
     ],
 )
 def test_console_verdict_emission_and_replay_agree(
-    cards, monkeypatch, tmp_path, device, majors, available, expected, color,
-):
+    cards: Callable[..., _CudaCards], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    device: str, majors: tuple[int, int], available: bool, expected: str, color: bool,
+) -> None:
     from soup_cli.commands import ship
     from soup_cli.utils import live_eval
 
     cuda = cards(majors, available=available)
     calls = []
 
-    def make_generator(model, **kwargs):
+    def make_generator(model: str, **kwargs: object) -> Callable[[str], str]:
         calls.append((model, kwargs))
         return lambda _: "yes" if model == "owner/tuned" else "no"
 
@@ -262,7 +278,7 @@ def test_console_verdict_emission_and_replay_agree(
 
 
 @pytest.mark.parametrize("numerics", ["float16", "bfloat16", "float32", "4bit", "8bit"])
-def test_evidence_replay_remains_torch_free(tmp_path, numerics):
+def test_evidence_replay_remains_torch_free(tmp_path: Path, numerics: str) -> None:
     from soup_cli.commands.ship import _config_sha_of
     from soup_cli.config.loader import load_config_from_string
 
