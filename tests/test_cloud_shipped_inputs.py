@@ -175,6 +175,76 @@ def test_reward_hack_mitigation_reaches_the_remote_config(chat_config, cloud):
     assert "reward_hack_mitigation: kl_control" in shipped, shipped
 
 
+def _grpo_hub_config(chat_config) -> None:
+    """Turn the chat config into a grpo run on a Hub dataset, so it can plan."""
+    cfg = load_config(chat_config)
+    cfg.data.train = "teknium/OpenHermes-2.5"
+    cfg.task = "grpo"
+    cfg.training.reward_fn = "accuracy"
+    chat_config.write_text(
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
+def test_the_shipped_config_loads_the_way_the_remote_run_loads_it(chat_config, cloud):
+    """The remote `soup train` loads the embedded text through every validator."""
+    from soup_cli.config.loader import load_config_from_string
+
+    _grpo_hub_config(chat_config)
+
+    result = _plan(cloud, "--reward-hack-detector", "info_rm", "--reward-hack-halt")
+
+    assert result.exit_code == 0, " ".join(strip_ansi(result.output).split())
+    (shipped,) = _shipped_configs(Path(f"soup_{cloud}_app.py"))
+    reloaded = load_config_from_string(shipped)
+    assert reloaded.training.reward_hack_detector == "info_rm"
+    assert reloaded.training.reward_hack_halt is True
+    assert reloaded.data.train == "teknium/OpenHermes-2.5"
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
+def test_an_override_the_schema_refuses_stops_the_plan_before_a_stub(chat_config, cloud):
+    """`--reward-hack-detector rm_ensemble` with a mitigation, and the default
+    `reward_hack_signals: [info_rm]`, is a config `soup train` itself refuses.
+
+    The overrides are assigned after the load, so no validator ran on the result;
+    the remote run would reload it and die after the paid boot."""
+    _grpo_hub_config(chat_config)
+
+    result = _plan(
+        cloud,
+        "--reward-hack-detector",
+        "rm_ensemble",
+        "--reward-hack-mitigation",
+        "log_only",
+    )
+
+    output = " ".join(strip_ansi(result.output).split())
+    assert result.exit_code == 2, output
+    assert "Cloud plan failed" in output, output
+    assert "would be refused on the remote machine" in output, output
+    assert (
+        "reward_hack_signals contains 'info_rm', but the active detector is 'rm_ensemble'"
+        in output
+    ), output
+    assert not Path(f"soup_{cloud}_app.py").exists(), "a stub was rendered anyway"
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
+def test_a_detector_on_a_task_the_schema_refuses_stops_the_plan(chat_config, cloud):
+    """The detector flag on an sft config: only grpo and ppo accept it."""
+    _rewrite(load_config(chat_config), chat_config, train="teknium/OpenHermes-2.5")
+
+    result = _plan(cloud, "--reward-hack-detector", "info_rm")
+
+    output = " ".join(strip_ansi(result.output).split())
+    assert result.exit_code == 2, output
+    assert "Cloud plan failed" in output, output
+    assert "only valid on task in {'grpo', 'ppo'}; got task='sft'" in output, output
+    assert not Path(f"soup_{cloud}_app.py").exists(), "a stub was rendered anyway"
+
+
 @pytest.mark.parametrize("cloud", CLOUDS)
 def test_an_unsupported_local_field_is_named_too(chat_config, cloud):
     """Not just data.train: anything the loader opens locally is named."""
@@ -261,11 +331,17 @@ class TestUnshippedInputs:
         cfg.data.train = ["teknium/OpenHermes-2.5", "mlfoundations/dclm-baseline-1.0"]
         assert unshipped_inputs(cfg) == []
 
-    def test_a_remote_uri_is_not_unshipped(self):
-        """The loader fetches an allowlisted URI over the network."""
+    @pytest.mark.parametrize(
+        "value",
+        ["s3://bucket/train.jsonl", "https://example.com/train.jsonl", "file:///t/train.jsonl"],
+    )
+    def test_a_uri_is_not_unshipped(self, value):
+        """Anything spelled `scheme://` is not judged as a local file here. The scheme
+        allowlist is the loader's job (`validate_remote_uri`), so the plan does not
+        enforce one: `https://` and `file://` plan like `s3://`."""
         from soup_cli.cloud._shipped import unshipped_inputs
 
-        assert unshipped_inputs(self._cfg("s3://bucket/train.jsonl")) == []
+        assert unshipped_inputs(self._cfg(value)) == []
 
     def test_a_bare_existing_path_is_unshipped(self, tmp_path, monkeypatch):
         from soup_cli.cloud._shipped import unshipped_inputs
@@ -285,7 +361,10 @@ class TestUnshippedInputs:
         cfg.base = "C:\\models\\merged"
         assert unshipped_inputs(cfg) == ["base"]
 
-    @pytest.mark.parametrize("value", ["./rewards.py", "accuracy, ./rewards.py"])
+    @pytest.mark.parametrize(
+        "value",
+        ["./rewards.py", "accuracy, ./rewards.py", "rewards.py", ".\\rewards", "~\\rewards"],
+    )
     def test_a_local_reward_file_is_unshipped(self, value):
         from soup_cli.cloud._shipped import unshipped_inputs
 
@@ -299,6 +378,23 @@ class TestUnshippedInputs:
         cfg = self._cfg()
         cfg.training.reward_fn = "accuracy, format"
         assert unshipped_inputs(cfg) == []
+
+    def test_a_directory_named_like_a_builtin_reward_does_not_refuse_the_builtin(
+        self, tmp_path, monkeypatch
+    ):
+        """The resolver checks the built-in names before it looks for a `.py` file, so
+        a `format/` or `accuracy/` directory beside the config changes nothing."""
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "format").mkdir()
+        (tmp_path / "accuracy").mkdir()
+        cfg = self._cfg()
+        cfg.training.reward_fn = "accuracy, format"
+        assert unshipped_inputs(cfg) == []
+        # The same directory is still a local path for a field that reads one.
+        cfg.base = "format"
+        assert unshipped_inputs(cfg) == ["base"]
 
     def test_a_field_soup_train_never_reads_is_not_refused(self):
         from soup_cli.cloud._shipped import unshipped_inputs
@@ -316,6 +412,9 @@ class TestUnshippedInputs:
             "~/nowhere/model",
             "\\\\nowhere\\share\\model",
             "\\nowhere\\model",
+            ".\\nowhere\\model",
+            "..\\nowhere\\model",
+            "~\\nowhere\\model",
         ],
     )
     def test_every_local_spelling_is_unshipped_even_when_absent(self, value):
@@ -448,6 +547,18 @@ class TestRefusalHint:
         message = self._message(cfg)
 
         assert "Hub dataset id or model id" in message, message
+
+    @pytest.mark.parametrize("field", ["forget_set", "retain_set"])
+    def test_an_unlearn_dataset_points_at_a_dataset_id(self, field):
+        """Both accept a Hub dataset name (their field descriptions say so)."""
+        cfg = self._cfg()
+        setattr(cfg.data, field, "./forget.jsonl")
+
+        message = self._message(cfg)
+
+        assert f"data.{field}" in message, message
+        assert "Hub dataset id" in message, message
+        assert "Run locally." not in message, message
 
     def test_a_field_with_no_hub_form_says_to_run_locally(self):
         """A reward file has no Hub id, so neither hint fits."""

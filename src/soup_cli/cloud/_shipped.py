@@ -45,8 +45,9 @@ _PATH_FIELDS: Tuple[str, ...] = tuple(
 )
 
 #: Fields whose remote form is a Hugging Face Hub *model* id. The refusal names
-#: the escape hatch that fits the field: a dataset id for ``data.train``, a model
-#: id for these, neither for a reward file or an image directory.
+#: the escape hatch that fits the field: a dataset id for ``data.train`` and the
+#: unlearning sets (``_HUB_DATASET_FIELDS`` below), a model id for these, neither
+#: for a reward file or an image directory.
 _HUB_MODEL_FIELDS: frozenset[str] = frozenset(
     {
         "base",
@@ -64,9 +65,26 @@ _LOCAL_ESCAPE_PREFIXES: Tuple[str, ...] = (
     "../",
     "~/",        # home
     "/",         # absolute path
+    ".\\",       # Windows: current directory
+    "..\\",      # Windows: parent directory
+    "~\\",       # Windows: home
     "\\\\",      # Windows UNC
     "\\",        # Windows root-relative
 )
+
+#: Fields whose remote form is a Hugging Face Hub *dataset* id. ``data.train`` is
+#: classified by the schema's own rule; the unlearning sets accept a Hub dataset
+#: name as well (see their field descriptions), so they get the same hint.
+_HUB_DATASET_FIELDS: frozenset[str] = frozenset(
+    {"data.train", "data.forget_set", "data.retain_set"}
+)
+
+#: Fields that name a built-in or a ``.py`` file, never a directory or a Hub id.
+#: ``trainer.rewards.load_reward_fn`` checks the built-in names (``accuracy``,
+#: ``format``) before it looks for a file, so a directory of the same name in the
+#: working directory must not make the plan refuse a built-in: only a ``.py``
+#: suffix or a path spelling says "local" for these.
+_PY_FILE_FIELDS: frozenset[str] = frozenset({"training.reward_fn"})
 
 _COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset(
     {"training.reward_fn"}
@@ -86,9 +104,9 @@ def _resolve_plan_input(cfg: "SoupConfig", dotted: str) -> object:
 def _entries_for_plan_input(value: object, dotted: str) -> List[str]:
     """Normalise a field value into the list of strings the loader opens.
 
-    ``data.train`` and ``data.replay`` already arrive as a list, and
+    ``data.train`` and ``training.mole_task_adapters`` arrive as a list and
     ``training.reward_fn`` accepts a comma-separated ensemble. Every other
-    field is a single string.
+    field, ``data.replay`` included, is a single string.
     """
     if isinstance(value, (list, tuple)):
         return [str(entry) for entry in value]
@@ -98,7 +116,12 @@ def _entries_for_plan_input(value: object, dotted: str) -> List[str]:
 
 
 def _is_remote(value: str) -> bool:
-    """True for a URI the loader fetches over the network."""
+    """True for anything spelled ``scheme://``.
+
+    A sniff, not an allowlist check: the plan does not look at the scheme, so
+    ``https://`` and ``file://`` pass here like ``s3://``. Which schemes the loader
+    accepts is ``validate_remote_uri``'s job, at load time on the remote machine.
+    """
     return "://" in value
 
 
@@ -116,7 +139,7 @@ def _train_entry_is_local(entry: str) -> bool:
     return _classify_data_train_entry(entry) == "local"
 
 
-def _path_field_is_local(value: str) -> bool:
+def _path_field_is_local(value: str, *, py_file_only: bool = False) -> bool:
     """True when a directory/file field points at a local file the stub cannot
     carry.
 
@@ -130,6 +153,11 @@ def _path_field_is_local(value: str) -> bool:
     it from a dataset id, so a bare name that exists on disk is refused and
     a bare name that does not exist is treated as a Hub id. Writing
     ./teacher is the safe way to say this is local.
+
+    ``py_file_only`` is for a field that names a built-in or a ``.py`` file
+    (``training.reward_fn``): a bare name is judged by its ``.py`` suffix, not by
+    whether a directory of that name exists, because the resolver tries the
+    built-in names first.
 
     ponytail: existence is checked at plan time, not real-path-checked. A value
     whose parent directory was deleted falls through and reaches the remote
@@ -145,6 +173,8 @@ def _path_field_is_local(value: str) -> bool:
         return True
     if len(value) >= 2 and value[1] == ":" and value[0].isalpha():
         return True
+    if py_file_only:
+        return value.lower().endswith(".py")
     return os.path.exists(value)
 
 
@@ -171,7 +201,10 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
         if value is None:
             continue
         entries = _entries_for_plan_input(value, dotted)
-        if any(_path_field_is_local(str(entry)) for entry in entries):
+        py_file_only = dotted in _PY_FILE_FIELDS
+        if any(
+            _path_field_is_local(str(entry), py_file_only=py_file_only) for entry in entries
+        ):
             found.append(dotted)
     return sorted(set(found))
 
@@ -179,12 +212,12 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
 def _escape_hatch(fields: List[str]) -> str:
     """The sentence naming what the remote run can resolve in place of a local path.
 
-    A Hub dataset id exists for ``data.train`` and a Hub model id for the model
-    fields; a reward file or an image directory has no Hub form, so for those
-    the only way out is to run locally.
+    A Hub dataset id exists for ``data.train`` and the unlearning sets and a Hub
+    model id for the model fields; a reward file or an image directory has no Hub
+    form, so for those the only way out is to run locally.
     """
     kinds: List[str] = []
-    if "data.train" in fields:
+    if any(field in _HUB_DATASET_FIELDS for field in fields):
         kinds.append("dataset id")
     if any(field in _HUB_MODEL_FIELDS for field in fields):
         kinds.append("model id")

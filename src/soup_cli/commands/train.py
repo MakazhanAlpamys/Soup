@@ -1239,11 +1239,23 @@ def train(
             import yaml
 
             from soup_cli.cloud._shipped import refuse_unshipped_inputs
+            from soup_cli.config.loader import load_config_from_string
 
             refuse_unshipped_inputs(cfg)
             effective_yaml = yaml.safe_dump(
                 cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
             )
+            # The overrides above are assigned after the load and the models do not
+            # validate on assignment, so no validator has seen this config. The
+            # remote `soup train` loads the text through all of them: do it here,
+            # before a stub exists, rather than after the paid boot.
+            try:
+                load_config_from_string(effective_yaml)
+            except ValueError as exc:
+                raise ValueError(
+                    "the effective config (the file with the command-line overrides "
+                    f"applied) would be refused on the remote machine: {exc}"
+                ) from exc
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
