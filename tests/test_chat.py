@@ -78,12 +78,15 @@ def test_chat_non_adapter_directory(tmp_path: Path):
 
 
 # #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("backend", ["transformers", "mlx"])
 @pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
 @pytest.mark.parametrize(
     "function_name, argument, first_work_line, list_input",
     [
-        ("chat", "model", 'if hub and hub != "hf":', False),
-        ("chat", "base_model", 'if hub and hub != "hf":', False),
+        ("chat", "model", "from soup_cli.utils.mlx_generation import "
+         "reject_native_adapter, validate_native_options", False),
+        ("chat", "base_model", "from soup_cli.utils.mlx_generation import "
+         "reject_native_adapter, validate_native_options", False),
     ],
 )
 def test_reward_bundle_refused_before_work(
@@ -93,6 +96,7 @@ def test_reward_bundle_refused_before_work(
     first_work_line,
     list_input,
     artifact_kind,
+    backend,
 ):
     from importlib import import_module
 
@@ -115,7 +119,7 @@ def test_reward_bundle_refused_before_work(
         root = adapter
     function = getattr(import_module("soup_cli.commands.chat"), function_name)
     value = [str(root)] if list_input else str(root)
-    kwargs = {}
+    kwargs = {"backend": backend}
     kwargs[argument] = value
     assert_reward_guard(function, kwargs, first_work_line)
 

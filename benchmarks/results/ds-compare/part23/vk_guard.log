@@ -1,0 +1,6 @@
+2026-11-07T13:10:55Z guard start: now=1794057055 launch=1794057010 deadline=1794069610 reserve=600s http=py id=59572480 key=present
+2026-11-07T13:10:56Z ARMED (OK 200 {"success": true})
+2026-11-07T13:11:56Z holding the job: group=0 payload=1 (until 1794058916 at most)
+2026-11-07T13:11:56Z hold released (group=0 payload=1): starting the job in /workspace/payload
+2026-11-07T13:11:56Z job started pid=547
+2026-11-07T14:18:58Z finalize: DONE rc=0

@@ -1,0 +1,19 @@
+{
+  "d_best_now": "D3",
+  "dropped_groups": [],
+  "elapsed_seconds": 7478.989053726196,
+  "finished": 1794051243.5685499,
+  "part": "part1",
+  "sb_selected": [
+    "S2",
+    "S6"
+  ],
+  "skipped": [
+    "A/80GB/D1PF/rep1: GPU not idle more than 50%",
+    "A/80GB/D1PF/rep2: GPU not idle more than 50%",
+    "A/80GB/D1PF/rep3: GPU not idle more than 50%",
+    "A/80GB/D2PF/rep1: GPU not idle more than 50%",
+    "A/80GB/D2PF/rep2: GPU not idle more than 50%",
+    "A/80GB/D2PF/rep3: GPU not idle more than 50%"
+  ]
+}
