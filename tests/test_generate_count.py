@@ -338,6 +338,7 @@ def test_generate_duplicates_do_not_hide_an_under_delivery(tmp_path, monkeypatch
     assert "after 3 consecutive attempts (1/4 generated)" in output_text
     assert [row["instruction"] for row in _rows(output_file)] == ["Q0"]
 
+
 def test_generate_rounds_of_duplicates_are_not_empty_rounds(tmp_path, monkeypatch):
     """Three or more rounds of duplicates in a row do not halt the run: exit 0."""
     monkeypatch.chdir(tmp_path)
@@ -356,4 +357,3 @@ def test_generate_rounds_of_duplicates_are_not_empty_rounds(tmp_path, monkeypatc
     assert "Generated 2 of 10 requested examples" in output_text
     assert "Duplicates: 8 removed" in output_text
     assert [row["instruction"] for row in _rows(output_file)] == ["Question 0", "Question 1"]
-
