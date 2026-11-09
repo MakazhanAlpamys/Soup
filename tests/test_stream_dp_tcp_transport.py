@@ -923,6 +923,92 @@ class TestHandshake:
         assert "Is the port taken (see SOUP_STREAM_DP_BIND_PORT)?" in str(excinfo.value)
 
 
+class _RecordingSocket:
+    """A stand-in for a socket: records the options asked for, answers for the buffers."""
+
+    def __init__(self, granted=None, fail_getsockopt=False):
+        self.asked = []
+        self.granted = granted
+        self.fail_getsockopt = fail_getsockopt
+
+    def setsockopt(self, level, option, value):
+        self.asked.append((level, option, value))
+
+    def getsockopt(self, level, option):
+        if self.fail_getsockopt:
+            raise OSError("no such option")
+        if self.granted is not None:
+            return self.granted
+        asked = {(lvl, opt): val for lvl, opt, val in self.asked}
+        return asked[(level, option)] * 2  # Linux reports twice what it keeps
+
+
+class TestSocketBufferGrant:
+    """The kernel clamps a socket-buffer request silently (L2: 8 MiB asked, 425,984 granted):
+    the transport logs what it got, once, at debug level, and changes nothing else."""
+
+    LOGGER = "soup_cli.utils.adapter_grad_transport"
+
+    @pytest.fixture(autouse=True)
+    def _fresh_flag(self, monkeypatch):
+        monkeypatch.setattr(transport, "_buffer_grant_logged", False)
+
+    def _records(self, caplog):
+        return [
+            record
+            for record in caplog.records
+            if record.name == self.LOGGER and "socket buffers" in record.message
+        ]
+
+    def test_a_clamped_grant_is_logged_with_both_sizes(self, caplog):
+        caplog.set_level("DEBUG", logger=self.LOGGER)
+        transport._tune_socket(_RecordingSocket(granted=425_984))
+        (record,) = self._records(caplog)
+        assert record.levelname == "DEBUG"
+        assert "requested 8388608 bytes each" in record.message
+        assert "granted receive=425984 send=425984" in record.message
+        assert "the kernel clamped it" in record.message
+        assert "net.core.rmem_max" in record.message
+
+    def test_an_unclamped_grant_is_logged_without_the_clamp_note(self, caplog):
+        caplog.set_level("DEBUG", logger=self.LOGGER)
+        transport._tune_socket(_RecordingSocket())  # Linux reports twice the request
+        (record,) = self._records(caplog)
+        assert "granted receive=16777216 send=16777216" in record.message
+        assert "clamped" not in record.message
+
+    def test_it_is_logged_once_per_process(self, caplog):
+        caplog.set_level("DEBUG", logger=self.LOGGER)
+        for _ in range(4):
+            transport._tune_socket(_RecordingSocket(granted=425_984))
+        assert len(self._records(caplog)) == 1
+
+    def test_nothing_is_logged_above_debug(self, caplog):
+        caplog.set_level("INFO", logger=self.LOGGER)
+        transport._tune_socket(_RecordingSocket(granted=425_984))
+        assert self._records(caplog) == []
+
+    def test_a_socket_that_cannot_be_read_back_is_not_an_error(self, caplog):
+        caplog.set_level("DEBUG", logger=self.LOGGER)
+        transport._tune_socket(_RecordingSocket(fail_getsockopt=True))
+        assert self._records(caplog) == []
+
+    def test_the_request_itself_is_unchanged(self):
+        """Behaviour pin: still 8 MiB on both buffers, Nagle off, keepalive on."""
+        sock = _RecordingSocket(granted=425_984)
+        transport._tune_socket(sock)
+        asked = {(level, option): value for level, option, value in sock.asked}
+        assert asked[(socket.SOL_SOCKET, socket.SO_SNDBUF)] == 8 * 1024 * 1024
+        assert asked[(socket.SOL_SOCKET, socket.SO_RCVBUF)] == 8 * 1024 * 1024
+        assert asked[(socket.IPPROTO_TCP, socket.TCP_NODELAY)] == 1
+        assert asked[(socket.SOL_SOCKET, socket.SO_KEEPALIVE)] == 1
+
+    def test_a_real_group_logs_it_once_on_loopback(self, caplog):
+        caplog.set_level("DEBUG", logger=self.LOGGER)
+        _ok(run_ranks(2, lambda group, rank: rank))
+        assert len(self._records(caplog)) == 1
+
+
 class TestObjects:
     def test_every_rank_gets_the_same_list_in_rank_order(self):
         def work(group, rank):
