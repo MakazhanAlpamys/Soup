@@ -6,6 +6,10 @@ specified shape. Peak means peak allocated bytes on the CUDA device. Projection 
 counts input rows per forward and backward pair. It excludes model layers, data loading,
 host transfers and the optimizer.
 
+All measurements apply on this card, at these shapes, and make no end-to-end claim
+about a full model training step. They form a new baseline on the Tesla T4 (sm_75)
+that cannot be combined with the earlier RTX 3050 or RTX 5070 figures in #842.
+
 Run from the repository root with Soup installed. The GPU probes use bitsandbytes 0.50.2 and
 CUDA fp16. The CPU self-test uses PyTorch and exercises the counters and decision rules.
 
@@ -37,8 +41,11 @@ must produce a finite wrong gradient, and bypassing the pool must restore exact 
 Kaggle ran commit `714cb9f7` on device 0, sm_75, driver 580.178.04, CUDA 13.0,
 PyTorch 2.11.0+cu130, bitsandbytes 0.50.2, peft 0.21.2, transformers 5.20.2.
 The input was synthetic. Scales were double-quantised with 64-element weight blocks.
+Commit `714cb9f7` produced `t4-ablation.json.gz` and `t4-aliasing.json`. Because later
+commits added `--model` and tracing to `nf4_stream_bench.py`, running `--ablation` from
+the branch head produces a different script SHA-256 hash than the record.
 
-| Fresh process | Shipped / cached ms | Reduction | Projection tokens/s, shipped / cached | Peak MiB, shipped / cached | Timed SM clock min/median/max MHz | Median memory-controller use | Same-shape dense GEMM TFLOP/s |
+| Fresh process | Shipped / cached ms | Reduction | Projection tokens/s, shipped / cached | Peak MiB, shipped / cached | Timed SM clock min/median/max MHz (5 samples) | Median memory-controller use (5 samples) | Same-shape dense GEMM TFLOP/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 2.025 / 1.451 | 28.34% | 252,850 / 352,858 | 104.51 / 72.51 | 585/1110/1200 | 37% | 22.84 |
 | 2 | 2.064 / 1.491 | 27.77% | 248,029 / 343,388 | 104.51 / 72.51 | 630/960/1125 | 30% | 24.31 |
@@ -46,6 +53,8 @@ The input was synthetic. Scales were double-quantised with 64-element weight blo
 
 All three paired reductions exceeded the 2% stopping threshold. The gap between
 the arm medians was 0.594 ms and the larger within-arm range was 0.245 ms.
+The timed SM clock and memory-controller metrics rest on 5 in-window samples per process
+(`sample_count: 5`), with the SM clock moving between 585 and 1200 MHz under load.
 Across all 300 timed pairs the shipped arm dequantised once in forward and once
 in recomputation. The cached arm used the same 32 MiB matrix each time. The reduction includes dispatch
 and launch overhead avoided by reusing that matrix. It is an ablation of one projection. The
@@ -63,7 +72,7 @@ layer had 171.125 MiB of packed weight before quantisation metadata.
 
 ## ZeroGPU correctness check
 
-The same four-layer fixture ran on an NVIDIA RTX PRO 6000 Blackwell Server Edition,
+The same four-layer fixture from commit `714cb9f7` ran on an NVIDIA RTX PRO 6000 Blackwell Server Edition (producing `blackwell-aliasing.json`),
 MIG 2g.48gb, sm_120, driver 580.178.04, CUDA 13.0, PyTorch 2.11.0 and
 bitsandbytes 0.50.2. All forward outputs matched. With the unsafe arm, the first
 two scale gradients differed by up to 0.16992 and 0.15448, and the input gradient
