@@ -725,8 +725,13 @@ every PR instead of relying on a hand-edited JSON file.
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
   best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
-  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
-  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  `bfloat16` / `float16` / `float32`) — the actual load, not the training field.
+  Full-precision live eval uses native `bfloat16` on the requested CUDA card when
+  supported, `float16` on older CUDA cards such as T4/V100, and `float32` on CPU or
+  without an available CUDA runtime. Indexed devices such as `cuda:1` are checked
+  independently of the current card. Both model loaders, the console line and the
+  evidence use the same dtype. Unsupported quantization formats fall back to this
+  full-precision policy. With `--evidence` alone, `--config` GATES: it refuses
   (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
   *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
   warns rather than failing closed.
@@ -879,7 +884,8 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   earlier version prints a warning that names it.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
-the same helpers: bfloat16 on CUDA and float32 elsewhere; `--config soup.yaml` reuses
+the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
+and float32 elsewhere; `--config soup.yaml` reuses
 the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
 is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
 variables (a Qwen3 model scores differently with thinking on or off). Every recorded
