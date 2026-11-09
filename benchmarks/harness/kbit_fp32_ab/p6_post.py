@@ -5,7 +5,7 @@
         --out <results dir>
 
 Cells are named <ARM>-r<round>-<P|T>.  T cells give timing, clocks, peak memory and loss; P cells give the category table, the
-per-phase memory peaks, the parameter dtypes and the allocator-snapshot blocks (analysis.json comes from case1-profile/analyze.py).
+per-phase memory peaks, the parameter dtypes and the allocator-snapshot blocks (analysis.json comes from analyze.py).
 Writes results/timing.json, loss.json, profile.json, tables.md.  Every number printed comes from a file under --runs / --analysis.
 """
 from __future__ import annotations
@@ -385,7 +385,7 @@ def tables(timing_cells, per_arm, loss_rows, loss_verdict, noise, profile):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", required=True, help="the pulled .../out/runs directory")
-    ap.add_argument("--analysis", help="analysis.json written by case1-profile/analyze.py for the P cells")
+    ap.add_argument("--analysis", help="analysis.json written by analyze.py for the P cells")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

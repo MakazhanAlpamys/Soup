@@ -207,7 +207,7 @@ def _attach(trainer, out_dir: str, warmup: int, max_wall_s: float) -> None:
     trainer.training_step = metered_training_step
     _atomic_write(os.path.join(out_dir, "effective_config.json"), effective_config(trainer))
     _STATE["attached"] = True
-    if os.environ.get("TCO_PROFILE") == "1":   # PROFILE-8a: diagnostic profiler (tco_profile.py); never set in the TCO record
+    if os.environ.get("TCO_PROFILE") == "1":   # diagnostic profiler (tco_profile.py); never set in the TCO record
         try:
             import tco_profile
             trainer.add_callback(tco_profile.attach(trainer, out_dir, warmup, os.environ.get("TCO_FRAMEWORK", "?")))

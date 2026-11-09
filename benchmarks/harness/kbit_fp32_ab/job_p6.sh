@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# job_p6.sh - vk job for issue #2609 step 1 (scratch A/B on one RTX 4090; no product change).  cwd = /workspace/payload.
+# job_p6.sh - job for issue #2609 step 1 (scratch A/B on one RTX 4090; no product change).  cwd = /workspace/payload.
 #   A  soup-cli 0.77.2 default            B  A + embed_tokens/lm_head/norms back to bf16 after prepare_model_for_kbit_training
 #   C  prepare_model_for_kbit_training replaced (freeze + enable_input_require_grads + gradient checkpointing, bf16 kept)
 #   D  A + training.use_liger: true (only if liger-kernel installs and imports)
 # Per round r (seed 3406+r): for each arm  P-cell (TCO_PROFILE=1: 5 warm-up + 3 profiled + 1 snapshot step, then stop; rounds in
 #   $P6_PROF_REPS only)  then T-cell (no profiler: 5 warm-up + 100 measured steps, the 840-row window).
-# Harness = case1-profile payload (soup-8a-prof) + the p6 edits listed in harness-diff.txt.  Results -> $VK_OUT.  No secrets here.
+# Harness = the base harness (the profiling harness this run started from) + the p6 edits listed in harness-diff.txt.  Results -> $VK_OUT.  No secrets here.
 set -u
 : "${VK_OUT:?need VK_OUT}"
 PAYLOAD="$(pwd)"

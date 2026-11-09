@@ -1,10 +1,10 @@
-# diff of the p6 payload against soup-archive/2026-11-07/case1-profile/payload (the soup-8a-prof harness); sha256 of the sources are in harness-source.sha256
+# diff of the p6 payload against the base harness (the profiling harness this run started from; it is not published)
 === tco_common.py
 (identical)
 === tco_meter.py
-(identical)
+(identical; one comment reworded, see the last section)
 === tco_profile.py
-(identical)
+(identical; one docstring line reworded, see the last section)
 === run_tco.sh
 (identical)
 === tco_run.py
@@ -23,4 +23,8 @@
 >         # can be taken over the measured window only; the summary below spans the whole run, idle model load included.
 >         atomic_write(os.path.join(base, "gpu_samples.json"),
 >                      {"cols": ["unix", "mem_mib", "sm_mhz", "power_w", "temp_c", "util_pct"], "rows": poller.samples})
-=== new files: payload/p6_arms.py payload/job_p6.sh payload/requirements-tco.txt (replaces the soup-41 pin list: no unsloth/unsloth_zoo/xformers/triton/torchao)
+=== new files: payload/p6_arms.py payload/job_p6.sh payload/requirements-tco.txt (replaces the base harness's pin list: no unsloth/unsloth_zoo/xformers/triton/torchao)
+=== text reworded before publication (comments, docstrings and help strings only; no code changed)
+analyze.py, tco_meter.py, tco_profile.py, tco_run.py, p6_post.py, job_p6.sh, requirements-tco.txt: internal working labels, the name of the
+rental provider and a local archive path were replaced by neutral wording (tco_run.py: four comments and the help text of --card and
+--actual-usd-per-hour).

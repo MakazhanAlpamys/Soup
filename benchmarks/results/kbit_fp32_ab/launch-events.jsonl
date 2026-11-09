@@ -1,11 +1,11 @@
-{"dph": 0.4181111111111111, "event": "launch", "id": 59706558, "t": "2026-11-08 11:38:15Z", "task": "p6-2609-ab"}
-{"event": "armed", "id": 59706558, "t": "2026-11-08 11:38:51Z"}
-{"event": "attach_key", "id": 59706558, "t": "2026-11-08 11:38:52Z", "why": "launch"}
-{"confirmed": true, "event": "destroy", "id": 59706558, "t": "2026-11-08 11:39:13Z", "why": "payload delivery failed"}
-{"dph": 0.3927777777777778, "event": "launch", "id": 59706768, "t": "2026-11-08 11:40:53Z", "task": "p6-2609-ab"}
-{"event": "armed", "id": 59706768, "t": "2026-11-08 11:41:48Z"}
-{"event": "attach_key", "id": 59706768, "t": "2026-11-08 11:41:50Z", "why": "launch"}
-{"event": "payload", "id": 59706768, "sha": "7b7550f840a90be3c95179c8dde3a67ee45ebdbcd8dbef3ac64bd6b8a71b874f", "t": "2026-11-08 11:42:11Z"}
-{"event": "pull", "id": 59706768, "method": "ssh", "sha": "0902f8dac81ba6da074e7e719d252f0e47a27ab735c45619dd9b3c7ff90e8ed6", "t": "2026-11-08 12:46:59Z"}
-{"event": "pull_marker", "id": 59706768, "sha": "0902f8dac81ba6da074e7e719d252f0e47a27ab735c45619dd9b3c7ff90e8ed6", "t": "2026-11-08 12:47:03Z"}
-{"confirmed": true, "event": "destroy", "id": 59706768, "t": "2026-11-08 12:47:29Z", "why": "reap"}
+{"event": "launch", "instance": 1, "t": "2026-11-08 11:38:15Z", "task": "p6-2609-ab"}
+{"event": "armed", "instance": 1, "t": "2026-11-08 11:38:51Z"}
+{"event": "attach_key", "instance": 1, "t": "2026-11-08 11:38:52Z", "why": "launch"}
+{"confirmed": true, "event": "destroy", "instance": 1, "t": "2026-11-08 11:39:13Z", "why": "payload delivery failed"}
+{"event": "launch", "instance": 2, "t": "2026-11-08 11:40:53Z", "task": "p6-2609-ab"}
+{"event": "armed", "instance": 2, "t": "2026-11-08 11:41:48Z"}
+{"event": "attach_key", "instance": 2, "t": "2026-11-08 11:41:50Z", "why": "launch"}
+{"event": "payload", "instance": 2, "sha": "7b7550f840a90be3c95179c8dde3a67ee45ebdbcd8dbef3ac64bd6b8a71b874f", "t": "2026-11-08 11:42:11Z"}
+{"event": "pull", "instance": 2, "method": "ssh", "sha": "0902f8dac81ba6da074e7e719d252f0e47a27ab735c45619dd9b3c7ff90e8ed6", "t": "2026-11-08 12:46:59Z"}
+{"event": "pull_marker", "instance": 2, "sha": "0902f8dac81ba6da074e7e719d252f0e47a27ab735c45619dd9b3c7ff90e8ed6", "t": "2026-11-08 12:47:03Z"}
+{"confirmed": true, "event": "destroy", "instance": 2, "t": "2026-11-08 12:47:29Z", "why": "reap"}

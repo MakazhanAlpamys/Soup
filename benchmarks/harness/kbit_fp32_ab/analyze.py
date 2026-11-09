@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline analysis of the case-1 profiler traces (soup-8a-prof).  Reads trace.json.gz written by tco_profile.py.
+"""Offline analysis of the profiler traces.  Reads trace.json.gz written by tco_profile.py.
 
     python analyze.py --arm soup=<run dir>/prof --arm unsloth=<run dir>/prof --out analysis.json
 

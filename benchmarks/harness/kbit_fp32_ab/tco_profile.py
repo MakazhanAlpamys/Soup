@@ -1,4 +1,4 @@
-"""Per-op profiler for the Soup-vs-Unsloth case-1 diagnostic (soup-8a-prof).  NOT part of the TCO record.
+"""Per-op profiler for the Soup-vs-Unsloth diagnostic.  NOT part of the TCO record.
 
 Attached from tco_meter._attach() when TCO_PROFILE=1.  It never changes what the trainer computes; it
 only (a) wraps compute_loss / training_step with timers, (b) registers forward hooks on the decoder

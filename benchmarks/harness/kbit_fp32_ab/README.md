@@ -15,25 +15,29 @@ patch the PEFT function inside the training process, and arm D is one yaml line.
 
 ## Files
 
-The scripts are the exact files that ran on the rented machine, except `p6_post.py`, where two
-example paths in the docstring were replaced by placeholders. `ruff.toml` relaxes six lint rules for
+The scripts are the files that ran on the rented machine, except that comments, docstrings and two
+help strings that named internal working labels, the rental provider or a local path were replaced by
+neutral wording (no code changed; see the last section of `harness-diff.txt`), and `p6_post.py`, where
+two example paths in the docstring were replaced by placeholders. The hashes below are of the published
+files. `ruff.toml` relaxes six lint rules for
 this directory only, so the files did not have to be reformatted (which would change their hashes).
 
 | file | role | sha256 |
 |---|---|---|
-| `job_p6.sh` | the job: set-up, model download, data window, 20 cells in the order A B C D per round, throttle sampler | `d755a65a7c6430673cee9b4e11fad3d48c75f164ec8a872f78505df8d68087d6` |
+| `job_p6.sh` | the job: set-up, model download, data window, 20 cells in the order A B C D per round, throttle sampler | `179643314ee6a6cb8d31d3443f53ec3e0b88e5c43467174b7c0e446351ba5075` |
 | `p6_arms.py` | arms B and C (patches `peft.prepare_model_for_kbit_training` in the worker), the dtype census written to `arm_info.json` | `1bc6335e61636a26ca27a56a28395b9d32991173de6d0ffd4fd1a8b9a1a17bf6` |
-| `requirements-tco.txt` | pinned stack | `b21bcec816a3f0737f64646d0b3b2bea87930ef541bd93b762a59fe3b373e04b` |
+| `requirements-tco.txt` | pinned stack | `27bb12191e95f2b0179835a9691629fd51cc4bd32832564cb9e298f5b75d2531` |
 | `run_tco.sh` | set-up of the virtual environment (identical to the base harness) | `1fd672f6c7ceaa9449dfc2713d0eadbce0826c72bc0a03d07b17d89f9d34ca6b` |
-| `tco_common.py`, `tco_meter.py`, `tco_profile.py` | step meter, GPU poller, profiler wrapper (identical to the base harness) | `28086dac...`, `cce1c6f4...`, `2aa334fa...` |
-| `tco_run.py` | cell runner; the base harness (`ace99f3e...`) plus the arm D yaml line and the `p6_arms` hook, see `harness-diff.txt` | `7632536979a3848ca3c964b5de434c44bc49e8cf1a4a2c13ec78e56e959edb48` |
-| `analyze.py` | joins every GPU event of a profiler trace to its CPU launch and aten op, buckets by kernel and shape | `924f9f6e949b1de565e713aebc3e64b2d6903d2a7c330580bf58cf87a25d9ac2` |
-| `p6_post.py` | timing, loss and profile tables from the per-cell files | `bcecf05e6725203e61aeae533f8d6232f9821abbdcad3bb141fb54d3884ceff2` |
+| `tco_common.py`, `tco_meter.py`, `tco_profile.py` | step meter, GPU poller, profiler wrapper (as in the base harness; `tco_meter.py` and `tco_profile.py` differ from it in one comment or docstring line each) | `28086dac...`, `03e004aa...`, `0d973664...` |
+| `tco_run.py` | cell runner; the base harness (`ace99f3e...`) plus the arm D yaml line and the `p6_arms` hook, see `harness-diff.txt` | `83ce37e1d5f28cd7a93c549696f957c4045f478067dd90d691853a781e1a9111` |
+| `analyze.py` | joins every GPU event of a profiler trace to its CPU launch and aten op, buckets by kernel and shape | `716be31a0004989356d85054f61bab568104962d2c854cae75e77673b357827a` |
+| `p6_post.py` | timing, loss and profile tables from the per-cell files | `7c2073ae307b521d6a1f1d58b6dd7f297068bb1700876c5076c812aa63f98fc5` |
 | `throttle_summary.py` | throttle-reason share per timing cell from the 2-second `nvidia-smi` sampler | `f009a787a05b7882bffbec1cbdbff2331f3a6e49e3e20bcdcc38e54acefb2f15` |
 | `harness-diff.txt` | what changed against the base harness | |
 
-`tco_common.py`, `tco_meter.py`, `tco_profile.py` and `run_tco.sh` are byte-identical to the base
-harness (the hashes above equal the base harness's); `tco_run.py` is the only changed file.
+`tco_common.py` and `run_tco.sh` are byte-identical to the base harness (the hashes above equal the
+base harness's); `tco_meter.py` and `tco_profile.py` differ from it in one comment or docstring line
+each; `tco_run.py` is the only file whose code changed.
 
 ## Re-running
 

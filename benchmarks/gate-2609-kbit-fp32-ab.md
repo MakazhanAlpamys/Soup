@@ -1,7 +1,7 @@
 <!--
 Measurement record: all 20 cells ran. Published as measured; nothing here is rounded in the direction of a conclusion.
 
-Hardware: 1x RTX 4090 24 GB (24,564 MiB), rented on vast.ai, instance 59706768, 2026-11-08.
+Hardware: 1x RTX 4090 24 GB (24,564 MiB), rented, 2026-11-08.
   AMD Ryzen 9 7900X (12 cores / 24 threads), 61.9 GB host RAM, Ubuntu container (glibc 2.39), kernel 6.8.0-147,
   driver 595.99.02 (CUDA 13.2), power limit 450 W (max 600 W).
 Stack: Python 3.12.3, torch 2.11.0+cu128, transformers 5.17.0, trl 0.29.1, peft 0.20.0, bitsandbytes 0.50.2,
@@ -85,7 +85,7 @@ and the 7,128 MiB it removes. This record is step 1 only; nothing under `src/sou
 | model | `Qwen/Qwen2.5-7B-Instruct` at revision `a09a35458c702b33eeacc393d103063234e8bc28` (`box/model-download.txt`) |
 | data | the 840-row UltraChat window (`HuggingFaceH4/ultrachat_200k`, `train_sft`, first rows in stored order whose templated length is at least 512 tokens and whose first user turn leaves at least 128 tokens for the answer), every row exactly 512 tokens, sha256 `eba8a5bc6074eced5adb255f3f8872d942779978171421e13f9c670494479c8a`, equal to the hash the job script expected (`box/data-manifest.json`, `box/data-sha-check.txt`) |
 | task | `soup train --config soup.yaml --yes`, `task: sft`, `quantization: 4bit`, LoRA r16 alpha 32 dropout 0 on q, k, v, o, gate, up, down, batch 8 x 512 (exactly 4,096 tokens per step in all 1,260 steps of the 12 timing cells, no padding), gradient accumulation 1, bf16, gradient checkpointing on, `adamw_torch`, lr 2e-4 constant, `max_grad_norm` 1, loss on all tokens (`runs/A-r1-T/soup.yaml`, `runs/D-r1-T/soup.yaml`) |
-| rental | vast.ai instance 59706768, quoted $0.3928/h (`launch-events.jsonl`), billed GPU rate $0.373/h (`invoice-lines.txt`); launch 11:40:53Z, job 11:42:33Z to 12:42:35Z (`box/job_wrapper.log`), results pulled 12:46:59Z, instance destroyed 12:47:29Z |
+| run window | launch 11:40:53Z, job 11:42:33Z to 12:42:35Z (`box/job_wrapper.log`), results pulled 12:46:59Z, machine destroyed 12:47:29Z (`launch-events.jsonl`) |
 | set-up | 335 s for torch and the pinned stack (`box/setup.json`), 5 s for liger-kernel, 126 s for the 15 GB model download, 13.5 s to build the data window; 20 cells of 48-59 s (profiled) and 190-252 s (timing) (`box/cell_times.tsv`) |
 
 All paths in the table are under `benchmarks/results/kbit_fp32_ab/`.
@@ -107,8 +107,8 @@ of `steps.jsonl` is equal across A, B, C and D in all three rounds.
 The rule file was written on 2026-11-08 and begins "Written 2026-11-08, BEFORE the first launch." Its last write was at
 11:34Z, its sha256 was taken at 11:37:33Z, and the first launch event is at 11:38:15Z (`launch-events.jsonl`). The sha256 of the
 whole file is
-`edb551d2a99070568724d6587ab32b1ae632f3b134b074618e844875f4ae0350`. The file is kept outside the repository (it also holds a
-spending note that is not published); the parts that decide the outcome are quoted here word for word. The one sentence of
+`edb551d2a99070568724d6587ab32b1ae632f3b134b074618e844875f4ae0350`. The file is kept outside the repository (it also holds
+notes that are not published); the parts that decide the outcome are quoted here word for word. The one sentence of
 the loss section that is not quoted says that A's own profiled-cell versus timing-cell loss on steps 1-9 and the spread of
 each arm over seeds are reported but are not part of pass or fail.
 
@@ -327,9 +327,9 @@ SwiGLU, RMSNorm and RoPE kernels are what a reference would run for the remainin
 
 ## 11. Incidents and deviations
 
-1. **The first rented instance failed and was destroyed before any job ran.** Instance 59706558 was launched at 11:38:15Z, was
-   armed at 11:38:51Z, and was destroyed at 11:39:13Z with the reason "payload delivery failed" (`launch-events.jsonl`); it
-   billed $0.036 for 0.086 GPU hours (`invoice-lines.txt`). One other offer was then rented (instance 59706768); its payload
+1. **The first rented machine failed and was destroyed before any job ran.** It was launched at 11:38:15Z, was
+   armed at 11:38:51Z, and was destroyed at 11:39:13Z with the reason "payload delivery failed" (`launch-events.jsonl`, instance 1).
+   A second machine was then rented (instance 2 in the same file); its payload
    was delivered at 11:42:11Z and the job started at 11:42:33Z.
 2. **Stack against the issue's box.** The pins are the same (torch, transformers, trl, peft, bitsandbytes, accelerate, soup-cli,
    driver), but this environment has no unsloth, xformers or torchao (`requirements-tco.txt`), the card's power limit is 450 W
@@ -344,12 +344,7 @@ SwiGLU, RMSNorm and RoPE kernels are what a reference would run for the remainin
 7. liger-kernel prints two `ImportError` lines at import for optional backends (`_cutedsl`, `_ascend`); the default Triton
    backend was used and the module swap was verified (section 3).
 
-## 12. Cost
-
-$0.515 invoiced for the whole job: instance 59706768 $0.479 (GPU 1.097 h at $0.373/h $0.409, disk $0.022, download 17.7 GB $0.046,
-upload $0.002) and instance 59706558 $0.036 (`invoice-lines.txt`).
-
-## 13. Not measured
+## 12. Not measured
 
 Against the first two acceptance criteria of the issue: the method was followed (same model, config and data in every arm, 5
 warm-up steps, a 3-step profile, an unprofiled median over 100 steps, three interleaved repeats, SM clock beside every tok/s,
@@ -373,7 +368,7 @@ chosen. The rest of the list follows.
 - The fusion work of step 4 (SwiGLU, RMSNorm plus residual, RoPE): only the size of what is left, 395 ms, was measured.
 - Whether the 223 ms of `copy_` under arm D are the head casts (read from op shapes, not tested).
 
-## 14. Files
+## 13. Files
 
 Under `benchmarks/results/kbit_fp32_ab/`:
 
@@ -382,7 +377,7 @@ Under `benchmarks/results/kbit_fp32_ab/`:
 | `tables.md` | the tables above as generated by `p6_post.py` (T1, T2, L1, P1-P4) |
 | `timing.json`, `loss.json`, `profile.json` | the numbers behind sections 6 to 9 |
 | `throttle.txt` | throttle-reason share per timing cell (`throttle_summary.py` over `box/smi_throttle.csv`) |
-| `invoice-lines.txt`, `launch-events.jsonl` | the invoice lines for both instances; the launch, destroy and pull events (owner and offer fields removed) |
+| `launch-events.jsonl` | the launch, destroy and pull events of the two rented machines (numbered 1 and 2; owner, offer and price fields removed) |
 | `runs/<cell>/` | per cell (`A-r1-T`, `A-r1-P`, ...): `steps.jsonl`, `log.jsonl`, `train_begin.json`, `arm_info.json`, `soup.yaml`; timing cells also `result.json` and `gpu_samples.json`; profiled cells also `prof/prof_meta.json` |
 | `box/` | job-level files: `env.txt`, `preflight.txt`, `setup.json`, `model-download.txt`, `data-*`, `cell_times.tsv`, `freeze-with-liger.txt`, `liger-install.txt`, `smi_throttle.csv`, `job_wrapper.log`, `PULLED.json` (sha256 of the result archive), `d-arm-worker-log-excerpt.txt` |
 

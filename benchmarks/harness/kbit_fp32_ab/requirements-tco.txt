@@ -1,5 +1,5 @@
-# Pinned stack for the #2609 step-1 A/B (soup-58 p6).  Same pins as the case1-profile / soup-41 TCO record
-# (soup-archive/2026-11-07/case1-profile/payload/requirements-tco.txt) MINUS unsloth, unsloth_zoo (the Soup arm hid them
+# Pinned stack for the #2609 step-1 A/B.  Same pins as the base harness's pin list
+# MINUS unsloth, unsloth_zoo (the Soup arm hid them
 # anyway: tco_run.py puts None in sys.modules for them) and MINUS xformers/triton/torchao which only unsloth pulled in.
 # torch 2.11.0 (cu128) is installed FIRST by run_tco.sh; nothing here may move it.
 # liger-kernel (arm D only) is installed afterwards by job_p6.sh against `pip freeze` as constraints.

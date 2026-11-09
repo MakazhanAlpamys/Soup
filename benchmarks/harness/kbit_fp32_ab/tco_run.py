@@ -194,7 +194,7 @@ def soup_yaml(case: dict, seed: int, data_path: str, out_dir: str, batch: int | 
         "data:",
         f"  train: {data_path}",
         "  format: chatml",
-        # soup-41 deviation D12: Soup's default is data.train_on_responses_only: true (loss on assistant tokens only);
+        # Deviation D12: Soup's default is data.train_on_responses_only: true (loss on assistant tokens only);
         # the protocol matches "loss on every non-pad token in every arm", so it must be switched off explicitly.
         "  train_on_responses_only: false",
         "  val_split: 0.0",
@@ -360,10 +360,10 @@ def worker(args) -> int:
     out_dir = args.run_dir
     os.makedirs(out_dir, exist_ok=True)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ["TCO_FRAMEWORK"] = args.framework   # PROFILE-8a: tco_profile.py needs to know which arm it is in
+    os.environ["TCO_FRAMEWORK"] = args.framework   # tco_profile.py needs to know which arm it is in
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     if args.framework in ("soup", "hf"):
-        # ARM ISOLATION (soup-41 deviation D9): the pilot found that `soup train` imports unsloth whenever it is
+        # ARM ISOLATION (deviation D9): the pilot found that `soup train` imports unsloth whenever it is
         # installed (commands/train.py "Tip: unsloth is installed"), which patches trl in the Soup process:
         # padding_free is auto-enabled and Soup's rewind recorder switches itself off.  With one shared venv the
         # Soup arm was therefore "Soup + Unsloth patches".  None in sys.modules makes `import unsloth` raise
@@ -667,7 +667,7 @@ def preflight(args) -> int:
         if torch.cuda.is_available():
             out["bf16"] = torch.cuda.is_bf16_supported()
             out["sm"] = ".".join(map(str, torch.cuda.get_device_capability(0)))
-            # host<->device bandwidth, the number Soup's streaming lives on (vast's pcie_bw is a claim)
+            # host<->device bandwidth, the number Soup's streaming lives on (a provider's advertised pcie_bw is a claim)
             buf = torch.empty(1 << 30, dtype=torch.uint8).pin_memory()
             dev = torch.empty(1 << 30, dtype=torch.uint8, device="cuda")
             for _ in range(2):
@@ -719,13 +719,13 @@ def main(argv=None) -> int:
         if framework:
             p.add_argument("framework", choices=C.FRAMEWORKS)
         p.add_argument("--mode", choices=("window", "epoch"), default="window")
-        p.add_argument("--card", help="vast gpu_name of the rented card, e.g. 'RTX 4090'")
+        p.add_argument("--card", help="GPU name of the rented card, e.g. 'RTX 4090'")
         p.add_argument("--price-json", help="price_snapshot.py output (priced by --card)")
         p.add_argument("--usd-per-hour", type=float, help="price input if no snapshot file")
         p.add_argument("--price-source", help="the command that produced --usd-per-hour")
         p.add_argument("--price-date", help="UTC date of that price")
         p.add_argument("--actual-usd-per-hour", type=float,
-                       help="what the instance is really billed (vastai show instances)")
+                       help="what the instance is really billed (the provider's instance listing)")
 
     p_plan = sub.add_parser("plan"); common(p_plan)
     p_pf = sub.add_parser("preflight"); common(p_pf)
