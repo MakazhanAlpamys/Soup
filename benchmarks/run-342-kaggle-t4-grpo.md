@@ -1,8 +1,9 @@
 # Kaggle T4 GRPO watchdog and capacity record (#342)
 
-Four FP16 GRPO arms on single-device Kaggle Tesla T4 sessions on 2026-11-07 (UTC):
-two short smoke runs, one capacity attempt, and a longer capture run with one
-watchdog trip. The inputs were synthetic. The first three arms used direct
+Four FP16 GRPO arms ran on single-device Kaggle Tesla T4 sessions on 2026-11-07
+(UTC): two short smoke runs, one capacity attempt, and a longer capture run with
+one watchdog trip. A separate fixed-batch replay used two T4s with the model
+sharded across them. The inputs were synthetic. The first three arms used direct
 `TRL.GRPOTrainer` calls with Soup's watchdog attached explicitly. The capture arm
 used Soup's GRPO wrapper. These results provide no evidence for or against the
 original H100 BF16 failure in [#342].
@@ -42,6 +43,13 @@ its `[train]` extra, removed the preinstalled `torchao==0.10.0`, and imported
 and `low_cpu_mem_usage=True` in `AutoModelForCausalLM.from_pretrained`.
 
 ### Fourth arm: longer capture run
+
+**Measured (final capture report timestamps).** The retained report records
+`started_at_ns=1794049208993816302` and `finished_at_ns=1794073097407026880`.
+Converted to UTC, these are 2026-11-07 11:00:08.993816302 and
+2026-11-07 17:38:17.407026880. Both are on the date in the header. These bracket
+the report's capture run, including its final assertion, rather than individual
+optimizer steps.
 
 **Source reading (saved launch settings).** The runner checked out
 [`811b94c8bc1ac8164cf3e93cc2a1d0fef7c6e588`][soup-capture], installed its
@@ -129,6 +137,42 @@ per-step hazard of `0.005` were applied, the probability of seeing no events wou
 `0.995^24 ≈ 0.887` for the 24-step run and `0.995^16 ≈ 0.923` for the 16-step run.
 No T4 event rate is estimated here.
 
+## Fixed-batch replay of step 62
+
+**Measured (separate Kaggle replay, two Tesla T4s).** One process reconstructed
+`Qwen/Qwen2.5-7B-Instruct` at Hub revision
+`a09a35458c702b33eeacc393d103063234e8bc28`, using Soup commit
+`811b94c8bc1ac8164cf3e93cc2a1d0fef7c6e588`, Torch `2.11.0+cu130`, CUDA build
+13.0, cuDNN runtime `92700`, Transformers `5.20.2`, TRL `0.29.1`, PEFT `0.21.2`,
+Accelerate `1.15.0`, bitsandbytes `0.50.2`, and Datasets `4.8.5`. The model was
+sharded across both T4s. It used NF4 with FP16 compute, rank-32 LoRA with alpha 64
+and dropout 0.05 on all seven projections, DAPO loss with beta 0.02, and gradient
+checkpointing.
+
+Each arm restored the 392 pre-step trainable tensors, Python and Torch CPU RNG
+states, and both CUDA RNG states. It reused the captured prompt/completion IDs,
+masks, advantages, and reference log-probabilities. Gradients were inspected
+after scaled backward and after unscale, before clipping. No optimizer update
+was performed.
+
+| Loss scale | Unscaled forward loss | Gradient result before clipping |
+|---:|---:|---|
+| 65536 | 0.1427229642868042 | Only the layer-23 `gate_proj.lora_B.default.weight` named above was non-finite, with five positive infinities, one negative infinity, and no NaNs, both before and after unscale |
+| 512 | 0.1427229642868042 | All 392 trainable gradients were finite before and after unscale |
+| 1 | 0.1427229642868042 | All 392 trainable gradients were finite before and after unscale |
+
+**Source reading and inference (saved scaler states and launcher).** The
+historical scale of 65536 was inferred from later saved scaler states and the
+fresh-start launcher; it was not measured in the step-62 capsule. The original
+base-model revision and device map were not recorded. Matching the saved forward
+loss establishes the reported replay comparison; the first overflowing operation
+and the historical H100 cause remain open.
+
+The fingerprints below include the replay report and, for cross-reference, the
+separate pinned CPU control report cited with it. The CPU control is separate
+from this T4 record; the workflow note and CPU probe are reviewed in [#2642].
+Both reports and the capsule stay private.
+
 ## Report fingerprints
 
 SHA-256 of the original retained report bytes.
@@ -146,6 +190,8 @@ report and terminal trainer state are also referenced by fingerprint.
 | Version 9, completed 7B smoke | `9e9698c5b9699373ecf09ceb536e7acc9cd45ab32a756f8e7b58902d83ac76c2` |
 | Longer capture, final report | `3e15cfb72de306e5c91bfe11fe77835dc84aebd48cf1db66b549063043f748c8` |
 | Longer capture, terminal trainer state | `4feb4af39b934dae5362ae9275d9e217246ab69c0bbf861a5a230682816bdc62` |
+| Fixed-batch two-T4 replay report | `c5f97b103687129eecb260b9a511e881879b05f97b1ec74f6653137c8adbbfbf` |
+| Separate pinned CPU control report (cross-reference only) | `bdeea86a2726e8772883cc6502aaf3dac957c0f123fd953210ffa210338e35cc` |
 
 <details>
 <summary>Version 5 report (measured on Kaggle)</summary>
@@ -194,6 +240,7 @@ report and terminal trainer state are also referenced by fingerprint.
 </details>
 
 [#342]: https://github.com/MakazhanAlpamys/Soup/issues/342
+[#2642]: https://github.com/MakazhanAlpamys/Soup/pull/2642
 [#2060]: https://github.com/MakazhanAlpamys/Soup/pull/2060
 [soup-v5]: https://github.com/MakazhanAlpamys/Soup/commit/9ca9819747a624da4cbbff03cc8e1a7d2a81100d
 [soup-v7b]: https://github.com/MakazhanAlpamys/Soup/commit/bcd9898b62e62ac6d74c9d985b40b3bf19155b5d
