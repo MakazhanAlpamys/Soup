@@ -878,6 +878,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+The two lines show the two shapes, and a file uses one of them: a non-blank `negative` on every row, or on none. A mix is refused before the model loads, naming how many rows have a `negative` and how many do not; the validation set is checked on its own.
+
 With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
 **Cross-Encoder (paired sequence classification - `data.format: cross_encoder`):**
@@ -1105,17 +1107,43 @@ rules out `train_on_messages_with_train_field`, which is itself exclusive with
 never both decide a run.
 
 On text SFT it is honoured by the transformers and unsloth backends, which run
-the same `SFTTrainerWrapper.setup()` row builder, and `task: distill` honours it
-too, since distill builds every row that way. On `task: sft` with
+the same `SFTTrainerWrapper.setup()` row builder, and native MLX text SFT, below.
+`task: distill` honours it too, since distill builds every row that way.
+On the transformers and unsloth backends, `task: sft` with
 `modality: vision` or `audio` it is accepted but not applied: those rows are
 built by the vision and audio preparers, which never read it (#1156).
 
-**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
-assistant turn, so the same config trains the last turn on transformers and every
-turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
-`soup doctor --config` reports it.
+**Native MLX text SFT:** `mask_history` selects the last actual assistant message,
+including consecutive assistant turns and a conversation ending in a tool turn.
+All earlier context remains in the input. The existing native response-only rule
+still excludes assistant headers and includes its end marker.
 
-**Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
+Alternatively, set `train_on_responses_only: false` and
+`train_on_messages_with_train_field: true`. Each message's `train: true` selects
+its whole token span (header, content and end marker), even for user, system,
+developer or tool roles. `false` excludes it; missing/`null` uses the assistant-role
+default. A non-boolean non-null flag is refused. This uses the shared per-message
+label policy with verified actual token-prefix boundaries; it does not estimate
+spans from rendered string lengths or apply an approximate alignment fallback.
+
+Both selective modes require chat message rows and verifiable native token
+boundaries. History masking checks the selected final assistant span: a template
+may rewrite ignored earlier reasoning if that span's boundaries remain exact.
+Per-message masking verifies every message boundary. Unsupported template renders
+raise an actionable error. The first training row is checked before training;
+other training and validation rows are checked as they are read. Rows with no
+selected causal target, including a selected turn fully truncated by
+`data.max_length`, are refused rather than training another turn. Each binary
+mask belongs to the original token position before the causal shift; padding has
+zero weight even when PAD=EOS. Batching/truncation retain this alignment. Saved
+adapter metadata records the effective selective flags. Existing assistant-only
+and full-sequence defaults are unchanged; no custom-template or train-on-EOT
+support is added here. Native evidence covers ordinary LoRA with dense and genuine
+4-bit text bases. Selective native masking on vision/audio is explicitly refused
+and reported by `soup doctor`; other task backends retain their existing scope.
+
+**Multimodal vision and audio ignore it (transformers backend):**
+For `modality: vision` and `modality: audio`,
 every text token is supervised. Soup's vision collator masks only padding and image
 tokens, and the audio path only padding. Assistant-only masking would have to locate the
 assistant spans after the processor expands the image or audio tokens, which neither path

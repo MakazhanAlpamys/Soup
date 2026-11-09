@@ -310,6 +310,18 @@ soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output re
 soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
 ```
 
+Interactive chat uses the same component and artifact contract:
+
+```bash
+soup chat --backend mlx --model ./mlx-adapter --temperature 0
+soup chat --backend mlx --model ./mlx-base
+```
+
+Chat preserves conversation history, `/quit`, `/clear` and `/system`.
+Ctrl-C or end-of-input during native generation ends the session with `Goodbye!`;
+its in-memory conversation history is discarded.
+Native adapters passed to the default chat backend are refused with a backend hint.
+
 Inference uses a shared MLX loader and generation implementation. Native Soup
 adapters carry `model`, `num_layers` and resolved `lora_parameters` in
 `adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
@@ -842,7 +854,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 174 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 175 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -851,7 +863,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (174 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
