@@ -19,10 +19,10 @@ The second half is the hang cap. In the nightly run of 2026-10-20 ``test (window
 3.10)`` stayed in one test until the job's 90-minute limit, and a macOS cell of a pull request
 held its runner for 46 minutes on 2026-10-13. The test steps now carry ``--timeout=600
 --timeout-method=thread --max-worker-restart=2`` (pytest-timeout, in the dev extra) and
-``timeout-minutes: 45``. The caps sit far above a healthy run: the slowest single test of
-four recent full cells took under 51 s and the longest test step of the last 7 days 27.7
-minutes. Under ``--dist loadfile`` xdist hands a crashed test to the replacement worker again
-(measured with xdist 3.8.0), which is why the restarts are limited.
+``timeout-minutes: 60`` (45 until 2026-11-07). The caps sit far above a healthy run: the
+slowest single test of four recent full cells took under 51 s and the longest test step of
+the last 7 days 27.7 minutes. Under ``--dist loadfile`` xdist hands a crashed test to the
+replacement worker again (measured with xdist 3.8.0), which is why the restarts are limited.
 
 Nothing here talks to GitHub: the workflow is read as YAML, the ``docs`` step's own shell runs
 under a local bash with ``gh`` replaced by a function, and the expressions are evaluated by the
@@ -561,7 +561,7 @@ class TestAHungTestIsCapped:
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_the_test_step_has_a_time_limit_of_its_own(self, step_name: str) -> None:
         step = next(step for step in _steps("test") if step.get("name") == step_name)
-        assert step["timeout-minutes"] == 45
+        assert step["timeout-minutes"] == 60
 
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_each_test_gets_a_per_test_cap_that_works_on_windows_and_in_a_worker(
@@ -602,11 +602,11 @@ class TestAHungTestIsCapped:
                 assert step["timeout-minutes"] < _jobs()["test"]["timeout-minutes"]
 
     def test_the_job_limit_is_above_every_job_measured_and_above_the_step_limit(self) -> None:
-        """60 minutes: 1.6 times the slowest successful `test` job of 2026-10-12..19 (37.5
-        minutes, 1145 jobs), with room above the 45-minute step for checkout, install and the
-        cache warm-up. It was 90."""
+        """75 minutes: 2.0 times the slowest successful `test` job of 2026-10-12..19 (37.5
+        minutes, 1145 jobs), with room above the 60-minute step for checkout, install and the
+        cache warm-up. It was 90, then 60 (with a 45-minute step) until 2026-11-07."""
         limit = _jobs()["test"]["timeout-minutes"]
-        assert limit == 60
+        assert limit == 75
         assert limit >= 1.5 * SLOWEST_TEST_JOB_MINUTES
         step_limits = [
             step["timeout-minutes"] for step in _steps("test") if "timeout-minutes" in step
@@ -665,4 +665,4 @@ def test_contributing_says_what_caps_a_slow_test() -> None:
     assert "`@pytest.mark.timeout(" in text
     assert "`--timeout=600 --timeout-method=thread --max-worker-restart=2`" in text
     assert "`-o faulthandler_timeout=300`" in text
-    assert "a 60-minute job limit" in text
+    assert "a 60-minute step limit and a 75-minute job limit" in text
