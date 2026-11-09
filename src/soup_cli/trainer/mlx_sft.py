@@ -734,16 +734,19 @@ class MLXSFTTrainerWrapper:
 
         self._apply_lora(self.model)
 
+        from soup_cli.trainer.mlx_lora import check_pattern_output
+
+        manifest = getattr(self, "_lora_manifest", None)
+        check_pattern_output(output_dir, {"model": str(cfg.base), "soup_lora": manifest})
         pattern_metadata = None
-        if getattr(self, "_lora_manifest", None) is not None:
-            from soup_cli.trainer.mlx_lora import check_pattern_output, write_pattern_metadata
+        if manifest is not None:
+            from soup_cli.trainer.mlx_lora import write_pattern_metadata
 
             pattern_metadata = build_mlx_adapter_config(
                 cfg.training.lora, adapter_path=str(output_dir),
                 soup_lora=self._lora_manifest, model=str(cfg.base),
                 num_layers=len(self.model.layers),
             )
-            check_pattern_output(output_dir, pattern_metadata)
 
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)

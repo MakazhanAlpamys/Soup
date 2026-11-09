@@ -433,3 +433,43 @@ def test_incompatible_existing_output_preserves_old_artifact(tmp_path, monkeypat
     with pytest.raises(ValueError, match="fresh output directory"):
         wrapper.train()
     assert {p.name: p.read_bytes() for p in output.glob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_uniform_run_cannot_relabel_same_shape_patterned_output(tmp_path, monkeypatch, quantized):
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    monkeypatch.chdir(tmp_path)
+    base = _base(tmp_path / "base", quantized)
+    output = tmp_path / "patterned"
+    cfg = _config(base, output, dora=False, quantized=quantized)
+    cfg.training.lora.alpha_pattern = {"q_proj": 12}
+    rows = {"train": [{"text": "alpha beta gamma alpha"}] * 2}
+    patterned = MLXSFTTrainerWrapper(cfg)
+    patterned.setup(rows)
+    patterned.train()
+    restored, _ = load_native_model(str(output))
+    assert restored.layers[0].self_attn.q_proj.scale == 3
+    before = {p.name: p.read_bytes() for p in output.glob("*") if p.is_file()}
+
+    uniform_cfg = cfg.model_copy(deep=True)
+    uniform_cfg.training.lora.alpha_pattern = None
+    fresh_cfg = uniform_cfg.model_copy(deep=True)
+    fresh_cfg.output = str(tmp_path / "uniform")
+    fresh = MLXSFTTrainerWrapper(fresh_cfg)
+    fresh.setup(rows)
+    fresh.train()
+    uniform, _ = load_native_model(fresh_cfg.output)
+    assert uniform.layers[0].self_attn.q_proj.scale == 2
+    assert {
+        name: value.shape for name, value in mx.load(str(output / "adapters.safetensors")).items()
+    } == {
+        name: value.shape
+        for name, value in mx.load(str(tmp_path / "uniform" / "adapters.safetensors")).items()
+    }
+    # Identical shapes cannot reveal the stale alpha-only scale to the loader.
+    refused = MLXSFTTrainerWrapper(uniform_cfg)
+    refused.setup(rows)
+    with pytest.raises(ValueError, match="fresh output directory"):
+        refused.train()
+    assert {p.name: p.read_bytes() for p in output.glob("*") if p.is_file()} == before

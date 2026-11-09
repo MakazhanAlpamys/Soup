@@ -155,18 +155,24 @@ def load_pattern_checkpoint(model: Any, checkpoint: str, manifest: dict) -> None
 
 
 def check_pattern_output(output: Path, metadata: dict) -> None:
-    """Never relabel existing checkpoint weights with a different recipe."""
+    """Require fresh output when either side uses a different patterned recipe."""
     import json
 
     if not any(output.glob("*adapters.safetensors")):
         return
     try:
         previous = json.loads((output / "adapter_config.json").read_text())
-        if (previous.get("soup_lora") == metadata["soup_lora"] and
-                previous.get("model") == metadata["model"]):
+    except (OSError, ValueError):
+        previous = None
+    manifest = metadata.get("soup_lora")
+    if manifest is None:
+        # Keep legacy uniform-output reuse, but never reinterpret a patterned
+        # checkpoint with scalar scales, even when all tensor shapes match.
+        if not isinstance(previous, dict) or "soup_lora" not in previous:
             return
-    except (OSError, ValueError, AttributeError):
-        pass
+    elif (isinstance(previous, dict) and previous.get("soup_lora") == manifest and
+          previous.get("model") == metadata["model"]):
+        return
     raise ValueError("MLX patterns require a fresh output directory for a different adapter recipe")
 
 

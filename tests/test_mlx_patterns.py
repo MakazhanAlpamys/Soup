@@ -277,3 +277,18 @@ def test_metadata_accepts_absolute_output_outside_cwd(tmp_path, monkeypatch):
     write_pattern_metadata(output, metadata)
     assert json.loads((output / "adapter_config.json").read_text()) == metadata
     assert not list(output.glob(".soup.*"))
+
+
+def test_uniform_output_reuse_refuses_only_existing_patterned_weights(tmp_path):
+    from soup_cli.trainer.mlx_lora import check_pattern_output
+
+    uniform = {"model": "owner/base", "soup_lora": None}
+    check_pattern_output(tmp_path, uniform)
+    (tmp_path / "adapters.safetensors").write_bytes(b"existing weights")
+    check_pattern_output(tmp_path, uniform)  # Legacy weights without metadata.
+    metadata = tmp_path / "adapter_config.json"
+    metadata.write_text(json.dumps({"model": "owner/base", "lora_parameters": {"rank": 4}}))
+    check_pattern_output(tmp_path, uniform)
+    metadata.write_text(json.dumps({"model": "owner/base", "soup_lora": _manifest()}))
+    with pytest.raises(ValueError, match="fresh output directory"):
+        check_pattern_output(tmp_path, uniform)
