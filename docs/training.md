@@ -1401,7 +1401,7 @@ Keeping the end preserves a chat template's assistant header, which sits at
 the end of the prompt; DPO and IPO keep the start because that is TRL's
 default for `DPOConfig`, and Soup does not change it. Before #1209, DPO and
 ORPO cut every prompt longer than `data.max_length // 2`, including rows that
-fit; `backend: mlx` native DPO, ORPO and SimPO still do (see
+fit. Native MLX DPO, ORPO and SimPO now use the same overflow-only rule (see
 [SimPO on MLX](backends-and-ops.md#simpo-on-mlx)).
 
 ```yaml

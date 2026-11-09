@@ -47,12 +47,13 @@ def _build(
     tokenizer: MockTokenizer | None = None,
     max_prompt_length: int = 6,
     mode: str = "keep_end",
+    max_length: int = 64,
 ):
     tok = tokenizer or MockTokenizer()
     return build_orpo_example(
         row,
         tok,
-        max_length=64,
+        max_length=max_length,
         max_prompt_length=max_prompt_length,
         truncation_mode=mode,
     )
@@ -61,7 +62,7 @@ def _build(
 def test_overlong_prompt_keeps_leading_bos_under_keep_end():
     # Prompt is 10 chars + BOS = 11 tokens; budget is 6 tokens
     row = {"prompt": "0123456789", "chosen": " yes", "rejected": " no"}
-    ex = _build(row, max_prompt_length=6, mode="keep_end")
+    ex = _build(row, max_prompt_length=6, mode="keep_end", max_length=12)
     prompt_ids = ex.chosen_ids[: ex.chosen_prompt_len]
     assert len(prompt_ids) == 6
     assert prompt_ids[0] == BOS
@@ -74,7 +75,7 @@ def test_overlong_prompt_keeps_leading_bos_under_keep_end():
 def test_overlong_prompt_without_bos_drops_start_under_keep_end():
     tok = MockTokenizer(has_bos=False)
     row = {"prompt": "0123456789", "chosen": " yes", "rejected": " no"}
-    ex = _build(row, tokenizer=tok, max_prompt_length=6, mode="keep_end")
+    ex = _build(row, tokenizer=tok, max_prompt_length=6, mode="keep_end", max_length=12)
     prompt_ids = ex.chosen_ids[: ex.chosen_prompt_len]
     assert len(prompt_ids) == 6
     assert BOS not in prompt_ids
@@ -84,7 +85,7 @@ def test_overlong_prompt_without_bos_drops_start_under_keep_end():
 
 def test_overlong_prompt_with_keep_start_keeps_start():
     row = {"prompt": "0123456789", "chosen": " yes", "rejected": " no"}
-    ex = _build(row, max_prompt_length=6, mode="keep_start")
+    ex = _build(row, max_prompt_length=6, mode="keep_start", max_length=12)
     prompt_ids = ex.chosen_ids[: ex.chosen_prompt_len]
     assert len(prompt_ids) == 6
     assert prompt_ids[0] == BOS
