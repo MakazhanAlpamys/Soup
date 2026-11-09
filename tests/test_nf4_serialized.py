@@ -1092,7 +1092,7 @@ def test_every_stage_of_the_import_uses_the_callers_chunk_size(work, monkeypatch
     for stage, chunks in seen.items():
         assert chunks and set(chunks) == {512}, (stage, set(chunks))
     for stage, sizes in reads.items():
-        assert sizes and max(sizes) <= 512, (stage, max(sizes))
+        assert sizes and 0 < min(sizes) and max(sizes) <= 512, (stage, min(sizes), max(sizes))
 
 
 def test_untrusted_names_in_messages_are_made_safe_for_the_terminal(work):
@@ -1203,6 +1203,36 @@ def test_a_file_that_shrank_after_the_headers_were_read_says_how_to_fix_it(tmp_p
     assert str(excinfo.value).endswith(REDOWNLOAD), str(excinfo.value)
 
 
+def test_the_fix_hint_names_config_keys_that_exist():
+    """``training.base`` is not a key (the model is the top-level ``base``) and an unknown key
+    refuses the load, so a hint that names one sends the reader to a second error."""
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+    hint = nf4_serialized._NF4_HINT
+    assert "base" in SoupConfig.model_fields and "quantization" in TrainingConfig.model_fields
+    assert "training.base" not in hint
+    assert "point base at the bf16 original" in hint
+    assert "set training.quantization: 4bit" in hint
+
+
+@pytest.mark.parametrize(
+    ("change", "explained"),
+    [
+        ({"bnb_4bit_compute_dtype": "float16"}, True),
+        ({"bnb_4bit_quant_type": "fp4"}, False),
+        ({"bnb_4bit_use_double_quant": False}, False),
+    ],
+)
+def test_only_the_compute_dtype_refusal_explains_the_bf16_requirement(work, change, explained):
+    source, out = work
+    build_source(source, quant_config={**_QUANT, **change})
+    with pytest.raises(ValueError, match="quantization_config") as excinfo:
+        import_nf4_checkpoint(source, out)
+    message = str(excinfo.value)
+    assert ("Soup streams in bf16" in message) is explained, message
+    assert "training.base" not in message and "point base at" in message
+
+
 # ---- Hugging Face cache snapshots: links into the repo's blob store ------------------------
 def make_hf_cache(tmp_path, source, *, shared_store=False):
     """Lay ``source`` out the way huggingface_hub does: blobs/<etag> and snapshots/<sha>/<name>."""
@@ -1296,6 +1326,155 @@ def test_a_link_outside_a_snapshot_directory_is_still_refused(tmp_path):
     os.symlink(str(real), os.path.join(source, "config.json"))
     with pytest.raises(ValueError, match="is not a Hugging Face cache snapshot"):
         plan_nf4_import(source)
+
+
+def _spy_on_files(monkeypatch, forbidden):
+    """Record every open / isfile / getsize of a path in ``forbidden`` (a link and its target)."""
+    import builtins
+
+    bad = set()
+    for path in forbidden:  # as spelled, and with the folder resolved (a short Windows name)
+        shown = os.path.abspath(str(path))
+        bad.add(os.path.normcase(shown))
+        bad.add(os.path.normcase(
+            os.path.join(os.path.realpath(os.path.dirname(shown)), os.path.basename(shown))
+        ))
+    touched = []
+    real_open, real_isfile, real_getsize = builtins.open, os.path.isfile, os.path.getsize
+
+    def hit(kind, path):
+        if isinstance(path, (str, bytes, os.PathLike)):
+            if os.path.normcase(os.path.abspath(os.fsdecode(path))) in bad:
+                touched.append((kind, os.fsdecode(path)))
+
+    def spy_open(file, *args, **kwargs):
+        hit("open", file)
+        return real_open(file, *args, **kwargs)
+
+    def spy_isfile(path):
+        hit("isfile", path)
+        return real_isfile(path)
+
+    def spy_getsize(path):
+        hit("getsize", path)
+        return real_getsize(path)
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    monkeypatch.setattr(os.path, "isfile", spy_isfile)
+    monkeypatch.setattr(os.path, "getsize", spy_getsize)
+    return touched
+
+
+@pytest.mark.requires_symlink
+def test_an_index_that_is_a_link_out_of_the_checkpoint_is_never_opened(work, tmp_path, monkeypatch):
+    source, out = work
+    build_source(source, files=2)
+    index = os.path.join(source, "model.safetensors.index.json")
+    outside = tmp_path / "outside.json"
+    os.replace(index, outside)
+    os.symlink(str(outside), index)
+    touched = _spy_on_files(monkeypatch, [index, outside])
+    with pytest.raises(ValueError, match="is not a Hugging Face cache snapshot"):
+        plan_nf4_import(source)
+    assert touched == []
+    assert not os.path.exists(out)
+
+
+@pytest.mark.requires_symlink
+def test_a_snapshot_index_link_out_of_the_cache_is_never_opened(tmp_path, monkeypatch):
+    source = str(tmp_path / "src")
+    build_source(source, files=2)
+    _repo, snapshot = make_hf_cache(tmp_path, source)
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"weight_map": {"a": "b"}}')
+    link = snapshot / "model.safetensors.index.json"
+    link.unlink()
+    os.symlink(str(outside), link)
+    touched = _spy_on_files(monkeypatch, [link, outside])
+    with pytest.raises(ValueError, match="points outside the Hugging Face blob store"):
+        import_nf4_checkpoint(str(snapshot), str(tmp_path / "out"))
+    assert touched == []
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("victim", ["config.json", "model.safetensors"])
+def test_a_snapshot_link_into_another_repos_blobs_is_refused(tmp_path, victim):
+    """The allowed stores are THIS repo's blobs and the marked cache-wide store, not the whole
+    cache directory: another repo's file is a valid file, in the cache, and still not ours."""
+    import shutil
+
+    source = str(tmp_path / "src")
+    build_source(source)
+    _repo, snapshot = make_hf_cache(tmp_path, source)
+    foreign_blobs = tmp_path / "hub" / "models--other--repo" / "blobs"
+    foreign_blobs.mkdir(parents=True)
+    foreign = foreign_blobs / ("f" * 40)
+    shutil.copy2(os.path.join(source, victim), foreign)
+    link = snapshot / victim
+    link.unlink()
+    os.symlink(str(foreign), link)
+    with pytest.raises(ValueError, match="points outside the Hugging Face blob store"):
+        import_nf4_checkpoint(str(snapshot), str(tmp_path / "out"))
+    assert not os.path.exists(tmp_path / "out")
+
+# ---- which files are the checkpoint ----------------------------------------------------------
+def test_a_consolidated_file_beside_indexed_shards_is_ignored(work):
+    """The index names the shards; ``consolidated.safetensors`` is the mistral-inference copy
+    of the same weights and is never opened (#1806): here it is not even a safetensors file."""
+    source, out = work
+    build_source(source, files=2)
+    with open(os.path.join(source, "consolidated.safetensors"), "wb") as handle:
+        handle.write(b"this is not a safetensors file")
+    result = import_nf4_checkpoint(source, out)
+    assert result.verified is True
+    assert [name for name, _size, _mtime in result.index.source_files] == [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ]
+    assert verify_nf4_import(source, out).verified is True
+
+
+def test_more_weight_files_than_the_bound_are_refused_before_any_is_read(work):
+    source, out = work
+    build_source(source)
+    os.remove(os.path.join(source, "model.safetensors"))
+    for number in range(4097):
+        open(os.path.join(source, f"model-{number + 1:05d}-of-04097.safetensors"), "wb").close()
+    with pytest.raises(ValueError, match=r"too many weight files \(4097 > 4096\)"):
+        plan_nf4_import(source)
+    assert not os.path.exists(out)
+
+
+def test_a_directory_without_weights_is_refused(work):
+    source, out = work
+    build_source(source)
+    os.remove(os.path.join(source, "model.safetensors"))
+    with pytest.raises(FileNotFoundError, match=r"no \.safetensors weight files found") as caught:
+        import_nf4_checkpoint(source, out)
+    assert "importing needs a safetensors checkpoint" in str(caught.value)
+    assert not os.path.exists(out)
+
+
+def test_a_directory_with_only_a_consolidated_file_is_refused_by_name(work):
+    source, out = work
+    build_source(source)
+    os.replace(
+        os.path.join(source, "model.safetensors"), os.path.join(source, "consolidated.safetensors")
+    )
+    with pytest.raises(FileNotFoundError, match="consolidated.safetensors") as caught:
+        import_nf4_checkpoint(source, out)
+    assert "are not part of one" in str(caught.value)
+    assert not os.path.exists(out)
+
+
+def test_an_index_naming_a_file_the_directory_lacks_is_refused(work):
+    source, out = work
+    build_source(source, files=2)
+    os.remove(os.path.join(source, "model-00002-of-00002.safetensors"))
+    with pytest.raises(FileNotFoundError, match="not found in the checkpoint directory") as caught:
+        import_nf4_checkpoint(source, out)
+    assert "model-00002-of-00002.safetensors" in str(caught.value)
+    assert not os.path.exists(out)
 
 
 # ---- quantization_config.llm_int8_skip_modules --------------------------------------------

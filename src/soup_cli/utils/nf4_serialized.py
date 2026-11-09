@@ -20,6 +20,14 @@ The flow is plan, write, verify, commit:
 4. Only then is ``index.json`` written, so an interrupted import leaves a directory
    with no commit point.
 
+The checkpoint's files are the ones transformers loads (``utils.checkpoint_files``): with
+``model.safetensors.index.json``, exactly the files its ``weight_map`` names, so a
+``consolidated.safetensors`` beside the shards is ignored. A symlink in the checkpoint
+directory is refused, with one exception: in a canonical Hugging Face cache snapshot
+(``.../models--org--name/snapshots/<commit>``) a link is followed only when it points into
+the same repo's own ``blobs`` directory or the cache-wide Xet store. Every file is read
+through its real path, never through the link.
+
 The index records ``quant="nf4"``, ``double_quant=True`` and ``quant_device="serialized"``
 (nothing was quantised on a device). Wiring this into the sharder and the trainer is
 a separate change; nothing imports this module yet.
@@ -86,8 +94,8 @@ HF_REQUIRED_QUANTIZATION = (
 )
 #: What to do about a checkpoint this importer refuses for its quantisation.
 _NF4_HINT = (
-    "use a double-quantised bitsandbytes NF4 upload (nf4, bfloat16), or point training.base "
-    "at the bf16 original and set training.quantization: 4bit"
+    "use a double-quantised bitsandbytes NF4 upload (nf4, bfloat16), or point base at the "
+    "bf16 original and set training.quantization: 4bit"
 )
 #: What to do about a file whose layout is broken.
 _REDOWNLOAD = "re-download the checkpoint, the file looks truncated or corrupt"
@@ -431,10 +439,14 @@ def _check_config_quantization(config: Mapping[str, Any]) -> Tuple[str, ...]:
     for field, wanted, default in HF_REQUIRED_QUANTIZATION:
         got = quant.get(field, default)
         if not hf_setting_matches(got, wanted):
+            why = (
+                " (the import stores bf16 statistics and Soup streams in bf16)"
+                if field == HF_COMPUTE_DTYPE_KEY
+                else ""
+            )
             raise ValueError(
                 f"config.json quantization_config.{field} is {_label(repr(got))}; "
-                f"{wanted!r} is required (the import stores bf16 statistics and Soup streams "
-                f"in bf16); {_NF4_HINT}"
+                f"{wanted!r} is required{why}; {_NF4_HINT}"
             )
     skip = quant.get("llm_int8_skip_modules")
     if skip is None:
@@ -653,8 +665,12 @@ def plan_nf4_import(source_dir: str) -> Nf4ImportPlan:
     config = _read_json_file(_contained_file(root, "config.json", "checkpoint"), "config.json")
     skip_modules = _check_config_quantization(config)
 
-    from soup_cli.utils.checkpoint_files import checkpoint_files
+    from soup_cli.utils.checkpoint_files import INDEX_FILE, checkpoint_files
 
+    # The index is opened BY NAME inside checkpoint_files: check that it is the checkpoint's
+    # own file (or a link into its cache repo's blob store) before anything opens it.
+    if os.path.lexists(os.path.join(root, INDEX_FILE)):
+        _contained_file(root, INDEX_FILE, "checkpoint")
     selected = checkpoint_files(root)
     names = sorted(selected.weights)
     if not names:
