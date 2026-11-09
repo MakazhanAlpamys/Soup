@@ -279,13 +279,33 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
 
 def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Reject a lossy format choice before constructing any preference trainer."""
-    if cfg.task not in PREFERENCE_PAIR_TASKS:
+    if cfg.task != "kto" and cfg.task not in PREFERENCE_PAIR_TASKS:
         return
+
     from soup_cli.data.loader import last_load_outcome
 
-    required = {"prompt", "chosen", "rejected"}
     outcome = last_load_outcome()
     fmt = outcome.fmt or cfg.data.format
+
+    # kto rows must be {prompt, completion, label}; auto-detection may pick a
+    # different format (llava, chatml, …) which will cause KeyError: 'prompt'
+    # once the trainer starts.  Catch this before any model is loaded (#2423).
+    if cfg.task == "kto":
+        kto_required = {"prompt", "completion", "label"}
+        for split in ("train", "val"):
+            rows = dataset.get(split, [])
+            for index, row in enumerate(rows, 1):
+                if isinstance(row, dict) and kto_required.issubset(row):
+                    continue
+                console.print(
+                    f"[red]Invalid kto dataset:[/] {split} row {index} loaded as "
+                    f"format {markup_escape(repr(fmt))} lacks prompt, completion or label. "
+                    "Use data.format: kto with kto rows."
+                )
+                raise typer.Exit(1)
+        return
+
+    required = {"prompt", "chosen", "rejected"}
     for split in ("train", "val"):
         rows = dataset.get(split, [])
         for index, row in enumerate(rows, 1):
