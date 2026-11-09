@@ -66,7 +66,6 @@ YAML_USERS = {
     "utils/onboarding.py": ("safe_dump",),
     "utils/ra_dit_run.py": ("safe_dump",),
     "utils/recipe_dag.py": ("YAMLError",),
-    "utils/terraform_plan.py": ("YAMLError", "safe_dump"),
 }
 
 _YAML_PACKAGES = ("yaml", "ruamel")

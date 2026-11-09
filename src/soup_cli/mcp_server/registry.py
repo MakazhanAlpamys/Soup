@@ -489,11 +489,9 @@ def tool_profile(args: dict) -> dict:
         allow_network=False,
         gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
     )
-    if result is None:
-        raise McpToolError(
-            "batch_size, max_length or the model's size (over 1,000B parameters) is "
-            "outside the estimate's range"
-        )
+    if not isinstance(result, dict):
+        # The reason names a field and a limit, never a value from the config (#2306).
+        raise McpToolError(result.reason)
     return finish_profile(
         result,
         seq_len=cfg.data.max_length,
