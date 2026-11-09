@@ -40,7 +40,10 @@ from the original failure. [Tagged schema][soup-config] · [Tagged wrapper][soup
 **Source reading (PyTorch report #196678, v2.13.0 CUDA 13.0 build).**
 The author reports “EFFICIENT_ATTENTION and MATH are clean on the same inputs”
 while cuDNN returned NaN query gradients and a finite forward. The directed
-input used low logsumexp and a key length of 64 modulo 128. [Primary report][torch-report]
+input required an explicit `attn_mask` (including an all-True mask),
+`seq_len % 128 == 64`, and a row logsumexp below about -88.7. The report's
+same-input cuDNN control with `is_causal=True` and no mask tensor was clean.
+[Primary report][torch-report]
 
 **Source reading (NVIDIA cuDNN Frontend PR #628, head
 `1fb3fc2c779e0209e65642dbd80b838f623441dc`).** NVIDIA describes how the
@@ -67,7 +70,9 @@ call. The guard is distinct from the directed reproducer's chosen inputs.
    inputs, RNG, per-rank raw loss statistics, and pre-clip gradient boundaries.
 2. Trace the policy attention call and any checkpoint recomputation. Record
    the actual ATen operator and CUDA kernel, padded Q/K/V lengths and strides,
-   mask shape/type, causal flag, gradient requirement, and incoming gradient.
+   whether a mask tensor was supplied or causality was implicit, mask shape/type,
+   causal flag, gradient requirement, and incoming gradient. This distinguishes
+   the report's explicit-mask trigger from its clean implicit-causal control.
 3. If the first bad boundary is SDPA, replay identical tensors and layout
    through cuDNN, Efficient, and Math in fresh processes. Record backend
    rejection separately from finite or non-finite results. Compare with the
