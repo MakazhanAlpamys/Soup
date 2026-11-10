@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.commands import cache as cache_cmd
 from soup_cli.trainer import stream_setup
 from soup_cli.utils.layer_cache_slots import list_base_slots, prune_slots
 
@@ -124,13 +125,15 @@ def test_symlinked_slot_ignored(root, tmp_path_factory):
     assert (target / "f").exists()
 
 
-def test_hostile_name_renders(root):
-    _slot(root, "org__m@[red]x", age=OLD - 100)
+def test_hostile_name_renders(root, monkeypatch):
+    # A narrow console must not put a line break inside the path (soft_wrap), so no widening.
+    monkeypatch.setattr(cache_cmd.console, "_width", 20)
+    hostile = _slot(root, "org__m@[red]x", age=OLD - 100)
     _slot(root, "org__m@z")
     result = runner.invoke(
         app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
     )
-    assert result.exit_code == 0 and "[red]x" in result.output
+    assert result.exit_code == 0 and str(hostile) in result.output
 
 
 def test_cli_prune_requires_yes(root):
