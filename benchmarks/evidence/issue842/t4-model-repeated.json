@@ -1,0 +1,1101 @@
+{
+  "hardware": {
+    "card": "Tesla T4",
+    "sm": "75",
+    "vram_bytes": 15636037632,
+    "cuda_runtime": "13.0",
+    "driver": "580.178.04",
+    "packages": {
+      "torch": "2.11.0+cu130",
+      "bitsandbytes": "0.50.2",
+      "peft": "0.21.2",
+      "transformers": "5.20.2"
+    },
+    "dtype": "native fp16",
+    "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]"
+  },
+  "tokens": 3,
+  "shape": {
+    "transformers_version": "5.20.2",
+    "architectures": null,
+    "output_hidden_states": false,
+    "return_dict": true,
+    "dtype": null,
+    "chunk_size_feed_forward": 0,
+    "is_encoder_decoder": false,
+    "id2label": {
+      "0": "LABEL_0",
+      "1": "LABEL_1"
+    },
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "problem_type": null,
+    "vocab_size": 64,
+    "hidden_size": 4096,
+    "intermediate_size": 26624,
+    "num_hidden_layers": 4,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "hidden_act": "silu",
+    "max_position_embeddings": 128,
+    "initializer_range": 0.02,
+    "rms_norm_eps": 1e-06,
+    "use_cache": false,
+    "pad_token_id": null,
+    "bos_token_id": 1,
+    "eos_token_id": 2,
+    "pretraining_tp": 1,
+    "tie_word_embeddings": true,
+    "rope_parameters": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    },
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "mlp_bias": false,
+    "head_dim": 128,
+    "_name_or_path": "",
+    "model_type": "llama",
+    "output_attentions": false
+  },
+  "buffers": 2,
+  "scale_cache": false,
+  "checkpoint_recomputation": true,
+  "arms": {
+    "unsafe": {
+      "repeats": [
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "dequant": 25,
+              "kernel": 24
+            }
+          },
+          "native_ctx_reads": {
+            "same_generation": 14,
+            "refilled_same_layer": 11
+          }
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "dequant": 25,
+              "kernel": 24
+            }
+          },
+          "native_ctx_reads": {
+            "same_generation": 14,
+            "refilled_same_layer": 11
+          }
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "dequant": 25,
+              "kernel": 24
+            }
+          },
+          "native_ctx_reads": {
+            "same_generation": 14,
+            "refilled_same_layer": 11
+          }
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "dequant": 25,
+              "kernel": 24
+            }
+          },
+          "native_ctx_reads": {
+            "same_generation": 14,
+            "refilled_same_layer": 11
+          }
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "dequant": 25,
+              "kernel": 24
+            }
+          },
+          "native_ctx_reads": {
+            "same_generation": 14,
+            "refilled_same_layer": 11
+          }
+        }
+      ],
+      "pinned": true,
+      "pass": false
+    },
+    "repair": {
+      "repeats": [
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "kernel": 28,
+              "dequant": 25
+            }
+          },
+          "native_ctx_reads": {}
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "kernel": 28,
+              "dequant": 25
+            }
+          },
+          "native_ctx_reads": {}
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "kernel": 28,
+              "dequant": 25
+            }
+          },
+          "native_ctx_reads": {}
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "kernel": 28,
+              "dequant": 25
+            }
+          },
+          "native_ctx_reads": {}
+        },
+        {
+          "forward": {
+            "finite": true,
+            "exact": true,
+            "max_abs": 0.0
+          },
+          "backward": {
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.0.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.1.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.2.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.q_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_A.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            },
+            "base_model.model.model.layers.3.self_attn.v_proj.lora_B.default.weight": {
+              "finite": true,
+              "exact": true,
+              "max_abs": 0.0
+            }
+          },
+          "paths": {
+            "forward": {
+              "kernel": 28
+            },
+            "backward": {
+              "kernel": 28,
+              "dequant": 25
+            }
+          },
+          "native_ctx_reads": {}
+        }
+      ],
+      "pinned": true,
+      "pass": true
+    }
+  },
+  "layer_file_bytes": [
+    190426004,
+    190426004,
+    190426004,
+    190426004
+  ],
+  "resident_paths": {
+    "forward": {
+      "kernel": 28
+    },
+    "backward": {
+      "dequant": 28,
+      "kernel": 24
+    }
+  },
+  "pass": false
+}
