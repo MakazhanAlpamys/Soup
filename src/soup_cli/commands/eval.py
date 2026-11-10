@@ -219,11 +219,11 @@ def aider(
 
     tracker = None
     if run_id:
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         if tracker.get_run(run_id) is None:
-            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
 
@@ -819,7 +819,7 @@ def compare(
 ):
     """Compare eval results between two training runs."""
     from soup_cli.eval.leaderboard import compare_runs
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
@@ -827,10 +827,14 @@ def compare(
     for rid in [run1, run2]:
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]Run not found: {rid}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
             raise typer.Exit(1)
 
-    comparison = compare_runs(tracker, run1, run2)
+    try:
+        comparison = compare_runs(tracker, run1, run2)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
         console.print("[yellow]No eval results found for these runs.[/]")
@@ -897,7 +901,11 @@ def leaderboard(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    lb = build_leaderboard_from_tracker(tracker)
+    try:
+        lb = build_leaderboard_from_tracker(tracker)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not lb.entries:
         console.print("[yellow]No eval results found.[/]")
@@ -1590,3 +1598,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register the retention-ledger subcommand (eval retention)
+from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
+
+_register_retention(app, console)

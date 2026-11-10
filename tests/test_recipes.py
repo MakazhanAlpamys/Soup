@@ -1832,6 +1832,7 @@ class TestV025NewRecipes:
         Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
         Task-variant for #275 added 1 (qwen3.5-2b-dpo) -> 171.
         Task-variant for #275 added 1 (qwen3.5-0.8b-dpo) -> 172.
+        Task-variant for #275 added 1 (qwen3.5-27b-dpo) -> 173.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
@@ -2014,3 +2015,15 @@ class TestR1DistillLlamaAndDpoRecipes:
         assert use_result.exit_code == 0
         content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
         assert "base: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" in content
+
+
+class TestQwen35LargeMoeGrpoRecipe:
+    """The #275 122B reasoning row is discoverable through public catalog APIs."""
+
+    def test_122b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-122b-a10b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="122b")

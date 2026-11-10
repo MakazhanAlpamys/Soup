@@ -279,13 +279,33 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
 
 def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Reject a lossy format choice before constructing any preference trainer."""
-    if cfg.task not in PREFERENCE_PAIR_TASKS:
+    if cfg.task != "kto" and cfg.task not in PREFERENCE_PAIR_TASKS:
         return
+
     from soup_cli.data.loader import last_load_outcome
 
-    required = {"prompt", "chosen", "rejected"}
     outcome = last_load_outcome()
     fmt = outcome.fmt or cfg.data.format
+
+    # kto rows must be {prompt, completion, label}; auto-detection may pick a
+    # different format (llava, chatml, …) which will cause KeyError: 'prompt'
+    # once the trainer starts.  Catch this before any model is loaded (#2423).
+    if cfg.task == "kto":
+        kto_required = {"prompt", "completion", "label"}
+        for split in ("train", "val"):
+            rows = dataset.get(split, [])
+            for index, row in enumerate(rows, 1):
+                if isinstance(row, dict) and kto_required.issubset(row):
+                    continue
+                console.print(
+                    f"[red]Invalid kto dataset:[/] {split} row {index} loaded as "
+                    f"format {markup_escape(repr(fmt))} lacks prompt, completion or label. "
+                    "Use data.format: kto with kto rows."
+                )
+                raise typer.Exit(1)
+        return
+
+    required = {"prompt", "chosen", "rejected"}
     for split in ("train", "val"):
         rows = dataset.get(split, [])
         for index, row in enumerate(rows, 1):
@@ -369,11 +389,18 @@ def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_from_config``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``.
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
+    printed before the model's details are read from the Hub, without the offline
+    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import hardware_fit_input_from_config
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE_BEFORE_DOWNLOAD
 
-    return hardware_fit_input_from_config(cfg, gpu_memory_gb=gpu_memory_gb)
+    return hardware_fit_input_from_config(
+        cfg,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+    )
 
 
 #: How the pre-flight panel names each sharding mode it prices per card (#2300).
@@ -1188,19 +1215,8 @@ def train(
         )
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
-    # Applied before SoupConfig validation via load_config(training_overrides=),
-    # so --minillm-on-policy can still select student-only sampling when the
-    # YAML leaves mix at 0 (#692 / #977). The assignment below is therefore a
-    # no-op when the flag was set; it stays so a later reader sees the flag
-    # take effect on cfg.training.
+    # Applied at config load time via load_config(training_overrides=).
     if minillm_on_policy:
-        if not cfg.training.minillm_enabled:
-            console.print(
-                "[red]--minillm-on-policy requires "
-                "training.minillm_enabled=true (task='distill')[/]"
-            )
-            raise typer.Exit(1)
-        cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
     # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
@@ -2813,6 +2829,59 @@ def _resolve_checkpoint(
     return None
 
 
+def _resume_failure_reason(
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
+) -> str:
+    """Say which path ``_resolve_checkpoint`` searched and why it found nothing.
+
+    The resolvers return a bare ``None`` for several different situations: a
+    missing path, a path that is not a directory (or an adapter file on MLX), an
+    output directory that does not exist, and one that holds no checkpoint
+    entry. This re-walks the same checks, only after resolution failed, so the
+    message names the path the user can fix (#2296).
+    """
+    from soup_cli.utils.terminal import for_terminal
+
+    if backend == "mlx":
+        if resume.lower() == "auto":
+            base = Path(output_dir)
+            base_text = for_terminal(output_dir)
+            if not base.exists():
+                return f"'{base_text}' does not exist"
+            if not base.is_dir():
+                return f"'{base_text}' is not a directory"
+            return f"no adapter file in '{base_text}'"
+        checkpoint_path = Path(resume)
+        path_text = for_terminal(resume)
+        if not checkpoint_path.exists():
+            return f"'{path_text}' does not exist"
+        return (
+            "--resume on MLX takes an adapter file, "
+            f"but '{path_text}' is not a file"
+        )
+
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+        if experiment_name:
+            base = base / experiment_name
+        base_text = for_terminal(str(base))
+        if not base.exists():
+            return f"'{base_text}' does not exist"
+        if not base.is_dir():
+            return f"'{base_text}' is not a directory"
+        return f"no checkpoint-N directory in '{base_text}'"
+
+    checkpoint_path = Path(resume)
+    path_text = for_terminal(resume)
+    if not checkpoint_path.exists():
+        return f"'{path_text}' does not exist"
+    return f"'{path_text}' is not a directory"
+
+
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on
     failure. Extracted out of ``train()`` (#634 review) so the
@@ -2832,7 +2901,10 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")
     else:
-        console.print("[red]No checkpoint found to resume from.[/]")
+        reason = _resume_failure_reason(
+            resume, cfg.output, cfg.experiment_name, backend=cfg.backend
+        )
+        console.print(f"[red]No checkpoint found to resume from: {reason}[/]")
         raise typer.Exit(1)
     return resume_from
 

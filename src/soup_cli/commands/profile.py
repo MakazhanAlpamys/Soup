@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -76,6 +78,54 @@ def profile(
     ),
 ):
     """Estimate memory, speed, and GPU requirements BEFORE training."""
+    # Refusals and the config loader's advisories print on stdout; with --json that
+    # stream is the document's, so they go to stderr and the document is written
+    # after the redirect ends.
+    with _diagnostics_to_stderr(json_output):
+        result, gpu_memory_gb, gpu_memory_source = _estimate(
+            config=config,
+            gpu=gpu,
+            model=model,
+            seq=seq,
+            batch=batch,
+            method=method,
+            lora_r=lora_r,
+            optimizer=optimizer,
+            gradient_checkpointing=gradient_checkpointing,
+        )
+    _emit(result, json_output, gpu_memory_gb, gpu_memory_source)
+
+
+@contextlib.contextmanager
+def _diagnostics_to_stderr(json_output: bool):
+    """In ``--json`` mode, send what the block prints on stdout to stderr."""
+    if json_output:
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    else:
+        yield
+
+
+def _say_hub_request() -> None:
+    """The line printed before the estimate's first request to the Hub (#2306)."""
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE
+
+    console.print(f"[dim]{HUB_REQUEST_LINE}[/]")
+
+
+def _estimate(
+    *,
+    config: Optional[str],
+    gpu: Optional[str],
+    model: Optional[str],
+    seq: Optional[int],
+    batch: Optional[int],
+    method: Optional[str],
+    lora_r: Optional[int],
+    optimizer: Optional[str],
+    gradient_checkpointing: Optional[str],
+) -> tuple[dict, float, str]:
+    """The estimate and the card it was priced on; exits 1 with a message if there is none."""
     if model is not None:
         if config is not None:
             console.print("[red]--model and --config cannot be used together.[/]")
@@ -87,10 +137,9 @@ def profile(
                 "fine-tune trains no adapters."
             )
             raise typer.Exit(1)
-        _profile_model(
+        return _profile_model(
             model,
             gpu=gpu,
-            json_output=json_output,
             seq=2048 if seq is None else seq,
             batch=4 if batch is None else batch,
             method=method,
@@ -101,7 +150,6 @@ def profile(
                 MODEL_QUERY_CHECKPOINTING,
             ),
         )
-        return
     query = {
         "--seq": seq,
         "--batch": batch,
@@ -134,13 +182,13 @@ def profile(
     # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
     # card is not one to resolve `auto` checkpointing on, so it prices as full then.
     result = profile_from_config(
-        cfg, gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb
+        cfg,
+        gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
+        on_hub_request=_say_hub_request,
     )
-    if result is None:
-        console.print(
-            "[red]Cannot estimate this run:[/] batch_size, max_length or the model's "
-            "size (over 1,000B parameters) is outside the range the estimate supports."
-        )
+    if not isinstance(result, dict):
+        # The reason names a field and a limit, never a value from the config (#2306).
+        console.print(f"[red]Cannot estimate this run:[/] {escape(result.reason)}.")
         raise typer.Exit(1)
     finish_profile(
         result,
@@ -148,7 +196,7 @@ def profile(
         gpu_memory_gb=gpu_memory_gb,
         gpu_memory_source=gpu_memory_source,
     )
-    _emit(result, json_output, gpu_memory_gb, gpu_memory_source)
+    return result, gpu_memory_gb, gpu_memory_source
 
 
 def _optimizers() -> frozenset:
@@ -174,14 +222,13 @@ def _profile_model(
     model: str,
     *,
     gpu: Optional[str],
-    json_output: bool,
     seq: int,
     batch: int,
     method: str,
     lora_r: int,
     optimizer: str,
     gradient_checkpointing: str,
-) -> None:
+) -> tuple[dict, float, str]:
     """``soup profile --model``: the config's estimate, from the model alone (#2049)."""
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory(gpu)
     try:
@@ -194,6 +241,7 @@ def _profile_model(
             optimizer=optimizer,
             gradient_checkpointing=gradient_checkpointing,
             gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
+            on_hub_request=_say_hub_request,
         )
     except ModelShapeUnavailableError as exc:
         console.print(
@@ -213,7 +261,7 @@ def _profile_model(
         gpu_memory_gb=gpu_memory_gb,
         gpu_memory_source=gpu_memory_source,
     )
-    _emit(result, json_output, gpu_memory_gb, gpu_memory_source)
+    return result, gpu_memory_gb, gpu_memory_source
 
 
 def _emit(result: dict, json_output: bool, gpu_memory_gb: float, gpu_memory_source: str) -> None:

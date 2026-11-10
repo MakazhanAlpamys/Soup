@@ -20,6 +20,7 @@ from typing import Optional
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
 from soup_cli.utils.crash import redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 # error_message is operator-facing text read in `soup runs show`, not a
 # diagnostic dump — capped well short of a full traceback so one runaway
@@ -141,6 +142,44 @@ def _get_db_path() -> Path:
     soup_dir = Path.home() / SOUP_DIR
     soup_dir.mkdir(parents=True, exist_ok=True)
     return soup_dir / EXPERIMENTS_DB
+
+
+def _run_id_prefix_pattern(run_id: str) -> str:
+    """LIKE pattern for the run ids that start with ``run_id``.
+
+    LIKE wildcards in user input are escaped so a crafted run_id can't widen
+    the match (% expands to "any").
+    """
+    escaped = (
+        run_id.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"{escaped}%"
+
+
+def run_lookup_failure(
+    tracker: ExperimentTracker,
+    run_id: str,
+    *,
+    markup: bool = True,
+    name_missing_id: bool = True,
+) -> str:
+    """Say why ``tracker.get_run(run_id)`` returned ``None``.
+
+    Call it only on that branch, so a successful lookup does no extra query.
+    No match gives ``Run not found: <id>``; a prefix that matches several runs
+    says so instead of claiming the run doesn't exist (#2470). With ``markup``
+    the id goes through :func:`for_terminal`, ready for a Rich console; without
+    it only control characters are removed, for callers that escape the whole
+    line themselves or don't print to a terminal. ``name_missing_id=False``
+    gives the bare ``Run not found`` for no match, which the web endpoints return.
+    """
+    shown = for_terminal(run_id) if markup else strip_control(run_id)
+    count = tracker.count_run_id_matches(run_id)
+    if count > 1:
+        return f"Run id prefix '{shown}' matches {count} runs; give more characters"
+    return f"Run not found: {shown}" if name_missing_id else "Run not found"
 
 
 def generate_run_id() -> str:
@@ -532,17 +571,10 @@ class ExperimentTracker:
         ).fetchone()
 
         if row is None:
-            # Try prefix match. Escape LIKE wildcards in user input so a
-            # crafted run_id can't widen the match (% expands to "any").
-            escaped = (
-                run_id.replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
             rows = conn.execute(
                 "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC",
-                (f"{escaped}%",),
+                (_run_id_prefix_pattern(run_id),),
             ).fetchall()
             if len(rows) == 1:
                 row = rows[0]
@@ -550,6 +582,25 @@ class ExperimentTracker:
                 return None  # ambiguous prefix
 
         return self._reconcile_orphaned_run(dict(row)) if row else None
+
+    def count_run_id_matches(self, run_id: str) -> int:
+        """How many runs ``run_id`` names, using the same lookup as :meth:`get_run`.
+
+        An exact id counts as 1. Otherwise it is the number of runs whose id
+        starts with ``run_id``, so 0 means no such run and 2 or more means the
+        prefix is ambiguous (``get_run`` returns ``None`` for both).
+        """
+        conn = self._get_conn()
+        exact = conn.execute(
+            "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if exact is not None:
+            return 1
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE run_id LIKE ? ESCAPE '\\'",
+            (_run_id_prefix_pattern(run_id),),
+        ).fetchone()
+        return count
 
     def get_metrics(self, run_id: str) -> list[dict]:
         """Get all metric rows for a run, ordered by step."""

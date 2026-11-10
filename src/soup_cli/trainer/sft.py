@@ -11,6 +11,7 @@ from typing import Any, Optional, Tuple
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -730,9 +731,6 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
-        from transformers import TrainingArguments
-        from trl import SFTTrainer
-
         # Enable Rich progress bar for HuggingFace downloads
         _enable_hf_transfer_progress()
 
@@ -765,6 +763,26 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        # #1464: a streamed run holds its runtime from here on, and training's
+        # cleanup context does not exist until train(). The streamed load above
+        # releases the runtime on its own failures; this covers everything after it.
+        try:
+            self._finish_setup(dataset, cfg, tcfg, use_vision=use_vision, use_audio=use_audio)
+        except BaseException:
+            try:
+                self._close_stream_runtime()
+            except Exception as close_error:
+                console.print(
+                    "[yellow]Could not release the layer-streaming runtime: "
+                    f"{for_terminal(str(close_error))}[/]"
+                )
+            raise
+
+    def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
+        """The rest of setup(), once the model is loaded (#1464)."""
+        from transformers import TrainingArguments
+        from trl import SFTTrainer
 
         # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
         # model, which has no get_nb_trainable_parameters(); fall back to a
@@ -2522,7 +2540,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if resume_from_checkpoint is not None:
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()
 

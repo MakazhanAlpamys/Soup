@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.77.1"
+version = "0.77.2"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -307,3 +307,15 @@ markers = [
     "requires_hardlink: creates a hardlink; skipped when this account or filesystem cannot",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
+
+[tool.coverage.run]
+# Modules that need the GPU stack to import or run: the Triton kernels and the code that imports
+# them. A CPU run can never execute them; tests/test_packed_lora_*_gpu.py covers them
+# (`pytest -m gpu --no-cov`, Linux CUDA). Everything that imports on CPU stays measured, and its
+# GPU-only functions carry a `# pragma: no cover` that names the tests.
+omit = [
+  "*/soup_cli/kernels/packed_lora/triton/*",
+  "*/soup_cli/kernels/packed_lora/layers.py",
+  "*/soup_cli/kernels/packed_lora/model.py",
+  "*/soup_cli/kernels/packed_lora/runtime.py",
+]

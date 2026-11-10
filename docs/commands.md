@@ -69,6 +69,7 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
+soup eval retention --model <m> --label v3 [--adapter <dir>] [--add-task NAME=PATH ...] [--record] [--threshold 0.05] [--ledger retention.json] [--output r.json] [--config soup.yaml] [--chat-template-kwargs JSON] [--require-history]  Accumulated forgetting across a series of versions: every control task vs its best-ever score (exit 0=no regression / 2=regression / 3=usage / 1=runtime)
 soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
 soup eval discover <data>                       Discover a held-out canary set
 soup eval lock <design>                         Freeze a design as a checksummed suite
@@ -162,7 +163,7 @@ soup data educational --input rows.jsonl -o scored.jsonl  Score educational valu
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
-soup profile --config soup.yaml --json       Machine-readable output
+soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics on stderr
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
@@ -186,7 +187,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 172 ready-made recipes
+soup recipes list                             List all 176 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml

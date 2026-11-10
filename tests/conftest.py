@@ -11,6 +11,13 @@ import pytest
 
 from tests import _source_scan
 
+# MLX runs float32 matmuls at TF32 precision by default (``MLX_ENABLE_TF32``,
+# ml-explore/mlx#3860). On an Apple M6 GPU that puts a float32 matmul about 1e-2
+# off, so the native MLX tests' float32 oracles fail there (#2385). MLX reads the
+# variable once, at its first matmul, so it is set here, before any test runs one;
+# an explicit MLX_ENABLE_TF32=1 is left alone.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 

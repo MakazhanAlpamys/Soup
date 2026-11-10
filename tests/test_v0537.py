@@ -1389,7 +1389,7 @@ class TestAnthropicMessagesStreaming:
         # actually invoking a model.
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("hello world", 3, 2),
+            return_value=("hello world", 3, 2, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)
@@ -1415,7 +1415,7 @@ class TestAnthropicMessagesStreaming:
 
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("response", 1, 1),
+            return_value=("response", 1, 1, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)
@@ -1440,7 +1440,7 @@ class TestAnthropicMessagesStreaming:
 
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("x", 1, 1),
+            return_value=("x", 1, 1, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)

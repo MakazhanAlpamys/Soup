@@ -12,6 +12,8 @@ The objective is the one Soup's transformers path trains on TRL 0.29.1, whose
   own ``GRPOTrainer._compute_loss`` (needs torch + trl, no MLX);
 - generation, the adapter-off reference and training through the real wrapper
   on a tiny random Llama (needs MLX and mlx-lm). No downloads.
+
+Step 2, pre-quantized 4-bit bases, is ``tests/test_mlx_grpo_4bit.py``.
 """
 
 from __future__ import annotations
@@ -924,6 +926,21 @@ def _wrapper(tmp_path, monkeypatch, *, train=None, val=None, model_seed=0, **tra
     return wrapper
 
 
+class TestFloat32Matmul:
+    def test_a_float32_matmul_is_float32_precise(self):
+        """``tests/conftest.py`` turns off MLX's TF32 default for float32 matmuls
+        (#2385); with it on, an Apple M6 GPU's matmul is off by about 1e-2 here and
+        the float32 oracles of these tests compare against TF32 results."""
+        mx = pytest.importorskip("mlx.core")
+
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal((4, 32)).astype(np.float32)
+        b = rng.standard_normal((32, 64)).astype(np.float32)
+        out = np.array(mx.array(a) @ mx.array(b))
+        np.testing.assert_allclose(out, a.astype(np.float64) @ b.astype(np.float64),
+                                   rtol=0, atol=1e-5)
+
+
 class _RecordingOptimizer:
     """Delegates to the real (clipping) optimizer; snapshots after each update."""
 
@@ -1031,10 +1048,21 @@ class TestTraining:
 
     def test_micro_batches_accumulate_to_one_batch_without_dividing(self, tmp_path, monkeypatch):
         """DAPO: one normaliser, the token count of the whole update; no /accum."""
+        from soup_cli.trainer.rewards import validate_reward_funcs
+
         def run(path, batch_size, accum):
             wrapper = _wrapper(path, monkeypatch, train=_prompt_rows(2), batch_size=batch_size,
                                gradient_accumulation_steps=accum, optimizer="sgd",
                                scheduler="constant", seed=7)
+            wrapper._prepare(wrapper._dataset)
+            group = wrapper._units.num_generations
+
+            # The first completion of each group scores 1 and the others 0, so every
+            # group has unequal rewards whatever the device samples (#2385).
+            def first_of_group(completions, **_):
+                return [float(index % group == 0) for index in range(len(completions))]
+
+            wrapper._reward_fn = validate_reward_funcs(first_of_group)
             result = wrapper.train()
             return result, _flat(wrapper.model.trainable_parameters())
 
@@ -1237,26 +1265,27 @@ class TestTraining:
         with pytest.raises(ValueError, match="resume is not implemented for MLX GRPO"):
             wrapper.train(resume_from_checkpoint=str(tmp_path / "x.safetensors"))
 
-    def test_a_quantized_base_is_refused(self, tmp_path, monkeypatch):
+    def test_a_base_quantized_other_than_4bit_affine_is_refused(self, tmp_path, monkeypatch):
         """`quantization: 4bit` is the default and only names a pre-quantized base on
-        MLX, so the base itself is checked once loaded (Step 2 adds 4-bit)."""
+        MLX, so the base itself is checked once loaded. 4-bit affine bases train
+        (Step 2, tests/test_mlx_grpo_4bit.py); an 8-bit one is refused."""
         nn = pytest.importorskip("mlx.nn")
         wrapper = _wrapper(tmp_path, monkeypatch)
-        nn.quantize(wrapper.model, group_size=32, bits=4)
-        with pytest.raises(ValueError, match="trains a dense base"):
+        nn.quantize(wrapper.model, group_size=32, bits=8)
+        with pytest.raises(ValueError, match="bits=8, mode='affine'"):
             wrapper.train()
 
-    def test_setup_refuses_a_quantized_base_right_after_loading(self, tmp_path, monkeypatch):
+    def test_setup_refuses_such_a_base_right_after_loading(self, tmp_path, monkeypatch):
         nn = pytest.importorskip("mlx.nn")
         import soup_cli.utils.mlx as mlx_utils
         from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
 
         model = _tiny_llama(vocab=_TRAIN_VOCAB)
-        nn.quantize(model, group_size=32, bits=4)
+        nn.quantize(model, group_size=32, bits=8)
         monkeypatch.setattr(mlx_utils, "load_mlx_model",
                             lambda *a, **k: (model, DigitTokenizer(_TRAIN_CHARS)))
         wrapper = MLXGRPOTrainerWrapper(_config(quantization="4bit"))
-        with pytest.raises(ValueError, match="is quantized"):
+        with pytest.raises(ValueError, match="pre-quantized at 4 bits"):
             wrapper.setup({"train": _prompt_rows(2)})
 
 
@@ -1947,7 +1976,7 @@ class TestAdapterCoverage:
         assert [m.scale for m in _lora_modules(model)] == before and model.extra.scale == 2.0
 
 
-class TestDenseCheck:
+class TestBaseCheck:
     def test_a_quantized_switch_layer_is_refused(self, tmp_path, monkeypatch):
         pytest.importorskip("mlx.core")
         pytest.importorskip("mlx.nn")
@@ -1956,8 +1985,8 @@ class TestDenseCheck:
 
         wrapper = _wrapper(tmp_path, monkeypatch)
         wrapper.model.experts = QuantizedSwitchLinear(64, 64, 2, group_size=32)
-        with pytest.raises(ValueError, match="first: experts"):
-            wrapper._check_dense(wrapper.model)
+        with pytest.raises(ValueError, match="first: experts .QuantizedSwitchLinear, bits=4"):
+            wrapper._check_base(wrapper.model)
 
     def test_any_module_storing_quantization_scales_is_refused(self, tmp_path, monkeypatch):
         mx = pytest.importorskip("mlx.core")
@@ -1970,10 +1999,11 @@ class TestDenseCheck:
 
         wrapper = _wrapper(tmp_path, monkeypatch)
         wrapper.model.odd = Stub()
-        with pytest.raises(ValueError, match="first: odd"):
-            wrapper._check_dense(wrapper.model)
+        with pytest.raises(ValueError, match="first: odd .Stub, bits=None, mode=None"):
+            wrapper._check_base(wrapper.model)
         del wrapper.model["odd"]
-        wrapper._check_dense(wrapper.model)
+        wrapper._check_base(wrapper.model)
+        assert wrapper._base_quantization is None
 
 
 # --------------------------------------------------------------------------

@@ -3,11 +3,13 @@
 import sys
 from unittest.mock import patch
 
+import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 runner = CliRunner()
 
@@ -1156,6 +1158,38 @@ def test_doctor_nonexistent_config_exits_2(tmp_path, monkeypatch):
     out = _strip_ansi(result.output)
     assert "Config not found:" in out
     assert "All checks passed!" not in out
+
+
+@pytest.mark.parametrize(
+    ("path", "display"),
+    [
+        pytest.param("missing.yaml", "missing.yaml", id="plain"),
+        pytest.param("[red]missing.yaml", "[red]missing.yaml", id="literal-tag"),
+        pytest.param("missing[/red].yaml", "missing[/red].yaml", id="unmatched-closing-tag"),
+        pytest.param(r"missing\[unclosed.yaml", r"missing\[unclosed.yaml", id="literal-backslash"),
+        pytest.param("missing\x9b\u202e.yaml", "missing.yaml", id="controls"),
+        pytest.param(
+            "missing-:smile:.yaml",
+            "missing-:smile:.yaml",
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="colon in Windows filename"),
+            id="literal-emoji-alias",
+        ),
+    ],
+)
+def test_doctor_missing_config_prints_literal_path(tmp_path, monkeypatch, path, display):
+    _mock_clean_doctor_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(width=160, height=100))
+
+    result = make_cli_runner().invoke(app, ["doctor", "--config", path])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert isinstance(result.exception, SystemExit)
+    # Check raw stdout before removing color escapes.
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert f"Config not found: {display}" in strip_ansi(result.stdout).splitlines()
+    assert "All checks passed!" not in result.stdout
+    assert result.stderr == ""
 
 
 def test_doctor_load_error_exception_exits_2(monkeypatch):

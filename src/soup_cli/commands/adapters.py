@@ -455,6 +455,14 @@ def merge(
             )
             raise typer.Exit(2)
 
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths([("adapter", path) for path in adapters], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
     # operator passes --allow-unscanned. WARN is advisory-only. Runs BEFORE the
@@ -766,7 +774,7 @@ def arithmetic(
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
     from soup_cli.utils.adapter_merge import write_merged_adapter
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
     name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -810,6 +818,16 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    # Refuse writing over a referenced adapter before any adapter is read (#2358).
+    try:
+        ensure_distinct_paths(
+            [(f"adapter {n}", path) for n, path in zip(referenced, ref_paths)],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     from soup_cli.utils.adapter_diff import (
         WRITE_ADAPTER_DEPS,
@@ -1619,19 +1637,99 @@ def adapter_pr(
     )
 
 
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line according to Microsoft C runtime rules,
+    with single-quote grouping support for cross-platform compatibility.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_dquote = False
+    in_squote = False
+    has_token = False
+
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+
+        if not in_dquote and not in_squote and char in (" ", "\t"):
+            if has_token:
+                args.append("".join(current))
+                current = []
+                has_token = False
+            index += 1
+            continue
+
+        if not in_dquote:
+            if in_squote:
+                if char == "'":
+                    in_squote = False
+                    index += 1
+                    continue
+                current.append(char)
+                index += 1
+                continue
+            elif char == "'" and not has_token:
+                in_squote = True
+                has_token = True
+                index += 1
+                continue
+
+        has_token = True
+
+        if char == "\\":
+            num_bs = 0
+            while index < length and command[index] == "\\":
+                num_bs += 1
+                index += 1
+
+            if index < length and command[index] == '"':
+                current.append("\\" * (num_bs // 2))
+                if num_bs % 2 != 0:
+                    current.append('"')
+                    index += 1
+                else:
+                    if in_dquote and index + 1 < length and command[index + 1] == '"':
+                        current.append('"')
+                        index += 2
+                    else:
+                        in_dquote = not in_dquote
+                        index += 1
+            else:
+                current.append("\\" * num_bs)
+            continue
+
+        if char == '"':
+            if in_dquote and index + 1 < length and command[index + 1] == '"':
+                current.append('"')
+                index += 2
+            else:
+                in_dquote = not in_dquote
+                index += 1
+            continue
+
+        current.append(char)
+        index += 1
+
+    if has_token:
+        args.append("".join(current))
+
+    if in_dquote or in_squote:
+        raise ValueError("No closing quotation")
+
+    return args
+
+
 def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
     """Split the template before substitution, preserving native path spelling."""
     import shlex
 
     if windows is None:
         windows = os.name == "nt"
-    argv = shlex.split(command, posix=not windows)
     if windows:
-        argv = [
-            word[1:-1] if len(word) >= 2 and word.startswith('"') and word.endswith('"')
-            else word
-            for word in argv
-        ]
+        argv = _split_windows_command(command)
+    else:
+        argv = shlex.split(command, posix=True)
     if not argv or not argv[0]:
         raise ValueError("--eval-command must name a program")
     return argv
