@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Optional
 
 SUPPORTED_UNLEARN_METHODS: frozenset[str] = frozenset({"npo", "simnpo", "rmu"})
 
@@ -140,14 +140,16 @@ def validate_unlearn_alpha(value: object) -> float:
     return fval
 
 
-def validate_unlearn_compat(*, task: str, backend: str) -> None:
+def validate_unlearn_compat(*, task: str, backend: str, method: Optional[str] = None) -> None:
     """Schema-time gate for ``task='unlearn'``.
 
     Rejects:
     - non-string / bool args (defence-in-depth, mirrors v0.52.0
       ``validate_classifier_compat`` policy).
     - non-unlearn task.
-    - ``backend == 'mlx'`` (no MLX unlearn path in v0.61.0).
+    - ``backend == 'mlx'`` with any ``method`` but ``simnpo``, the one MLX
+      unlearning path (#2005). The rest of its scope is refused in
+      ``SoupConfig._validate_mlx_task_support``.
 
     Multi-method specifics (forget_set required, retain_set conditional)
     are enforced at the SoupConfig cross-validator level so the schema
@@ -169,10 +171,11 @@ def validate_unlearn_compat(*, task: str, backend: str) -> None:
             f"validate_unlearn_compat called with task={task!r}; "
             f"expected task='unlearn'"
         )
-    if backend == "mlx":
+    if backend == "mlx" and method != "simnpo":
         raise ValueError(
-            "task='unlearn' is not supported on backend=mlx: there is no MLX "
-            "unlearning path. Use backend: transformers."
+            f"task='unlearn' with unlearn_method={method!r} is not supported on "
+            "backend=mlx: MLX runs unlearn_method: simnpo only. Use backend: "
+            "transformers for npo and rmu."
         )
 
 

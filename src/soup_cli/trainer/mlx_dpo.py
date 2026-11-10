@@ -501,6 +501,12 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
     #: NaN. DPO keeps its documented behaviour: a diverged run reports NaN.
     fail_on_nonfinite = False
 
+    #: Apply the last accumulation group even when it has fewer than
+    #: ``gradient_accumulation_steps`` batches, instead of cutting the plan to a
+    #: whole number of groups. Off for the preference objectives, which cut as
+    #: MLX SFT does; MLX SimNPO (``mlx_unlearn.py``) trains every forget row.
+    flush_partial_accumulation = False
+
     def _build_example(self, row: dict, max_length: int) -> Any:
         return build_preference_example(
             row, self.tokenizer, max_length=max_length, max_prompt_length=max_length // 2,
@@ -663,14 +669,14 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         plan = self._plan_batches(len(train_examples), batch_size, epoch_count, data_seed)
         batches_per_epoch = max(1, len(plan) // epoch_count)
         iters = len(plan)
-        if accum > 1:
+        if accum > 1 and not self.flush_partial_accumulation:
             # Like MLX SFT: no partial accumulation group is ever flushed.
             cut = max(accum, iters - iters % accum)
             if cut < iters:
                 self._on_plan_cut(plan[cut:], cut, accum)
             iters = cut
             plan = (plan * math.ceil(iters / len(plan)))[:iters]
-        total_updates = max(1, iters // accum)
+        total_updates = max(1, math.ceil(iters / accum))
 
         self._apply_lora(self.model)
         if tcfg.gradient_checkpointing:
@@ -782,21 +788,24 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 # weights saved are those of the last update.
                 if save_steps > 0 and it % save_steps == 0:
                     save(output_dir / f"{it:07d}_adapters.safetensors")
-                if it % accum:
+                if it % accum and it != iters:
                     continue
-                if accum > 1:
-                    grads = tree_map(lambda g: g / accum, grads)
+                # The batches in this group: ``accum``, except a last partial
+                # group, which only flush_partial_accumulation leaves in the plan.
+                size = (it - 1) % accum + 1
+                if size > 1:
+                    grads = tree_map(lambda g: g / size, grads)
                 optimizer.update(self.model, grads)
                 mx.eval(self.model.parameters(), optimizer.state)
                 grads = None
-                update = it // accum
-                step = {k: v / accum for k, v in group.items()}
+                update = math.ceil(it / accum)
+                step = {k: v / size for k, v in group.items()}
                 losses.append(step["loss"])
                 group = {k: 0.0 for k in group}
 
                 # Evaluate once per epoch: when this update crossed an epoch
                 # boundary, or on the last update.
-                crossed = it // batches_per_epoch > (it - accum) // batches_per_epoch
+                crossed = it // batches_per_epoch > (it - size) // batches_per_epoch
                 val = evaluate() if crossed or it == iters else None
                 if val is not None:
                     final_eval = val

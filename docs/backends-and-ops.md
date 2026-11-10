@@ -143,7 +143,8 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO, and SimNPO unlearning
+(`task: unlearn` with `unlearn_method: simnpo`, below). `task: preference`
 with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
 native MLX trainer, with the same load-time restrictions and doctor support
 report as the explicit native task. The configured task remains `preference`;
@@ -154,7 +155,7 @@ without a native trainer are refused when the config is loaded, with an error
 naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
-`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO, GRPO and unlearning ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### DPO on MLX
 
@@ -322,6 +323,59 @@ That shows the objective moving, not alignment quality.
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
+
+#### SimNPO unlearning on MLX
+
+`task: unlearn` with `unlearn_method: simnpo` and `backend: mlx` runs the MLX DPO
+loop with no reference model and the objective the transformers backend runs
+for SimNPO ([#2005](https://github.com/MakazhanAlpamys/Soup/issues/2005)). With
+`s` the summed log-probability of a forget row's target tokens and `n` the
+number of them scored:
+
+`loss = (2/beta) * mean(softplus(beta * (s/n - gamma))) + unlearn_alpha * retain CE`
+
+- **Scope:** SimNPO only, on a Llama-architecture text base (`model_type:
+  llama`), with standard LoRA and `quantization: none`. `unlearn_method: npo` and
+  `rmu` are refused at load, naming the method, and so are `training.lora.r: 0`,
+  non-text `modality`, DoRA, LoRA+ and `training.eval_steps`. A base of another
+  architecture is refused after it loads, before training. Use `backend:
+  transformers` for any of these.
+- **Beta is 0.1 and gamma 0**, the values the transformers path uses; neither is
+  a setting. `unlearn_alpha` weights the retain term, 1 when omitted; `0` keeps
+  the forget term alone. The retain CE is a token mean over the retain rows'
+  target tokens across the batch.
+- **Rows** come from `data.forget_set` and `data.retain_set` through the
+  transformers path's loader (`data.train` is not read), and are tokenized as it
+  does: the prompt as one user turn of the tokenizer's chat template (the raw
+  prompt without one), then the target and EOS, cut to `data.max_length` from
+  the end. Each file's skipped lines are counted and printed by reason (blank,
+  not JSON, over the size limit, no usable prompt and target). A row with no
+  scored target token left after the cut is skipped and counted, never scored
+  against a clamped length.
+- **Refused before the model loads:** a `forget_set` or a `retain_set` that is
+  set but yields no usable row, naming the file. Without a `retain_set`, the run
+  prints the transformers path's warning and trains the forget term alone.
+- **Batching:** each micro-batch takes `batch_size` forget rows and the next
+  `batch_size` retain rows, round-robin. Unlike the preference objectives, the
+  last partial batch and the last partial accumulation group train, so every
+  forget row is used in every epoch; each micro-batch's loss counts equally in
+  its group.
+- **Reported:** each logged step prints the loss, the forget term and the retain
+  CE. The run result adds `updates`, the forget and retain rows scored, and the
+  rows skipped for having no target token.
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
+  unlearn`, `unlearn_method: simnpo`, `simnpo_beta`, `simnpo_gamma`, the
+  effective `unlearn_alpha`, the forget and retain row counts and the base
+  model), loadable with `mlx_lm.load(base, adapter_path=output)`.
+- **What it shows:** a lower measured likelihood of the forget rows. It does not
+  establish erasure, privacy protection or compliance.
+- **Qualified on an Apple M6** with `HuggingFaceTB/SmolLM2-360M-Instruct`
+  ([record](../benchmarks/run-2005-mlx-simnpo-m6.md)), on three seeds: the
+  trained forget rows' per-token NLL rose by 0.27 to 0.34 nats, and the adapter
+  reloaded exactly in a fresh process. The record's rule **failed** on its
+  held-out check: held-out rows on the forget topic became more likely, as
+  unrelated held-out rows did, under the retain term. Do not read the run as
+  forgetting a topic beyond the rows trained on.
 
 #### KTO on MLX
 
@@ -675,7 +729,7 @@ what ran is recoverable from the output directory.
 ### Transformers on MPS
 
 The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO,
-SimPO, KTO and GRPO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
+SimPO, KTO, GRPO and SimNPO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
 The decision comes from a live MPS allocation probe rather than a macOS version

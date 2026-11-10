@@ -19,8 +19,8 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo``, ``task=kto``
-and ``task=grpo`` on ``backend=mlx``, plus multimodal vision and audio on
+both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo``, ``task=kto``,
+``task=grpo`` and ``task=unlearn`` on ``backend=mlx``, plus multimodal vision and audio on
 ``backend=transformers`` (#1156). Other combinations report nothing rather than guessing,
 which is the honest default for a table that has not been reviewed for them.
 """
@@ -210,6 +210,12 @@ _MLX_GRPO: tuple[SupportEntry, ...] = tuple(
     entry for entry in _MLX_DPO if entry.field in _MLX_GRPO_FIELDS
 )
 
+#: MLX SimNPO unlearning (#2005) runs MLX DPO's loop with no reference, so it ignores
+#: the same fields, less NEFTune, which every ``task: unlearn`` config refuses at load.
+_MLX_UNLEARN: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_DPO if entry.field != "training.neftune_alpha"
+)
+
 _MLX_SELECTIVE_NON_TEXT = tuple(
     SupportEntry(
         name, REJECTED, "native selective message masks support text SFT only", trainer_reads=True,
@@ -237,6 +243,7 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("simpo", "mlx", "text"): _MLX_SIMPO,
     ("kto", "mlx", "text"): _MLX_KTO,
     ("grpo", "mlx", "text"): _MLX_GRPO,
+    ("unlearn", "mlx", "text"): _MLX_UNLEARN,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -306,6 +313,16 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/grpo.py",
         "soup_cli/trainer/rewards.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("unlearn", "mlx", "text"): (
+        "soup_cli/trainer/mlx_unlearn.py",
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/unlearn.py",
         "soup_cli/trainer/_trl_compat.py",
         "soup_cli/trainer/loss_summary.py",
     ),
