@@ -106,6 +106,13 @@ def _diagnostics_to_stderr(json_output: bool):
         yield
 
 
+def _say_hub_request() -> None:
+    """The line printed before the estimate's first request to the Hub (#2306)."""
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE
+
+    console.print(f"[dim]{HUB_REQUEST_LINE}[/]")
+
+
 def _estimate(
     *,
     config: Optional[str],
@@ -175,13 +182,13 @@ def _estimate(
     # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
     # card is not one to resolve `auto` checkpointing on, so it prices as full then.
     result = profile_from_config(
-        cfg, gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb
+        cfg,
+        gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
+        on_hub_request=_say_hub_request,
     )
-    if result is None:
-        console.print(
-            "[red]Cannot estimate this run:[/] batch_size, max_length or the model's "
-            "size (over 1,000B parameters) is outside the range the estimate supports."
-        )
+    if not isinstance(result, dict):
+        # The reason names a field and a limit, never a value from the config (#2306).
+        console.print(f"[red]Cannot estimate this run:[/] {escape(result.reason)}.")
         raise typer.Exit(1)
     finish_profile(
         result,
@@ -234,6 +241,7 @@ def _profile_model(
             optimizer=optimizer,
             gradient_checkpointing=gradient_checkpointing,
             gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
+            on_hub_request=_say_hub_request,
         )
     except ModelShapeUnavailableError as exc:
         console.print(

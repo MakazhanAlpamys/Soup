@@ -135,13 +135,20 @@ concurrency:
 # save runner-minutes that are only ever spent when a job is already hung.
 #
 # 2026-10-20: `test` is 60, not 90, and its two pytest steps carry a limit of
-# their own (45; see the first of them). The table above predates the parallel
-# run (2026-10-07). Measured 2026-10-12..19 over 1145 successful `test` jobs: the
+# their own (45 then, 60 since 2026-11-07; see the first of them). The table above
+# predates the parallel run (2026-10-07). Measured 2026-10-12..19 over 1145 successful `test` jobs: the
 # slowest took 37.5 minutes (Windows, before the warm-cache fix of 2026-10-19
 # took 6.3 of them; 23.3 since), ubuntu 31.0, macOS 31.7. 60 is 1.6x the slowest
 # and leaves 15 minutes above the step limit for checkout, install and the warm-up.
 # What it saves: a job that hangs ends 30 minutes sooner (the nightly run of
 # 2026-10-20 held one Windows cell for the full 90).
+#
+# 2026-11-07: the two pytest steps go from 45 to 60 minutes and the `test` job from 60
+# to 75. On the Windows and macOS cells the step sometimes reached 45 minutes (one
+# Windows job ran 18:12Z -> 19:00Z on 2026-11-05 and failed with only PASSED lines in
+# its log; a macOS step on 2026-11-06 took 38 min 21 s), and each timeout cost a re-run
+# on the shared queue. The job limit moves with the step limit so that it keeps the 15
+# minutes above it for checkout, install and the warm-up, and stays above it at all.
 
 jobs:
   # Quick runs, the required cells at approval, the full matrix every night, and
@@ -515,7 +522,7 @@ jobs:
         # neither listed here nor exempted there. The four non-test_mlx files it
         # found (#2308) are the three below and the exempt upstream tripwire in
         # tests/test_issue23_mlx_val_loss_producer.py.
-        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py tests/test_mlx_unlearn.py tests/test_mlx_grpo.py tests/test_mlx_grpo_4bit.py tests/test_issue683_mlx_response_masking.py tests/test_issue686_mlx_optimizer_schedule.py tests/test_rewind_wiring.py tests/test_mlx_prompt_cap_bos.py
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py tests/test_mlx_unlearn.py tests/test_mlx_grpo.py tests/test_mlx_grpo_4bit.py tests/test_issue683_mlx_response_masking.py tests/test_issue686_mlx_optimizer_schedule.py tests/test_rewind_wiring.py tests/test_mlx_prompt_cap_bos.py tests/test_mlx_preference_prompt_budget.py
   torchao-contract:
     needs: plan
     # Not on a pull request, approval run included: it is not a required check.
@@ -868,7 +875,7 @@ jobs:
       # is what keeps a required one blocking a merge.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       # Force UTF-8 mode on all platforms. Without this, Windows defaults to
       # cp1252 ('charmap'), which fails when importing upstream packages that
@@ -1106,7 +1113,7 @@ jobs:
         # default limit of four restarts per worker (9 failures of one test in that run), which
         # at ten minutes each would outlast the step. `--max-worker-restart=2` bounds it at three
         # tries, 30 minutes, and a one-off wedge still passes on the retry (the run stays red:
-        # the first failure is kept). `timeout-minutes: 45` on the step is the backstop for a
+        # the first failure is kept). `timeout-minutes: 60` on the step is the backstop for a
         # hang neither can see (a worker that never exits). `-o faulthandler_timeout=300`
         # (pytest's own, no dependency) dumps every thread's stack into the log once a test has
         # run for five minutes, before the cap above ends it, so a hang leaves its location in
@@ -1122,7 +1129,7 @@ jobs:
         # last 7 days took 27.7 minutes, so none of the caps can fire on a healthy run. A test
         # that needs longer marks itself `@pytest.mark.timeout(N)`.
         if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        timeout-minutes: 45
+        timeout-minutes: 60
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Run unit tests without coverage
         # Same options as the step above minus the coverage reports; `--junitxml` stays in
@@ -1133,7 +1140,7 @@ jobs:
         # The exact opposite of the step above: every cell of a pull request, and every cell
         # of any run but ubuntu / 3.11. The same two caps.
         if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11')
-        timeout-minutes: 45
+        timeout-minutes: 60
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
         # The cell that measures coverage, nowhere else: ubuntu / 3.11 of a run that is not a
