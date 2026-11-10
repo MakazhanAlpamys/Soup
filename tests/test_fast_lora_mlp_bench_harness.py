@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import strip_ansi
 
 pytest.importorskip("torch")
 
@@ -99,7 +100,7 @@ def test_invalid_measurement_arguments_exit_two(args, monkeypatch, capsys):
         harness.main()
 
     assert error.value.code == 2
-    assert "iters must be at least 5" in capsys.readouterr().err
+    assert "iters must be at least 5" in strip_ansi(capsys.readouterr().err)
 
 
 def test_missing_cuda_exits_two_without_producing_a_result(monkeypatch, capsys):
@@ -112,4 +113,4 @@ def test_missing_cuda_exits_two_without_producing_a_result(monkeypatch, capsys):
         harness.main()
 
     assert error.value.code == 2
-    assert "a CUDA GPU is required" in capsys.readouterr().err
+    assert "a CUDA GPU is required" in strip_ansi(capsys.readouterr().err)
