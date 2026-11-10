@@ -121,10 +121,7 @@ app.add_typer(
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
 )
 app.command()(migrate.migrate)
-app.add_typer(
-    cache.app, name="cache",
-    help="Layer-stream cache: list and prune stale slots.",
-)
+app.command(name="prune-layer-cache")(cache.prune_layer_cache)
 app.add_typer(
     adapters.app, name="adapters",
     help="Adapter management: list, info, compare LoRA adapters.",

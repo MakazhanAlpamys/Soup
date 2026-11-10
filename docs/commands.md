@@ -168,8 +168,7 @@ soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
-soup cache list --model org/base              List layer-stream cache slots of a base
-soup cache prune --model org/base [--yes]    Remove unreferenced slots (dry run without --yes)
+soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters

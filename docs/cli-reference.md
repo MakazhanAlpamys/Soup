@@ -59,7 +59,6 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup bench`](#soup-bench) | Benchmark a model: inference speed (infer, the default) or training (train). |
 | [`soup bom`](#soup-bom) | CycloneDX ML-BOM + SPDX AI bill-of-materials emitter (v0.59.0). |
 | [`soup build`](#soup-build) | dbt-for-SFT DAG: validate, plan, and materialise dataset transforms. |
-| [`soup cache`](#soup-cache) | Layer-stream cache: list and prune stale slots. |
 | [`soup can`](#soup-can) | Soup Cans: pack/inspect/verify/fork shareable .can artifacts. |
 | [`soup card`](#soup-card) | Generate a HuggingFace model card from a registry entry. |
 | [`soup chat`](#soup-chat) | Chat with a fine-tuned model in the terminal. |
@@ -102,6 +101,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup plugins`](#soup-plugins) | Discover, list, enable, and disable Soup plugins. |
 | [`soup probe`](#soup-probe) | Activation probes: sleeper-agent defection / honesty / misuse / pairwise interference / SAE feature diff / probe pack (v0.66.0, truth+harm v0.71.8). |
 | [`soup profile`](#soup-profile) | Estimate memory, speed, and GPU requirements BEFORE training. |
+| [`soup prune-layer-cache`](#soup-prune-layer-cache) | Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes. |
 | [`soup prune-prompt`](#soup-prune-prompt) | Detect + strip a shared system-prompt prefix across training data so the FT model internalises it (v0.63.0). |
 | [`soup push`](#soup-push) | Push a trained model to HuggingFace Hub (or alternate hub). |
 | [`soup quantize`](#soup-quantize) | Quantize a model - ergonomic alias for `soup export --format <to>`. |
@@ -727,40 +727,6 @@ Usage: `soup build [OPTIONS] CONFIG`
 | `CONFIG` | text |  | yes | Path to build manifest (YAML) |
 | `--output-dir`, `-o` | text | `build_out` |  | Directory (under cwd) for materialised model JSONL + state store. |
 | `--dry-run` | flag | off |  | Validate the manifest + print the topological plan; do not execute. |
-
-## `soup cache`
-
-Layer-stream cache: list and prune stale slots.
-
-Usage: `soup cache <command> [ARGS]...`
-
-Subcommands:
-
-- [`list`](#soup-cache-list)
-- [`prune`](#soup-cache-prune)
-
-### `soup cache list`
-
-List every cache slot of a base, with sizes and paths.
-
-Usage: `soup cache list [OPTIONS]`
-
-| Name | Type | Default | Required | Help |
-|---|---|---|---|---|
-| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
-| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
-
-### `soup cache prune`
-
-Remove unreferenced slots of a base. Dry run unless --yes.
-
-Usage: `soup cache prune [OPTIONS]`
-
-| Name | Type | Default | Required | Help |
-|---|---|---|---|---|
-| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
-| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
-| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup can`
 
@@ -3085,6 +3051,18 @@ Usage: `soup profile [OPTIONS]`
 | `--lora-r` | integer, 1 to 4096 |  |  | With --model: LoRA rank (default 64) |
 | `--optimizer` | text |  |  | With --model: optimizer (default adamw_torch) |
 | `--gradient-checkpointing` | text |  |  | With --model: off (default), full, medium, selective or auto |
+
+## `soup prune-layer-cache`
+
+Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes.
+
+Usage: `soup prune-layer-cache [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup prune-prompt`
 

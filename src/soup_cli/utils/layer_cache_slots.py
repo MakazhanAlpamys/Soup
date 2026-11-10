@@ -11,12 +11,8 @@ from __future__ import annotations
 import os
 import shutil
 import stat
-import time
 from dataclasses import dataclass, field
 from typing import Optional
-
-#: A slot with a file modified this recently may belong to a concurrent run.
-RECENT_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -35,9 +31,9 @@ class CacheSlot:
     stripes: tuple[StripeFolder, ...] = field(default_factory=tuple)
 
 
-def _walk(path: str) -> tuple[int, float]:
-    """(bytes of regular files, newest mtime). Never follows links; unreadable entries skip."""
-    total, newest = 0, 0.0
+def _bytes(path: str) -> int:
+    """Bytes of regular files. Never follows links; unreadable entries are skipped."""
+    total = 0
     for dirpath, _dirs, files in os.walk(path, followlinks=False):
         for name in files:
             try:
@@ -46,8 +42,15 @@ def _walk(path: str) -> tuple[int, float]:
                 continue
             if stat.S_ISREG(info.st_mode):
                 total += info.st_size
-                newest = max(newest, info.st_mtime)
-    return total, newest
+    return total
+
+
+def _writing(path: str) -> bool:
+    """A sharder temp file (``.soup.*.tmp``) is in the slot: a write may be in progress."""
+    try:
+        return any(n.startswith(".soup.") and n.endswith(".tmp") for n in os.listdir(path))
+    except OSError:
+        return True
 
 
 def _stripes(slot_path: str, index) -> tuple[StripeFolder, ...]:
@@ -58,7 +61,7 @@ def _stripes(slot_path: str, index) -> tuple[StripeFolder, ...]:
     out = []
     for root, folder in zip(roots, stripe_dirs(slot_path, roots)[1:]):
         if stripe_folder_problem(folder, root) is None and os.path.isdir(folder):
-            out.append(StripeFolder(folder, _walk(folder)[0]))
+            out.append(StripeFolder(folder, _bytes(folder)))
     return tuple(out)
 
 
@@ -70,12 +73,12 @@ def list_base_slots(
     model: str,
     cache_dir: Optional[str] = None,
     current_slot: Optional[str] = None,
-    *,
-    now: Optional[float] = None,
 ) -> list[CacheSlot]:
     """Every slot of ``model``'s base under the cache root, sorted by name.
 
     ``current_slot`` is the slot this invocation resolves to (path or name); it is kept.
+    So is the newest complete slot (the ``index.json`` with the latest mtime), because
+    the commit a later run pins is not known here and re-sharding a large base takes hours.
     """
     from soup_cli.utils.layer_shard import (
         _RESHARDING_INDEX_NAME,
@@ -87,7 +90,7 @@ def list_base_slots(
     root = resolve_cache_root(cache_dir)
     slug = model_slug(model)
     current = os.path.basename(os.path.normpath(current_slot)) if current_slot else None
-    clock = time.time() if now is None else now
+    mtimes: dict[str, float] = {}
     slots: list[CacheSlot] = []
     try:
         entries = sorted(os.scandir(root), key=lambda e: e.name)
@@ -102,13 +105,15 @@ def list_base_slots(
             path = os.path.realpath(entry.path)
             if os.path.commonpath([root, path]) != root or os.path.dirname(path) != root:
                 continue
-            size, newest = _walk(path)
+            size = _bytes(path)
             stripes: tuple[StripeFolder, ...] = ()
             reason = ""
             if entry.name == current:
                 reason = "current slot"
             elif os.path.exists(os.path.join(path, _RESHARDING_INDEX_NAME)):
                 reason = "resharding"
+            elif _writing(path):
+                reason = "write in progress, kept"
             else:
                 try:
                     index = read_shard_index(path)
@@ -117,11 +122,17 @@ def list_base_slots(
                     reason = "incomplete, kept"
                 if index is not None:
                     stripes = _stripes(path, index)
-                    if clock - newest < RECENT_SECONDS:
-                        reason = "modified within the last hour"
+                    mtimes[entry.name] = os.stat(os.path.join(path, "index.json")).st_mtime
             slots.append(CacheSlot(entry.name, path, size, bool(reason), reason, stripes))
         except OSError:
             continue
+    if mtimes:
+        newest = max(mtimes, key=lambda n: (mtimes[n], n))
+        slots = [
+            CacheSlot(x.name, x.path, x.bytes, True, "newest complete slot", x.stripes)
+            if x.name == newest and not x.referenced else x
+            for x in slots
+        ]
     return slots
 
 

@@ -1,4 +1,4 @@
-"""#2196 — stale layer-stream cache slots: listing, preflight panel, opt-in prune."""
+"""Stale layer-stream cache slots: listing, preflight panel, opt-in prune (#2196)."""
 
 import os
 import time
@@ -61,19 +61,35 @@ def test_reference_rules(root):
     _slot(root, "org__m@cur")
     _slot(root, "org__m@rs", extra=("index.json.resharding",))
     _slot(root, "org__m@inc", index=False)
-    _slot(root, "org__m@new", age=time.time())
-    _slot(root, "org__m@old")
+    _slot(root, "org__m@tmp", extra=(".soup.abc.tmp",))
+    _slot(root, "org__m@old", age=OLD - 100)
+    _slot(root, "org__m@new", age=OLD + 100)
     slots = _by_name(root, current="org__m@cur")
     assert {n: s.referenced for n, s in slots.items()} == {
         "org__m@cur": True, "org__m@rs": True, "org__m@inc": True,
-        "org__m@new": True, "org__m@old": False,
+        "org__m@tmp": True, "org__m@old": False, "org__m@new": True,
     }
     assert slots["org__m@inc"].reason == "incomplete, kept"
+    assert slots["org__m@tmp"].reason == "write in progress, kept"
+
+
+def test_keeps_newest_complete_slot_without_current(root):
+    old = _slot(root, "org__m@aaa", age=OLD - 500)
+    new = _slot(root, "org__m@bbb", age=OLD)
+    res = prune_slots("org/m", str(root), None, confirm=True)
+    assert [s.name for s, _ in res] == ["org__m@aaa"]
+    assert not old.exists() and new.exists()
+
+
+def test_single_complete_slot_never_removed(root):
+    only = _slot(root, "org__m@aaa")
+    assert prune_slots("org/m", str(root), None, confirm=True) == [] and only.exists()
 
 
 def test_prune_dry_run_then_yes(root):
     _slot(root, "org__m@cur")
-    old = _slot(root, "org__m@old")
+    old = _slot(root, "org__m@old", age=OLD - 100)
+    _slot(root, "org__m@new", age=OLD + 100)
     dry = prune_slots("org/m", str(root), "org__m@cur", confirm=False)
     assert [s.name for s, _ in dry] == ["org__m@old"] and old.exists()
     done = prune_slots("org/m", str(root), "org__m@cur", confirm=True)
@@ -81,7 +97,8 @@ def test_prune_dry_run_then_yes(root):
 
 
 def test_prune_failure_does_not_stop_others(root, monkeypatch):
-    a, b = _slot(root, "org__m@a"), _slot(root, "org__m@b")
+    a, b = _slot(root, "org__m@a", age=OLD - 200), _slot(root, "org__m@b", age=OLD - 100)
+    _slot(root, "org__m@z")
     import shutil
 
     real = shutil.rmtree
@@ -108,14 +125,18 @@ def test_symlinked_slot_ignored(root, tmp_path_factory):
 
 
 def test_hostile_name_renders(root):
-    _slot(root, "org__m@[red]x[/]")
-    result = runner.invoke(app, ["cache", "list", "--model", "org/m", "--cache-dir", str(root)])
+    _slot(root, "org__m@[red]x", age=OLD - 100)
+    _slot(root, "org__m@z")
+    result = runner.invoke(
+        app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
+    )
     assert result.exit_code == 0 and "[red]x" in result.output
 
 
 def test_cli_prune_requires_yes(root):
-    old = _slot(root, "org__m@old")
-    args = ["cache", "prune", "--model", "org/m", "--cache-dir", str(root)]
+    old = _slot(root, "org__m@old", age=OLD - 100)
+    _slot(root, "org__m@new")
+    args = ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
     assert runner.invoke(app, args).exit_code == 0 and old.exists()
     assert runner.invoke(app, [*args, "--yes"]).exit_code == 0 and not old.exists()
 
@@ -130,15 +151,15 @@ def _preflight(slots, free=10**15):
 
 def test_preflight_lists_slots(root, capsys, monkeypatch):
     _slot(root, "org__m@a", 100)
-    _slot(root, "org__m@b", 200, age=time.time())
+    _slot(root, "org__m@b", 200)
     slots = list(_by_name(root).values())
     printed = []
     monkeypatch.setattr(stream_setup.console, "print", lambda p: printed.append(str(p.renderable)))
     _preflight(slots)
     text = printed[0]
     assert "org__m@a" in text and "org__m@b" in text and str(root) in text
-    assert "kept: modified within the last hour" in text
-    assert "soup cache prune --model org/m --yes" in text
+    assert "kept: newest complete slot" in text
+    assert "soup prune-layer-cache --model org/m --yes" in text
 
 
 def test_preflight_default_unchanged(monkeypatch):

@@ -718,9 +718,9 @@ def _render_stream_disk_preflight(
         if len(other_slots) > 20:
             lines.append(f"  +{len(other_slots) - 20} more")
         lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
-        cmd = f"soup cache prune --model {for_terminal(base)} --yes"
+        cmd = f"soup prune-layer-cache --model {for_terminal(base)} --yes"
         lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
-        stale_hint = " Stale cache slots can be removed with `soup cache prune`."
+        stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
         free = free_by_device[device]
