@@ -1220,6 +1220,53 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
+#### Compare generation performance in the same report
+
+Use `--performance` to add latency, generated tokens/s and CUDA allocated peak
+alongside the existing quality verdict, with before/after percentage changes:
+
+```bash
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --device cuda:0 --format json
+
+# Defaults: one unscored warm-up, three measured generations of every task prompt.
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --performance-warmup 1 \
+  --performance-repeats 5 --device cpu --format markdown
+```
+
+This path loads, warms, measures and releases the first model before loading
+the second. It pins one device: `auto` selects CUDA when available, otherwise
+CPU; explicit `cpu`, `cuda`, `cuda:<index>` and `mps` are supported. It uses the
+same inference dtype policy as `soup infer` (FP32 on CPU, FP16 on CUDA/MPS),
+and records the actual model dtype/device. The quality-only command keeps its
+existing loading behavior. Both sides use greedy decoding, at most 256 new
+tokens per call, and the same task prompts. Only the first measured answer per
+task contributes to quality; the other repeats measure performance. The first
+task prompt supplies the unscored warm-ups. `--allow-stub` is incompatible with
+`--performance` because stubs cannot supply model performance measurements.
+
+Latency includes tokenization, input transfer, generation and text decoding,
+with the selected accelerator synchronized at both boundaries. Loading is
+outside that timer. Generated token/s uses the actual new token IDs, including
+EOS, divided by total measured generation time; different answer lengths can
+therefore change both latency and throughput. CUDA memory is this process's
+allocated peak across measured generations after warm-up, including resident
+weights and generation buffers. It excludes loading/warm-up transients and
+allocator-reserved bytes. CPU/MPS memory is reported as `null` in JSON and
+`N/A` in tables, rather than a zero-byte footprint.
+
+The optional JSON `performance` object includes the raw per-task latency/token
+samples and the mean suite latency for each repeat. The report labels overlap
+between the two observed repeat ranges; small differences inside that spread
+may be noise. This is a descriptive within-model repeat check, not a confidence
+interval or a comparison of independent model-loading runs. With one repeat,
+noise cannot be estimated (`latency_ranges_overlap: null`). Use several
+representative prompts and additional independent runs for conclusions about
+speed. Performance remains informational: **quality alone determines exit 2**.
+The table, JSON and markdown all include this additional result only when
+`--performance` is enabled.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.

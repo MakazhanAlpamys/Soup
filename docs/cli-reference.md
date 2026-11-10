@@ -1319,7 +1319,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -2303,6 +2303,10 @@ Usage: `soup eval quant-check [OPTIONS]`
 | `--tasks` | text |  | yes | JSONL eval tasks file (see 'soup eval custom') |
 | `--format` | text | `table` |  | Output format: table \| json \| markdown |
 | `--allow-stub` | flag | off |  | Allow deterministic stub generators if live model loading fails. |
+| `--performance` | flag | off |  | Also measure generation latency, tokens/s and CUDA memory sequentially. |
+| `--performance-warmup` | integer, at least 0 | `1` |  | Unscored first-prompt warm-ups per model (requires --performance). |
+| `--performance-repeats` | integer, at least 1 | `3` |  | Measured greedy generations per task (requires --performance). |
+| `--device` | text |  |  | Device for --performance: auto (default), cpu, cuda, cuda:&lt;index> or mps. |
 
 ### `soup eval retention`
 

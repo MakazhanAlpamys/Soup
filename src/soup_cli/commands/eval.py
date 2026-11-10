@@ -1401,6 +1401,22 @@ def quant_check_cmd(
         False, "--allow-stub",
         help="Allow deterministic stub generators if live model loading fails.",
     ),
+    performance: bool = typer.Option(
+        False, "--performance",
+        help="Also measure generation latency, tokens/s and CUDA memory sequentially.",
+    ),
+    performance_warmup: int = typer.Option(
+        1, "--performance-warmup", min=0,
+        help="Unscored first-prompt warm-ups per model (requires --performance).",
+    ),
+    performance_repeats: int = typer.Option(
+        3, "--performance-repeats", min=1,
+        help="Measured greedy generations per task (requires --performance).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="Device for --performance: auto (default), cpu, cuda, cuda:<index> or mps.",
+    ),
 ) -> None:
     """Compare accuracy before vs after quantization on the same eval suite.
 
@@ -1423,6 +1439,15 @@ def quant_check_cmd(
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if performance and allow_stub:
+        console.print("[red]--performance cannot measure deterministic --allow-stub generators.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    if not performance and (
+        device is not None or performance_warmup != 1 or performance_repeats != 3
+    ):
+        console.print("[red]--device and performance budgets require --performance.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     resolved: dict[str, Optional[str]] = {}
     for label, ref in (("--before", before), ("--after", after)):
@@ -1493,46 +1518,68 @@ def quant_check_cmd(
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
 
-    is_stub = False
+    if performance:
+        from soup_cli.eval.quant_check import run_performance_quant_check
+        from soup_cli.eval.quant_performance import resolve_performance_device
 
-    try:
-        before_gen = make_model_generator(resolved_before)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --before model ({resolved_before}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
+        try:
+            measured_device = resolve_performance_device(device or "auto")
+        except (ValueError, ImportError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        try:
+            result = run_performance_quant_check(
+                before_factory=lambda: make_model_generator(
+                    resolved_before, device=measured_device,
+                ),
+                after_factory=lambda: make_model_generator(resolved_after, device=measured_device),
+                tasks=pre_tasks, device=measured_device,
+                warmup=performance_warmup, repeats=performance_repeats,
             )
+        except (OSError, ValueError, ImportError, RuntimeError) as exc:
+            console.print(f"[red]Performance comparison failed: {for_terminal(str(exc))}[/]")
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
-            )
-        before_gen = stub_generator("before")
-        is_stub = True
+    else:
+        is_stub = False
 
-    try:
-        after_gen = make_model_generator(resolved_after)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --after model ({resolved_after}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
-            )
-            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
-            )
-        after_gen = stub_generator("after")
-        is_stub = True
+        try:
+            before_gen = make_model_generator(resolved_before)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --before model ({resolved_before}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
+                )
+            before_gen = stub_generator("before")
+            is_stub = True
 
-    result = run_quant_check(
-        before_gen=before_gen,
-        after_gen=after_gen,
-        tasks=pre_tasks,
-        stub=is_stub,
-    )
+        try:
+            after_gen = make_model_generator(resolved_after)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --after model ({resolved_after}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
+                )
+            after_gen = stub_generator("after")
+            is_stub = True
+
+        result = run_quant_check(
+            before_gen=before_gen,
+            after_gen=after_gen,
+            tasks=pre_tasks,
+            stub=is_stub,
+        )
     rendered = render(result, fmt=fmt)
     if fmt == "table":
         console.print(rendered)
@@ -1540,7 +1587,7 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags, and disable
         # highlighting so JSON output is not polluted with ANSI escape codes.
-        console.print(rendered, markup=False, highlight=False)
+        console.print(rendered, markup=False, highlight=False, soft_wrap=True)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)

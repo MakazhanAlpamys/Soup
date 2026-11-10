@@ -1,0 +1,223 @@
+"""Quality remains the gate when quant-check also measures latency and memory."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+
+def _fake_factories(monkeypatch, *, after_wrong=0, variable=False, fail=False):
+    from soup_cli.eval import quant_performance
+
+    clock = [0.0]
+    events = []
+    monkeypatch.setattr(quant_performance.time, "perf_counter", lambda: clock[0])
+
+    class Generator:
+        device = "cpu"
+        dtype = "float32"
+        last_generated_tokens = 2
+
+        def __init__(self, label):
+            self.label = label
+            self.calls = 0
+            events.append(f"load:{label}")
+
+        def __call__(self, prompt):
+            self.calls += 1
+            events.append(f"generate:{self.label}")
+            seconds = 0.010 if self.label == "before" else 0.005
+            if variable:
+                seconds = (0.009, 0.011, 0.010)[(self.calls - 1) % 3]
+            clock[0] += seconds
+            if fail:
+                raise RuntimeError("generation failed")
+            return "wrong" if self.label == "after" and int(prompt) < after_wrong else "ok"
+
+        def close(self):
+            events.append(f"close:{self.label}")
+
+    return lambda: Generator("before"), lambda: Generator("after"), events
+
+
+def _tasks(count=10):
+    from soup_cli.eval.custom import EvalTask
+
+    return [EvalTask(prompt=str(i), expected="ok") for i in range(count)]
+
+
+def test_ten_vs_five_ms_reports_half_latency_and_preserves_quality_gate(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, events = _fake_factories(monkeypatch, after_wrong=1)
+    result = run_performance_quant_check(
+        before_factory=before, after_factory=after, tasks=_tasks(),
+        device="cpu", warmup=1, repeats=3,
+    )
+    payload = json.loads(result.to_json())
+    performance = payload["performance"]
+    assert performance["latency_change_pct"] == pytest.approx(-50.0)
+    assert performance["tokens_per_second_change_pct"] == pytest.approx(100.0)
+    assert performance["before"]["latency_ms"] == pytest.approx(10.0)
+    assert performance["after"]["latency_ms"] == pytest.approx(5.0)
+    assert performance["before"]["generated_tokens"] == 60  # No warm-up tokens.
+    assert performance["before"]["peak_gpu_memory_bytes"] is None
+    assert performance["peak_gpu_memory_change_pct"] is None
+    assert performance["latency_ranges_overlap"] is False
+    assert result.rows[0].before == 1.0
+    assert result.rows[0].after == 0.9
+    assert result.rows[0].verdict == "MAJOR"
+    assert events.index("close:before") < events.index("load:after")
+
+
+def test_model_is_released_after_generation_failure(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, events = _fake_factories(monkeypatch, fail=True)
+    with pytest.raises(RuntimeError, match="generation failed"):
+        run_performance_quant_check(
+            before_factory=before, after_factory=after, tasks=_tasks(),
+            device="cpu", warmup=1, repeats=3,
+        )
+    assert events == ["load:before", "generate:before", "close:before"]
+
+
+def test_no_generator_reference_survives_into_the_second_load(monkeypatch):
+    import weakref
+
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, _ = _fake_factories(monkeypatch)
+    references = []
+
+    def first():
+        generator = before()
+        references.append(weakref.ref(generator))
+        return generator
+
+    def second():
+        assert references[0]() is None
+        return after()
+
+    run_performance_quant_check(
+        before_factory=first, after_factory=second, tasks=_tasks(1), device="cpu",
+    )
+
+
+def test_only_first_measured_answer_is_scored(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, _, _ = _fake_factories(monkeypatch)
+
+    def factory():
+        generator = before()
+
+        class Alternating:
+            device = "cpu"
+            dtype = "float32"
+            last_generated_tokens = 2
+
+            def __call__(self, prompt):
+                generator(prompt)
+                # Call 1 is warm-up; call 2 is the first measured answer.
+                return "ok" if generator.calls == 2 else "wrong"
+
+            def close(self):
+                generator.close()
+
+        return Alternating()
+
+    result = run_performance_quant_check(
+        before_factory=factory, after_factory=factory, tasks=_tasks(1),
+        device="cpu", warmup=1, repeats=3,
+    )
+    assert result.rows[0].before == result.rows[0].after == 1.0
+
+
+def test_performance_renderers_include_units_and_noise_information(monkeypatch):
+    from soup_cli.eval.quant_check import render_markdown, render_table, run_performance_quant_check
+
+    before, after, _ = _fake_factories(monkeypatch, variable=True)
+    result = run_performance_quant_check(
+        before_factory=before, after_factory=after, tasks=_tasks(1),
+        device="cpu", warmup=0, repeats=3,
+    )
+    markdown = render_markdown(result)
+    assert "latency (ms)" in markdown
+    assert "tokens/s" in markdown
+    assert "CUDA allocated peak (MiB)" in markdown
+    assert "N/A" in markdown
+    assert "ranges overlap" in markdown
+    assert "Quality alone" in render_table(result).caption
+
+
+def test_overlapping_repeat_ranges_are_not_presented_as_a_clear_speed_change(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, _ = _fake_factories(monkeypatch, variable=True)
+    result = run_performance_quant_check(
+        before_factory=before, after_factory=after, tasks=_tasks(1),
+        device="cpu", warmup=0, repeats=3,
+    )
+    assert result.performance.latency_ranges_overlap is True
+
+
+def test_single_repeat_cannot_estimate_noise(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, _ = _fake_factories(monkeypatch)
+    result = run_performance_quant_check(
+        before_factory=before, after_factory=after, tasks=_tasks(1),
+        device="cpu", warmup=0, repeats=1,
+    )
+    assert result.performance.latency_ranges_overlap is None
+
+
+@pytest.mark.parametrize("kwargs", [{"repeats": 0}, {"warmup": -1}, {"repeats": True}])
+def test_bad_budgets_are_refused_before_model_loading(monkeypatch, kwargs):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, events = _fake_factories(monkeypatch)
+    with pytest.raises(ValueError):
+        run_performance_quant_check(
+            before_factory=before, after_factory=after, tasks=_tasks(), device="cpu", **kwargs,
+        )
+    assert events == []
+
+
+def test_empty_suite_is_refused_before_model_loading(monkeypatch):
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, events = _fake_factories(monkeypatch)
+    with pytest.raises(ValueError, match="No eval tasks"):
+        run_performance_quant_check(
+            before_factory=before, after_factory=after, tasks=[], device="cpu",
+        )
+    assert events == []
+
+
+def test_cli_quality_drop_still_exits_two_with_performance(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner
+
+    monkeypatch.chdir(tmp_path)
+    before, after, _ = _fake_factories(monkeypatch, after_wrong=1)
+    monkeypatch.setattr(
+        quant_check, "make_model_generator",
+        lambda path, **kwargs: before() if path.endswith("before") else after(),
+    )
+    for side in ("before", "after"):
+        (tmp_path / side).mkdir()
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text("".join(json.dumps({"prompt": str(i), "expected": "ok"}) + "\n"
+                            for i in range(10)))
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", str(tasks), "--performance", "--device", "cpu", "--format", "json",
+    ])
+    assert result.exit_code == 2, (result.output, result.exception)
+    payload = json.loads(result.output)
+    assert payload["rows"][0]["verdict"] == "MAJOR"
+    assert payload["performance"]["latency_change_pct"] == pytest.approx(-50.0)
