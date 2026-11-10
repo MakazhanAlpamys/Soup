@@ -374,6 +374,12 @@ def resolve_deepspeed_config(
     if quant_keys:
         # Read after the precision is matched, so an fp16 run keeps the quantiser.
         bf16 = _enabled(resolved, "bf16")
+        # A file naming no precision at all is left alone by _match_precision
+        # (#2266 review), so bf16 is still None here even on a bf16 or "auto"
+        # run. Read the resolver's own precision in that case, matching what
+        # accelerate will fill the file in with once the trainer is built.
+        if bf16 is None and precision in ("bf16", "auto"):
+            bf16 = True if precision == "bf16" else "auto"
         if bf16 is True or bf16 == "auto":
             run = (
                 "this run is bf16"

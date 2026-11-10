@@ -162,6 +162,40 @@ class TestTheNoteIsPrinted:
 
 
 class TestZeroPlusPlusQuantiser:
+    _NO_PRECISION = {
+        "zero_optimization": {
+            "stage": 3, "zero_quantized_weights": True, "zero_quantized_gradients": True,
+        },
+    }
+
+    @pytest.mark.parametrize(
+        ("precision", "why"), [("bf16", "this run is bf16"), ("auto", "may be bf16")]
+    )
+    def test_a_file_naming_no_precision_turns_it_off_on_a_bf16_or_auto_run(
+        self, precision, why
+    ):
+        """#2266 review, round 2: a file with neither bf16 nor fp16 is left alone by
+        _match_precision (the first round's fix for an absent key), so the quantiser
+        decision used to see bf16 still None even on a bf16/auto run, and left the
+        fp16 quantiser on -- the expected mat1 and mat2 to have the same dtype crash
+        once accelerate fills bf16 in from the trainer. Reads the resolver's own
+        precision only for this already-absent case."""
+        cfg, notes = resolve_deepspeed_config(
+            self._NO_PRECISION, gpu_count=4, precision=precision
+        )
+        zero = cfg["zero_optimization"]
+        assert zero["zero_quantized_weights"] is False
+        assert zero["zero_quantized_gradients"] is False
+        assert any(why in note for note in notes)
+        assert "bf16" not in cfg and "fp16" not in cfg
+
+    def test_a_file_naming_no_precision_keeps_it_on_an_fp16_run(self):
+        cfg, notes = resolve_deepspeed_config(
+            self._NO_PRECISION, gpu_count=4, precision="fp16"
+        )
+        assert cfg == self._NO_PRECISION
+        assert notes == []
+
     def test_an_fp16_run_keeps_the_quantiser(self):
         cfg, notes = resolve_deepspeed_config(
             get_deepspeed_config("zero++"), gpu_count=4, precision="fp16"
