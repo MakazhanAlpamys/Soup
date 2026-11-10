@@ -1,0 +1,245 @@
+{
+  "soup_base_sha": "485d62b79c2f98734934a91de2445cba58960ef6",
+  "source_files_sha256": {
+    "src/soup_cli/commands/serve.py": "91575c9fc9af913dfec6152c3834cb68d469e7f92ac55a8f87d230e8473b681b",
+    "src/soup_cli/utils/mlx_generation.py": "084a61f6c4596118c634d6c9df89b494abcb417f38d9484a4b4cdfe90a341cef",
+    "src/soup_cli/utils/mlx_serve.py": "51910de633f1e50a1c7ae6a656ef81ee9bd4079ad866688d7d849301406a1363"
+  },
+  "working_source_tree_sha256": "c428269f3bc9b4cc53db85ef5cf5cd9087fb5a7f6a2473a2dc28e81ef5226496",
+  "benchmark_sha256": "5a8a926c1dfa89fe603cece25e1f9846e6e563828982e87054d4a0e45a28d9aa",
+  "fixture_generator_sha256": "e9026dcee42aca161cc98f124f3eaff108f2f15805e41ced6ac0e84a0d04fa0b",
+  "python": "3.12.7",
+  "versions": {
+    "mlx": "0.32.4",
+    "mlx-lm": "0.32.2",
+    "transformers": "5.19.0",
+    "fastapi": "0.162.0",
+    "starlette": "1.10.0",
+    "uvicorn": "0.54.0",
+    "httpx": "0.28.1",
+    "pydantic": "2.14.2"
+  },
+  "hardware": {
+    "platform": "Darwin",
+    "machine": "arm64",
+    "processor": "arm",
+    "chip": "Apple M4 Pro"
+  },
+  "unified_memory_bytes": 51539607552,
+  "device": "Device(gpu, 0)",
+  "metal_available": true,
+  "training_packages_present": [],
+  "model_files_sha256": {
+    "adapter_config.json": "8f4fd53e1239b50a2fc001f83ccf774cec93c3fc0f370967cd8f5561fb51d085",
+    "adapters.safetensors": "36bc85068022bf4a98025802d4474b3b4f73594cfb4786db459c5a4073bccee0"
+  },
+  "base_files_sha256": {
+    "chat_template.jinja": "bbb5be5478b2e408cb14501ff61cbbfe4c71914852cb4ba6a6b3916dff8e333c",
+    "config.json": "58556756349617442026c9d5e1b30d8ba657411810a1074cd3d32f248d35df69",
+    "model.safetensors": "4030a58ed0d88766998327f7083b0cdd74e8395822b1f53f051e58d151b5c514",
+    "model.safetensors.index.json": "83c88abd494cadd96daaa4a774782820d2c25f8bfce37ac3f87edcb8036eb3a7",
+    "tokenizer.json": "56a56e38208cfb6888bb0cda53f026ffa9b8c973b07e16bd426eb2820e59a265",
+    "tokenizer_config.json": "3c9e5e848f6761d5f3e1074344c95db3116cec243347b4b0b58140aebcd3002e"
+  },
+  "model_identity": "offline-trained-tiny-llama",
+  "model_revision": "fixture-files-sha256",
+  "cases": [
+    [
+      {
+        "role": "user",
+        "content": "red green"
+      }
+    ],
+    [
+      {
+        "role": "user",
+        "content": "t6 red"
+      }
+    ]
+  ],
+  "public_cli": [
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/.venv-mlx-2001/bin/python",
+    "-m",
+    "soup_cli",
+    "serve",
+    "--backend",
+    "mlx",
+    "--model",
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-merge2124-20261109/fixture-current/fixture/adapter",
+    "--port",
+    "57313"
+  ],
+  "readiness_seconds": 1.0740623750025406,
+  "child_returncode": 0,
+  "results": [
+    {
+      "case": 0,
+      "direct": {
+        "text": "blue blue blue blue blue blue blue blue",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "http": {
+        "id": "chatcmpl-384e83562f9a4469a3c94b8ef6f4e4a8",
+        "created": 1794239987,
+        "model": "adapter",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "blue blue blue blue blue blue blue blue"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "streaming_content": "blue blue blue blue blue blue blue blue",
+      "streaming_usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 8,
+        "total_tokens": 10
+      },
+      "first_content_seconds": 0.011979375034570694,
+      "stream_seconds": 0.012802292010746896
+    },
+    {
+      "case": 1,
+      "direct": {
+        "text": "blue blue blue blue blue blue blue blue",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "http": {
+        "id": "chatcmpl-39cdfe9d2157404eb48c6b59fe5001f1",
+        "created": 1794239987,
+        "model": "adapter",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "blue blue blue blue blue blue blue blue"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "streaming_content": "blue blue blue blue blue blue blue blue",
+      "streaming_usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 8,
+        "total_tokens": 10
+      },
+      "first_content_seconds": 0.012222709017805755,
+      "stream_seconds": 0.012902542017400265
+    },
+    {
+      "case": 0,
+      "direct": {
+        "text": "blue blue blue blue blue blue blue blue",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "http": {
+        "id": "chatcmpl-3b3ce13d474549629bb7e449b2f93472",
+        "created": 1794239987,
+        "model": "adapter",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "blue blue blue blue blue blue blue blue"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2,
+          "completion_tokens": 8,
+          "total_tokens": 10
+        }
+      },
+      "streaming_content": "blue blue blue blue blue blue blue blue",
+      "streaming_usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 8,
+        "total_tokens": 10
+      },
+      "first_content_seconds": 0.012370249954983592,
+      "stream_seconds": 0.013148917001672089
+    }
+  ],
+  "base_only_controls": [
+    {
+      "text": "green green green green green green green green",
+      "finish_reason": "length",
+      "usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 8,
+        "total_tokens": 10
+      }
+    },
+    {
+      "text": "red red red red red red red red",
+      "finish_reason": "length",
+      "usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 8,
+        "total_tokens": 10
+      }
+    }
+  ],
+  "fixture": {
+    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-merge2124-20261109/fixture-current/fixture/base",
+    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-merge2124-20261109/fixture-current/fixture/adapter",
+    "losses": [
+      4.773211479187012,
+      1.4672682285308838,
+      0.38696572184562683,
+      0.2843286991119385,
+      0.23150987923145294,
+      0.20638757944107056,
+      0.19565439224243164,
+      0.1917237639427185,
+      0.18842813372612,
+      0.18454238772392273,
+      0.18125629425048828,
+      0.17877957224845886,
+      0.1768890917301178,
+      0.17538043856620789,
+      0.17412669956684113,
+      0.17305277287960052
+    ],
+    "max_lora_b": 1.8815001249313354,
+    "frozen_tensors_unchanged": 11,
+    "trainable_tensors": 8
+  },
+  "limits": "CLI/HTTP lifecycle and greedy equality only; fixture is not pretrained quality; observed arrival times are not throughput benchmarks; concurrent/cancellation sensitivity is separately covered by deterministic offline ASGI tests"
+}

@@ -1,8 +1,9 @@
 """Every `tests/test_*.py` that needs the real MLX library runs in the `mlx-smoke` job.
 
 `mlx` is not in `[dev]`, so the 3x3 test matrix cannot import it and every test that
-`importorskip`s `mlx.core` / `mlx_lm` skips there. `mlx-smoke` (macOS, `.[mlx]` and `pytest`
-only) is the one job that can execute them, and it runs an explicit list of files. A new MLX
+`importorskip`s `mlx.core` / `mlx_lm` skips there. `mlx-smoke` (macOS, `.[mlx,serve]`,
+`pytest` and `httpx`) is the one job that can execute them, and it runs an explicit
+list of files. A new MLX
 test file that nobody adds to that list therefore runs on no job at all, and the suite stays
 green whatever its tests would say. That is how the DPO, ORPO and eval-steps files (#1846,
 #2073, #2074) went unexecuted: their loss, gradient and training-loop tests skip wherever MLX
