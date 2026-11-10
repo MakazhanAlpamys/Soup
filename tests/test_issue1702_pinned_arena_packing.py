@@ -296,18 +296,26 @@ class TestTheDiskTierStagesAPackedPlan:
 # ==========================================================================
 @pytest.fixture
 def _release_packed_fixture_pinned_cache():
+    def hand_back_cached_arenas():
+        import gc
+
+        import torch
+
+        from soup_cli.utils.layer_stream_runtime import release_cached_pinned_memory
+
+        torch.cuda.synchronize()
+        gc.collect()
+        release_cached_pinned_memory()
+
+    # Before: the test reads the allocator's process-wide active_bytes before and
+    # after building a store, so pinned blocks an earlier test already freed but the
+    # cache still counts (two 4 MiB tensors in test_issue1174) must not be released
+    # inside its window, where they turn the delta negative.
+    hand_back_cached_arenas()
     yield
     # The test's locals are gone by teardown: hand its cached arenas back, so the
     # hardware tests that run after it do not inherit them.
-    import gc
-
-    import torch
-
-    from soup_cli.utils.layer_stream_runtime import release_cached_pinned_memory
-
-    torch.cuda.synchronize()
-    gc.collect()
-    release_cached_pinned_memory()
+    hand_back_cached_arenas()
 
 
 @pytest.mark.gpu
