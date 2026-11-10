@@ -1674,9 +1674,10 @@ def train(
     cfg.training.quantization = resolved_quant
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
-    # analytical VRAM predictor says the run won't fit. Skips silently on CPU
-    # or when the config isn't statically predictable (e.g. batch_size='auto');
-    # says so when the quantization has no memory model (hqq:*).
+    # analytical VRAM predictor says the run won't fit. Skips silently on CPU;
+    # when the estimate cannot price the config (batch_size='auto', an input
+    # outside its range, or a quantization with no memory model such as hqq:*)
+    # it says the fit is not checked and why.
     sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
     _hardware_fit_preflight(
         cfg,

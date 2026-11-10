@@ -172,6 +172,10 @@ def test_batch_outside_estimate_range_names_the_reason(
         "Pre-flight skipped: training.batch_size is outside 1 to 1,024, "
         "the range the estimate prices."
     ]
+    assert console.renderables == [
+        "[yellow]Pre-flight skipped:[/] training.batch_size is outside 1 to 1,024, "
+        "the range the estimate prices."
+    ]
 
 
 def test_model_over_1000b_names_the_reason(
