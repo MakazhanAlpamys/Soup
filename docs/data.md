@@ -472,6 +472,13 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
+`--count` is the number of rows requested. Rows the provider did not return, and rows that
+fail validation, are asked for again. A row dropped as a duplicate (of `--dedup-with`, or of
+an earlier row in the same run) counts toward `--count`: the file then holds fewer rows, the
+summary shows how many were requested and how many duplicates were removed, and the command
+exits 0. If three requests in a row return no valid row, the command stops, saves the rows it
+has to the output file and exits 1.
+
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so

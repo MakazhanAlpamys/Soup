@@ -704,7 +704,7 @@ def distill(
             )
         )
         # The YAML already quotes its scalars. Rich must not reinterpret those bytes.
-        console.print(yaml_text, markup=False, emoji=False)
+        console.print(yaml_text, markup=False, emoji=False, soft_wrap=True)
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
