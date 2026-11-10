@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Hashable, Mapping, Optional, Sequence
+from typing import Any, Hashable, Mapping, Optional, Sequence
 
 CLASSIFIER_TASKS: frozenset[str] = frozenset(
     {"classifier", "reranker", "cross_encoder"}
@@ -223,7 +223,7 @@ def ranking_score_skip_reason(num_labels: int, multi_label: bool) -> Optional[st
 
 
 def _as_rows(values: object) -> list:
-    return values.tolist() if hasattr(values, "tolist") else list(values)  # type: ignore[arg-type]
+    return values.tolist() if hasattr(values, "tolist") else list(values)  # type: ignore[call-overload]
 
 
 def ranking_scores(logits: object, num_labels: int, multi_label: bool) -> list[float]:
@@ -359,7 +359,7 @@ def classification_skip_reason(num_labels: int, multi_label: bool) -> Optional[s
 
 def _vector(row: object, num_labels: int, what: str) -> list[float]:
     """One row of logits or multi-label targets as ``num_labels`` floats."""
-    values = list(row) if isinstance(row, (list, tuple)) else [row]
+    values: list[Any] = list(row) if isinstance(row, (list, tuple)) else [row]
     if len(values) != num_labels:
         raise ValueError(f"expected {num_labels} {what} per row, got {len(values)}")
     return [float(value) for value in values]
@@ -429,25 +429,29 @@ def classification_metrics(
         for row, label in zip(logit_rows, label_rows):
             targets = [value >= 0.5 for value in _vector(label, num_labels, "labels")]
             predicted = [value > 0.0 for value in row]
-            correct += predicted == targets
-            for c, (pred, true) in enumerate(zip(predicted, targets)):
-                tp[c] += pred and true
-                fp[c] += pred and not true
-                fn[c] += true and not pred
+            if predicted == targets:
+                correct += 1
+            for c, (is_predicted, is_true) in enumerate(zip(predicted, targets)):
+                if is_predicted and is_true:
+                    tp[c] += 1
+                elif is_predicted:
+                    fp[c] += 1
+                elif is_true:
+                    fn[c] += 1
         result = {"subset_accuracy": correct / len(logit_rows)}
         return _with_f1(result, tp, fp, fn, micro=True)
 
     for row, label in zip(logit_rows, label_rows):
-        true = int(label)
-        if not 0 <= true < num_labels:
-            raise ValueError(f"label index {true} out of range [0, {num_labels})")
-        pred = _argmax(row)
-        if pred == true:
+        true_class = int(label)
+        if not 0 <= true_class < num_labels:
+            raise ValueError(f"label index {true_class} out of range [0, {num_labels})")
+        predicted_class = _argmax(row)
+        if predicted_class == true_class:
             correct += 1
-            tp[true] += 1
+            tp[true_class] += 1
         else:
-            fp[pred] += 1
-            fn[true] += 1
+            fp[predicted_class] += 1
+            fn[true_class] += 1
     result = {"accuracy": correct / len(logit_rows)}
     return _with_f1(result, tp, fp, fn, micro=False)
 
