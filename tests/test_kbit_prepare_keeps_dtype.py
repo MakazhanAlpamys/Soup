@@ -347,10 +347,20 @@ def _setup_trainer(monkeypatch, *, task, module, cls_name, flags, training=None)
     return wrapper.model
 
 
+# The trainers whose ``_setup_transformers`` this harness can drive with a tiny causal LM.
+# reward_model (sequence-classification loader), online_dpo (needs a judge), embedding and the
+# SFT vision/audio loaders are held to the helper by the scanner below instead.
 _TRAINERS = [
     ("sft", "soup_cli.trainer.sft", "SFTTrainerWrapper"),
     ("dpo", "soup_cli.trainer.dpo", "DPOTrainerWrapper"),
     ("grpo", "soup_cli.trainer.grpo", "GRPOTrainerWrapper"),
+    ("orpo", "soup_cli.trainer.orpo", "ORPOTrainerWrapper"),
+    ("simpo", "soup_cli.trainer.simpo", "SimPOTrainerWrapper"),
+    ("ipo", "soup_cli.trainer.ipo", "IPOTrainerWrapper"),
+    ("kto", "soup_cli.trainer.kto", "KTOTrainerWrapper"),
+    ("bco", "soup_cli.trainer.bco", "BCOTrainerWrapper"),
+    ("pretrain", "soup_cli.trainer.pretrain", "PretrainTrainerWrapper"),
+    ("ppo", "soup_cli.trainer.ppo", "PPOTrainerWrapper"),
 ]
 
 
