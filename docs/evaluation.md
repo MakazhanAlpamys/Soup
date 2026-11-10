@@ -892,8 +892,17 @@ variables (a Qwen3 model scores differently with thinking on or off). Every reco
 version carries these **numerics** (`dtype`, `device` family, `quantization`,
 `chat_template_kwargs`), and a run whose numerics differ from any recorded version is
 refused before the model loads (exit `3`), naming each differing key with this run's
-value and the recorded one. A CPU run (float32) and a GPU run (bfloat16) are therefore
-never mixed in one ledger; start a new ledger with `--ledger NEW.json` to change them.
+value and the recorded one. CPU runs (float32), native-BF16 CUDA runs (bfloat16), and
+pre-Ampere CUDA runs (float16) therefore use separate ledgers; start a new ledger with
+`--ledger NEW.json` to change those settings.
+
+**Existing pre-Ampere histories.** Before the device-aware precision change (#2409),
+full-precision runs on T4, V100 and RTX 20xx also recorded `dtype: bfloat16`. The same
+card now selects `float16`, so continuing that existing BF16 ledger is refused **before
+the model loads**, with exit `3` naming the old and new dtype. Start a separate ledger
+with `--ledger NEW.json`, register the control tasks again with `--add-task`, and record
+a new FP16 baseline. Historical scores retain their BF16 stamp and are not migrated
+into the FP16 series, since scores measured under different dtypes are not comparable.
 
 **Failed generations.** A generation that raises, or returns something that is not
 text, is a failure and not a wrong answer. If any sample of a control task fails (an
