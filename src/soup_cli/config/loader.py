@@ -376,7 +376,16 @@ def load_config_from_string(yaml_str: str, *, max_bytes: "int | None" = None) ->
         raise ValueError(
             f"Config must be a YAML mapping, got {type(raw).__name__}"
         )
+    return config_from_mapping(raw)
 
+
+def config_from_mapping(raw: dict) -> SoupConfig:
+    """Validate a config mapping and return the SoupConfig, raising ValueError on errors.
+
+    The checks of :func:`load_config_from_string` without the YAML parse, for a caller
+    that holds the mapping already and wants an exception rather than an exit
+    (``build_plan`` called with a dict alone, #2306).
+    """
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         raise ValueError(unknown_error)

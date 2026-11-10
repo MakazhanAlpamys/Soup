@@ -25,6 +25,8 @@ Public surface:
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
+- ``hardware_fit_input_or_reason(cfg, ...)`` -> ``HardwareFitInput | FitUnavailable``:
+  the same input, or the field that stops the estimate and why (#2306).
 """
 
 from __future__ import annotations
@@ -492,6 +494,19 @@ def checkpointing_for_task(
     return resolve_granularity(value, gpu_memory_gb=gpu_memory_gb) or False
 
 
+@dataclass(frozen=True)
+class FitUnavailable:
+    """Why the estimate cannot price a run (#2306).
+
+    ``field`` is the soup.yaml field that stops it (``None`` when no one field does);
+    ``reason`` is one line naming that field and the limit. Neither holds a value read
+    from the config (a model id, a path), so a caller can print the reason as it is.
+    """
+
+    field: Optional[str]
+    reason: str
+
+
 def hardware_fit_input_from_config(
     cfg: Any,
     *,
@@ -506,14 +521,40 @@ def hardware_fit_input_from_config(
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, a quantization with no memory model, out-of-range dims), in which
-    case the pre-flight skips rather than guess. ``profile_defaults`` is ``soup
-    profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
-    with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
-    is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
-    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
-    ``kbit_fp32`` is True for a card without bf16 hardware, where a 4-bit or 8-bit run keeps
-    peft's fp32 embeddings, norms and head (#2609); ``grpo_fp16`` implies it. Every other
-    caller, which knows no card, prices the bf16 default.
+    case the pre-flight skips rather than guess; :func:`hardware_fit_input_or_reason`
+    says which of those it is. ``profile_defaults`` is ``soup profile``'s reading
+    instead: ``auto`` is priced at batch 4 and a quantization with no memory model at
+    bf16, as ``soup profile`` always did. ``gpu_memory_gb`` is the card's memory in
+    GiB, which ``gradient_checkpointing: auto`` resolves on. ``on_hub_request`` is
+    called just before the first request to the Hub, if one is made. ``kbit_fp32`` is
+    True for a card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's fp32
+    embeddings, norms and head (#2609); ``grpo_fp16`` implies it. Every other caller,
+    which knows no card, prices the bf16 default.
+    """
+    result = hardware_fit_input_or_reason(
+        cfg,
+        allow_network=allow_network,
+        profile_defaults=profile_defaults,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=on_hub_request,
+        kbit_fp32=kbit_fp32,
+    )
+    return result if isinstance(result, HardwareFitInput) else None
+
+
+def hardware_fit_input_or_reason(
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    profile_defaults: bool = False,
+    gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
+    kbit_fp32: bool = False,
+) -> Union[HardwareFitInput, FitUnavailable]:
+    """:func:`hardware_fit_input_from_config`, or the one cause that stops it (#2306).
+
+    The batch size, the sequence length and the quantization are checked before the
+    model is read, so a run the estimate cannot price makes no request to the Hub.
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -521,23 +562,54 @@ def hardware_fit_input_from_config(
     bs = getattr(tcfg, "batch_size", None)
     if not isinstance(bs, int) or isinstance(bs, bool):
         if not profile_defaults:
-            return None  # "auto" resolves later — can't predict yet
+            # "auto" resolves later, once the model is loaded: can't predict yet.
+            return FitUnavailable(
+                "training.batch_size",
+                "training.batch_size is auto, which is chosen after the model loads",
+            )
         bs = PROFILE_AUTO_BATCH
+    if not _MIN_BATCH <= bs <= _MAX_BATCH:
+        # The schema asks only for 1 or more.
+        return FitUnavailable(
+            "training.batch_size",
+            f"training.batch_size is outside {_MIN_BATCH} to {_MAX_BATCH:,}, the range "
+            "the estimate prices",
+        )
     seq_len = getattr(cfg.data, "max_length", None)
-    if not isinstance(seq_len, int) or isinstance(seq_len, bool):
-        return None
-    if profile_defaults:
+    if profile_defaults and isinstance(seq_len, int) and not isinstance(seq_len, bool):
         seq_len = min(max(seq_len, _MIN_SEQ_LEN), _MAX_SEQ_LEN)
+    if (
+        not isinstance(seq_len, int)
+        or isinstance(seq_len, bool)
+        or not _MIN_SEQ_LEN <= seq_len <= _MAX_SEQ_LEN
+    ):
+        # A guard: the schema already bounds data.max_length to this range, so a
+        # validated config does not reach it.
+        return FitUnavailable(
+            "data.max_length",
+            f"data.max_length is outside {_MIN_SEQ_LEN} to {_MAX_SEQ_LEN:,}, the range "
+            "the estimate prices",
+        )
     quant = CONFIG_QUANT_TO_FIT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         if not profile_defaults:
-            return None
+            return FitUnavailable(
+                "training.quantization",
+                "training.quantization has no memory model in the estimate",
+            )
         quant = "none"
     shape = read_model_shape(
         getattr(cfg, "base", "") or "",
         allow_network=allow_network,
         on_hub_request=on_hub_request,
     )
+    # Compared as is: dividing a count too large for a float would raise here.
+    if shape.params > _MAX_PARAMS_B * GB:
+        return FitUnavailable(
+            "base",
+            f"the model in base has over {_MAX_PARAMS_B:,.0f}B parameters, the most the "
+            "estimate prices",
+        )
     peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _VALID_OPTIMIZERS:
@@ -577,7 +649,8 @@ def hardware_fit_input_from_config(
             kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
         )
     except (ValueError, TypeError, ArithmeticError):
-        return None  # dims out of the predictor's supported range
+        # Any other input the estimate refuses: no one field is known to be the cause.
+        return FitUnavailable(None, "the run's inputs are outside the range the estimate prices")
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
@@ -681,6 +754,7 @@ def decide_hardware_fit(
 
 __all__ = [
     "VRAM_SAFETY_MARGIN",
+    "FitUnavailable",
     "HardwareFitInput",
     "HardwareFitReport",
     "VRAMBreakdown",
@@ -688,6 +762,7 @@ __all__ = [
     "decide_hardware_fit",
     "estimate_peak_vram_gb",
     "hardware_fit_input_from_config",
+    "hardware_fit_input_or_reason",
     "outside_calibrated_range",
     "validate_batch_size",
     "validate_seq_len",
