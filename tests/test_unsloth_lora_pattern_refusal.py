@@ -8,10 +8,9 @@ which hands ``FastLanguageModel.get_peft_model`` one scalar ``r`` and ``lora_alp
 no parameter for a pattern. A config that set one loaded, passed ``soup train --dry-run``
 and trained a uniform-rank adapter with no warning.
 
-It is the unsloth twin of ``tests/test_mlx_lora_pattern_refusal.py`` (#1996, #2150) and is
-kept in its own file on purpose: when one backend starts applying the patterns, delete that
-backend's validator and that backend's file, and the other keeps working. For unsloth:
-``SoupConfig._validate_unsloth_lora_patterns`` and this file.
+It originally accompanied the interim MLX refusal (#1996, #2150). Native MLX text SFT
+now applies patterns, with coverage in ``tests/test_mlx_patterns.py``. The unsloth refusal
+remains independent: ``SoupConfig._validate_unsloth_lora_patterns`` and this file.
 """
 
 from __future__ import annotations
