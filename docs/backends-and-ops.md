@@ -1349,8 +1349,12 @@ macOS. A value already set is kept, and Windows leaves the current directory out
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
 the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
 directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
-POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
-`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+POSIX quoting on Linux/macOS and Microsoft C runtime quoting rules on Windows (where
+double quotes group arguments anywhere within an option like `--opt="a b"`, a single quote
+opens a group only at the start of a word like `'{ckpt}'` whereas inside a word it is an ordinary
+character, and backslashes are literal unless preceding a double quote; use double quotes for
+`--opt="a b"`), preserving backslashes in `.\tool.bat` and `C:\tools\tool.bat`.
+Quote a program path containing spaces.
 The template is split once before checkpoint substitution; checkpoint text remains one
 argument even when it contains spaces or quotes. No shell interprets that text. A missing
 or unstartable program is an invocation error (exit 2), with no bisect verdict or result
@@ -1640,16 +1644,31 @@ LIVE (v0.71.21): reshapes fused Llama-4 expert weights `[E*din, dout]` → `[E, 
 
 ## Ctrl+C Graceful Save
 
-First SIGINT → trainer writes a checkpoint and continues. Second SIGINT → trainer stops cleanly after the next save. No-state fallback raises `KeyboardInterrupt` so the user never gets stuck. `GracefulSaveHandler.install()` is idempotent and swallows `signal.signal` failures on non-main threads.
+For HF Trainer-backed runs, the first SIGINT requests a checkpoint after the
+next completed optimizer step and training continues. The second requests a
+checkpoint and stops after that save. A third SIGINT restores the prior signal
+handler and raises `KeyboardInterrupt` immediately, without waiting for a safe
+step or a checkpoint to finish. Requests survive gradient accumulation
+and TrainerControl resets. Initialized distributed ranks share the save/stop
+decision at the safe step. The prior signal handler is restored on normal
+completion and on startup, training or checkpoint errors. The controls work
+without a live display. Signal installation is unavailable on non-main threads;
+the file trigger still works there.
+
+Native MLX training and custom loops that do not use HF Trainer (including
+`task: unlearn`) do not implement these manual-save controls.
 
 
 ## Checkpoint-Now Trigger File
 
 ```bash
-touch ./out/.checkpoint_now    # trainer saves on the next step, then deletes the trigger
+touch ./out/.checkpoint_now    # save after the next optimizer step; remove after success
 ```
 
-Path containment via `is_under_cwd`; `os.lstat + S_ISLNK` rejection at the trigger target so a pre-placed symlink can't redirect the write.
+The HF Trainer lifecycle polls this file at optimizer-step boundaries. A failed
+save leaves the trigger in place for a retry. The saving rank consumes it only
+after the checkpoint succeeds. Path containment uses `is_under_cwd`; trigger
+symlinks and non-regular files are neither followed nor consumed.
 
 
 ## Onboarding Wizard Helper
@@ -1921,7 +1940,7 @@ start training or rewrite the config.
 
 The state file is a thin JSON envelope; the actual training is still driven by `soup train`. The gate prevents the "wait, why did I spend another $0.50 on the wrong config" surprise.
 
-`peak_vram_gb` is the `soup train` pre-flight's own estimate for the run, before its 10% margin ([Hardware-Fit Calculator](#hardware-fit-calculator)). When the plan cannot price the run, it records `null` and says why in `peak_vram_reason`: the model's `config.json` could not be read, `batch_size: auto`, a quantization with no memory model, layer streaming (sized by the streaming planner when it starts) or `backend: mlx`. Until #2049 it recorded a fixed 8.0 GB for every run. A state file written before that still loads, and `peak_vram_gb` is not part of the drift check.
+`peak_vram_gb` is the `soup train` pre-flight's own estimate for the run, before its 10% margin ([Hardware-Fit Calculator](#hardware-fit-calculator)). When the plan cannot price the run, it records `null` and says why in `peak_vram_reason`, naming the field that stops the estimate where one does: `training.batch_size` (`auto`, or outside 1 to 1,024), `training.quantization` (no memory model) or `base` (over 1,000B parameters); otherwise the model's `config.json` could not be read, layer streaming (sized by the streaming planner when it starts) or `backend: mlx`. Until #2049 it recorded a fixed 8.0 GB for every run. A state file written before that still loads, and `peak_vram_gb` is not part of the drift check.
 
 
 ## Hermetic Env Lockfile (`soup env`)
@@ -1968,7 +1987,7 @@ The coefficients come from 42 two-step `soup train` runs on an RTX 3060 Laptop a
 
 What those numbers do not cover: the rows are seven dense decoders of 135M to 3B parameters, at up to 4,096 tokens and batch 4, on one 6 GB card under WSL2 with one software stack (torch 2.14.0+cu130, transformers 5.17.0). The coefficients are fitted on 39 of the 42 rows the test checks, so the bands show how well they fit those rows, not an error on runs they were not fitted to. Mixture-of-experts models are sized as dense ones, no model of 7B or more was measured, and neither were the `medium` and `selective` checkpointing tiers, the fused losses (`use_liger`, `use_cut_ce`) or `backend: unsloth`, which replaces the loss and the checkpointing. So the pre-flight refuses a peak that does not fit only inside the measured range, dense models of 3.5B parameters and below. A run above that size, a mixture-of-experts model, a `medium` or `selective` tier, a fused-loss flag or `backend: unsloth` that does not fit gets the estimate as a warning ("outside the calibrated range ...; the estimate may overstate the peak") and starts, unless its floor alone is more than the card holds, and that run is refused. The floor is the weights, the CUDA context and the state of the parameters the run trains (adapters, gradients and optimizer state): each is bytes per parameter times a count, or a constant, so none is an extrapolation (a full fine-tune of a 7B model holds 27 GB of weights, as much again in gradients and twice that in AdamW state, whatever its sequence length). A term is left out where the estimate prices more than the run holds or has no exact figure. On a full fine-tune, Spectrum, LISA, `freeze_layers`, `freeze_ratio` and `expand_layers` train a subset of the parameters, so only the weights and the CUDA context count; with LoRA these settings change nothing in the floor, and the adapters with their gradients and optimizer state count as usual. `lomo` and `adalomo` keep no full gradient. Optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`. Adafactor, `lion_8bit` and `adalomo` hold less than the estimate's figure, a paged optimizer moves its state to host memory, and an optimizer without a figure is priced as AdamW, so none of them has a state term. On `sft`, `tts` and `pretrain`, `use_galore` replaces the optimizer with `galore_adamw`, which keeps low-rank state for the attention and MLP projections and full AdamW state for the other parameters (embeddings, output head, norms); the estimate has no figure for that mix, so the floor counts no optimizer state there, which can only understate it. On other tasks `use_galore` changes nothing and the optimizer's state counts as usual. Activations, logits and the allocator slack never enter the floor. A run sharded across more than one process (`WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`) is checked against its floor per card: `--fsdp full_shard`, `full_offload` and DeepSpeed ZeRO-3 divide the weights and the adapters by the process count, those and `--fsdp shard_grad` and ZeRO-2 divide the gradients and optimizer state, and the CUDA context is not divided. The stage is read from `zero_optimization.stage` of the preset or JSON given to `--deepspeed`, and an offload preset is priced as its stage without offload. The estimate is fitted on one card, so for such a run it is a warning, and the panel says the run is sharded and that only the floor is per card (#2300). `--gpus N` without `--fsdp` or `--deepspeed` is checked as one card. Inside the range the refusal says so and names `--allow-oom-attempt`, which launches the run anyway. The shipped `longcontext` template (an 8B model at 131,072 tokens) is outside the range: it warns and launches, and its header says how to turn on the fused loss.
 
-The model's shape comes from its `config.json` (a local directory, then the Hugging Face cache, then the Hub unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set), and its exact parameter count from the safetensors headers (local files, a cached snapshot, or the Hub's header-only metadata call on `huggingface-hub` 0.20 or later; otherwise it is counted from `config.json`). No weight is downloaded and torch is not imported. Reaching the Hub writes the model's `config.json` into the Hugging Face cache; the size is checked with a HEAD request first, each request has a timeout, and the metadata lookup as a whole has a deadline. The MCP `profile` tool never reaches the Hub: it reads a local directory or the local cache, and prices any other model from a guessed shape. When no `config.json` can be read, the shape is guessed from the parameter count (`model_size_from_name`), the logits term is not counted, and the output says so. That count:
+The model's shape comes from its `config.json` (a local directory, then the Hugging Face cache, then the Hub unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set), and its exact parameter count from the safetensors headers (local files, a cached snapshot, or the Hub's header-only metadata call on `huggingface-hub` 0.20 or later; otherwise it is counted from `config.json`). No weight is downloaded and torch is not imported. Reaching the Hub writes the model's `config.json` into the Hugging Face cache; the size is checked with a HEAD request first, each request has a timeout, and the metadata lookup as a whole has a deadline. `soup plan`, `soup profile` and the `soup train` pre-flight print one line before the first request to the Hub, and nothing offline, for a local directory or for a cached snapshot with its weights (#2306). The line says "Reading the model's details from the Hub to size the run (HF_HUB_OFFLINE=1 skips this)..."; the train pre-flight leaves out the offline hint because the model download comes next. The MCP `profile` tool never reaches the Hub: it reads a local directory or the local cache, and prices any other model from a guessed shape. When no `config.json` can be read, the shape is guessed from the parameter count (`model_size_from_name`), the logits term is not counted, and the output says so. That count:
 - A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.

@@ -2,7 +2,10 @@
 
 import math
 import re
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+
+if TYPE_CHECKING:
+    from soup_cli.utils.hardware_fit import FitUnavailable
 
 # GPU memory lookup table (name → GB VRAM). Keys are normalized by
 # ``normalize_gpu_key``. Every laptop part has its own key, including those with
@@ -213,25 +216,37 @@ def profile_result(
 
 
 def profile_from_config(
-    cfg: Any, *, allow_network: bool = True, gpu_memory_gb: Optional[float] = None
-) -> Optional[dict]:
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
+) -> Union[dict, "FitUnavailable"]:
     """The memory profile of a ``SoupConfig``, from the model's own shape.
 
     Built from the same input as the train pre-flight
     (``hardware_fit.hardware_fit_input_from_config``), so the two report the same
-    peak for the same config (#2049). ``None`` when the run cannot be priced.
-    ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto`` resolves on.
+    peak for the same config (#2049). When the run cannot be priced, the
+    :class:`~soup_cli.utils.hardware_fit.FitUnavailable` naming the field that stops
+    it (#2306). ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto``
+    resolves on. ``on_hub_request`` is called just before the first request to the
+    Hub, if one is made.
     """
     from soup_cli.utils.hardware_fit import (
+        FitUnavailable,
         estimate_peak_vram_gb,
-        hardware_fit_input_from_config,
+        hardware_fit_input_or_reason,
     )
 
-    inp = hardware_fit_input_from_config(
-        cfg, allow_network=allow_network, profile_defaults=True, gpu_memory_gb=gpu_memory_gb
+    inp = hardware_fit_input_or_reason(
+        cfg,
+        allow_network=allow_network,
+        profile_defaults=True,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=on_hub_request,
     )
-    if inp is None:
-        return None
+    if isinstance(inp, FitUnavailable):
+        return inp
     result = profile_result(
         estimate_peak_vram_gb(inp),
         model_name=cfg.base,
@@ -295,6 +310,7 @@ def profile_from_model(
     gradient_checkpointing: str = "off",
     allow_network: bool = True,
     gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
 ) -> dict:
     """The memory profile of a model id or directory, with no soup.yaml (#2049).
 
@@ -302,7 +318,8 @@ def profile_from_model(
     come from the model's own config.json (a local directory, the Hugging Face cache,
     then the Hub unless offline); a shape guessed from the name is not an answer to
     "will it fit", so that raises :class:`ModelShapeUnavailableError`. Out-of-range
-    numbers raise ``ValueError``.
+    numbers raise ``ValueError``. ``on_hub_request`` is called just before the first
+    request to the Hub, if one is made.
     """
     from soup_cli.utils.hardware_fit import (
         HardwareFitInput,
@@ -314,7 +331,9 @@ def profile_from_model(
     from soup_cli.utils.model_shape import read_model_shape
 
     quant, peft = MODEL_QUERY_METHODS[method]
-    shape = read_model_shape(model, allow_network=allow_network)
+    shape = read_model_shape(
+        model, allow_network=allow_network, on_hub_request=on_hub_request
+    )
     if shape.guessed:
         raise ModelShapeUnavailableError(_unreadable_reason(model, allow_network=allow_network))
     inp = HardwareFitInput(
