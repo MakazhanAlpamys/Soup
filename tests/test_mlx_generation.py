@@ -551,3 +551,67 @@ def test_native_option_refusal_names_only_the_option_that_failed(options, said, 
     assert said in message
     for other in not_said:
         assert other not in message
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        ("read_native_adapter", "path", 'config_path = path / "adapter_config.json"', False),
+        ("read_native_adapter", "base", 'config_path = path / "adapter_config.json"', False),
+        ("load_native_model", "model_path", "path = Path(model_path)", False),
+        ("load_native_model", "base_model", "path = Path(model_path)", False),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.utils.mlx_generation"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = (
+        {"model_path": "ordinary/base"}
+        if function_name == "load_native_model"
+        else {"path": tmp_path}
+    )
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)
+
+
+def test_reward_resolved_native_base_refused_before_trust(tmp_path, monkeypatch):
+    from soup_cli.utils import mlx_generation
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    monkeypatch.setattr(mlx_generation, 'read_native_adapter',
+                        lambda *_: {'model': str(root)})
+    assert_reward_guard(
+        mlx_generation.load_native_model, {'model_path': 'ordinary-base'},
+        'trust_remote_code = resolve_trust_remote_code(',
+    )

@@ -81,6 +81,16 @@ def diff(
     ),
 ):
     """Compare outputs of two models side-by-side on the same prompts."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model_a, model_b, base_a, base_b):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     # Validate model paths
     path_a = Path(model_a)
     path_b = Path(model_b)
@@ -220,6 +230,16 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load a model and tokenizer."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model_path, base_model):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype

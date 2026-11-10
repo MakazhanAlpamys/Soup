@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 
 class TestParseJsonArray:
     """Test JSON array parsing from LLM output."""
@@ -222,3 +224,41 @@ class TestGenerateCLI:
             "--count", "1",
         ])
         assert result.exit_code != 0
+
+
+@pytest.mark.parametrize('entry', ['command', 'loader'])
+def test_reward_local_generation_refused_before_work(tmp_path, entry):
+    from soup_cli.commands.generate import _generate_local, generate
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    if entry == 'command':
+        function = generate
+        kwargs = dict(provider='local', model_name=str(root), ollama_model=None)
+        boundary = 'from soup_cli.commands._common import refuse_output_over_input'
+    else:
+        function = _generate_local
+        kwargs = dict(prompt='test', count=1, fmt='alpaca', model_name=str(root),
+                      temperature=0.0, seed_examples=[])
+        boundary = 'import torch'
+    assert_reward_guard(function, kwargs, boundary)
+
+
+@pytest.mark.parametrize('provider,shorthand', [('openai', None), ('local', 'remote-ollama'),
+                                              ('local', None)])
+def test_remote_ids_and_ordinary_local_models_keep_generation_semantics(
+    tmp_path, provider, shorthand,
+):
+    from soup_cli.commands.generate import generate
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'same-name'
+    root.mkdir()
+    if provider != 'local' or shorthand:
+        (root / 'reward_model.json').write_text('broken')
+    assert_reward_guard(
+        generate, dict(provider=provider, model_name=str(root), ollama_model=shorthand),
+        'from soup_cli.commands._common import refuse_output_over_input', refused=False,
+    )

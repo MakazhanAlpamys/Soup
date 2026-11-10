@@ -633,6 +633,16 @@ def distill(
     ),
 ) -> None:
     """Distil a target model into a tiny dense speculative-decoding draft."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (target, draft_base):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     try:
         enforce_under_cwd_and_no_symlink(output, "output dir")
         rows = _read_jsonl(data, "data path", _MAX_DATA_ROWS)
@@ -815,6 +825,16 @@ def measure(
     ),
 ) -> None:
     """Report a draft's acceptance rate + throughput against its target."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (target, draft):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     sweep_values: Optional[list[int]] = None
     if sweep_k is not None:
         try:

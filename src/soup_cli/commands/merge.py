@@ -90,6 +90,16 @@ def merge(
     ),
 ):
     """Merge a LoRA adapter with its base model into a full model."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter, base):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.mlx_generation import reject_native_adapter
 
     if backend not in ("transformers", "mlx"):
@@ -421,7 +431,12 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
     try:
         with open(adapter_config_path, encoding="utf-8") as f:
             config = json.load(f)
-        return config.get("base_model_name_or_path")
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        base = config.get("base_model_name_or_path")
+        if isinstance(base, str):
+            refuse_reward_artifact(base)
+        return base
     except (json.JSONDecodeError, OSError):
         return None
 

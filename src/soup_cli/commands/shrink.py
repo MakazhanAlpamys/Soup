@@ -260,6 +260,16 @@ def shrink(
     ),
 ) -> None:
     """Depth-prune a model (least-important contiguous block) + verdict."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     try:
         _shrink_impl(
             model=model,

@@ -11,6 +11,45 @@ from tests.conftest import strip_ansi
 runner = CliRunner()
 
 
+@pytest.mark.parametrize('argument', ['adapter', 'base'])
+@pytest.mark.parametrize('artifact_kind', ['root', 'payload', 'recorded-base'])
+def test_reward_native_merge_refused_before_work(tmp_path, argument, artifact_kind):
+    from soup_cli.utils.mlx_merge import merge_native_adapter
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    member = 'reward.safetensors' if artifact_kind == 'payload' else 'reward_model.json'
+    (root / member).write_text('broken')
+    if artifact_kind == 'recorded-base':
+        adapter = tmp_path / 'lm-adapter'
+        adapter.mkdir()
+        (adapter / 'adapter_config.json').write_text(
+            json.dumps({'base_model_name_or_path': str(root)})
+        )
+        root = adapter
+    kwargs = {'adapter': 'ordinary/adapter', 'base': 'ordinary/base',
+              'output': str(tmp_path / 'merged')}
+    kwargs[argument] = str(root)
+    assert_reward_guard(
+        merge_native_adapter, kwargs,
+        'from soup_cli.utils.mlx_generation import load_native_model, read_native_adapter',
+    )
+    assert not (tmp_path / 'merged').exists()
+
+
+def test_ordinary_native_merge_reaches_first_work(tmp_path):
+    from soup_cli.utils.mlx_merge import merge_native_adapter
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    assert_reward_guard(
+        merge_native_adapter,
+        {'adapter': str(tmp_path), 'base': 'ordinary/base', 'output': str(tmp_path / 'merged')},
+        'from soup_cli.utils.mlx_generation import load_native_model, read_native_adapter',
+        refused=False,
+    )
+
+
 def test_local_base_path_keeps_local_inputs_and_resolves_hub_offline(tmp_path, monkeypatch):
     import huggingface_hub
 

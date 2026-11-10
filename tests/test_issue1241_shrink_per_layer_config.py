@@ -299,3 +299,45 @@ def test_shrink_cli_refuses_an_index_valued_layout_before_loading(tmp_path, monk
     assert r.exit_code == 1, (plain, repr(r.exception))
     assert "mlp_only_layers" in plain, plain
     assert "Scoring importance" not in plain, plain
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        ("shrink", "model", "_shrink_impl(", False),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.commands.shrink"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = {}
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)

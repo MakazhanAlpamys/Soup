@@ -57,6 +57,12 @@ def _finite(value: Any) -> bool:
 
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     """Validate metadata before loading optional dependencies or allocating a model."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (path, base):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     config_path = path / "adapter_config.json"
     if not config_path.exists():
         if (path / "adapters.safetensors").exists():
@@ -129,6 +135,12 @@ def load_native_model(
     return_config: bool = False,
 ) -> tuple[Any, Any] | tuple[Any, Any, dict]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (model_path, base_model):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     path = Path(model_path)
     config = read_native_adapter(path, base_model)
     from rich.console import Console
@@ -139,6 +151,7 @@ def load_native_model(
     )
 
     base = config["model"] if config else model_path
+    refuse_reward_artifact(base)
     trust_remote_code = resolve_trust_remote_code(
         base, requested=trust_remote_code, console=Console(),
         requires_remote_code=bool(model_requires_trust_remote_code(base)),

@@ -237,6 +237,8 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("simpo", "mlx", "text"): _MLX_SIMPO,
     ("kto", "mlx", "text"): _MLX_KTO,
     ("grpo", "mlx", "text"): _MLX_GRPO,
+    # #2003: changed unread fields are refused at config load, not gap warnings.
+    ("reward_model", "mlx", "text"): (),
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -259,6 +261,18 @@ _TRANSFORMERS_SFT_MODULES = (
 #: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
 #: field wired entirely inside a helper would have passed.
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
+    ("reward_model", "mlx", "text"): (
+        "soup_cli/trainer/mlx_reward_model.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/loss_summary.py",
+        "soup_cli/utils/mlx.py",
+        "soup_cli/utils/mlx_reward.py",
+        "soup_cli/utils/mlx_reward_bundle.py",
+        "soup_cli/utils/mlx_reward_data.py",
+        "soup_cli/utils/mlx_reward_native.py",
+        "soup_cli/utils/seeding.py",
+    ),
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
