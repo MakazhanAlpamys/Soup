@@ -255,6 +255,10 @@ def test_failed_arms_stay_failed_without_a_final_provenance_file(sweep_cli, phas
     )
     rows = sweep_cli.runs()
     assert len(rows) == 2 and all(row["status"] == "failed" for row in rows)
+    if phase == "train":
+        assert [(row["base_revision"], row["base_revision_source"]) for row in rows] == [
+            (FIRST, "hub_commit"), (SECOND, "hub_commit"),
+        ]
     assert sweep_cli.state.lookups == [BASE, BASE]
     assert not list(sweep_cli.root.rglob("soup_run.json"))
     assert provenance.base_revision_kwargs(BASE) == {}
