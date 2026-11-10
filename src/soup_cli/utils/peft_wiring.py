@@ -544,8 +544,9 @@ def restrict_target_modules_to_layers(
     ``layers_to_transform`` to a list ``target_modules`` but never to a
     string, so a string target has to become an explicit list before it can
     respect the plan (#2201). Names outside a numbered decoder layer
-    (``lm_head``, embeddings) are dropped: the plan cannot scope them, and
-    peft would not have scoped them for a list either.
+    (``lm_head``, embeddings) are kept: the plan only governs numbered layers,
+    and peft keeps an exact module name for a list target too, so after
+    resolution every name is exact.
     """
     if isinstance(target_modules, str):
         candidates = expand_string_target_modules(model, target_modules)

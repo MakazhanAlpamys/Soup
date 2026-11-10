@@ -149,6 +149,12 @@ class TestTheRefusalsThatRemain:
 
 
 class TestNamesOutsideTheDecoderStack:
+    def test_the_resolved_list_is_passed_without_layers_to_transform(self, tmp_path, monkeypatch):
+        """The names are already scoped, so the layers argument must not be
+        handed to peft as well (#2289 review, second small item)."""
+        wrapper = _wrapper(tmp_path, monkeypatch, targets="all-linear", freeze=1)
+        assert wrapper.model.peft_config["default"].layers_to_transform is None
+
     def test_a_name_outside_the_stack_is_kept(self):
         """A freeze plan only governs numbered layers, so an exact name outside
         them is kept, as peft keeps it for a list target (#2201, item 3)."""
