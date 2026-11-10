@@ -333,6 +333,18 @@ def _pin_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
 
 
+def _cuda_reported() -> bool:
+    """What ``torch.cuda.is_available`` answers right now, patched or not.
+
+    Not a hardware probe and not a skip gate (``tests/test_issue833_gpu_marker.py``): it
+    reads back the lookup ``_cpu_only`` replaces, to prove the replacement is in force.
+    """
+    import torch
+
+    probe = torch.cuda.is_available
+    return bool(probe())
+
+
 @contextlib.contextmanager
 def _cpu_only() -> Iterator[pytest.MonkeyPatch]:
     """The CPU pin, on one thread (the previous thread count is restored on exit)."""
@@ -412,7 +424,7 @@ def _run(
 
     class Recorder(TrainerCallback):
         def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
-            leg.cuda_visible = torch.cuda.is_available()
+            leg.cuda_visible = _cuda_reported()
             leg.threads = torch.get_num_threads()
             leg.at_train_begin = {
                 "global_step": state.global_step,
@@ -502,8 +514,8 @@ class TestTheComparisonSeesADifference:
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
         with _cpu_only():
-            assert torch.cuda.is_available() is False
-        assert torch.cuda.is_available() is True
+            assert _cuda_reported() is False
+        assert _cuda_reported() is True
 
     def test_the_pin_hides_every_mps_probe_the_trainer_may_use(
         self, monkeypatch: pytest.MonkeyPatch
