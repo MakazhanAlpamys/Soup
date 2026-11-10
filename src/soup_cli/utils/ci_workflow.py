@@ -170,7 +170,7 @@ def render_soup_gate_workflow(
     suite = _validate_path(suite_path, "suite_path")
     evidence = _validate_path(evidence_path, "evidence_path")
 
-    if not isinstance(python_version, str) or not _PY_RE.match(python_version):
+    if not isinstance(python_version, str) or not _PY_RE.fullmatch(python_version):
         raise ValueError("python_version must look like '3.11'")
     py_tuple = tuple(int(part) for part in python_version.split("."))
     if py_tuple < _MIN_SUPPORTED_PYTHON or py_tuple > _MAX_SUPPORTED_PYTHON:
