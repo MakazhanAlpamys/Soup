@@ -2541,3 +2541,11 @@ historical startup digest. Copied artifacts retain that digest without the
 original dataset. Existing runs stay unknown; no historical identity is inferred
 from today's files. Sweep and other training entry points do not gain capture in
 this change.
+
+Single-process Hugging Face Transformers `soup sweep` records a base revision per
+arm, independently of training-data hashing. Each arm resolves once before its
+first base load and keeps that commit across its base loads; arms can name
+different bases or record different commits if the Hub moves during the sweep.
+The arm's `runs` row identifies its commit, and its final `soup_run.json` preserves
+it for a copied artifact. Both the row and file leave `training_data_sha256`
+unknown: sweep does not capture a training-data hash.
