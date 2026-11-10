@@ -283,6 +283,28 @@ def test_capsule_preserves_each_microbatch_loss_and_first_bad_loss(tmp_path, bad
     capsule.close()
 
 
+def test_first_nonfinite_loss_is_preserved_when_both_microbatches_are_bad(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "two-bad-losses",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    for _ in range(2):
+        trainer._compute_loss(trainer.model, {
+            "input_ids": torch.ones(1, 16), "constant": torch.tensor(float("nan")),
+        }).backward()
+    capsule.capture_pre_optimizer(trainer.state)
+    payload = torch.load(
+        tmp_path / "two-bad-losses/rank000/capsule_000001.pt", weights_only=True,
+    )
+    assert [row["microbatch_index"] for row in payload["microbatch_loss_stats"]] == [0, 1]
+    assert [row["stats"]["finite"] for row in payload["microbatch_loss_stats"]] == [False, False]
+    assert payload["first_nonfinite_loss"]["microbatch_index"] == 0
+    capsule.close()
+
+
 def test_capsule_observes_accumulation_overflow_from_finite_contributions(tmp_path):
     torch = pytest.importorskip("torch")
     harness = _module()
@@ -312,6 +334,62 @@ def test_capsule_observes_accumulation_overflow_from_finite_contributions(tmp_pa
     assert summary["nonfinite_accumulated_parameter_names_before_clip"] == ["weight"]
     capsule.close()
     assert not trainer.model.weight._post_accumulate_grad_hooks
+
+
+def test_accumulation_attribution_keeps_first_overflow_and_unique_names(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    contributions = []
+    trainer.model.weight.register_hook(
+        lambda grad: contributions.append(bool(grad.isfinite().all()))
+    )
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "three-backwards",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    for _ in range(3):
+        trainer._compute_loss(trainer.model, {
+            "input_ids": torch.full((1, 16), 2e38), "constant": torch.tensor(0.0),
+        }).backward()
+    assert contributions == [True, True, True]
+    assert trainer.model.weight.grad.isinf().all()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary = json.loads(
+        (tmp_path / "three-backwards/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["first_nonfinite_parameter"] is None
+    assert summary["nonfinite_parameter_names_before_clip"] == []
+    assert summary["first_nonfinite_accumulated_parameter"]["name"] == "weight"
+    assert summary["first_nonfinite_accumulated_parameter"]["microbatch_index"] == 1
+    assert summary["nonfinite_accumulated_parameter_names_before_clip"] == ["weight"]
+    capsule.close()
+
+
+def test_finite_returned_norm_preserves_an_earlier_loss_anomaly(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "bad-loss-finite-norm",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(float("nan")),
+    }).backward()
+    assert trainer.model.weight.grad.isfinite().all()
+    norm = trainer.accelerator.clip_grad_norm_(trainer.model.parameters(), 1.0)
+    assert norm.item() == 4.0
+    assert trainer.model.weight.grad.isfinite().all()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary_path = tmp_path / "bad-loss-finite-norm/rank000/capsule_000001.json"
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["first_nonfinite_loss"]["microbatch_index"] == 0
+    assert summary["gradient_norm_observation"]["finite"] is True
+    assert summary["gradient_norm_observation"]["value"] == 4.0
+    assert summary["post_clip_nonfinite_gradient_names"] == []
+    capsule.close()
 
 
 @pytest.mark.parametrize("max_norm", [1.0, float("inf")])
