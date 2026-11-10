@@ -23,7 +23,8 @@ Each variant runs through the real ``setup()`` path of ``SFTTrainerWrapper``:
   property, one only the streamed variants show is streaming-specific.
 * ``*-accumulating`` takes two micro-batches per optimizer step, so a resume has to
   skip whole accumulation groups. ``*-dropout`` trains with LoRA dropout, which makes
-  the restored RNG stream decide the losses.
+  the restored RNG stream decide the losses. ``*-epoch-boundary`` cuts exactly between two
+  epochs and ``*-head-adapter`` trains an adapter on ``lm_head`` (see below).
 
 The first leg is cut by a callback and not by a smaller ``max_steps``: the LR
 schedule is built from ``max_steps``, so a leg with ``max_steps=2`` would train on a
@@ -33,10 +34,23 @@ Every run also draws once from each global RNG at the end of each step. With dro
 nothing else consumes randomness, so without the draw a skipped RNG restore would be
 invisible: reseeding at ``setup()`` already puts every stream where the checkpoint had it.
 
-Float32 on the CPU: on an accelerator the streamed dtype is bf16 and the bit-exact
-claim is a different one (the GPU tier measures it).
+Float32 on the CPU, on one thread: on an accelerator the streamed dtype is bf16 and the
+bit-exact claim is a different one (the GPU tier measures it). The legs are pinned to the
+CPU for real, the way ``tests/test_issue805_optimizer_settings.py`` pins its fixture
+(``_cpu_only``): ``torch.cuda.is_available`` and the MPS probes report no accelerator, so
+``TrainingArguments`` picks the CPU on a CUDA or an Apple Silicon host too (passing
+``device="cpu"`` to the wrapper alone does not decide that), and ``torch.set_num_threads(1)``
+takes the thread count out of "exact on the CPU".
 
-Apple Silicon is kept off MPS on purpose (``_hide_mps``). ``Trainer`` checkpoints the
+Two kinds of variant cut the run where the Trainer resumes through a different branch. At an
+epoch boundary (``*-epoch-boundary``: four rows, two optimizer steps per epoch, so the cut at
+step 2 falls exactly between two epochs) ``steps_trained_in_current_epoch`` is 0, no batch is
+skipped and the RNG is restored before the epoch loop instead of after the skip; the second
+epoch then re-seeds its sampler. ``*-head-adapter`` puts a LoRA adapter on ``lm_head`` too, a
+streamed large boundary (``tests/test_issue1048_lora_head_save_resume.py`` is about the save
+and load of that adapter).
+
+Apple Silicon is kept off MPS on purpose (``_pin_to_cpu``). ``Trainer`` checkpoints the
 python, numpy and CPU generators and the CUDA / XLA / NPU / HPU / MLU / MUSA ones, and no
 MPS generator (``_save_rng_state`` / ``_load_rng_state``, read in transformers 5.17).
 On an MPS host the LoRA dropout masks are drawn from the MPS generator, so a resumed run
@@ -53,17 +67,21 @@ dropout on Apple Silicon is not bit-exact. This file measures the CPU, as promis
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, NamedTuple
 
 import pytest
 
 from tests.test_issue1048_lora_head_save_resume import _requires_train_extra
 
+# The mark the sibling streaming tests carry (test_issue1048_lora_head_save_resume.py,
+# test_layer_stream_boundary_save.py): the DeprecationWarnings transformers, peft and trl
+# raise on the Trainer path are not what this file measures.
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 pytest.importorskip("torch")
@@ -74,17 +92,6 @@ pytest.importorskip("safetensors")
 TOTAL_STEPS = 4
 CUT_AT = 2
 LEARNING_RATE = 5e-3
-
-#: (id, stream_layers, tie_word_embeddings, gradient_accumulation_steps, lora dropout)
-VARIANTS = (
-    ("streamed-untied", True, False, 1, 0.0),
-    ("streamed-tied", True, True, 1, 0.0),
-    ("streamed-untied-accumulating", True, False, 2, 0.0),
-    ("streamed-untied-dropout", True, False, 1, 0.1),
-    ("resident", False, True, 1, 0.0),
-    ("resident-accumulating", False, True, 2, 0.0),
-    ("resident-dropout", False, True, 1, 0.1),
-)
 
 #: Eight different rows. The shared fixture rows are eight copies of one, which would
 #: make every batch identical and the data order unobservable.
@@ -99,8 +106,49 @@ _CONVERSATIONS = (
     ("cat mat", "answer"),
 )
 
+_ATTENTION = ("q_proj", "v_proj")
 
-def _rows() -> list[dict[str, Any]]:
+
+class Variant(NamedTuple):
+    """One configuration of the comparison (the batch size is always 1)."""
+
+    name: str
+    stream: bool  # stream_layers
+    tie: bool  # tie_word_embeddings
+    accumulate: int = 1  # gradient_accumulation_steps
+    dropout: float = 0.0  # LoRA dropout
+    rows: int = len(_CONVERSATIONS)  # training rows: how many optimizer steps make an epoch
+    targets: tuple[str, ...] = _ATTENTION  # LoRA target modules
+
+    @property
+    def steps_per_epoch(self) -> int:
+        return -(-self.rows // self.accumulate)
+
+    @property
+    def cuts_on_epoch_boundary(self) -> bool:
+        return CUT_AT % self.steps_per_epoch == 0
+
+
+VARIANTS = (
+    Variant("streamed-untied", True, False),
+    Variant("streamed-tied", True, True),
+    Variant("streamed-untied-accumulating", True, False, accumulate=2),
+    Variant("streamed-untied-dropout", True, False, dropout=0.1),
+    Variant("streamed-epoch-boundary", True, False, accumulate=2, dropout=0.1, rows=4),
+    Variant(
+        "streamed-untied-head-adapter", True, False, targets=(*_ATTENTION, "lm_head")
+    ),
+    Variant("resident", False, True),
+    Variant("resident-accumulating", False, True, accumulate=2),
+    Variant("resident-dropout", False, True, dropout=0.1),
+    Variant("resident-epoch-boundary", False, True, accumulate=2, dropout=0.1, rows=4),
+    Variant(
+        "resident-untied-head-adapter", False, False, targets=(*_ATTENTION, "lm_head")
+    ),
+)
+
+
+def _rows(count: int) -> list[dict[str, Any]]:
     return [
         {
             "messages": [
@@ -108,7 +156,7 @@ def _rows() -> list[dict[str, Any]]:
                 {"role": "assistant", "content": answer},
             ]
         }
-        for prompt, answer in _CONVERSATIONS
+        for prompt, answer in _CONVERSATIONS[:count]
     ]
 
 
@@ -243,6 +291,8 @@ class Leg:
     log: list[dict[str, Any]] = field(default_factory=list)
     global_step: int = -1
     trainer_device: str = ""
+    cuda_visible: bool = True
+    threads: int = -1
     optimizer_class: str = ""
     scheduler_class: str = ""
     at_train_begin: dict[str, Any] = field(default_factory=dict)
@@ -257,41 +307,48 @@ class Scenario:
     continuous: Leg
     first: Leg
     resumed: Leg
-    stream: bool
+    variant: Variant
+
+    @property
+    def stream(self) -> bool:
+        return self.variant.stream
 
 
-def _hide_mps(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the real wrapper off MPS, where a checkpoint does not carry the dropout RNG.
+def _pin_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``TrainingArguments`` pick the CPU, whatever accelerator the host has.
 
-    Soup does not wire ``use_cpu`` into ``TrainingArguments``, so the Trainer would pick
-    MPS by itself on Apple Silicon; the same three lookups other tests patch
-    (``test_issue805_optimizer_settings.py``) make it pick the CPU. Patched after the lazy
-    transformers import, and ``transformers.training_args`` caches its own copy of the
-    probe, so that one is overridden too.
+    Soup does not wire ``use_cpu`` into ``TrainingArguments`` and the wrapper's ``device``
+    argument does not reach it, so on a CUDA host the Trainer would pick the GPU (bf16 kernels,
+    a claim this file does not make) and on Apple Silicon it would pick MPS (which has no
+    checkpointed RNG, see the module docstring). ``tests/test_issue805_optimizer_settings.py``
+    makes the same lookups say "no accelerator"; ``torch.mps.is_available`` is added here.
+    ``transformers.training_args`` caches its own copy of the MPS probe, so that one is
+    overridden too.
     """
     import torch
 
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(torch.mps, "is_available", lambda: False)
     monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
 
 
-def _expected_device() -> str:
-    """The device the legs run on: CUDA when present (its generator is checkpointed), else CPU."""
-    from tests.conftest import cuda_available
+@contextlib.contextmanager
+def _cpu_only() -> Iterator[pytest.MonkeyPatch]:
+    """The CPU pin, on one thread (the previous thread count is restored on exit)."""
+    import torch
 
-    return "cuda" if cuda_available() else "cpu"
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            _pin_to_cpu(monkeypatch)
+            yield monkeypatch
+    finally:
+        torch.set_num_threads(previous_threads)
 
 
-def _build(
-    root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    stream: bool,
-    tie: bool,
-    accumulate: int,
-    dropout: float,
-) -> Any:
+def _build(root: Path, monkeypatch: pytest.MonkeyPatch, variant: Variant) -> Any:
     from tests.test_v07204 import (
         _stream_cfg,
         _tiny_llama_dir,
@@ -299,7 +356,7 @@ def _build(
         _write_tiny_tokenizer,
     )
 
-    weights, _, _ = _tiny_llama_dir(root, n_layers=2, tie=tie, hidden=64, vocab=64)
+    weights, _, _ = _tiny_llama_dir(root, n_layers=2, tie=variant.tie, hidden=64, vocab=64)
     _write_tiny_tokenizer(weights)
     monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(root / "cache"))
     monkeypatch.chdir(root)
@@ -307,16 +364,20 @@ def _build(
         weights,
         root / "out",
         task="sft",
-        stream_layers=stream,
+        stream_layers=variant.stream,
         batch_size=1,
-        gradient_accumulation_steps=accumulate,
+        gradient_accumulation_steps=variant.accumulate,
         lr=LEARNING_RATE,
         save_steps=CUT_AT,
-        lora={"r": 4, "alpha": 8, "dropout": dropout, "target_modules": ["q_proj", "v_proj"]},
+        lora={
+            "r": 4,
+            "alpha": 8,
+            "dropout": variant.dropout,
+            "target_modules": list(variant.targets),
+        },
     )
-    _hide_mps(monkeypatch)
-    wrapper = _wrapper_for("sft")(cfg, device=_expected_device())
-    wrapper.setup({"train": _rows()})
+    wrapper = _wrapper_for("sft")(cfg, device="cpu")
+    wrapper.setup({"train": _rows(variant.rows)})
     wrapper.trainer.args.max_steps = TOTAL_STEPS
     return wrapper
 
@@ -324,15 +385,16 @@ def _build(
 def _run(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
+    variant: Variant,
     *,
     stop_after: int | None = None,
     resume_from: Path | None = None,
-    **settings: Any,
 ) -> Leg:
     """A fresh wrapper from a freshly built config, trained once."""
+    import torch
     from transformers import TrainerCallback
 
-    wrapper = _build(root, monkeypatch, **settings)
+    wrapper = _build(root, monkeypatch, variant)
     trainer = wrapper.trainer
     leg = Leg(checkpoints=root / "out", start_adapters=_adapters(wrapper.model))
     leg.streamed = getattr(wrapper, "_stream_runtime", None) is not None
@@ -350,6 +412,8 @@ def _run(
 
     class Recorder(TrainerCallback):
         def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+            leg.cuda_visible = torch.cuda.is_available()
+            leg.threads = torch.get_num_threads()
             leg.at_train_begin = {
                 "global_step": state.global_step,
                 "adapters": _adapters(wrapper.model),
@@ -387,19 +451,18 @@ def _run(
     return leg
 
 
-@pytest.fixture(scope="module", params=VARIANTS, ids=[variant[0] for variant in VARIANTS])
+@pytest.fixture(scope="module", params=VARIANTS, ids=[variant.name for variant in VARIANTS])
 def scenario(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Scenario:
     _requires_train_extra()
-    _, stream, tie, accumulate, dropout = request.param
+    variant: Variant = request.param
     root = tmp_path_factory.mktemp("stream-resume-exact")
-    settings = {"stream": stream, "tie": tie, "accumulate": accumulate, "dropout": dropout}
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        continuous = _run(root / "continuous", monkeypatch, **settings)
-        first = _run(root / "first", monkeypatch, stop_after=CUT_AT, **settings)
+    with _cpu_only() as monkeypatch:
+        continuous = _run(root / "continuous", monkeypatch, variant)
+        first = _run(root / "first", monkeypatch, variant, stop_after=CUT_AT)
         cut = root / "first" / "out" / f"checkpoint-{CUT_AT}"
         assert cut.is_dir(), sorted(path.name for path in (root / "first" / "out").iterdir())
-        resumed = _run(root / "resumed", monkeypatch, resume_from=cut, **settings)
-    return Scenario(continuous=continuous, first=first, resumed=resumed, stream=stream)
+        resumed = _run(root / "resumed", monkeypatch, variant, resume_from=cut)
+    return Scenario(continuous=continuous, first=first, resumed=resumed, variant=variant)
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +495,59 @@ class TestTheComparisonSeesADifference:
         assert _differences([1, 2], [1, 2, 3])
         assert _differences({"step": 3}, {"step": 4})
 
+    def test_the_pin_hides_cuda_even_where_it_is_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        with _cpu_only():
+            assert torch.cuda.is_available() is False
+        assert torch.cuda.is_available() is True
+
+    def test_the_pin_hides_every_mps_probe_the_trainer_may_use(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import torch
+        import transformers.training_args as training_args
+
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: True)
+        monkeypatch.setattr(training_args, "is_torch_mps_available", lambda: True)
+        with _cpu_only():
+            assert torch.backends.mps.is_available() is False
+            assert torch.mps.is_available() is False
+            assert training_args.is_torch_mps_available() is False
+
+    def test_the_pin_takes_one_thread_and_gives_the_count_back(self) -> None:
+        import torch
+
+        previous = torch.get_num_threads()
+        torch.set_num_threads(2)
+        try:
+            with _cpu_only():
+                assert torch.get_num_threads() == 1
+            assert torch.get_num_threads() == 2
+        finally:
+            torch.set_num_threads(previous)
+
+    def test_the_variants_include_cuts_on_and_off_an_epoch_boundary_and_a_head_adapter(
+        self,
+    ) -> None:
+        # Guards the variant table itself: a row count or an accumulation edited later must
+        # not quietly turn the boundary variants into mid-epoch ones.
+        for variant in VARIANTS:
+            assert variant.cuts_on_epoch_boundary is variant.name.endswith("epoch-boundary"), (
+                variant
+            )
+        assert {variant.stream for variant in VARIANTS if variant.cuts_on_epoch_boundary} == {
+            True,
+            False,
+        }
+        heads = [variant for variant in VARIANTS if "lm_head" in variant.targets]
+        assert {variant.stream for variant in heads} == {True, False}
+        assert all(not variant.tie for variant in heads)
+
     def test_the_rng_snapshot_moves_when_a_stream_is_drawn_from(self) -> None:
         before = _rng_state()
         assert _differences(before, _rng_state()) == []
@@ -447,16 +563,42 @@ class TestTheRunsAreComparable:
         for leg in (scenario.continuous, scenario.first, scenario.resumed):
             assert leg.streamed is scenario.stream
 
-    def test_the_trainer_runs_where_its_checkpoint_carries_the_dropout_rng(
+    def test_the_legs_ran_on_the_cpu_on_one_thread(self, scenario: Scenario) -> None:
+        # CUDA would be a different claim (bf16 streamed, GPU kernels) and on MPS a resumed
+        # dropout run cannot continue exactly at all (the module docstring): nothing else in
+        # this file says why, a dozen tests would just fail.
+        for leg in (scenario.continuous, scenario.first, scenario.resumed):
+            assert leg.trainer_device == "cpu", (
+                f"the Trainer picked {leg.trainer_device!r}; this file measures the CPU "
+                "(Trainer checkpoints no MPS RNG, and the CUDA run is a different claim)"
+            )
+            assert leg.cuda_visible is False
+            assert leg.threads == 1
+
+    def test_the_cut_falls_where_the_variant_says(self, scenario: Scenario) -> None:
+        variant = scenario.variant
+        epochs = {entry["step"]: entry["epoch"] for entry in scenario.continuous.log}
+        assert epochs[CUT_AT] == pytest.approx(CUT_AT / variant.steps_per_epoch)
+        assert epochs[TOTAL_STEPS] == pytest.approx(TOTAL_STEPS / variant.steps_per_epoch)
+        assert (float(epochs[CUT_AT]).is_integer()) is variant.cuts_on_epoch_boundary
+        if variant.cuts_on_epoch_boundary:
+            # the resumed run must cross into a second epoch, or the boundary is not tested
+            assert epochs[TOTAL_STEPS] > epochs[CUT_AT]
+            assert scenario.resumed.at_train_begin["global_step"] == CUT_AT
+
+    def test_the_head_adapter_is_trained_where_the_variant_has_one(
         self, scenario: Scenario
     ) -> None:
-        # On MPS a resumed run cannot continue a dropout run exactly (see the module
-        # docstring), and nothing else in this file says why: twelve tests would just fail.
-        for leg in (scenario.continuous, scenario.first, scenario.resumed):
-            assert leg.trainer_device == _expected_device(), (
-                f"the Trainer picked {leg.trainer_device!r}; Trainer checkpoints no MPS RNG, "
-                "so the dropout variants cannot resume exactly there"
-            )
+        leg = scenario.continuous
+        head = sorted(name for name in leg.start_adapters if "lm_head" in name)
+        if "lm_head" not in scenario.variant.targets:
+            assert not head
+            return
+        assert head, "the variant asks for an lm_head adapter and the model has none"
+        assert _differences(
+            {name: leg.start_adapters[name] for name in head},
+            {name: leg.adapters_after[CUT_AT][name] for name in head},
+        ), "the lm_head adapter did not move"
 
     def test_all_three_runs_start_from_the_same_adapter(self, scenario: Scenario) -> None:
         start = scenario.continuous.start_adapters
