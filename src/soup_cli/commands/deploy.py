@@ -561,24 +561,27 @@ def hf_space(
     # --- Create repo + upload ---
     try:
         api = get_hf_api(token=token, endpoint=endpoint)
+        from huggingface_hub import CommitOperationAdd
     except ImportError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1) from exc
 
     try:
+        operations = [
+            CommitOperationAdd(path_in_repo=name, path_or_fileobj=content.encode("utf-8"))
+            for name, content in files.items()
+        ]
         api.create_repo(
             repo_id=space, repo_type="space",
             space_sdk=sdk,
             private=private, exist_ok=True,
         )
-        for in_repo_name, content in files.items():
-            api.upload_file(
-                path_or_fileobj=content.encode("utf-8"),
-                path_in_repo=in_repo_name,
-                repo_id=space,
-                repo_type="space",
-                commit_message=f"Soup CLI: add {in_repo_name}",
-            )
+        api.create_commit(
+            repo_id=space,
+            repo_type="space",
+            operations=operations,
+            commit_message="Soup CLI: deploy Space files",
+        )
     except Exception as exc:
         console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
