@@ -57,6 +57,8 @@ def test_the_self_test_passes(capsys, monkeypatch, aten_half_matmuls):
     children = []
 
     def run_without_onednn(argv, **kwargs):
+        if "--cell" not in argv:
+            return run(argv, **kwargs)
         children.append(argv)
         return run([argv[0], "-c", _CHILD_WITHOUT_ONEDNN, *argv[1:]], **kwargs)
 
