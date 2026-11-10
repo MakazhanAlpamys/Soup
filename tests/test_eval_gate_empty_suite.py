@@ -64,18 +64,19 @@ def test_load_suite_refuses_zero_tasks(
 def test_load_suite_empty_file_is_a_value_error_naming_suite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes,
 ) -> None:
-    """The contract, not the implementation: an empty suite file is refused with a
-    ValueError whose message names the missing "suite" field (pydantic's "Field required"
-    report today; a "must be a mapping" refusal under #1878), never with a TypeError from
-    `**None`, and never with a made-up suite name or a message that hides what is wrong."""
+    """An empty suite file is a plain ValueError that names the file and the
+    fields to write. It is not a TypeError from ``**None``, and not a
+    MalformedSuiteError (training warns and leaves the gate inert)."""
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "gate.yaml"
     path.write_bytes(content)
     with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
-    message = str(caught.value)
-    assert "suite" in message, repr(caught.value)
-    assert "Field required" in message or "must be a mapping" in message, repr(caught.value)
+    assert type(caught.value) is ValueError
+    assert str(caught.value) == (
+        f"eval-gate suite '{path}' is empty: it needs 'suite' (a name) "
+        "and 'tasks' (a list of tasks)"
+    )
 
 
 @pytest.mark.parametrize("payload", EMPTY_SUITES, ids=["explicit", "missing", "misspelled"])
