@@ -515,6 +515,8 @@ _NOT_SEEDED = {
     "bitnet": "raises before it builds anything; hardware-gated path",
     "mlx_sft": "seeds mx.random and numpy in train(), where the adapter is "
                "built (#1850; tests/test_mlx_sft_seed.py)",
+    "mlx_pretrain": "seeds mx.random before LoRA initialization in train(); uses a private "
+                    "data-order RNG, qualified by test_mlx_pretrain_native.py",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
 }
 

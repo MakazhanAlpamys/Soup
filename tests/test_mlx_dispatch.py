@@ -42,9 +42,9 @@ def test_mlx_registry_rejects_unknown_task_loudly():
     from soup_cli.trainer.mlx_routing import get_mlx_trainer
 
     with pytest.raises(
-        ValueError, match="MLX backend does not support task 'pretrain'"
+        ValueError, match="MLX backend does not support task 'ppo'"
     ):
-        get_mlx_trainer("pretrain")
+        get_mlx_trainer("ppo")
 
 
 def test_mlx_backend_resolves_sft_trainer():

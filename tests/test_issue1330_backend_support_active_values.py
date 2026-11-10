@@ -60,6 +60,8 @@ def _config(task: str, backend: str, modality: str) -> dict:
     }
     if modality != "text":
         cfg["modality"] = modality
+    if (task, backend) == ("pretrain", "mlx"):
+        cfg["data"].update(train="./data/corpus.txt", format="plaintext")
     return cfg
 
 

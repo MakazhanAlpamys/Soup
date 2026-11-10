@@ -203,7 +203,7 @@ class TestEvalStepsFootguns:
             _load(_yaml(task="dpo", backend="mlx", training_extra="  eval_steps: 5\n"))
         message = str(info.value)
         assert "training.eval_steps is not supported for task='dpo' on backend='mlx'" in message
-        assert "#1990" in message
+        assert "only task='sft' and 'pretrain' honour it" in message
 
     def test_mlx_without_it_still_loads(self):
         """The control for the refusal above: MLX itself is untouched."""

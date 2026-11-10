@@ -1919,6 +1919,7 @@ def train(
         dataset = load_dataset(
             data_config_for_task(run_data_config, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
+        **({"native_pretrain": True} if (cfg.backend, cfg.task) == ("mlx", "pretrain") else {}),
         )
         _validate_preference_dataset_if_applicable(cfg, dataset)
         _refuse_empty_train(cfg.data, dataset)
@@ -1945,6 +1946,7 @@ def train(
     dataset = load_dataset(
         data_config_for_task(run_data_config, cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
+        **({"native_pretrain": True} if (cfg.backend, cfg.task) == ("mlx", "pretrain") else {}),
     )
     _validate_preference_dataset_if_applicable(cfg, dataset)
     _refuse_empty_train(cfg.data, dataset)

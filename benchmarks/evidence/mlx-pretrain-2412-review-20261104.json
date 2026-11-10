@@ -1,0 +1,207 @@
+{
+  "date": "2026-11-04",
+  "records": [
+    {
+      "soup_base_sha": "e7c43848c9ea39226f6739cfc9a2d2ac2fce5ba4",
+      "working_source_tree_sha256": "934c5e7dc70f3ff1da95ceed56d6614099213536e4e157acf0f6806b91f224c6",
+      "python": "3.12.7",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.32.2",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "hardware": {
+        "platform": "Darwin",
+        "machine": "arm64",
+        "processor": "arm",
+        "chip": "Apple M4 Pro"
+      },
+      "unified_memory_bytes": 51539607552,
+      "metal_available": true,
+      "training_packages_present": [],
+      "unchanged_base_tensors": 11,
+      "max_lora_b_change_from_zero": 1.1766443252563477,
+      "live_vs_fresh_reload_max_abs": 0.0,
+      "live_vs_base_max_abs": 5.286922931671143,
+      "base_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "limits": "tiny lifecycle fixture; no domain-quality or CUDA parity claim; peak MLX allocation excludes model loading; throughput excludes eval/save",
+      "case": "current-dense",
+      "configuration": "data.validation set; data.val_split omitted",
+      "effective_val_split": 0,
+      "base_quantization": null,
+      "result": {
+        "completed_updates": 8,
+        "consumed_targets": 192,
+        "eval_updates": [
+          3,
+          6,
+          8
+        ],
+        "initial_val_loss": 4.666231282552084,
+        "val_loss": 1.4834726969401042
+      }
+    },
+    {
+      "soup_base_sha": "e7c43848c9ea39226f6739cfc9a2d2ac2fce5ba4",
+      "working_source_tree_sha256": "934c5e7dc70f3ff1da95ceed56d6614099213536e4e157acf0f6806b91f224c6",
+      "python": "3.12.7",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.32.2",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "hardware": {
+        "platform": "Darwin",
+        "machine": "arm64",
+        "processor": "arm",
+        "chip": "Apple M4 Pro"
+      },
+      "unified_memory_bytes": 51539607552,
+      "metal_available": true,
+      "training_packages_present": [],
+      "unchanged_base_tensors": 27,
+      "max_lora_b_change_from_zero": 1.2285363674163818,
+      "live_vs_fresh_reload_max_abs": 0.0,
+      "live_vs_base_max_abs": 4.902771949768066,
+      "base_tensor_dtypes": [
+        "mlx.core.float32",
+        "mlx.core.uint32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "limits": "tiny lifecycle fixture; no domain-quality or CUDA parity claim; peak MLX allocation excludes model loading; throughput excludes eval/save",
+      "case": "current-4bit",
+      "configuration": "data.validation set; data.val_split omitted",
+      "effective_val_split": 0,
+      "base_quantization": {
+        "bits": 4,
+        "group_size": 32,
+        "mode": "affine",
+        "quantized_linear": 7,
+        "quantized_embedding": 1
+      },
+      "result": {
+        "completed_updates": 8,
+        "consumed_targets": 192,
+        "eval_updates": [
+          3,
+          6,
+          8
+        ],
+        "initial_val_loss": 4.6905059814453125,
+        "val_loss": 1.5033411661783853
+      }
+    },
+    {
+      "soup_base_sha": "e7c43848c9ea39226f6739cfc9a2d2ac2fce5ba4",
+      "working_source_tree_sha256": "934c5e7dc70f3ff1da95ceed56d6614099213536e4e157acf0f6806b91f224c6",
+      "python": "3.12.7",
+      "versions": {
+        "mlx": "0.31.2",
+        "mlx-lm": "0.31.3",
+        "transformers": "5.16.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "hardware": {
+        "platform": "Darwin",
+        "machine": "arm64",
+        "processor": "arm",
+        "chip": "Apple M4 Pro"
+      },
+      "unified_memory_bytes": 51539607552,
+      "metal_available": true,
+      "training_packages_present": [],
+      "unchanged_base_tensors": 11,
+      "max_lora_b_change_from_zero": 1.1766445636749268,
+      "live_vs_fresh_reload_max_abs": 0.0,
+      "live_vs_base_max_abs": 5.286922454833984,
+      "base_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "limits": "tiny lifecycle fixture; no domain-quality or CUDA parity claim; peak MLX allocation excludes model loading; throughput excludes eval/save",
+      "case": "resolved-floor-dense",
+      "configuration": "data.validation set; data.val_split omitted",
+      "effective_val_split": 0,
+      "base_quantization": null,
+      "result": {
+        "completed_updates": 8,
+        "consumed_targets": 192,
+        "eval_updates": [
+          3,
+          6,
+          8
+        ],
+        "initial_val_loss": 4.666231282552084,
+        "val_loss": 1.4834726969401042
+      }
+    },
+    {
+      "soup_base_sha": "e7c43848c9ea39226f6739cfc9a2d2ac2fce5ba4",
+      "working_source_tree_sha256": "934c5e7dc70f3ff1da95ceed56d6614099213536e4e157acf0f6806b91f224c6",
+      "python": "3.12.7",
+      "versions": {
+        "mlx": "0.31.2",
+        "mlx-lm": "0.31.3",
+        "transformers": "5.16.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "hardware": {
+        "platform": "Darwin",
+        "machine": "arm64",
+        "processor": "arm",
+        "chip": "Apple M4 Pro"
+      },
+      "unified_memory_bytes": 51539607552,
+      "metal_available": true,
+      "training_packages_present": [],
+      "unchanged_base_tensors": 27,
+      "max_lora_b_change_from_zero": 1.2285363674163818,
+      "live_vs_fresh_reload_max_abs": 0.0,
+      "live_vs_base_max_abs": 4.902771949768066,
+      "base_tensor_dtypes": [
+        "mlx.core.float32",
+        "mlx.core.uint32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "limits": "tiny lifecycle fixture; no domain-quality or CUDA parity claim; peak MLX allocation excludes model loading; throughput excludes eval/save",
+      "case": "resolved-floor-4bit",
+      "configuration": "data.validation set; data.val_split omitted",
+      "effective_val_split": 0,
+      "base_quantization": {
+        "bits": 4,
+        "group_size": 32,
+        "mode": "affine",
+        "quantized_linear": 7,
+        "quantized_embedding": 1
+      },
+      "result": {
+        "completed_updates": 8,
+        "consumed_targets": 192,
+        "eval_updates": [
+          3,
+          6,
+          8
+        ],
+        "initial_val_loss": 4.6905059814453125,
+        "val_loss": 1.5033409118652343
+      }
+    }
+  ]
+}
