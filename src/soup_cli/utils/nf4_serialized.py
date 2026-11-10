@@ -29,8 +29,9 @@ the same repo's own ``blobs`` directory or the cache-wide Xet store. Every file 
 through its real path, never through the link.
 
 The index records ``quant="nf4"``, ``double_quant=True`` and ``quant_device="serialized"``
-(nothing was quantised on a device). Wiring this into the sharder and the trainer is
-a separate change; nothing imports this module yet.
+(nothing was quantised on a device). The sharder (``utils.layer_shard``) and the trainer's
+layer-streaming setup (``trainer.stream_setup``) call it for a source that
+``utils.fp8_block.is_serialized_nf4_config`` admits, under ``quantization: 4bit`` only.
 
 Bitsandbytes' serialisation, for a weight ``W`` (``QuantState.as_dict(packed=True)``):
 ``W`` (U8, ``[ceil(n/2), 1]``), ``W.absmax`` (U8, one per block under double

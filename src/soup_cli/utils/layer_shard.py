@@ -63,6 +63,7 @@ from soup_cli.utils.fp8_block import (
     read_checkpoint_quantization_config,
     refuse_unsupported_tensor,
 )
+from soup_cli.utils.process_liveness import process_is_alive
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,10 @@ SUPPORTED_STREAM_QUANTS = (QUANT_NONE, QUANT_NF4)
 
 #: ``ShardIndex.quant_device`` of a cache the NF4 importer wrote
 #: (``utils/nf4_serialized.py``): nothing was quantised on a device, the bytes are the
-#: source's own, so the cache is the same on every run device.
+#: source's own. The cache check compares it like any other device name, strictly: a run
+#: that reads a serialised source asks for ``'serialized'`` (the sharder does, and the
+#: trainer's disk pre-flight does), and a run that quantises a float source on ``'cuda'`` or
+#: ``'cpu'`` neither reuses a serialised index nor is reused by one.
 SERIALIZED_QUANT_DEVICE = "serialized"
 
 #: Sidecar keys for one quantised weight. ``::`` cannot collide with a real
@@ -1590,18 +1594,6 @@ def _describe_source_change(
     return "source_fingerprint changed although its recorded components match"
 
 
-def _quant_device_changed(index: ShardIndex, quant_device: str) -> bool:
-    """Whether a cache quantised on one device is being asked for on another.
-
-    A cache Soup quantised itself depends on the device (CPU and CUDA agree on the packed
-    nibbles but not on every float32 nested statistic). A cache the importer wrote
-    (:data:`SERIALIZED_QUANT_DEVICE`) holds the source's bytes unchanged and depends on none.
-    """
-    return (
-        index.quant_device != SERIALIZED_QUANT_DEVICE and index.quant_device != quant_device
-    )
-
-
 def inspect_shard_cache(
     out_dir: str,
     dtype: str,
@@ -1637,7 +1629,7 @@ def inspect_shard_cache(
         return None, (
             f"double_quant changed ({index.double_quant!r} -> {double_quant!r})"
         )
-    if index.quant != QUANT_NONE and _quant_device_changed(index, quant_device):
+    if index.quant != QUANT_NONE and index.quant_device != quant_device:
         return None, (
             f"quantization device changed "
             f"({index.quant_device!r} -> {quant_device!r})"
@@ -1719,7 +1711,7 @@ def _content_change_requires_index_quarantine(
             index.dtype != dtype,
             index.quant != quant,
             index.quant != QUANT_NONE and index.double_quant != double_quant,
-            index.quant != QUANT_NONE and _quant_device_changed(index, quant_device),
+            index.quant != QUANT_NONE and index.quant_device != quant_device,
             index.source_fingerprint != fingerprint,
             index.external_mode != external_mode,
             index.expert_layout != expert_layout,
@@ -1870,20 +1862,39 @@ def check_serialized_nf4_request(
         )
 
 
-#: Name prefix of the importer's staging folder inside the cache folder (``tempfile.mkdtemp``).
+#: Name prefix of the importer's staging folder inside the cache folder. The folder is
+#: ``<prefix><pid of the importing process>.<random>`` (``tempfile.mkdtemp``), so a sweep can
+#: tell a folder a killed import left from one a live import is writing.
 _NF4_STAGING_PREFIX = ".soup-nf4-import."
+_STAGING_OWNER_RE = re.compile(r"([0-9]{1,10})\.")
 
 
-def _remove_stale_nf4_staging(cache_dir: str) -> None:
+def _nf4_staging_owner(name: str) -> Optional[int]:
+    """Process id recorded in a staging folder's name, or ``None`` when it has none."""
+    match = _STAGING_OWNER_RE.match(name[len(_NF4_STAGING_PREFIX):])
+    return int(match.group(1)) if match else None
+
+
+def remove_stale_nf4_staging(cache_dir: str) -> None:
     """Delete the staging folders a killed import left in ``cache_dir``, best effort.
 
     A run killed between ``mkdtemp`` and its ``finally`` (a power cut, the OOM killer, a
-    closed terminal) leaves a folder holding a partial copy of the model, and nothing else
-    would ever remove it. Only directories directly inside ``cache_dir`` whose name starts
-    with the importer's own prefix go, and only if they really live there: a link or a
-    junction (whose real path is elsewhere) is left alone and never followed, and a plain file
-    of that name is not a folder to empty. The cache folder has one writer at a time, as on
-    the float path.
+    closed terminal) leaves a folder holding a partial copy of the model, up to the whole
+    payload, and nothing else would ever remove it. The trainer calls this before its disk
+    pre-flight (the leftover counts as used space there) and the sharder again before it
+    stages.
+
+    Only directories directly inside ``cache_dir`` whose name starts with the importer's own
+    prefix go, and only if they really live there: a link or a junction (whose real path is
+    elsewhere) is left alone and never followed, and a plain file of that name is not a
+    folder to empty. A folder whose recorded process is still running is another import's
+    live staging area (two runs of one base share this cache folder) and is kept, this
+    process's own included; a name with no process id is not one this code made and is
+    treated as a leftover.
+
+    Known limitation: a killed import whose process id the operating system has since given
+    to another process keeps its folder until that process ends (a process id cannot tell
+    the two apart); the folder is removed by the first run after that.
     """
     real_dir = os.path.realpath(cache_dir)
     try:
@@ -1898,6 +1909,9 @@ def _remove_stale_nf4_staging(cache_dir: str) -> None:
             if os.path.normcase(os.path.realpath(entry.path)) != here:
                 continue
         except OSError:
+            continue
+        owner = _nf4_staging_owner(entry.name)
+        if owner is not None and process_is_alive(owner):
             continue
         _remove_staging(entry.path)
 
@@ -1938,8 +1952,9 @@ def _shard_serialized_nf4(
     is replaced, the index is the last file written), with the bytes coming from
     :func:`~soup_cli.utils.nf4_serialized.import_nf4_checkpoint` instead of from a read,
     a cast and a quantisation. The importer wants an empty folder, so it writes into a
-    staging folder inside the cache folder; its files replace the cache's one by one and
-    the index, last, is the commit. A failed import changes nothing.
+    staging folder inside the cache folder, named for this process
+    (:func:`remove_stale_nf4_staging` keeps a live process's folder); its files replace the
+    cache's one by one and the index, last, is the commit. A failed import changes nothing.
     """
     from soup_cli.utils import nf4_serialized
     from soup_cli.utils.terminal import for_terminal
@@ -1970,8 +1985,10 @@ def _shard_serialized_nf4(
             return cached
         if notify is not None:
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
-    _remove_stale_nf4_staging(resolved_out)
-    staging = tempfile.mkdtemp(prefix=_NF4_STAGING_PREFIX, dir=resolved_out)
+    remove_stale_nf4_staging(resolved_out)
+    staging = tempfile.mkdtemp(
+        prefix=f"{_NF4_STAGING_PREFIX}{os.getpid()}.", dir=resolved_out
+    )
     try:
         index = nf4_serialized.import_nf4_checkpoint(weights_dir, staging, notify=notify).index
         if set(index.quant_specs) != set(suffixes):
@@ -2061,7 +2078,8 @@ def shard_checkpoint(
     A pre-quantised double-quantised bitsandbytes NF4 source with bfloat16 compute
     (``unsloth/*-bnb-4bit``; ``fp8_block.is_serialized_nf4_config``) is, under
     ``quant='nf4'`` only, not sharded at all: ``nf4_serialized`` copies its payloads into
-    the shard layout unchanged (``quant_device`` ``'serialized'``), and a ``dtype`` other
+    the shard layout unchanged (the index records ``quant_device`` ``'serialized'``; the
+    ``quant_device`` argument is ignored for such a source), and a ``dtype`` other
     than bfloat16, ``double_quant=False`` or ``stripe_roots`` is refused for it by name
     (:func:`check_serialized_nf4_request`).
 

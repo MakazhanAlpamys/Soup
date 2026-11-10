@@ -22,9 +22,12 @@ Sections:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import struct
+import subprocess
+import sys
 import types
 
 import pytest
@@ -354,7 +357,8 @@ def test_quant_suffixes_that_disagree_with_the_import_commit_nothing(tmp_path):
 
 def test_a_second_run_reuses_the_cache_whatever_device_it_runs_on(tmp_path, monkeypatch):
     """The index says quant_device 'serialized'; a run passes its own device ('cuda',
-    'cpu'). Reading that as a changed device would re-import on every run."""
+    'cpu'). The sharder reads a serialised source under its own device name and ignores
+    the argument, so a run on any device finds the cache again instead of re-importing."""
     from soup_cli.utils import nf4_serialized
 
     source = _build(tmp_path)
@@ -402,33 +406,53 @@ def _quarantine_check(cache, source, device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda", "cpu"])
-def test_a_serialized_index_matches_any_run_device_in_the_cache_check(tmp_path, device):
-    source = _build(tmp_path)
-    cache = tmp_path / "cache"
-    _shard(source, cache)
-    reusable, reason = _cache_check(cache, source, device)
-    assert reusable is not None, reason
-    assert _quarantine_check(cache, source, device) is False
-
-
-def test_only_a_serialized_index_ignores_the_run_device(tmp_path):
-    """A cache Soup quantised ON a device still depends on it (CPU and CUDA disagree on the
-    nested statistics): the leniency is for the importer's index and nothing else."""
+def _record_device(cache, device):
+    """Rewrite the cache's index as if it had been written for ``device``, nothing else changed
+    (same source fingerprint, same files): only the device check can tell the two apart."""
     from dataclasses import replace
 
     from soup_cli.utils.layer_shard import _atomic_write_index, read_shard_index
 
+    _atomic_write_index(replace(read_shard_index(str(cache)), quant_device=device), str(cache))
+
+
+def test_a_serialized_index_is_reused_by_a_serialized_request(tmp_path):
     source = _build(tmp_path)
     cache = tmp_path / "cache"
     _shard(source, cache)
-    _atomic_write_index(replace(read_shard_index(str(cache)), quant_device="cpu"), str(cache))
-    reusable, reason = _cache_check(cache, source, "cuda")
-    assert reusable is None and "quantization device changed" in reason
-    assert _quarantine_check(cache, source, "cuda") is True
-    reusable, _reason = _cache_check(cache, source, "cpu")
+    reusable, reason = _cache_check(cache, source, "serialized")
+    assert reusable is not None, reason
+    assert _quarantine_check(cache, source, "serialized") is False
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_a_float_source_run_on_a_device_does_not_reuse_a_serialized_index(tmp_path, device):
+    """The device comparison is strict: an index the importer wrote says 'serialized', and a
+    request for 'cuda' or 'cpu' (a float source quantised on that device) is a different
+    cache, found by the device alone because the fingerprint here is the same."""
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    _shard(source, cache)
+    reusable, reason = _cache_check(cache, source, device)
+    assert reusable is None and "quantization device changed" in reason, reason
+    assert "'serialized'" in reason and repr(device) in reason
+    assert _quarantine_check(cache, source, device) is True
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_a_serialized_request_does_not_reuse_an_index_quantised_on_a_device(tmp_path, device):
+    """The other direction: a cache Soup quantised ON a device (CPU and CUDA disagree on the
+    nested statistics) is not the importer's cache, whatever the source says."""
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    _shard(source, cache)
+    _record_device(cache, device)
+    reusable, reason = _cache_check(cache, source, "serialized")
+    assert reusable is None and "quantization device changed" in reason, reason
+    assert _quarantine_check(cache, source, "serialized") is True
+    reusable, _reason = _cache_check(cache, source, device)
     assert reusable is not None
-    assert _quarantine_check(cache, source, "cpu") is False
+    assert _quarantine_check(cache, source, device) is False
 
 
 def test_a_changed_source_is_imported_again_over_the_stale_cache(tmp_path):
@@ -447,7 +471,7 @@ def test_a_changed_source_is_imported_again_over_the_stale_cache(tmp_path):
     assert (second.quant, second.quant_device) == ("nf4", "serialized")
     assert not os.path.exists(cache / "index.json.resharding")
     assert not [name for name in _files(cache) if name.startswith(".")]
-    reusable, reason = _cache_check(cache, source, "cuda")
+    reusable, reason = _cache_check(cache, source, "serialized")
     assert reusable is not None, reason
 
 
@@ -505,7 +529,7 @@ def test_an_interrupted_install_leaves_a_cache_nothing_will_reuse(tmp_path, monk
     assert not os.path.exists(cache / "index.json")
     assert os.path.exists(cache / "index.json.resharding")
     assert not [name for name in _files(cache) if name.startswith(".soup-nf4-import.")]
-    reusable, reason = _cache_check(cache, source, "cuda")
+    reusable, reason = _cache_check(cache, source, "serialized")
     assert reusable is None and "did not finish" in reason
 
     repaired = _shard(source, cache)
@@ -522,22 +546,101 @@ def _stale_staging(cache, name=".soup-nf4-import.dead0001", files=("layer_000.sa
     return folder
 
 
+@contextlib.contextmanager
+def _exited_process():
+    """A process that has already ended: its pid is dead. The handle is held until the block
+    ends, which keeps Windows from giving the pid to a new process meanwhile."""
+    process = subprocess.Popen([sys.executable, "-I", "-c", "pass"])
+    process.wait()
+    try:
+        yield process.pid
+    finally:
+        process.kill()
+
+
+@contextlib.contextmanager
+def _running_process():
+    """Another process that is alive until the block ends: a sibling run of the same base."""
+    process = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(300)"])
+    try:
+        yield process.pid
+    finally:
+        process.kill()
+        process.wait()
+
+
+def _staging_name(pid, suffix="x1y2z3"):
+    return f".soup-nf4-import.{pid}.{suffix}"
+
+
 def test_staging_folders_a_killed_import_left_are_removed_by_the_next_import(tmp_path):
     from soup_cli.utils.nf4_serialized import import_nf4_checkpoint
 
     source = _build(tmp_path)
     cache = tmp_path / "cache"
     cache.mkdir()
-    dead = [
-        _stale_staging(cache, ".soup-nf4-import.dead0001"),
-        _stale_staging(cache, ".soup-nf4-import.dead0002", ("a.tmp", "index.json", ".soup.x.tmp")),
-    ]
-    index = _shard(source, cache)
+    with _exited_process() as dead_pid:
+        dead = [
+            _stale_staging(cache, _staging_name(dead_pid, "aaaa0001")),
+            _stale_staging(
+                cache, _staging_name(dead_pid, "aaaa0002"), ("a.tmp", "index.json", ".soup.x.tmp")
+            ),
+            # a name with no process id is not one this code makes: a leftover
+            _stale_staging(cache, ".soup-nf4-import.dead0001"),
+            _stale_staging(cache, ".soup-nf4-import.12x.not-a-pid"),
+        ]
+        index = _shard(source, cache)
     assert all(not folder.exists() for folder in dead), _files(cache)
     # and the import itself is the same one a clean folder gets
     direct = tmp_path / "direct"
     assert index == import_nf4_checkpoint(source, str(direct)).index
     assert _bytes(cache) == _bytes(direct)
+
+
+def test_a_live_siblings_staging_folder_is_kept_by_the_sweep(tmp_path):
+    """Two runs of one base share the cache folder: the second one's sweep must not delete the
+    folder the first one is copying into. This process's own pid counts as live too."""
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    with _running_process() as sibling_pid, _exited_process() as dead_pid:
+        sibling = _stale_staging(cache, _staging_name(sibling_pid))
+        own = _stale_staging(cache, _staging_name(os.getpid()))
+        dead = _stale_staging(cache, _staging_name(dead_pid))
+        index = _shard(source, cache)
+        assert index.quant_device == "serialized"
+        assert sibling.exists() and own.exists(), _files(cache)
+        assert (sibling / "layer_000.safetensors").read_bytes().startswith(b"partial copy")
+        assert (own / "layer_000.safetensors").exists()
+        assert not dead.exists()
+
+
+def test_a_sibling_sweep_during_an_import_leaves_the_running_imports_staging_alone(
+    tmp_path, monkeypatch
+):
+    """The import's own staging folder is named for its process, so a sweep that runs while
+    the copy is in flight (another run reaching the same code) keeps it, and the import
+    commits."""
+    from soup_cli.utils import layer_shard, nf4_serialized
+
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    real_import = nf4_serialized.import_nf4_checkpoint
+    seen = []
+
+    def _import_while_a_sibling_sweeps(weights_dir, staging, **kwargs):
+        name = os.path.basename(staging)
+        seen.append(name)
+        layer_shard.remove_stale_nf4_staging(os.path.dirname(staging))
+        assert os.path.isdir(staging), "the sweep deleted the folder a live import writes into"
+        return real_import(weights_dir, staging, **kwargs)
+
+    monkeypatch.setattr(nf4_serialized, "import_nf4_checkpoint", _import_while_a_sibling_sweeps)
+    index = _shard(source, cache)
+    (name,) = seen
+    assert name.startswith(f".soup-nf4-import.{os.getpid()}."), name
+    assert index.quant_device == "serialized"
+    assert not [entry for entry in _files(cache) if entry.startswith(".soup-nf4-import.")]
 
 
 def test_only_the_importers_own_staging_prefix_inside_the_cache_folder_is_removed(tmp_path):
@@ -1025,7 +1128,7 @@ def _resident_of(source, adapter_dtype):
     return peft_model
 
 
-def test_the_streamed_model_equals_the_resident_bitsandbytes_model_of_the_same_files(served):
+def _assert_the_streamed_model_equals_the_resident_one(served):
     """Strictest equality: ``torch.equal`` on the logits, the loss and every LoRA gradient, in
     train mode (the resident path then dequantises and calls ``F.linear``, as the streamed
     one does; its eval path repacks for a CPU kernel and differs by one bf16 ulp, which
@@ -1074,6 +1177,29 @@ def test_the_streamed_model_equals_the_resident_bitsandbytes_model_of_the_same_f
         assert torch.equal(got[name], want[name]), name
 
 
+def test_the_streamed_model_equals_the_resident_bitsandbytes_model_of_the_same_files(served):
+    _assert_the_streamed_model_equals_the_resident_one(served)
+
+
+@pytest.fixture
+def served_block_4096_tied(tmp_path, monkeypatch, aten_half_matmuls):
+    """``served`` for the other end of the admitted range: weight blocks of 4096 (the
+    statistics are one block per weight there) and a tied embedding and head, which the
+    streamed model keeps as one resident matrix."""
+    _bf16_card(monkeypatch)
+    source = _build(tmp_path, blocksize=4096, tie=True)
+    wrapper, dataset = _wrapper(tmp_path, monkeypatch, source)
+    return wrapper, dataset, source
+
+
+def test_the_streamed_model_equals_the_resident_one_at_block_size_4096_with_tied_embeddings(
+    served_block_4096_tied,
+):
+    """The streamed side rebuilds each QuantState from the per-weight blocksize and nested
+    blocksize the index records; the default fixture only runs 64."""
+    _assert_the_streamed_model_equals_the_resident_one(served_block_4096_tied)
+
+
 def test_a_second_setup_reuses_the_imported_cache(served, tmp_path, monkeypatch):
     from soup_cli.utils import nf4_serialized
 
@@ -1096,7 +1222,9 @@ def test_a_second_setup_reuses_the_imported_cache(served, tmp_path, monkeypatch)
 
 def test_the_disk_preflight_sizes_the_cache_from_the_payload(tmp_path, monkeypatch):
     """First run: the import is charged its payload (not the coarse flat rate, not
-    'approximately'). Second run: the cache is reusable, so nothing is written."""
+    'approximately'). Second run: the cache is reusable, so nothing is written. The run is on
+    the CPU and the index says 'serialized': the pre-flight must look the cache up under that
+    name (the device comparison is strict), or it would charge a second import."""
     import soup_cli.trainer.stream_setup as stream_setup
 
     pytest.importorskip("peft")
@@ -1118,6 +1246,41 @@ def test_the_disk_preflight_sizes_the_cache_from_the_payload(tmp_path, monkeypat
     folder = _cache_folder(tmp_path)
     assert second["shard_write_bytes"] == 0
     assert second["shard_bytes"] == sum(os.path.getsize(folder / name) for name in _files(folder))
+
+
+def test_a_killed_imports_leftover_does_not_make_the_disk_preflight_refuse(
+    tmp_path, monkeypatch
+):
+    """A volume with room for exactly one copy of the cache, holding the partial copy a killed
+    import left: the pre-flight counts that folder as used space, so the sweep must have run
+    before it. A live sibling's folder is not swept (its process is running)."""
+    import pathlib
+
+    import soup_cli.trainer.stream_setup as stream_setup
+    from soup_cli.utils.layer_shard import resolve_shard_dir
+
+    pytest.importorskip("peft")
+    _bf16_card(monkeypatch)
+    source = _build(tmp_path)
+    needed = _estimate(source).total_bytes
+    wrapper, dataset = _wrapper(tmp_path, monkeypatch, source)
+    cache = pathlib.Path(resolve_shard_dir(source))
+
+    def _one_copy_fits(_path):
+        used = sum(entry.stat().st_size for entry in cache.rglob("*") if entry.is_file())
+        return 1, needed + 4096 - used
+
+    monkeypatch.setattr(stream_setup, "_disk_volume", _one_copy_fits)
+    with _exited_process() as dead_pid, _running_process() as sibling_pid:
+        leftover = cache / _staging_name(dead_pid)
+        leftover.mkdir()
+        (leftover / "layer_000.safetensors").write_bytes(b"\0" * needed)
+        sibling = cache / _staging_name(sibling_pid)
+        sibling.mkdir()
+        (sibling / "layer_000.safetensors").write_bytes(b"\0" * 64)
+        wrapper.setup(dataset)
+        assert not leftover.exists()
+        assert (sibling / "layer_000.safetensors").read_bytes() == b"\0" * 64
 
 
 def test_a_cpu_run_without_a_bfloat16_card_is_refused_before_anything_is_written(

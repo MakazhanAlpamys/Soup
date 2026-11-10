@@ -908,12 +908,14 @@ class StreamingSetupMixin:
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
             QUANT_NONE,
+            SERIALIZED_QUANT_DEVICE,
             check_serialized_nf4_request,
             checkpoint_source_components,
             estimate_oq_stream_cache_bytes,
             fingerprint_source_files,
             inspect_shard_cache,
             layer_paths,
+            remove_stale_nf4_staging,
             resolve_shard_dir,
             shard_cache_disk_bytes,
             shard_checkpoint,
@@ -1060,6 +1062,10 @@ class StreamingSetupMixin:
             check_serialized_nf4_request(
                 dtype=dtype, double_quant=double_quant, stripe_roots=stripe_roots
             )
+            # A killed import's leftover staging folder holds up to the whole payload and
+            # counts as used space in the disk pre-flight below, which would refuse a run
+            # the sweep makes room for. A live sibling's folder is kept (it names its pid).
+            remove_stale_nf4_staging(shard_dir)
             console.print(
                 "[dim]Pre-quantised bitsandbytes NF4 base: imported byte for byte, "
                 "not re-quantised[/]"
@@ -1072,7 +1078,15 @@ class StreamingSetupMixin:
                 )
                 + "[/]"
             )
-        quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
+        # The device the cache index is looked up under. A cache Soup quantised depends on
+        # the device (CPU and CUDA disagree on some float32 statistics); a pre-quantised
+        # source's cache was quantised on none and its index says so.
+        if serialized_nf4:
+            quant_device_kind = SERIALIZED_QUANT_DEVICE
+        elif quant == QUANT_NF4:
+            quant_device_kind = str(self.device).split(":", 1)[0]
+        else:
+            quant_device_kind = ""
         # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
         # decoder layer; the sharder drops them against the config's count (and the
         # disk pre-flight does not charge them).
