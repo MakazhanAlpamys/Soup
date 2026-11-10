@@ -147,13 +147,13 @@ def show(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
 ):
     """Show detailed info about a specific run, including loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
@@ -257,17 +257,17 @@ def compare(
     run_2: str = typer.Argument(..., help="Second run ID (or prefix)"),
 ):
     """Compare two training runs side by side."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     r1 = tracker.get_run(run_1)
     r2 = tracker.get_run(run_2)
 
     if not r1:
-        console.print(f"[red]Run not found: {for_terminal(run_1)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_1)}[/]", emoji=False)
         raise typer.Exit(1)
     if not r2:
-        console.print(f"[red]Run not found: {for_terminal(run_2)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Run ids, names, models and config values are stored text: every cell is a
@@ -337,13 +337,13 @@ def delete(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a training run and its metrics."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if not force:
@@ -416,7 +416,7 @@ def clean(
     """
     import shutil
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
@@ -428,7 +428,7 @@ def clean(
     elif run_id:
         run = tracker.get_run(run_id)
         if not run:
-            console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
         runs_to_clean = [run]
     else:
@@ -559,13 +559,13 @@ def replay(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Render loss curve"),
 ):
     """Replay a completed run's metrics — re-renders summary + loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.replay import downsample, summarise
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     metrics = tracker.get_metrics(run["run_id"])
@@ -661,14 +661,14 @@ def curriculum_curve(
     import os
     import stat as _stat
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.curriculum_dynamic import parse_history_jsonl, render_curve
     from soup_cli.utils.paths import is_under_cwd
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if history_path is None:
