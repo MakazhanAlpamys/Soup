@@ -45,9 +45,7 @@ class NoCausalLossTargetError(ValueError):
     """Raised when truncation leaves a row with no shifted causal-LM target."""
 
 
-def _coerce_int_list(
-    values: Any, *, field: str, allow_bool: bool = False
-) -> list[int]:
+def _coerce_int_list(values: Any, *, field: str, allow_bool: bool = False) -> list[int]:
     """Return a one-dimensional tokenizer sequence as Python ``int`` values."""
     try:
         items = list(values)
@@ -59,9 +57,7 @@ def _coerce_int_list(
     result: list[int] = []
     for position, item in enumerate(items):
         if isinstance(item, bool) and not allow_bool:
-            raise ValueError(
-                f"tokenizer returned non-integer {field}[{position}]={item!r}"
-            )
+            raise ValueError(f"tokenizer returned non-integer {field}[{position}]={item!r}")
         try:
             item = index(item)
         except TypeError as exc:
@@ -116,6 +112,8 @@ def _apply_template_with_mask(
     tokenizer: Any, messages: Sequence[dict]
 ) -> Optional[tuple[list[int], list[int]]]:
     """Try the preferred path. Returns (input_ids, mask) or None on failure."""
+    if not messages:
+        return [], []
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("tokenizer has no chat_template — cannot mask labels")
     try:
@@ -136,9 +134,7 @@ def _apply_template_with_mask(
         return None
     try:
         ids = coerce_token_ids(out)
-        mask = _coerce_int_list(
-            masks, field="assistant_masks", allow_bool=True
-        )
+        mask = _coerce_int_list(masks, field="assistant_masks", allow_bool=True)
     except ValueError:
         return None
     if len(mask) != len(ids):
@@ -150,6 +146,38 @@ def _apply_template_with_mask(
     return ids, mask
 
 
+def tokenize_turn_prefix(
+    tokenizer: Any,
+    messages: Sequence[dict],
+    idx: int,
+    *,
+    tools: Any = None,
+) -> list[int]:
+    """Compute prefix token IDs for turn `idx` with an explicit turn-0 guard.
+
+    When `idx == 0`, returns `[]` without calling `tokenizer.apply_chat_template`,
+    preventing `ValueError: Cannot apply chat template to an empty conversation`.
+    """
+    if idx == 0:
+        return []
+    prefix_messages = messages[:idx]
+    if not prefix_messages:
+        return []
+    if tools is not None:
+        try:
+            out = tokenizer.apply_chat_template(
+                prefix_messages,
+                tools=tools,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_dict=False,
+            )
+            return coerce_token_ids(out)
+        except (TypeError, ValueError):
+            pass
+    return _tokenize_only(tokenizer, prefix_messages)
+
+
 def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
     """Render ``messages`` into Python int ids without auto-prepending BOS.
 
@@ -157,6 +185,8 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
     ``input_ids``. Tensor-like sequences are normalised element by element;
     missing or non-integer ids raise instead of flowing into a collator.
     """
+    if not messages:
+        return []
     try:
         out = tokenizer.apply_chat_template(
             messages,
@@ -217,9 +247,7 @@ def _unmask_aligned_render(
         labels[b1:end] = full_ids[b1:end]
 
 
-def _truncate(
-    input_ids: list[int], labels: list[int], max_length: int
-) -> dict[str, list[int]]:
+def _truncate(input_ids: list[int], labels: list[int], max_length: int) -> dict[str, list[int]]:
     input_ids = input_ids[:max_length]
     labels = labels[:max_length]
     attention_mask = [1] * len(input_ids)
@@ -267,7 +295,7 @@ def keep_only_the_last_assistant_turn(labels: list[int]) -> list[int]:
         return labels
     while index >= 0 and labels[index] != IGNORE_INDEX:
         index -= 1
-    return [IGNORE_INDEX] * (index + 1) + labels[index + 1:]
+    return [IGNORE_INDEX] * (index + 1) + labels[index + 1 :]
 
 
 def build_assistant_only_labels(
@@ -307,13 +335,9 @@ def build_assistant_only_labels(
         TypeError: ``include_eot`` not bool.
     """
     if not isinstance(include_eot, bool):
-        raise TypeError(
-            f"include_eot must be bool, got {type(include_eot).__name__}"
-        )
+        raise TypeError(f"include_eot must be bool, got {type(include_eot).__name__}")
     if not isinstance(mask_history, bool):
-        raise TypeError(
-            f"mask_history must be bool, got {type(mask_history).__name__}"
-        )
+        raise TypeError(f"mask_history must be bool, got {type(mask_history).__name__}")
     _check_messages(messages)
     _validate_max_length(max_length)
 
@@ -324,10 +348,7 @@ def build_assistant_only_labels(
         input_ids, mask = preferred
         if include_eot and eos_token_id is not None:
             mask = _extend_mask_to_eot(input_ids, mask, eos_token_id)
-        labels = [
-            tok if flag else IGNORE_INDEX
-            for tok, flag in zip(input_ids, mask)
-        ]
+        labels = [tok if flag else IGNORE_INDEX for tok, flag in zip(input_ids, mask)]
         if mask_history:
             labels = keep_only_the_last_assistant_turn(labels)
         return _truncate(input_ids, labels, max_length)
@@ -640,24 +661,37 @@ def build_per_message_train_labels(
         # Native training cannot safely approximate a mask through a template
         # that rewrites earlier turns. Keep the same per-message policy while
         # requiring each complete message boundary to be a verified token prefix.
-        full_ids = coerce_token_ids(tokenizer.apply_chat_template(
-            messages, tools=tools, add_generation_prompt=False, return_dict=False,
-        ))
+        full_ids = coerce_token_ids(
+            tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                add_generation_prompt=False,
+                return_dict=False,
+            )
+        )
         labels = [IGNORE_INDEX] * len(full_ids)
         previous = []
         for position, message in enumerate(messages):
             flag = message.get("train")
             if flag is not None and type(flag) is not bool:
                 raise ValueError(f"message {position} train must be bool or None")
-            current = coerce_token_ids(tokenizer.apply_chat_template(
-                messages[:position + 1], tools=tools,
-                add_generation_prompt=False, return_dict=False,
-            ))
-            if len(current) < len(previous) or full_ids[:len(current)] != current:
+            if position == 0:
+                prefix_ids: list[int] = []
+            else:
+                prefix_ids = previous
+            current = coerce_token_ids(
+                tokenizer.apply_chat_template(
+                    messages[: position + 1],
+                    tools=tools,
+                    add_generation_prompt=False,
+                    return_dict=False,
+                )
+            )
+            if len(current) < len(prefix_ids) or full_ids[: len(current)] != current:
                 raise ValueError(f"chat template is not prefix-stable at message {position}")
             should_train = flag if flag is not None else message.get("role") == "assistant"
             if should_train:
-                labels[len(previous):len(current)] = full_ids[len(previous):len(current)]
+                labels[len(prefix_ids) : len(current)] = full_ids[len(prefix_ids) : len(current)]
             previous = current
         return _truncate(full_ids, labels, max_length)
 
@@ -688,9 +722,7 @@ def build_per_message_train_labels(
             for deferred_msg, deferred_train_flag in deferred:
                 if not deferred_train_flag:
                     continue
-                without_message = [
-                    item for item in cumulative if item is not deferred_msg
-                ]
+                without_message = [item for item in cumulative if item is not deferred_msg]
                 _unmask_render_insertions(
                     labels,
                     full_ids,

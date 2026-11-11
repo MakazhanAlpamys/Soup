@@ -62,9 +62,7 @@ class _FakeTokenizer:
             return text
         if return_assistant_tokens_mask and return_dict:
             if not self.supports_assistant_mask:
-                raise TypeError(
-                    "this tokenizer does not support return_assistant_tokens_mask"
-                )
+                raise TypeError("this tokenizer does not support return_assistant_tokens_mask")
             return {"input_ids": ids, "assistant_masks": mask}
         return ids
 
@@ -90,9 +88,7 @@ class _BatchEncodingTokenizer(_FakeTokenizer):
         if kwargs.get("return_assistant_tokens_mask"):
             if self.zero_mask:
                 mask = [0] * len(ids)
-            return BatchEncoding(
-                {"input_ids": ids, "assistant_masks": mask}
-            )
+            return BatchEncoding({"input_ids": ids, "assistant_masks": mask})
         self.fallback_calls += 1
         return BatchEncoding({"input_ids": ids})
 
@@ -239,9 +235,7 @@ class TestPreferredPath:
         from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
 
         tok = _BatchEncodingTokenizer(zero_mask=True)
-        out = build_assistant_only_labels(
-            [{"role": "user", "content": "Q"}], tok
-        )
+        out = build_assistant_only_labels([{"role": "user", "content": "Q"}], tok)
 
         assert tok.fallback_calls == 0
         assert all(label == IGNORE_INDEX for label in out["labels"])
@@ -329,9 +323,7 @@ class TestTokenIdNormalisation:
         encoded = BatchEncoding({"input_ids": [1, 2, 3]})
         assert not isinstance(encoded, dict)
 
-        ids = _tokenize_only(
-            _StaticTokenizer(encoded), [{"role": "user", "content": "Q"}]
-        )
+        ids = _tokenize_only(_StaticTokenizer(encoded), [{"role": "user", "content": "Q"}])
         assert ids == [1, 2, 3]
         assert all(type(token_id) is int for token_id in ids)
 
@@ -365,9 +357,7 @@ class TestTokenIdNormalisation:
 
         with pytest.raises(ValueError, match="non-integer input_ids"):
             _tokenize_only(
-                _StaticTokenizer(
-                    BatchEncoding({"input_ids": ["input_ids"]})
-                ),
+                _StaticTokenizer(BatchEncoding({"input_ids": ["input_ids"]})),
                 [{"role": "user", "content": "Q"}],
             )
 
@@ -491,9 +481,7 @@ class TestPerMessageTrainField:
         system_end = len("<system>:Follow the format.\n")
         user_end = system_end + len("<user>:Q\n")
         assert all(label != IGNORE_INDEX for label in out["labels"][:system_end])
-        assert all(
-            label == IGNORE_INDEX for label in out["labels"][system_end:user_end]
-        )
+        assert all(label == IGNORE_INDEX for label in out["labels"][system_end:user_end])
 
     def test_trainable_first_user_does_not_absorb_ignored_system_prefix(self):
         from soup_cli.data.loss_mask import (
@@ -564,9 +552,7 @@ class TestEdgeCases:
                 raise ValueError("tokenizer has no chat_template")
 
         with pytest.raises(ValueError, match="chat_template"):
-            build_assistant_only_labels(
-                [{"role": "user", "content": "x"}], _NoTemplate()
-            )
+            build_assistant_only_labels([{"role": "user", "content": "x"}], _NoTemplate())
 
 
 # ---------------------------------------------------------------------------
@@ -663,3 +649,115 @@ class TestBuildFormatRow:
         }
         out = fn(long_row)
         assert len(out["input_ids"]) == 64
+
+
+# ---------------------------------------------------------------------------
+# Turn-Zero Chat Template Slicing Guard (Transformers v5 compatibility)
+# ---------------------------------------------------------------------------
+
+
+class _StrictHFEmptyRejectingTokenizer:
+    """Mock tokenizer mirroring HuggingFace Transformers v5 apply_chat_template behavior."""
+
+    chat_template = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
+
+    def apply_chat_template(
+        self,
+        conversation,
+        tokenize=True,
+        add_generation_prompt=False,
+        return_assistant_tokens_mask=False,
+        return_dict=False,
+        tools=None,
+        **kwargs,
+    ):
+        if not conversation:
+            raise ValueError(
+                "Cannot apply chat template to an empty conversation. Provide at least one message."
+            )
+        # Simple simulated tokenization
+        ids = []
+        for i, m in enumerate(conversation):
+            ids.extend([ord(c) for c in f"{m['role']}:{m['content']} "])
+        if return_assistant_tokens_mask:
+            masks = []
+            for m in conversation:
+                flag = 1 if m["role"] == "assistant" else 0
+                masks.extend([flag] * len(f"{m['role']}:{m['content']} "))
+            if return_dict:
+                return {"input_ids": ids, "assistant_masks": masks}
+            return ids, masks
+        if return_dict:
+            return {"input_ids": ids}
+        return ids
+
+
+class TestTurnZeroChatTemplateGuard:
+    def test_tokenize_only_empty_messages_returns_empty_list(self) -> None:
+        from soup_cli.data.loss_mask import _tokenize_only
+
+        tok = _StrictHFEmptyRejectingTokenizer()
+        # Must not raise ValueError: Cannot apply chat template to an empty conversation
+        assert _tokenize_only(tok, []) == []
+
+    def test_apply_template_with_mask_empty_messages_returns_empty_tuple(self) -> None:
+        from soup_cli.data.loss_mask import _apply_template_with_mask
+
+        tok = _StrictHFEmptyRejectingTokenizer()
+        # Must not raise ValueError: Cannot apply chat template to an empty conversation
+        assert _apply_template_with_mask(tok, []) == ([], [])
+
+    def test_tokenize_turn_prefix_at_turn_zero_returns_empty(self) -> None:
+        from soup_cli.data.loss_mask import tokenize_turn_prefix
+
+        tok = _StrictHFEmptyRejectingTokenizer()
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "How are you?"},
+            {"role": "assistant", "content": "Doing well"},
+        ]
+        # Turn 0 prefix must be empty without invoking apply_chat_template
+        prefix_0 = tokenize_turn_prefix(tok, messages, 0)
+        assert prefix_0 == []
+
+        # Subsequent turns return non-empty prefix
+        prefix_1 = tokenize_turn_prefix(tok, messages, 1)
+        assert len(prefix_1) > 0
+        prefix_2 = tokenize_turn_prefix(tok, messages, 2)
+        assert len(prefix_2) > len(prefix_1)
+
+    def test_multi_turn_dialogue_tokenization_turn_zero_does_not_raise(self) -> None:
+        from soup_cli.data.loss_mask import (
+            build_assistant_only_labels,
+            build_per_message_train_labels,
+        )
+
+        tok = _StrictHFEmptyRejectingTokenizer()
+        messages = [
+            {"role": "user", "content": "Question 1"},
+            {"role": "assistant", "content": "Answer 1"},
+            {"role": "user", "content": "Question 2"},
+            {"role": "assistant", "content": "Answer 2"},
+        ]
+
+        # Preferred path with return_assistant_tokens_mask
+        out1 = build_assistant_only_labels(messages, tok)
+        assert len(out1["input_ids"]) > 0
+        assert len(out1["labels"]) == len(out1["input_ids"])
+
+        # Fallback path without assistant mask support
+        tok_fallback = _FakeTokenizer(supports_assistant_mask=False)
+        out2 = build_assistant_only_labels(messages, tok_fallback)
+        assert len(out2["input_ids"]) > 0
+        assert len(out2["labels"]) == len(out2["input_ids"])
+
+        # Per-message train labels path
+        out3 = build_per_message_train_labels(messages, tok, verified_prefix=False)
+        assert len(out3["input_ids"]) > 0
+        assert len(out3["labels"]) == len(out3["input_ids"])
+
+        # Per-message train labels with verified_prefix=True
+        out4 = build_per_message_train_labels(messages, tok, verified_prefix=True)
+        assert len(out4["input_ids"]) > 0
+        assert len(out4["labels"]) == len(out4["input_ids"])
