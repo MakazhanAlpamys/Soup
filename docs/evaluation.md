@@ -1120,6 +1120,10 @@ unusable reply rather than a transient outage: it is not retried. The error name
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
 
+`soup eval judge --rubric` requires criterion names to be unique after trimming
+surrounding whitespace and ignoring case. A duplicate name exits `1` before
+sending a judge request.
+
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
 the saved banner reports the saved count. It exits `0` when at least one result was
