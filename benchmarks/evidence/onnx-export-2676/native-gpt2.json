@@ -2,8 +2,8 @@
   "versions": {
     "torch": "2.14.1",
     "transformers": "5.19.0",
-    "optimum": "2.3.0",
-    "optimum-onnx": "0.1.0",
+    "optimum": null,
+    "optimum-onnx": null,
     "onnx": "1.23.2",
     "onnxruntime": "1.31.1",
     "numpy": "2.5.4"

@@ -3,7 +3,8 @@
     "optimum": "2.3.0",
     "optimum_onnx": "0.1.0",
     "transformers": "5.19.0",
-    "error": "ImportError: get_parameter_dtype"
+    "error": "ImportError: get_parameter_dtype",
+    "also_checked_optimum_core": "2.1.0: same get_parameter_dtype ImportError"
   },
   "old_on_transformers_5": {
     "optimum": "1.16.0",
@@ -31,6 +32,8 @@
     "gpt2_exit": 0,
     "llama_exit": 0,
     "corrupted_gpt2_inspect_exit": 2,
-    "optimum_imported": false
+    "optimum_imported": false,
+    "pip_check": "No broken requirements found.",
+    "optimum_distribution_present": false
   }
 }

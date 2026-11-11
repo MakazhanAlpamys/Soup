@@ -28,6 +28,10 @@ The released venv was installed normally with `soup-cli[onnx]`, not with `--no-d
 2.6.0+cpu, transformers 4.57.6, optimum 2.1.0, optimum-onnx 0.1.0, onnx 1.23.2,
 onnxruntime 1.31.1. The training/native environment kept torch 2.14.1 and transformers
 5.19.0. The package inventories are recorded with the evidence.
+The native lane was also rerun with only normally installed ONNX/ONNX Runtime and
+their dependencies added to the training environment's import path: no Optimum
+distribution was present, none was imported, and `pip check` passed. Both native
+numerical results remained exactly the same as the initial lab run.
 
 ## Inputs and interpretation
 
