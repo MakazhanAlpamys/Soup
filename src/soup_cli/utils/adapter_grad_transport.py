@@ -25,7 +25,8 @@ B1 in short:
   ``weight_r * flat_r`` in RANK order, divides by the total weight, and sends the one result
   to every rank, so all ranks hold the same bytes.
 * **Wire.** After the handshake (magic, protocol version, rank, world size, the largest
-  payload one operation may carry, and optionally an HMAC over a nonce: ``SOUP_STREAM_DP_TOKEN``)
+  payload one operation may carry, and an HMAC over a nonce: ``SOUP_STREAM_DP_TOKEN``, optional
+  on a loopback or private address and required on a public one, see :func:`address_is_public`)
   every operation is a 21-byte frame (operation, sequence number, payload length, weight)
   followed by the payload. Every declared length is checked against the length the operation
   expects BEFORE a byte of it is read, and against a hard cap; objects are JSON (never
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -364,6 +366,64 @@ def _validated_token(raw: str) -> str:
     return raw
 
 
+#: Besides loopback and link-local (judged by ``ipaddress`` itself): RFC 1918 and the IPv6
+#: unique-local range. Everything else, shared (carrier-grade NAT) space and the documentation
+#: ranges included, counts as public.
+_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(text)
+    for text in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+
+#: A bind address that names no interface: rank 0 then listens on all of them and there is no
+#: address to judge.
+_WILDCARD_HOSTS = ("", "0.0.0.0", "::")
+
+
+def address_is_public(host: str) -> bool:
+    """True when ``host`` is an address on the public internet, so the token is required.
+
+    Not public: loopback (127.0.0.0/8, ``::1``), link-local (169.254.0.0/16, ``fe80::/10``),
+    RFC 1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), the IPv6 unique-local range
+    (``fc00::/7``) and the name ``localhost``. An IPv6 literal may be bracketed, and an
+    IPv4-mapped one (``::ffff:10.0.0.1``) is judged by its IPv4 half, the same on every
+    Python version. Everything else is public, including the unspecified address, shared
+    (100.64.0.0/10) space and the documentation ranges.
+
+    A host name that is not an IP literal is NOT resolved (a lookup is slow, can fail, can
+    answer differently on the node that connects, and can be pointed at a private address by
+    whoever controls the zone): it counts as public unless it is ``localhost``. Put the token
+    on any run that reaches rank 0 by name.
+    """
+    name = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return name.rstrip(".").lower() != "localhost"
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_loopback or address.is_link_local:
+        return False
+    return not any(address in network for network in _PRIVATE_NETWORKS)
+
+
+def require_token_for_public_address(host: str, token: Optional[str], *, what: str) -> None:
+    """Refuse (:class:`B1ConfigError`) a public ``host`` without a token.
+
+    ``what`` names the setting that holds the address, for the message (for example
+    ``SOUP_STREAM_DP_ADDR=203.0.113.7:41123``). An empty token is no token, as in the handshake.
+    Nothing here opens a socket: callers run it before they open one.
+    """
+    if token or not address_is_public(host):
+        return
+    raise B1ConfigError(
+        f"{ENV_TOKEN} is required when {what} is a public internet address and is not set: "
+        "anyone who can reach the port could join the group. Set the same "
+        f"{ENV_TOKEN} ({_MIN_TOKEN_CHARS} to {_MAX_TOKEN_CHARS} characters) on every node. It is "
+        "optional only for loopback, private (RFC 1918, fc00::/7) and link-local addresses and "
+        "for localhost."
+    )
+
+
 def read_b1_env(environ: Optional[Mapping[str, str]] = None) -> Optional[B1Env]:
     """The B1 settings of this process, ``None`` when none of the variables is set.
 
@@ -373,7 +433,10 @@ def read_b1_env(environ: Optional[Mapping[str, str]] = None) -> Optional[B1Env]:
     range, ``rank >= world size``, a world below 2. Rank 0 needs ``_BIND_PORT`` (the port it
     listens on); every other rank needs ``_ADDR`` (``host:port`` where rank 0 is reached, on
     vast the external mapped port). The other one is optional and checked when present.
-    ``_TOKEN`` (optional, 16 to 256 characters) makes the handshake authenticate with an HMAC.
+    ``_TOKEN`` (16 to 256 characters) makes the handshake authenticate with an HMAC. It is
+    optional while ``_ADDR`` is a loopback, private or link-local address or ``localhost``, and
+    REQUIRED when ``_ADDR`` is any other address, a host name included
+    (:func:`address_is_public`): a missing one is refused here, before any socket is opened.
     """
     env = os.environ if environ is None else environ
     present = {name: env.get(name) for name in B1_ENV_NAMES if env.get(name) is not None}
@@ -414,6 +477,8 @@ def read_b1_env(environ: Optional[Mapping[str, str]] = None) -> Optional[B1Env]:
             "mapped port)"
         )
     token = _validated_token(present[ENV_TOKEN]) if ENV_TOKEN in present else None
+    if host is not None:  # last, so every other problem is named first; before any socket
+        require_token_for_public_address(host, token, what=f"{ENV_ADDR}={_text(present[ENV_ADDR])}")
     return B1Env(
         rank=rank,
         world_size=world_size,
@@ -604,8 +669,11 @@ class TcpStarGroup(GradGroup):
 
     ``host`` / ``port`` are where a peer reaches rank 0; ``bind_host`` / ``bind_port`` are
     where rank 0 listens (``bind_port=0`` takes a free port, reported through
-    ``on_listening(port)``). ``token`` enables the HMAC handshake. ``timeout_seconds`` is the
-    per-operation wait for a silent peer; lower it with :meth:`set_timeout` after the setup.
+    ``on_listening(port)``). ``token`` enables the HMAC handshake; it is required when ``host``
+    (or, on rank 0, a ``bind_host`` that names one interface) is a public address, see
+    :func:`address_is_public`, and a missing one raises :class:`B1ConfigError` before any socket
+    is opened. ``timeout_seconds`` is the per-operation wait for a silent peer; lower it with
+    :meth:`set_timeout` after the setup.
     """
 
     name = "tcp-star"
@@ -642,6 +710,12 @@ class TcpStarGroup(GradGroup):
                 f"max_payload_bytes must be an int from {_ELEMENT_BYTES} to "
                 f"{HARD_MAX_PAYLOAD_BYTES}, got {max_payload_bytes!r}"
             )
+        # a public address needs the token, whoever builds the group (the launch checks it too);
+        # before any attribute is set and before any socket is opened
+        if host is not None:
+            require_token_for_public_address(host, token, what=f"host {_text(host)}")
+        if rank == 0 and bind_host not in _WILDCARD_HOSTS:
+            require_token_for_public_address(bind_host, token, what=f"bind_host {_text(bind_host)}")
         self.rank = rank
         self.world_size = world_size
         self.max_payload_bytes = max_payload_bytes
