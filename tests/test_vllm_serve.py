@@ -72,9 +72,7 @@ class TestServeBackendFlag:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        result = runner.invoke(
-            app, ["serve", "--model", str(model_dir), "--backend", "invalid"]
-        )
+        result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "invalid"])
         assert result.exit_code != 0
         assert "unknown backend" in result.output.lower() or result.exit_code != 0
 
@@ -89,9 +87,7 @@ class TestServeBackendFlag:
         model_dir.mkdir()
 
         with patch("soup_cli.utils.vllm.is_vllm_available", return_value=False):
-            result = runner.invoke(
-                app, ["serve", "--model", str(model_dir), "--backend", "vllm"]
-            )
+            result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "vllm"])
             assert result.exit_code != 0
 
     def test_vllm_hint_shown_when_available(self, tmp_path):
@@ -215,12 +211,15 @@ class TestCreateVllmEngine:
         mock_engine_cls = MagicMock()
         mock_engine_cls.from_engine_args.return_value = mock_engine
 
-        with patch.dict("sys.modules", {
-            "vllm": MagicMock(
-                AsyncEngineArgs=mock_args_cls,
-                AsyncLLMEngine=mock_engine_cls,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -232,6 +231,7 @@ class TestCreateVllmEngine:
                 is_adapter=False,
                 tensor_parallel_size=2,
                 gpu_memory_utilization=0.8,
+                vllm_cache_dtype="bfloat16",
             )
 
             assert engine == mock_engine
@@ -241,6 +241,7 @@ class TestCreateVllmEngine:
             assert call_kwargs.kwargs["model"] == "/path/to/model"
             assert call_kwargs.kwargs["tensor_parallel_size"] == 2
             assert call_kwargs.kwargs["gpu_memory_utilization"] == 0.8
+            assert call_kwargs.kwargs["kv_cache_dtype"] == "bfloat16"
 
     def test_create_engine_adapter(self):
         """create_vllm_engine with adapter should use base_model and enable LoRA."""
@@ -249,12 +250,15 @@ class TestCreateVllmEngine:
         mock_engine_cls = MagicMock()
         mock_engine_cls.from_engine_args.return_value = mock_engine
 
-        with patch.dict("sys.modules", {
-            "vllm": MagicMock(
-                AsyncEngineArgs=mock_args_cls,
-                AsyncLLMEngine=mock_engine_cls,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -265,6 +269,7 @@ class TestCreateVllmEngine:
                 model_path="/path/to/adapter",
                 base_model="meta-llama/Llama-3.1-8B",
                 is_adapter=True,
+                vllm_cache_dtype="float16",
             )
 
             assert engine == mock_engine
@@ -272,6 +277,7 @@ class TestCreateVllmEngine:
             call_kwargs = mock_args_cls.call_args
             assert call_kwargs.kwargs["model"] == "meta-llama/Llama-3.1-8B"
             assert call_kwargs.kwargs["enable_lora"] is True
+            assert call_kwargs.kwargs["kv_cache_dtype"] == "float16"
 
     def test_create_engine_max_model_len(self):
         """create_vllm_engine should set max_model_len when provided."""
@@ -280,12 +286,15 @@ class TestCreateVllmEngine:
         mock_engine_cls = MagicMock()
         mock_engine_cls.from_engine_args.return_value = mock_engine
 
-        with patch.dict("sys.modules", {
-            "vllm": MagicMock(
-                AsyncEngineArgs=mock_args_cls,
-                AsyncLLMEngine=mock_engine_cls,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -325,11 +334,14 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "vllm": mock_vllm,
-            "vllm.lora": MagicMock(),
-            "vllm.lora.request": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": mock_vllm,
+                "vllm.lora": MagicMock(),
+                "vllm.lora.request": MagicMock(),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -356,11 +368,14 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "vllm": mock_vllm,
-            "vllm.lora": MagicMock(),
-            "vllm.lora.request": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": mock_vllm,
+                "vllm.lora": MagicMock(),
+                "vllm.lora.request": MagicMock(),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -390,11 +405,14 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "vllm": mock_vllm,
-            "vllm.lora": MagicMock(),
-            "vllm.lora.request": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": mock_vllm,
+                "vllm.lora": MagicMock(),
+                "vllm.lora.request": MagicMock(),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -427,11 +445,14 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "vllm": mock_vllm,
-            "vllm.lora": MagicMock(),
-            "vllm.lora.request": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": mock_vllm,
+                "vllm.lora": MagicMock(),
+                "vllm.lora.request": MagicMock(),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -473,13 +494,16 @@ class TestServeVllmIntegration:
         mock_engine = MagicMock()
         mock_app = MagicMock()
 
-        with patch(
-            "soup_cli.utils.vllm.create_vllm_engine",
-            return_value=(mock_engine, "base-model"),
-        ) as mock_create_engine, patch(
-            "soup_cli.utils.vllm.create_vllm_app",
-            return_value=mock_app,
-        ) as mock_create_app:
+        with (
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(mock_engine, "base-model"),
+            ) as mock_create_engine,
+            patch(
+                "soup_cli.utils.vllm.create_vllm_app",
+                return_value=mock_app,
+            ) as mock_create_app,
+        ):
             from soup_cli.commands.serve import _serve_vllm
 
             model_path = tmp_path / "model"
@@ -507,8 +531,65 @@ class TestServeVllmIntegration:
                 quantization=None,  # default: model's native dtype
                 trust_remote_code=False,  # v0.71.33 — default-deny gate
                 max_model_len=None,  # #333 — new --max-model-len lever
+                vllm_cache_dtype=None,
             )
             mock_create_app.assert_called_once()
+
+    def test_serve_vllm_rejects_dtype_mismatch(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(torch_dtype="torch.float16")
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch("soup_cli.utils.vllm.create_vllm_engine") as mock_create_engine,
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            with pytest.raises(RuntimeError, match="must match model dtype"):
+                _serve_vllm(
+                    model_path=tmp_path / "model",
+                    base_model="base-model",
+                    is_adapter=False,
+                    max_tokens_default=512,
+                    tensor_parallel=1,
+                    gpu_memory_utilization=0.9,
+                    vllm_cache_dtype="bfloat16",
+                )
+
+            mock_create_engine.assert_not_called()
+
+    def test_serve_vllm_rejects_unknown_model_dtype(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(torch_dtype=None)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch("soup_cli.utils.vllm.create_vllm_engine") as mock_create_engine,
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            with pytest.raises(RuntimeError, match="Cannot determine model dtype"):
+                _serve_vllm(
+                    model_path=tmp_path / "model",
+                    base_model="base-model",
+                    is_adapter=False,
+                    max_tokens_default=512,
+                    tensor_parallel=1,
+                    gpu_memory_utilization=0.9,
+                    vllm_cache_dtype="bfloat16",
+                )
+
+            mock_create_engine.assert_not_called()
 
     def test_serve_vllm_with_adapter(self, tmp_path):
         """_serve_vllm with adapter should pass adapter_path."""
@@ -520,13 +601,16 @@ class TestServeVllmIntegration:
         mock_engine = MagicMock()
         mock_app = MagicMock()
 
-        with patch(
-            "soup_cli.utils.vllm.create_vllm_engine",
-            return_value=(mock_engine, "base-model"),
-        ), patch(
-            "soup_cli.utils.vllm.create_vllm_app",
-            return_value=mock_app,
-        ) as mock_create_app:
+        with (
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(mock_engine, "base-model"),
+            ),
+            patch(
+                "soup_cli.utils.vllm.create_vllm_app",
+                return_value=mock_app,
+            ) as mock_create_app,
+        ):
             from soup_cli.commands.serve import _serve_vllm
 
             model_path = tmp_path / "adapter"
