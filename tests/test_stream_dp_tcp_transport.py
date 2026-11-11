@@ -82,6 +82,8 @@ from soup_cli.utils.adapter_grad_transport import (
     TorchDistributedGroup,
     address_is_public,
     b1_rank_or_none,
+    names_every_interface,
+    open_b1_group,
     read_b1_env,
     refuse_b1_without_streaming,
     require_token_for_public_address,
@@ -116,7 +118,10 @@ def _free_port() -> int:
 # --------------------------------------------------------------------------
 
 _TOKEN = "shared-secret-0123456789"
-_RANK_0 = {ENV_RANK: "0", ENV_WORLD_SIZE: "2", ENV_BIND_PORT: "41000"}
+# rank 0 without ADDR listens on every interface, which public networks reach: it carries the
+# token the launch then requires; _RANK_0_NO_TOKEN is the same launch without it
+_RANK_0 = {ENV_RANK: "0", ENV_WORLD_SIZE: "2", ENV_BIND_PORT: "41000", ENV_TOKEN: _TOKEN}
+_RANK_0_NO_TOKEN = {name: value for name, value in _RANK_0.items() if name != ENV_TOKEN}
 # 203.0.113.7 is a public address (the documentation range is not private), so rank 1 carries
 # the token the launch then requires; _RANK_1_NO_TOKEN is the same launch without it
 _RANK_1 = {
@@ -137,7 +142,7 @@ class TestB1Env:
     def test_rank_0_listens_on_its_bind_port(self):
         env = read_b1_env(_RANK_0)
         assert (env.rank, env.world_size, env.bind_port) == (0, 2, 41000)
-        assert (env.host, env.port, env.token) == (None, None, None)
+        assert (env.host, env.port, env.token) == (None, None, _TOKEN)
         assert env.bind_host == "0.0.0.0", "a vast port mapping reaches the container's address"
 
     def test_a_peer_reaches_rank_0_at_the_address(self):
@@ -372,7 +377,7 @@ class TestPublicAddressNeedsAToken:
 
     def test_rank_0_with_a_public_address_and_no_token_is_refused_too(self):
         with pytest.raises(B1ConfigError) as excinfo:
-            read_b1_env({**_RANK_0, ENV_ADDR: "203.0.113.7:41123"})
+            read_b1_env({**_RANK_0_NO_TOKEN, ENV_ADDR: "203.0.113.7:41123"})
         assert str(excinfo.value) == _needs_token("SOUP_STREAM_DP_ADDR=203.0.113.7:41123")
 
     @pytest.mark.parametrize("host", _PRIVATE_HOSTS)
@@ -385,11 +390,6 @@ class TestPublicAddressNeedsAToken:
     def test_a_public_address_with_a_token_passes_the_gate(self, host):
         env = read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: f"{host}:41123", ENV_TOKEN: _TOKEN})
         assert (env.host, env.token) == (host, _TOKEN)
-
-    def test_rank_0_without_an_address_listens_on_every_interface_without_a_gate(self):
-        # nothing names an address to judge: the documented case, and the token stays optional
-        env = read_b1_env(_RANK_0)
-        assert (env.host, env.token, env.bind_host) == (None, None, "0.0.0.0")
 
     def test_a_malformed_token_is_refused_for_what_it_is_before_the_address_is_judged(self):
         with pytest.raises(B1ConfigError) as excinfo:
@@ -468,8 +468,8 @@ class TestPublicAddressNeedsATokenInTheGroup:
         assert str(excinfo.value) == _needs_token("bind_host 203.0.113.5")
         assert no_socket == []
 
-    @pytest.mark.parametrize("bind_host", ["0.0.0.0", "::", "127.0.0.1", "10.1.2.3", "::1"])
-    def test_rank_0_on_every_interface_or_a_private_one_needs_no_token(
+    @pytest.mark.parametrize("bind_host", ["127.0.0.1", "10.1.2.3", "::1", "localhost"])
+    def test_rank_0_bound_to_one_private_address_needs_no_token(
         self, bind_host, sockets_are_stubbed
     ):
         TcpStarGroup(rank=0, world_size=2, bind_host=bind_host, bind_port=41000)
@@ -484,6 +484,197 @@ class TestPublicAddressNeedsATokenInTheGroup:
         TcpStarGroup(rank=1, world_size=2, host="203.0.113.7", port=41123, token=_TOKEN)
         TcpStarGroup(rank=0, world_size=2, bind_host="203.0.113.5", bind_port=41000, token=_TOKEN)
         assert len(sockets_are_stubbed) == 2
+
+
+_WILDCARDS = ["0.0.0.0", "::", "[::]", "0:0:0:0:0:0:0:0", "::0", "[0:0:0:0:0:0:0:0]", ""]
+_NOT_WILDCARDS = [
+    "127.0.0.1",
+    "10.0.0.1",
+    "203.0.113.7",
+    "::1",
+    "[::1]",
+    "localhost",
+    "0.0.0.1",
+    "x",
+]
+
+_NEEDS_TOKEN_WILDCARD_ENV = (
+    "SOUP_STREAM_DP_TOKEN is required on rank 0 while SOUP_STREAM_DP_ADDR is not set: rank 0 "
+    "would then listen on every interface (0.0.0.0), which public networks can reach, and anyone "
+    "who can reach the port could join the group. Either set the same SOUP_STREAM_DP_TOKEN "
+    "(16 to 256 characters) on every node, or set SOUP_STREAM_DP_ADDR to the loopback or private "
+    "address rank 0 should bind to (for example 127.0.0.1:41000 or 192.168.1.5:41000)."
+)
+
+
+def _needs_token_wildcard_group(shown: str) -> str:
+    return (
+        "SOUP_STREAM_DP_TOKEN is required for a rank 0 whose bind_host is a wildcard: rank 0 "
+        f"would then listen on every interface ({shown}), which public networks can reach, and "
+        "anyone who can reach the port could join the group. Either set the same "
+        "SOUP_STREAM_DP_TOKEN (16 to 256 characters) on every node, or bind rank 0 to a "
+        "loopback or private bind_host."
+    )
+
+
+class TestRankZeroOnEveryInterfaceNeedsAToken:
+    """Rank 0 with no SOUP_STREAM_DP_ADDR listens on the wildcard address, which public networks
+    reach: the token is required there, and a loopback or private ADDR is the way to bind to one
+    address (and so to run without a token)."""
+
+    @pytest.mark.parametrize("host", _WILDCARDS)
+    def test_a_wildcard_spelling_names_every_interface(self, host):
+        assert names_every_interface(host) is True
+
+    @pytest.mark.parametrize("host", _NOT_WILDCARDS)
+    def test_a_single_address_or_name_does_not(self, host):
+        assert names_every_interface(host) is False
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "[::]", "::"])
+    def test_a_wildcard_literal_is_a_public_address_too(self, host):
+        assert address_is_public(host) is True
+
+    def test_rank_0_without_an_address_and_without_a_token_is_refused_by_name(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env(_RANK_0_NO_TOKEN)
+        assert str(excinfo.value) == _NEEDS_TOKEN_WILDCARD_ENV
+
+    def test_rank_0_without_an_address_but_with_a_token_listens_on_every_interface(self):
+        env = read_b1_env(_RANK_0)
+        assert (env.host, env.token, env.bind_host) == (None, _TOKEN, "0.0.0.0")
+
+    @pytest.mark.parametrize("address", ["0.0.0.0:41000", "[::]:41000"])
+    def test_a_wildcard_literal_as_the_address_of_rank_0_needs_the_token(self, address):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_0_NO_TOKEN, ENV_ADDR: address})
+        assert str(excinfo.value) == _needs_token(f"{ENV_ADDR}={address}")
+        env = read_b1_env({**_RANK_0, ENV_ADDR: address})
+        assert env.bind_host == "0.0.0.0", "a wildcard address binds every interface"
+
+    @pytest.mark.parametrize(
+        ("address", "bind_host"),
+        [
+            ("127.0.0.1:41000", "127.0.0.1"),
+            ("127.0.0.7:1", "127.0.0.7"),
+            ("10.1.2.3:41000", "10.1.2.3"),
+            ("172.16.0.9:41000", "172.16.0.9"),
+            ("192.168.1.5:41000", "192.168.1.5"),
+            ("169.254.1.1:41000", "169.254.1.1"),
+            ("[::1]:41000", "::1"),
+            ("[fd12::1]:41000", "fd12::1"),
+            ("[fe80::1]:41000", "fe80::1"),
+            ("localhost:41000", "127.0.0.1"),
+        ],
+    )
+    def test_rank_0_with_a_loopback_or_private_address_binds_it_and_needs_no_token(
+        self, address, bind_host
+    ):
+        env = read_b1_env({**_RANK_0_NO_TOKEN, ENV_ADDR: address})
+        assert (env.token, env.bind_host) == (None, bind_host)
+
+    @pytest.mark.parametrize(
+        "address", ["203.0.113.7:41123", "node0.example.com:41123", "[2001:db8::7]:41123"]
+    )
+    def test_rank_0_with_a_public_address_and_a_token_binds_every_interface(self, address):
+        # a public address is where the peers reach rank 0 (a port mapping): it is not an
+        # address of this machine, so rank 0 cannot bind it
+        env = read_b1_env({**_RANK_0, ENV_ADDR: address})
+        assert env.bind_host == "0.0.0.0"
+
+    def test_a_peer_does_not_bind_and_is_not_judged_by_the_wildcard_rule(self):
+        env = read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: "10.0.0.1:41123"})
+        assert env.token is None and env.bind_host == "0.0.0.0"
+
+    def test_the_other_problems_are_still_named_first(self):
+        with pytest.raises(B1ConfigError, match=re.escape(f"{ENV_BIND_PORT} is not set on rank 0")):
+            read_b1_env({ENV_RANK: "0", ENV_WORLD_SIZE: "2"})
+        with pytest.raises(B1ConfigError, match=re.escape("is out of range")):
+            read_b1_env({**_RANK_0_NO_TOKEN, ENV_BIND_PORT: "0"})
+
+    @pytest.mark.parametrize("host", _WILDCARDS)
+    def test_the_group_refuses_a_wildcard_bind_without_a_token_before_any_socket(
+        self, host, monkeypatch
+    ):
+        def tripwire(self, *args, **kwargs):
+            raise AssertionError("a socket was opened before the token gate")
+
+        monkeypatch.setattr(TcpStarGroup, "_accept_peers", tripwire)
+        with pytest.raises(B1ConfigError) as excinfo:
+            TcpStarGroup(rank=0, world_size=2, bind_host=host, bind_port=41000)
+        shown = host or "''"
+        assert str(excinfo.value) == _needs_token_wildcard_group(shown)
+
+    def test_the_group_takes_a_wildcard_bind_with_a_token(self, monkeypatch):
+        reached = []
+        monkeypatch.setattr(TcpStarGroup, "_accept_peers", lambda self, *a, **k: reached.append(a))
+        for host in ("0.0.0.0", "::"):
+            TcpStarGroup(rank=0, world_size=2, bind_host=host, bind_port=41000, token=_TOKEN)
+        assert len(reached) == 2
+
+    @pytest.mark.parametrize("bind_host", ["127.0.0.1", "::1", "10.1.2.3", "localhost"])
+    def test_the_group_takes_a_single_private_bind_without_a_token(self, bind_host, monkeypatch):
+        reached = []
+        monkeypatch.setattr(TcpStarGroup, "_accept_peers", lambda self, *a, **k: reached.append(a))
+        TcpStarGroup(rank=0, world_size=2, bind_host=bind_host, bind_port=41000)
+        assert len(reached) == 1
+
+    def test_rank_1_is_not_judged_by_its_bind_host(self, monkeypatch):
+        reached = []
+        monkeypatch.setattr(
+            TcpStarGroup, "_connect_to_root", lambda self, *a, **k: reached.append(a)
+        )
+        TcpStarGroup(rank=1, world_size=2, host="127.0.0.1", port=41000, bind_host="0.0.0.0")
+        assert len(reached) == 1
+
+    def test_rank_0_with_a_loopback_address_and_no_token_really_binds_loopback(self, monkeypatch):
+        port = _free_port()
+        env = read_b1_env(
+            {**_RANK_0_NO_TOKEN, ENV_BIND_PORT: str(port), ENV_ADDR: f"127.0.0.1:{port}"}
+        )
+        bound = []
+        make_listener = transport._make_listener
+
+        def spy(bind_host, bind_port):
+            listener = make_listener(bind_host, bind_port)
+            bound.append(listener.getsockname()[:2])
+            return listener
+
+        monkeypatch.setattr(transport, "_make_listener", spy)
+        announced = []
+        box = {}
+
+        def root():
+            try:
+                box["group"] = open_b1_group(env, announce=announced.append)
+            except BaseException as exc:  # noqa: BLE001 - the test reads it
+                box["error"] = exc
+
+        thread = threading.Thread(target=root, daemon=True)
+        thread.start()
+        peer = TcpStarGroup(rank=1, world_size=2, host="127.0.0.1", port=port, connect_timeout=30)
+        thread.join(30)
+        try:
+            assert "error" not in box, repr(box.get("error"))
+            assert bound == [("127.0.0.1", port)]
+            assert any(f"rank 0 listens on 127.0.0.1:{port}" in line for line in announced)
+        finally:
+            peer.close()
+            if "group" in box:
+                box["group"].close()
+
+    def test_a_bind_address_that_is_not_this_machines_is_named(self):
+        with pytest.raises(HandshakeError) as excinfo:
+            TcpStarGroup(
+                rank=0,
+                world_size=2,
+                bind_host="10.255.255.254",
+                bind_port=0,
+                connect_timeout=1,
+            )
+        message = str(excinfo.value)
+        assert message.startswith("rank 0 could not listen on 10.255.255.254:0")
+        assert "SOUP_STREAM_DP_ADDR names the address rank 0 binds" in message
+        assert "it must be an address of this machine" in message
 
 
 class TestStreamingIsRequired:
@@ -609,7 +800,8 @@ class TestDecision:
             refuse_if_distributed_launch(_sft_cfg(tmp_path))
         message = _plain(str(excinfo.value))
         assert message.startswith(
-            f"{ENV_RANK}, {ENV_WORLD_SIZE}, {ENV_BIND_PORT} set together with WORLD_SIZE={size}:"
+            f"{ENV_RANK}, {ENV_WORLD_SIZE}, {ENV_BIND_PORT}, {ENV_TOKEN} set together with "
+            f"WORLD_SIZE={size}:"
         ), message
         assert "two launches that must not be mixed" in message
 
@@ -2361,7 +2553,8 @@ class TestTrainCommand:
         output = _plain(result.output)
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert (
-            f"{ENV_RANK}, {ENV_WORLD_SIZE}, {ENV_BIND_PORT} are set, but training.stream_layers "
+            f"{ENV_RANK}, {ENV_WORLD_SIZE}, {ENV_BIND_PORT}, {ENV_TOKEN} are set, but "
+            "training.stream_layers "
             "is not true" in output
         ), output
         assert not isinstance(result.exception, _StopAtTrainerError)
@@ -2438,6 +2631,7 @@ def _b1_env(env: dict, rank: int, port: int) -> dict:
     env[ENV_WORLD_SIZE] = "2"
     if rank == 0:
         env[ENV_BIND_PORT] = str(port)
+        env[ENV_ADDR] = f"127.0.0.1:{port}"  # binds loopback: no token needed
     else:
         env[ENV_ADDR] = f"127.0.0.1:{port}"
     return env
