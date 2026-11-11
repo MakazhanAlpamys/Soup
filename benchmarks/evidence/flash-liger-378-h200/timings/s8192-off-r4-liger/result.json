@@ -1,7 +1,0 @@
-{
-  "status": "not_run_probe_oom",
-  "arm": "liger",
-  "sequence": 8192,
-  "checkpoint": "off",
-  "reason": "Same-shape 8-step activation probe exhausted headroom"
-}
