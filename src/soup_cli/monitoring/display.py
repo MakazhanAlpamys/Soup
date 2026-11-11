@@ -7,6 +7,7 @@ from rich.live import Live
 from rich.panel import Panel
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.reward_collapse import reward_group_fraction
 
 console = Console()
 
@@ -75,11 +76,13 @@ class TrainingDisplay:
         #: grpo's validation number: the mean reward on the held-out
         #: completions, higher is better (#1389). Its own row, never a "loss".
         self.val_reward = None
+        self.frac_reward_zero_std: Optional[float] = None
         self._live: Optional[Live] = None
 
     def start(self, total_steps: int):
         """Start the live display."""
         self.total_steps = total_steps
+        self.frac_reward_zero_std = None
         self._live = Live(self._render(), console=console, refresh_per_second=2)
         self._live.start()
 
@@ -99,6 +102,9 @@ class TrainingDisplay:
             self.val_loss = kwargs["val_loss"]
         if kwargs.get("val_reward") is not None:
             self.val_reward = kwargs["val_reward"]
+
+        if "frac_reward_zero_std" in kwargs and self.config.task == "grpo":
+            self.frac_reward_zero_std = reward_group_fraction(kwargs["frac_reward_zero_std"])
 
         if self._live:
             self._live.update(self._render())
@@ -132,6 +138,8 @@ class TrainingDisplay:
             lines.append(f"Val loss: {self.val_loss:.4f}")
         if self.val_reward is not None:
             lines.append(f"Val reward: {self.val_reward:.4f}")
+        if self.config.task == "grpo" and self.frac_reward_zero_std is not None:
+            lines.append(f"Zero-spread groups: {self.frac_reward_zero_std:.1%}")
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:

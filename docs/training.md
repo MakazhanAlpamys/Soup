@@ -1474,6 +1474,16 @@ Set `training.preference_loss` for a single loss.
 
 ## GRPO Training (Reasoning)
 
+On the Transformers backend the live panel shows **Zero-spread groups**, TRL's
+measured `frac_reward_zero_std` (the fraction of generation groups with identical
+rewards). A real zero displays as 0%; the row is hidden until a valid measurement
+exists and keeps its last reading between measurements. More than 50% over five
+distinct logged optimizer steps emits one warning per run. This is a diagnostic
+heuristic, not a quality threshold: it neither stops training nor changes rewards
+or gradients. Evaluation/summary logs do not count as new measurements; invalid
+fractions break the warning streak. MLX's existing logging is unchanged.
+
+
 Train reasoning models with Group Relative Policy Optimization (DeepSeek-R1 style):
 
 ```yaml
