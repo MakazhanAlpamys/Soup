@@ -9,7 +9,7 @@ trl==0.29.1
 peft==0.20.0
 bitsandbytes==0.50.2
 accelerate==1.15.0
-datasets==4.8.5
+datasets==5.0.1
 huggingface_hub>=0.34.0
 hf_transfer
 psutil
