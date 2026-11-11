@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from soup_cli.utils.tool_paths import find_tool, tool_environment
+
 _COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _PROBE_TIMEOUT_SECONDS = 2.0
 _ROUTING_ENV = (
@@ -45,21 +47,22 @@ def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
     """
     unknown = CodeRevision()
     deadline = time.monotonic() + _PROBE_TIMEOUT_SECONDS
-    env = os.environ.copy()
-    for key in _ROUTING_ENV:
-        env.pop(key, None)
+    env = tool_environment(drop=_ROUTING_ENV)
     # `git status` otherwise may refresh/write the index as an optimization.
     env["GIT_OPTIONAL_LOCKS"] = "0"
 
     try:
         directory = os.fspath(cwd) if cwd is not None else os.getcwd()
+        program = find_tool("git")
+        if program is None:
+            return unknown
 
         def git(*args: str) -> str:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
             result = subprocess.run(
-                ["git", "-C", directory, *args],
+                [program, "-C", directory, *args],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding="utf-8", errors="replace", timeout=remaining, env=env,
                 check=True,

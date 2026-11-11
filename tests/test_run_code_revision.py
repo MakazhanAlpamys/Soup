@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -105,6 +106,8 @@ def test_non_repo_and_unborn_head_are_unknown(repository, tmp_path):
 def test_probe_failure_does_not_abort_training(monkeypatch, tmp_path, failure):
     from soup_cli.utils import code_revision
 
+    monkeypatch.setattr(code_revision, "find_tool", lambda name: str(tmp_path / "git"))
+
     def fail(*args, **kwargs):
         assert 0 < kwargs["timeout"] <= 2
         assert kwargs["env"]["GIT_OPTIONAL_LOCKS"] == "0"
@@ -123,6 +126,7 @@ def test_probe_failure_does_not_abort_training(monkeypatch, tmp_path, failure):
 def test_bad_commit_failed_status_or_moving_head_stays_unknown(monkeypatch, tmp_path, outputs):
     from soup_cli.utils import code_revision
 
+    monkeypatch.setattr(code_revision, "find_tool", lambda name: str(tmp_path / "git"))
     results = iter(outputs)
 
     def run(argv, **kwargs):
@@ -139,6 +143,7 @@ def test_bad_commit_failed_status_or_moving_head_stays_unknown(monkeypatch, tmp_
 def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path):
     from soup_cli.utils import code_revision
 
+    monkeypatch.setattr(code_revision, "find_tool", lambda name: str(tmp_path / "git"))
     clock = {"now": 0.0}
     timeouts = []
 
@@ -157,6 +162,7 @@ def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path
 def test_sha256_git_object_id_is_not_truncated(monkeypatch, tmp_path):
     from soup_cli.utils import code_revision
 
+    monkeypatch.setattr(code_revision, "find_tool", lambda name: str(tmp_path / "git"))
     outputs = iter(["a" * 64, "", "a" * 64])
     monkeypatch.setattr(
         code_revision.subprocess, "run",
@@ -165,6 +171,42 @@ def test_sha256_git_object_id_is_not_truncated(monkeypatch, tmp_path):
     captured = code_revision.capture_code_revision(tmp_path)
     assert captured.commit == "a" * 64
     assert captured.dirty is False
+
+
+def test_missing_git_does_not_start_a_subprocess(monkeypatch, tmp_path):
+    from soup_cli.utils import code_revision
+
+    monkeypatch.setattr(code_revision, "find_tool", lambda name: None)
+    monkeypatch.setattr(
+        code_revision.subprocess, "run", lambda *a, **kw: pytest.fail("Git is unavailable"),
+    )
+    captured = code_revision.capture_code_revision(tmp_path)
+    assert captured.commit is None and captured.dirty is None
+
+
+def test_git_is_resolved_from_absolute_path_entries_not_the_current_directory(
+    tmp_path, monkeypatch,
+):
+    from soup_cli.utils import code_revision
+
+    monkeypatch.chdir(tmp_path)
+    binary = "git.EXE" if os.name == "nt" else "git"
+    (tmp_path / binary).write_text("current-directory stand-in", encoding="utf-8")
+    installed = tmp_path / "bin"
+    installed.mkdir()
+    trusted = installed / binary
+    trusted.write_text("PATH stand-in; never executed by this test", encoding="utf-8")
+    trusted.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join(["", ".", str(installed)]))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    outputs = iter(["a" * 40, "", "a" * 40])
+
+    def run(argv, **kwargs):
+        assert argv[0] == str(trusted)
+        return subprocess.CompletedProcess(argv, 0, next(outputs), "")
+
+    monkeypatch.setattr(code_revision.subprocess, "run", run)
+    assert code_revision.capture_code_revision().commit == "a" * 40
 
 
 def test_legacy_database_is_upgraded_without_guessing_a_historical_commit(tmp_path):
