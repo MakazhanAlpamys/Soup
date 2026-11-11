@@ -105,7 +105,7 @@
     }
   },
   "device_samples": {
-    "device_uuid": "GPU-58f410a3-f7f3-03ba-de47-064b72fceb83",
+    "device_uuid": "GPU-<redacted>",
     "device_name": "NVIDIA L40S",
     "count": 14381,
     "observed_peak_used_mib": 6597,

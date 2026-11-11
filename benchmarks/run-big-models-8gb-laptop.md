@@ -4,7 +4,8 @@ never mixed:
   EARLIER RECORDED = read from result files written when the run was made (laptop 2026-11-03; cloud
     2026-11-05 .. 2026-11-07; the Banking77 run 2026-11-07).
   RE-RUN = measured again on the same laptop on 2026-11-07 (Qwen3-32B only).
-Mistral Large was NOT re-run: its numbers are from earlier recorded runs.
+Mistral numbers from earlier recorded runs, not re-run. The laptop re-check of the Mistral numbers has not
+been run.
 
 Laptop: NVIDIA GeForce RTX 5070 Laptop GPU 8151 MiB, driver 616.92; Intel i9-14900HX (24 cores / 32
   logical); 31.73 GiB visible RAM; two Samsung MZAL81T0HFLB-00BL2 NVMe SSDs; native Windows.
@@ -21,17 +22,18 @@ Raw output: benchmarks/results/big-models-8gb-laptop/ (path-scrubbed copies, sec
 
 # Run record: LoRA on Qwen3-32B and Mistral Large (122.6 B) through layer streaming on an 8 GB laptop GPU, one same-laptop re-run, and a 300-step Banking77 fine-tune
 
-**Status: capacity measured once per configuration. One Qwen3-32B result was re-run on the same laptop on
-2026-11-07 and reproduced bit for bit (n = 1); the Qwen3-32B reload was not reproduced; the Mistral
-numbers are from earlier recorded runs, not re-run.** This is a capacity record. It is not a throughput
-benchmark and it makes no model-quality claim for Mistral Large.
+**Status: Mistral numbers from earlier recorded runs, not re-run. The laptop re-check of the Mistral numbers
+has not been run.** Capacity was measured once per configuration. One Qwen3-32B result was re-run on the
+same laptop on 2026-11-07 and reproduced bit for bit (n = 1); the Qwen3-32B reload was not reproduced.
+This is a capacity record. It is not a throughput benchmark and it makes no model-quality claim for
+Mistral Large.
 
 - **Earlier recorded, laptop (8 GB RTX 5070 Laptop).** Three rank-8 q/v LoRA updates ran through every
   decoder layer of **Qwen3-32B** NF4 at 1 x 128 tokens (sampled whole-device peak **3,002 MiB**) and of
   **Mistral-Large-Instruct-2407** NF4, 122,610,069,504 parameters, at 1 x 128 tokens (**4,598 MiB**) and
   1 x 512 tokens (**5,602 MiB**). Each saved adapter was reloaded in a different process and reproduced the
   trained held-out losses exactly: a 128-value logits slice per example for the 32B, the complete BF16
-  logits tensors for the 123B (section 5).
+  logits tensors for the 123B (section 5). **Mistral numbers from earlier recorded runs, not re-run.**
 - **Re-run on the same laptop, 2026-11-07, Qwen3-32B only.** The train step **reproduced bit for bit, one
   run (n = 1, not the three that were planned)**: the same 3,002 MiB sampled peak, the same torch peaks,
   the same three step losses, the same held-out losses, the same `adapter_model.safetensors` SHA-256. The
@@ -39,19 +41,21 @@ benchmark and it makes no model-quality claim for Mistral Large.
   The **reload in a fresh process was not reproduced**: six attempts produced no result, none because of a
   mismatch (section 6).
 - **Mistral numbers from earlier recorded runs, not re-run.** The Mistral weights on the laptop were
-  re-hashed on 2026-11-07 and equal the recorded values; nothing else about Mistral was re-measured.
+  re-hashed on 2026-11-07 and equal the recorded values (`RF/rerun-2026-11-07/weights-hash-checks.json`);
+  nothing else about Mistral was re-measured.
 - **Earlier recorded, cloud L40S, Mistral Large, no Soup code.** One full-depth update at **8,192 tokens**
   (sampled **4,323 MiB**) and one at **16,384 tokens** (sampled **6,597 MiB**, a 33 GiB activation spill to
   disk, 3,618 s of worker time), each under a 6.25 GiB PyTorch allocator cap, and the saved optimizer state
-  was restored exactly in a fresh process. The 16K step is not a laptop result (section 7).
+  was restored exactly in a fresh process. The 16K step is not a laptop result (section 7). Mistral numbers
+  from earlier recorded runs, not re-run.
 - **No Mistral quality result.** The only pre-registered quality gate (4 updates at 8,192 tokens) ended
-  **22/32 against 22/32** for its control and was not met (section 7.1).
+  **22/32 against 22/32** for its control and was not met (section 7.1). Mistral numbers from earlier
+  recorded runs, not re-run.
 - **Qwen3-32B, 300-step Banking77 fine-tune through `soup train`** (earlier recorded, 2026-11-07, one seed):
   accuracy on the full official test split rose from **69.58% to 82.82%** (n = 3,080); MMLU (500 items)
   went 76.4% to 77.2% and GSM8K (400 items) 95.25% to 95.75%, so neither fell. The training process held
   **5,052 MiB** of PyTorch memory against **20,127 MiB** for a resident control that reached 83.18%. It
-  trained on a rented L40S under the 6.25 GiB cap, **not on the laptop**. The adapter is published at
-  <https://huggingface.co/AlpamysSigmaaaa/Qwen3-32B-Banking77-LoRA-Soup> (section 8).
+  trained on a cloud L40S under the 6.25 GiB cap, **not on the laptop** (section 8).
 
 Unit convention: MiB = 2^20 B and GiB = 2^30 B, as `nvidia-smi` and PyTorch report them; byte counts are as
 recorded. "Sampled" means the largest value of a periodic `nvidia-smi` reading of the whole device, which
@@ -67,7 +71,10 @@ can miss a short peak. "pp" is an absolute difference in accuracy, in percent. `
 | EARLIER-LAPTOP | Qwen3-32B and Mistral Large: train 3 updates, then reload in a fresh process (Q32, M128, M512) | RTX 5070 Laptop 8 GB | 2026-11-03 | read from result files; **only the Q32 train step was re-run** |
 | RE-RUN | Qwen3-32B train step; six reload attempts; hash checks of the Qwen3-32B and Mistral weights | the same laptop | 2026-11-07 | measured again; the reload gave no result; Mistral **not** re-run |
 | EARLIER-CLOUD | Mistral Large, 8K and 16K tokens, full depth, plus quality pilots | one L40S per run | 2026-11-05 to 2026-11-07 | read from result files, not re-run |
-| BANKING77 | Qwen3-32B, 300 steps, held-out accuracy; plus a forward-only reload check on the laptop | one rented L40S (training and evaluation); the laptop (reload check) | 2026-11-07 | measured once |
+| BANKING77 | Qwen3-32B, 300 steps, held-out accuracy; plus a forward-only reload check on the laptop | one cloud L40S (training and evaluation); the laptop (reload check) | 2026-11-07 for the cloud phases (`summary_train.json` phase times); the laptop reload check carries no date in its result file | measured once |
+
+**Mistral numbers from earlier recorded runs, not re-run** (the EARLIER-LAPTOP rows for M128 and M512 and
+the EARLIER-CLOUD row). The laptop re-check of the Mistral numbers has not been run.
 
 The result files were copied with a filter (text, JSON, logs); model weights, adapter tensors and optimizer
 checkpoints are not included and are identified only by the SHA-256 values in the result files. Several
@@ -86,8 +93,9 @@ they were read from.
   run and the re-run (`RF/earlier-recorded/laptop/summary-q32.json`, `RF/rerun-2026-11-07/q32-train-n1.json`).
   The runners are not included in this record.
 - **Cloud runs (EARLIER-CLOUD)** are stand-alone experiment decoders on stock torch, bitsandbytes,
-  transformers and peft; the launch wrappers install no Soup package and the worker sources were searched
-  for `soup_cli` imports (none). Their SHA-256 values are listed in the handoff files
+  transformers and peft; the operator reports that the launch wrappers install no Soup package and that the
+  worker sources were searched for `soup_cli` imports with none found (the search output and the sources are
+  not part of this record). Their SHA-256 values are listed in the handoff files
   (`RF/earlier-recorded/cloud/ROOT_CONTEXT74_HANDOFF_01.json`, `ROOT_CONTEXT83_HANDOFF_01.json`); the sources
   are not included. The cloud results are therefore evidence for the streaming method, not for Soup's
   shipped code.
@@ -99,7 +107,7 @@ they were read from.
   copied byte for byte into per-layer shards without de- or re-quantisation: 2,053 tensor payloads,
   19,211,023,168 B for Qwen3-32B; 2,645 tensors, 64,449,162,720 B for Mistral Large
   (`RF/earlier-recorded/laptop/q32-REPORT.txt`, `m128-REPORT.txt`). Compute is BF16; adapters and AdamW state
-  are FP32.
+  are FP32. The Mistral figures here are Mistral numbers from earlier recorded runs, not re-run.
 
 ## 3. Hardware and resources as recorded
 
@@ -113,7 +121,8 @@ they were read from.
 
 The laptop was a working machine, not a quiet one: the guard's minimum available host RAM during the six
 accepted workers was 5,645.6 to 7,126.3 MiB and the minimum system commit headroom 2,355.9 to 6,629.8 MiB
-(table in section 5).
+(table in section 5). Four of those six workers are Mistral runs: Mistral numbers from earlier recorded
+runs, not re-run.
 
 ## 4. What was run
 
@@ -125,7 +134,9 @@ accepted workers was 5,645.6 to 7,126.3 MiB and the minimum system commit headro
 | L8K | L40S | same | 1 x 8,192 | 1 | same | one training fixture, 124 supervised tokens |
 | L16K | L40S | same | 1 x 16,384, no padding | 1 | same | one training fixture, 124 supervised tokens |
 | L-Q | L40S | same | 1 x 8,192 | 4 after a shared 2-update state | same | 4 training rows; 8, then 32, synthetic held-out rows |
-| B77 | rented L40S | Qwen3-32B NF4 via `soup train` | micro-batch 4 | 300 | rank 8, alpha 16, q/v | 1,200 Banking77 rows, one epoch |
+| B77 | cloud L40S | Qwen3-32B NF4 via `soup train` | micro-batch 4 | 300 | rank 8, alpha 16, q/v | 1,200 Banking77 rows, one epoch |
+
+The M128, M512, L8K, L16K and L-Q rows are Mistral numbers from earlier recorded runs, not re-run.
 
 Sources: `RF/earlier-recorded/laptop/q32-REPORT.txt`, `q32-ANALYSIS.json`, `m128-REPORT.txt`,
 `m128-ANALYSIS_FINAL.json`, `m512-REPORT35.txt`; `RF/earlier-recorded/cloud/verification-8192-02.json`,
@@ -150,6 +161,10 @@ guard's `nvidia-smi` whole-device reading, taken once per 1.1 to 1.7 s on averag
 the sample count, third row of the table); **process RAM** = peak working set and private commit of the
 worker; **system** = minimum available physical memory and minimum system-wide commit headroom.
 
+**Mistral numbers from earlier recorded runs, not re-run** (the M128 and M512 columns of both tables
+below). The laptop re-check of the Mistral numbers has not been run. The Q32 train step was re-run once
+(section 6).
+
 | | Q32 train | Q32 reload | M128 train | M128 reload | M512 train | M512 reload |
 |---|---|---|---|---|---|---|
 | torch peak allocated, B | 2,780,192,256 | 2,329,868,288 | 3,757,965,824 | 2,418,830,336 | 4,968,217,088 | 3,282,605,568 |
@@ -169,13 +184,16 @@ worker; **system** = minimum available physical memory and minimum system-wide c
 Sources: `RF/earlier-recorded/laptop/summary-q32.json`, `summary-m128.json`, `summary-m512.json` (each read
 from the run's result file and the guard's summary and samples; the SHA-256 of those originals is in
 `summary-sources.json`), `q32-REPORT.txt`, `m128-REPORT.txt`, `m512-REPORT35.txt`. Q32 is Qwen3-32B, M128 and
-M512 are Mistral Large. **Mistral numbers (M128 and M512) are from earlier recorded runs, not re-run.**
+M512 are Mistral Large. **Mistral numbers (M128 and M512) from earlier recorded runs, not re-run.**
 
 | run | held-out loss before | after the 3 updates | reloaded in a fresh process |
 |---|---|---|---|
 | Q32 | 4.309379 / 4.310736 | 4.298624 / 4.307984 | 4.298624 / 4.307984 (equal to the trained losses: yes) |
 | M128 | 3.774966 / 3.844886 | 3.651912 / 3.692650 | 3.651912 / 3.692650 (equal to the trained losses: yes) |
 | M512 | 1.079077 / 1.098381 | 1.050543 / 1.058185 | 1.050543 / 1.058185 (equal to the trained losses: yes) |
+
+Mistral numbers from earlier recorded runs, not re-run (the M128 and M512 rows above; sources
+`summary-m128.json`, `summary-m512.json`).
 
 - **Step times include diagnostics**: adapter clones, per-tensor gradient and update audits, durable phase
   records and (M512) synchronous cache trims; the worker's elapsed time also includes two full SHA-256 passes
@@ -184,7 +202,8 @@ M512 are Mistral Large. **Mistral numbers (M128 and M512) are from earlier recor
 - **Step losses** (Q32: 3.5959742069244385, 4.572229862213135, 4.455287456512451; the others are in
   `summary-m128.json` and `summary-m512.json`) belong to different examples and are not a curve.
 - **Disk.** Qwen3-32B source 19,211,935,565 B in 4 files; Mistral Large source 13 shards of 64.450 GB, "around
-  129 GB SSD" for source and native store together (`q32-REPORT.txt`, `m128-REPORT.txt`).
+  129 GB SSD" for source and native store together (`q32-REPORT.txt`, `m128-REPORT.txt`). The Mistral sizes are
+  Mistral numbers from earlier recorded runs, not re-run.
 - **Held-out losses** moved by small amounts on 2 held-out examples (254 targets). That is a capacity check,
   not a quality result (`m512-REPORT35.txt`: "capacity metrics").
 
@@ -233,12 +252,14 @@ update 30.505 s against 10.140 s. What differed on the day, and is not shown to 
 passes were 38% and 14% slower, available host RAM was lower (3,795.7 MiB minimum against 6,339.7 MiB), and
 the system commit limit was 93,339,557,888 B instead of 54,471,286,784 B. "A busier machine and a colder
 file cache" is a hypothesis, not a measured cause: GPU clocks, throttling and the disk queue were not sampled during this run,
-and a repeat on a quiet machine (the second and third run that were planned) did not happen. A later
-unattended window the same night was cancelled before anything ran (available RAM never reached the level the
-plan required, and the laptop was on battery and went to sleep); nothing from it is reported.
+and a repeat on a quiet machine (the second and third run that were planned) did not happen. The operator
+reports that a later unattended window the same night was cancelled before anything ran (available RAM never
+reached the level the plan required, and the laptop was on battery and went to sleep); no file in this record
+shows it, and nothing from that window is reported.
 
-**Reload in a fresh process: not reproduced.** Six attempts, none produced a result, none ended in a
-mismatch. The worker's result file never reached `passed` in any of them.
+**Reload in a fresh process: not reproduced.** Six attempts (a to f), none produced a result, none ended in a
+mismatch. The worker's result file never reached `passed` in any of them. Five attempts have a guard summary
+and are in the table; attempt c was stopped by hand before a worker started.
 
 | attempt | start (UTC) | outcome | guard elapsed, s | whole-device max sampled, MiB |
 |---|---|---|---|---|
@@ -250,13 +271,16 @@ mismatch. The worker's result file never reached `passed` in any of them.
 | q32 reload e | 2026-11-07T10:04:08Z | guard_stopped: device_fb_budget | 122.8 | 7,863 |
 | q32 reload f | 2026-11-07T10:10:47Z | supervisor_error: RuntimeError: preflight resource failure: host_budget | 48.6 | - |
 
-The sixth reload attempt (c) is not in the table: it was stopped by hand before a worker started, because a
-measurement by someone else was holding the GPU. A second train call was stopped by hand in the same way when
-another job appeared on the GPU, before the completed train run; it is not in the table either. Neither has a
-guard summary and no file of theirs is included. `guard_stopped: device_fb_budget` means the whole-device
-reading went above the 7,600 MiB limit while this worker's own earlier-recorded reload peak was 2,440 MiB (`summary-q32.json`); the run log
-attributes the rest to an unrelated job that started on the GPU during the reload, and the process listing
-that showed it is not part of this record. For reload d the worker's own preflight refused to start
+Reload attempt c is not in the table: the operator reports that it was stopped by hand before a worker
+started, because a measurement by someone else was holding the GPU. A second train call was stopped by hand
+in the same way when another job appeared on the GPU, before the completed train run; it is not in the table
+either. Neither has a guard summary and no file of theirs is included, so these two reasons are the operator's
+report and are not shown by any file in this record (`attempts-with-a-guard-summary.json`, field `note`).
+`guard_stopped: device_fb_budget` means the whole-device reading went above the 7,600 MiB limit while this
+worker's own earlier-recorded reload peak was 2,440 MiB (`summary-q32.json`). The operator's run log (not
+included) attributes the rest to an unrelated job that started on the GPU during the reload; the process
+listing that would show it is not part of this record, so the cause is not established here. For reload d the
+worker's own preflight refused to start
 (`worker_error` in the attempts file: host available 7,428,878,336 B against 7,784,628,224 B required).
 Sources: `RF/rerun-2026-11-07/attempts-with-a-guard-summary.json`, `log-q32-import-and-first-train-call.txt`,
 `log-q32-train-and-first-reload.txt`.
@@ -264,14 +288,16 @@ Sources: `RF/rerun-2026-11-07/attempts-with-a-guard-summary.json`, `log-q32-impo
 **Mistral Large: not re-run.** Mistral numbers from earlier recorded runs, not re-run. On 2026-11-07 only the
 Mistral weight files on the laptop were re-hashed: the 45 recorded source files and the 93 recorded store
 files all equal the earlier values (`weights-hash-checks.json`: 0 different or missing in each). A re-run of
-M128 and M512 was estimated to need an exclusive window of about two hours and was not possible. Two further
+M128 and M512 was estimated by the operator to need an exclusive window of about two hours (an estimate, not
+derived from any file here) and was not made. Two further
 limits of any future M512 re-run, from reading the worker source (not included): the accepted 5,602 MiB came
 from a trimmed variant of the worker that refuses to run unless its original absolute paths exist, and its
 untrimmed predecessor was stopped by the guard after one update (section 10).
 
 ## 7. Results: cloud (one L40S, allocator cap 6,710,886,400 B), EARLIER RECORDED, Mistral Large
 
-Not re-run. No Soup code.
+Mistral numbers from earlier recorded runs, not re-run. No Soup code. This section's tables, the continuation
+and section 7.1 are all Mistral numbers from earlier recorded runs, not re-run.
 
 | | L8K (8,192 tokens) | L16K (16,384 tokens) |
 |---|---|---|
@@ -320,6 +346,8 @@ context; all 14,381 were at or below 8,192 MiB (`device_samples.all_observations
 
 ### 7.1 Quality pilots at 8,192 tokens (all 88 layers): no quality result
 
+Mistral numbers from earlier recorded runs, not re-run.
+
 - **Pilot (L-Q, first design).** Four updates (steps 3 to 6, one per training row) with losses 1.3326656818389893,
   0.2171434760093689, 0.006549788638949394 and 0.005973503924906254, then 8 synthetic four-way retrieval rows:
   **6 of 8 correct before, 4 of 8 after**; mean label NLL 1.935 to 3.831 (`ROOT_CONTEXT76_HANDOFF_01.json`).
@@ -336,14 +364,14 @@ context; all 14,381 were at or below 8,192 MiB (`device_samples.all_observations
 
 B6 had 0 more correct than A6 (`b6_minus_a6_correct` 0, `advances` false): **gate not met**. Paired A6 to B6:
 20 right in both, 8 wrong in both, 2 fixed, 2 broken. The branch lane trained for 2,192.814 s excluding the
-download (`ROOT_CONTEXT80_HANDOFF_01.json`).
+download (`ROOT_CONTEXT80_HANDOFF_01.json`). Mistral numbers from earlier recorded runs, not re-run.
 
-## 8. Qwen3-32B, 300-step Banking77 fine-tune through `soup train` (rented L40S, 6.25 GiB cap, EARLIER RECORDED)
+## 8. Qwen3-32B, 300-step Banking77 fine-tune through `soup train` (cloud L40S, 6.25 GiB cap, EARLIER RECORDED)
 
-**This run did not train on the laptop.** It trained on a rented L40S with the PyTorch allocator of the
+**This run did not train on the laptop.** It trained on a cloud L40S with the PyTorch allocator of the
 training process capped at 6,710,886,400 B (6.25 GiB). The whole device was sampled at 5,804 MiB (5.67 GiB) at
 most. Laptop evidence for this model is limited to the forward-only reload check in section 8.3 and to the Qwen3-32B re-run in
-section 6. Nothing here shows that the 300 steps fit or run on an 8 GB card, and the step times of the rented
+section 6. Nothing here shows that the 300 steps fit or run on an 8 GB card, and the step times of the cloud
 card do not transfer to the laptop.
 
 Setup: Soup main at `74e6628fc27454a6d82502b2d8b2e68b6bf159da` (`soup_cli 0.77.2` from the payload), `soup
@@ -441,15 +469,14 @@ difference 2.4e-20) and all 256 saved adapter tensors are fp32 (`summary_train.j
 
 The saved adapter (same SHA-256) was loaded into Soup's streamed engine on the RTX 5070 Laptop (disk tier, the
 Qwen3-32B NF4 store used by the other laptop runs) and 32 probe items were scored once: torch peak allocated
-**2,613,421,056 B (2,492.4 MiB)**, mean cross-entropy 0.13946 against 0.14010 for the same items on the rented
+**2,613,421,056 B (2,492.4 MiB)**, mean cross-entropy 0.13946 against 0.14010 for the same items on the cloud
 card, mean absolute difference per item 0.0035, largest 0.0198 (`RF/quality-banking77/laptop-reload-check.json`,
-read from the laptop's result file and from `STREAM.json`, the rented card's streamed-engine scores).
-The logits are not bit-identical to the rented card (a different GPU; see the NF4 note above). A second laptop
+read from the laptop's result file and from `STREAM.json`, the cloud card's streamed-engine scores).
+The logits are not bit-identical to the cloud card (a different GPU; see the NF4 note above). A second laptop
 run for same-hardware determinism was not made.
 
-The adapter from this run (SHA-256 above) is published at
-<https://huggingface.co/AlpamysSigmaaaa/Qwen3-32B-Banking77-LoRA-Soup>. This record did not re-check that the
-published file equals the hashed one.
+The adapter weights themselves are not part of this record; the adapter is identified only by the SHA-256
+above. No download link is given here, and this record did not check any published copy against that hash.
 
 ## 9. Correctness checks
 
@@ -468,6 +495,9 @@ published file equals the hashed one.
 model. The restore checks load saved state and compare it; the only restored state that was trained further
 and compared is the 8K continuation. Fresh laptop processes read from a warm OS file cache (the hashing passes
 warm it); a fresh process is not a cold cache (`q32-REPORT.txt`).
+
+The M128, M512, L8K and L16K rows (and the Mistral part of the "base untouched" row) are Mistral numbers from
+earlier recorded runs, not re-run.
 
 ## 10. Every attempt in these experiments
 
@@ -495,14 +525,19 @@ attempts in this table were stopped by the system-commit floor and the fourth by
 reports say the later success cannot be attributed only to the code change, because the rest of the machine's
 memory use differed between sessions (`m128-REPORT.txt`, `m512-TRAIN_COMPARISON35.txt`).
 
+Mistral numbers from earlier recorded runs, not re-run: every row of this table except the two Q32 rows and
+the RE-RUN row. Only the RE-RUN row was measured again, and it is Qwen3-32B.
+
 ## 11. What this does NOT show
 
 - **No Mistral quality claim.** The laptop Mistral runs are 3-update capacity tests on authored texts; the
   only pre-registered Mistral quality gate was not met (22/32 against 22/32) and its pilot lost accuracy
   (6/8 to 4/8). No run on the large models trained for long: the two longer laptop campaigns recorded reached
-  10 and 19 updates and were stopped before any evaluation; the longest cloud sequence is 6 updates at 8,192
-  tokens and 1 at 16,384.
-- **The Qwen3-32B reload and every Mistral number were not reproduced on 2026-11-07.** The train-step
+  10 and 19 updates and were stopped, and no evaluation of a trained model is recorded for either; the
+  longest cloud sequence is 6 updates at 8,192 tokens and 1 at 16,384. Mistral numbers from earlier recorded
+  runs, not re-run.
+- **Mistral numbers from earlier recorded runs, not re-run; the Qwen3-32B reload was not reproduced on
+  2026-11-07.** The laptop re-check of the Mistral numbers has not been run. The Qwen3-32B train-step
   reproduction is one run, and its step time is 2.37x the earlier record for a reason nobody has found.
 - **16K is not a laptop result.** It ran on an L40S (46,068 MiB reported) with the PyTorch allocator capped at
   6.25 GiB. The cap does not bound the CUDA context, the driver or the 8 GB laptop's WDDM behaviour; the
@@ -540,8 +575,9 @@ All under `benchmarks/results/big-models-8gb-laptop/`:
 | `quality-banking77/` | `SCORE.json` (scorer output), the control and reload-check summaries, training summary, config, launcher lines, trimmed freeze file |
 
 Preparation: a copy replaces the user's home path, the experiment and asset roots with `<HOME>`, `<EXP>`,
-`<ASSETS>`, `<RERUN>`, `<SOUP_TREE>` and `<SNAPSHOTS>`, cloud app identifiers with `ap-<redacted>`, a rented
-instance number with "rented instance", and internal document names with plain words; hashes recorded inside a
+`<ASSETS>`, `<RERUN>`, `<SOUP_TREE>` and `<SNAPSHOTS>`, cloud app identifiers with `ap-<redacted>`, a GPU
+device UUID with `GPU-<redacted>`, a cloud instance number with "cloud instance", and internal document names
+with plain words; hashes recorded inside a
 copied file refer to the unmodified original. Files that are a reading of larger raw files carry the SHA-256 of
 those originals: `summary-sources.json` (for the four `summary-*.json`), `q32-train-rerun-vs-earlier.json`,
 `attempts-with-a-guard-summary.json`, `laptop-reload-check.json` and `resident-control-memory.json`.

@@ -98,5 +98,5 @@
     "lora_init": 32017,
     "mmlu": 20261108
   },
-  "_trimmed_for_publication": "keys removed from the original: cost_sha256, owner_approval, deviations_md_sha256"
+  "_trimmed_for_publication": "three keys removed from the original (they named unpublished documents)"
 }
