@@ -546,6 +546,40 @@ def _local_kimi_k2_dir(base: str) -> bool:
     return read is not None and read[0].get("model_type") == KIMI_K2_MODEL_TYPE
 
 
+def uses_resident_kimi_k2_route(base: str) -> bool:
+    """True iff ``base`` loads through the resident K2 route.
+
+    That is a known K2 hub id (case-insensitively, local directories carved out) or a local
+    directory whose ``config.json`` declares ``model_type: kimi_k2``. Kept as one predicate
+    so the loader and the trainer call sites cannot disagree about which route a base takes.
+    """
+    from soup_cli.utils.kimi import is_resident_kimi_k2_base
+
+    return is_resident_kimi_k2_base(base) or _local_kimi_k2_dir(base)
+
+
+def resident_kimi_k2_rope_refusal(
+    base: str, rope_scaling_type: str | None, *, stream_layers: bool = False
+) -> str | None:
+    """Why a rope-scaling override cannot ride the resident K2 route, or ``None``.
+
+    The route rewrites the checkpoint config in memory behind the guard and never runs a
+    repository's config code, so a per-run rope override has no config object to land on
+    (the loader refuses a caller-supplied ``config``). Refusing here — before a tokenizer,
+    a config or a single weight is fetched — keeps that promise and replaces what would
+    otherwise be either a transformers ``auto_map`` error or a late, opaque refusal.
+    """
+    if stream_layers or not rope_scaling_type or not uses_resident_kimi_k2_route(base):
+        return None
+    return (
+        f"resident Kimi K2 route: rope_scaling_type {rope_scaling_type!r} is not "
+        "supported on this route yet — it rewrites the checkpoint config in memory and "
+        "never runs the repository's config code, so a per-run rope override has nowhere "
+        "to land. Train without rope scaling, or use the guarded streamed route "
+        "(training.stream_layers: true), which applies it."
+    )
+
+
 def _resolve_resident_device(device_map: Any, torch: Any):
     """The single device an accelerate-style ``device_map`` asks the whole model to live on.
 
@@ -654,9 +688,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     import torch
     from transformers import AutoModelForCausalLM
 
-    from soup_cli.utils.kimi import is_resident_kimi_k2_base
-
-    if not is_resident_kimi_k2_base(base) and not _local_kimi_k2_dir(base):
+    if not uses_resident_kimi_k2_route(base):
         return AutoModelForCausalLM.from_pretrained(base, **model_kwargs)
 
     model_kwargs = dict(model_kwargs)

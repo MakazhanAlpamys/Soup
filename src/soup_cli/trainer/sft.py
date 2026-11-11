@@ -1523,7 +1523,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoTokenizer
 
+        from soup_cli.utils.kimi_k2 import (
+            UnsupportedKimiK2Error,
+            resident_kimi_k2_rope_refusal,
+        )
         from soup_cli.utils.moe import detect_moe_model
+
+        # #2104 — the resident Kimi K2 route rewrites the checkpoint config in memory and
+        # never runs the repository's config code, so there is no config for a rope
+        # override to land on. Refuse before AutoConfig (which would execute that code
+        # under trust_remote_code) or a tokenizer is fetched.
+        rope_refusal = resident_kimi_k2_rope_refusal(
+            cfg.base, tcfg.rope_scaling_type, stream_layers=tcfg.stream_layers
+        )
+        if rope_refusal is not None:
+            raise UnsupportedKimiK2Error(rope_refusal)
 
         if tcfg.quantization_aware == "quest":
             # Fail before ``device_map='auto'`` can shard the model across

@@ -723,3 +723,48 @@ def test_resident_model_refuses_mismatched_expert_shapes(tmp_path, resident_chec
     assert victim in message
     assert "[33, 64]" in message
     assert "[32, 64]" in message
+
+
+def test_rope_override_is_refused_on_the_resident_route(resident_checkpoints):
+    from soup_cli.utils.kimi_k2 import resident_kimi_k2_rope_refusal
+
+    reason = resident_kimi_k2_rope_refusal("moonshotai/Kimi-K2-Base", "yarn")
+    assert reason is not None
+    assert "rope_scaling_type 'yarn'" in reason
+    assert "stream_layers" in reason
+
+    # A local K2 checkpoint takes the same route, so it takes the same refusal.
+    local = resident_kimi_k2_rope_refusal(resident_checkpoints["k2-bf16"], "yarn")
+    assert local is not None and "streamed route" in local
+
+    # Nothing to refuse: no override, another model, or the streamed route owning the run.
+    assert resident_kimi_k2_rope_refusal("moonshotai/Kimi-K2-Base", None) is None
+    assert resident_kimi_k2_rope_refusal("meta-llama/Llama-3-8B", "yarn") is None
+    assert (
+        resident_kimi_k2_rope_refusal(
+            "moonshotai/Kimi-K2-Base", "yarn", stream_layers=True
+        )
+        is None
+    )
+
+
+def test_sft_refuses_a_rope_override_before_fetching_a_tokenizer_or_config(monkeypatch):
+    import transformers
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    def _fetched(*args, **kwargs):
+        raise AssertionError("a refused run must not fetch a tokenizer or a config")
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", _fetched)
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", _fetched)
+
+    cfg = load_config_from_string(
+        "base: moonshotai/Kimi-K2-Base\ntask: sft\ndata: {train: data.jsonl}\n"
+        "training: {rope_scaling_type: yarn}\n"
+    )
+    wrapper = SFTTrainerWrapper(cfg, device="cpu")
+    with pytest.raises(ValueError) as caught:
+        wrapper._setup_transformers(cfg, cfg.training)
+    assert "rope_scaling_type 'yarn'" in str(caught.value)
