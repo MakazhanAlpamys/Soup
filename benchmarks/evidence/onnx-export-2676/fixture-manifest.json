@@ -1,0 +1,34 @@
+{
+  "versions": {
+    "torch": "2.14.1",
+    "transformers": "5.19.0",
+    "optimum": null,
+    "optimum-onnx": null,
+    "onnx": null,
+    "onnxruntime": null,
+    "numpy": "2.5.4"
+  },
+  "seed": 2676,
+  "prompts": [
+    "Hello",
+    "Hello world",
+    "a test example",
+    "Hello world a test"
+  ],
+  "models": {
+    "gpt2": {
+      "tokenizer.json": "fa62ec01107d02ae55efa6437ed6365d84c860bd6b74958b09df9dc5251b3983",
+      "tokenizer_config.json": "48441d170a9047e97a27d9bc1521e72acf4ebf14c0506e16f9628680c90dbd04",
+      "generation_config.json": "c05ec9d48765f07a73f9481abc815afae630ffb3d7ef43ae1ca79e013c028094",
+      "model.safetensors": "e155c4bfbf10e66e1e2d2cc760be8e80887555c543f60ab4bcbd6216c4ce30b7",
+      "config.json": "12b9f945d5019cf49da027b7bd08b136754accae69a792df5dcf715072c409df"
+    },
+    "llama": {
+      "tokenizer.json": "fa62ec01107d02ae55efa6437ed6365d84c860bd6b74958b09df9dc5251b3983",
+      "tokenizer_config.json": "48441d170a9047e97a27d9bc1521e72acf4ebf14c0506e16f9628680c90dbd04",
+      "generation_config.json": "c05ec9d48765f07a73f9481abc815afae630ffb3d7ef43ae1ca79e013c028094",
+      "model.safetensors": "408595bcfa439e407b4b2983f803e1840b5f96c41aa1940d4697d8557d4d32ec",
+      "config.json": "de3085fb10070953b43b792a45643dd1462581b0fe3f8898c5afeff496513277"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "versions": {
+    "torch": "2.14.1",
+    "transformers": "5.19.0",
+    "optimum": "2.3.0",
+    "optimum-onnx": "0.1.0",
+    "onnx": "1.23.2",
+    "onnxruntime": "1.31.1",
+    "numpy": "2.5.4"
+  },
+  "model": "gpt2",
+  "reference_source": "lab/published-fixtures/gpt2",
+  "backend": "torch.onnx.export",
+  "tokens_match_training_reference": true,
+  "optimum_imported": false,
+  "same_stack": {
+    "max_abs_error": 5.960464477539063e-08,
+    "mean_abs_error": 1.4941906556487083e-08,
+    "elements": 80,
+    "prompts": 4,
+    "atol": 0.0001
+  },
+  "cross_train_stack": {
+    "max_abs_error": 5.960464477539063e-08,
+    "mean_abs_error": 1.4941906556487083e-08,
+    "elements": 80,
+    "prompts": 4,
+    "atol": 0.0001
+  },
+  "pass": true,
+  "inputs": [
+    {
+      "name": "input_ids",
+      "type": "tensor(int64)",
+      "shape": [
+        1,
+        "sequence"
+      ]
+    },
+    {
+      "name": "attention_mask",
+      "type": "tensor(int64)",
+      "shape": [
+        1,
+        "sequence"
+      ]
+    },
+    {
+      "name": "position_ids",
+      "type": "tensor(int64)",
+      "shape": [
+        1,
+        "sequence"
+      ]
+    }
+  ]
+}

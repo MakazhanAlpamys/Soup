@@ -271,8 +271,31 @@ their existing exit code **1**. A failed check leaves the exported files for ins
 does not print the completion panel and does not register the export. For an adapter,
 the reference is its freshly merged model, checked before the temporary merge is removed.
 Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
-the flag. Install a compatible optimum/transformers stack for your model; a successful
-check on one stack is not a compatibility guarantee for other releases.
+the flag.
+
+**Keep the export environment separate when using released Optimum packages.** The tested
+`optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires
+Transformers 5.16.1 or newer. These requirements do not fit in one environment. For a
+merged checkpoint whose model configuration and tokenizer are supported by Transformers 4.57.6,
+the following separate, export-only environment was checked on Linux / Python 3.12:
+
+```bash
+python3 -m venv .venv-onnx
+.venv-onnx/bin/python -m pip install "torch==2.6.0" \
+  --index-url https://download.pytorch.org/whl/cpu
+.venv-onnx/bin/python -m pip install -e ".[onnx]" \
+  "optimum==2.1.0" "optimum-onnx==0.1.0" "transformers==4.57.6"
+.venv-onnx/bin/python -m pip check
+.venv-onnx/bin/python -m soup_cli.cli export --model ./merged --format onnx \
+  --validate-onnx --prompts ./prompts.txt --output ./model_onnx
+```
+
+Install only the ONNX extra there; keep training and merging in their training environment.
+This is a bounded path for compatible checkpoints, not support for Transformers-5-only
+architectures or tokenizer classes. For example, a tokenizer saved as `TokenizersBackend`
+cannot be loaded by the tested 4.x loader. Do not rename a real tokenizer class to make
+an error disappear. The compatibility report and the separate native-PyTorch lab prototype
+are in [the ONNX qualification record](../benchmarks/onnx-export-compatibility-2026-11-11.md).
 
 ### TensorRT-LLM Export
 
