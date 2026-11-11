@@ -1360,6 +1360,29 @@ file; a program that starts and exits nonzero still means a failing checkpoint.
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
 
+### Recorded project code
+
+For local `soup train` execution, Soup records the full Git HEAD commit of the
+directory the command starts in, plus `clean`, `dirty` or `unknown`. The observation
+is taken before dataset/model setup writes artifacts. It follows Git discovery
+from that directory, including subdirectories, detached HEADs and linked worktrees;
+it is not the commit of Soup's installation, the config file's directory or the
+model's Hugging Face repository. `dirty` includes staged, unstaged and untracked
+files; ignored files do not count. `soup runs show` and `soup runs compare` show the
+saved values even after the working tree has moved on.
+
+Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
+failed probes or a changing HEAD record `unknown` without stopping training. The
+read-only local probe has a two-second total deadline and makes no network calls.
+The nullable `runs.code_commit` and `runs.code_dirty` columns are added to existing
+databases in place; older rows remain unknown, never backfilled from today's
+checkout. Restarting a preallocated run ID clears its previous code observation.
+This is startup provenance, not a reproducibility guarantee: Soup does not archive
+the diff or untracked file contents, freeze concurrent edits, or add these fields
+to portable model artifacts or reproducibility receipts in this version. Remote
+cloud submission and direct trainer-wrapper calls do not establish this local
+CLI observation.
+
 ### Recorded base identity
 
 For single-process Hugging Face loads on the Transformers backend (resident or

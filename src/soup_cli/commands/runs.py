@@ -22,6 +22,14 @@ console = Console()
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
 
 
+def _code_state(run: dict) -> str:
+    """Do not mistake an older run's NULL for a clean working tree."""
+    dirty = run.get("code_dirty")
+    if dirty is None:
+        return "unknown"
+    return "dirty" if dirty else "clean"
+
+
 def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
     """Return only runs whose output_dir is under ``cwd``.
 
@@ -203,6 +211,8 @@ def show(
         f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
+        f"Code commit: {for_terminal(run.get('code_commit') or 'unknown')}",
+        f"Code state: {_code_state(run)}",
         f"Task:       {for_terminal(run.get('task') or '-')}",
         f"Device:     {for_terminal(run.get('device_name') or '-')} "
         f"({for_terminal(run.get('device') or '-')})",
@@ -283,6 +293,8 @@ def compare(
         ("Task", r1.get("task") or "-", r2.get("task") or "-"),
         ("Device", r1.get("device_name") or "-", r2.get("device_name") or "-"),
         ("Status", r1.get("status") or "-", r2.get("status") or "-"),
+        ("Code commit", r1.get("code_commit") or "unknown", r2.get("code_commit") or "unknown"),
+        ("Code state", _code_state(r1), _code_state(r2)),
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
         ("Final Loss", _fmt_float(r1.get("final_loss")), _fmt_float(r2.get("final_loss"))),
         ("Steps", str(r1.get("total_steps") or "-"), str(r2.get("total_steps") or "-")),
