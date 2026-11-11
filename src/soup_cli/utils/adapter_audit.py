@@ -384,7 +384,9 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     one run that most needs reporting -- #683 itself, handed a clean bill by
     the command written to catch it.
     """
-    asked = bool(data.get("train_on_responses_only", True))
+    asked = bool(data.get("train_on_responses_only", True)) or bool(
+        data.get("train_on_messages_with_train_field", False)
+    )
     prefix_mask = record.get("mask_prompt")
     token_mask = record.get("response_token_mask")
 

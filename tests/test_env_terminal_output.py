@@ -1,6 +1,5 @@
 """Env lock contents and paths are data, never terminal control sequences."""
 
-import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +11,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import env
 from soup_cli.utils.env_lock import EnvEntry, EnvLock, read_lock, write_lock
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 DIRTY = "[bold]value\x1b\x07\x9b\u202e[/]"
@@ -75,7 +75,7 @@ def test_lock_sanitizes_snapshot_and_success_path_but_keeps_file_contents(workdi
     assert read_lock(name) == lock
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows filename")
+@skip_colon_on_windows
 def test_lock_receipt_keeps_alias_in_the_written_path(workdir, monkeypatch):
     lock = _lock()
     monkeypatch.setattr(env, "snapshot_env", lambda: lock)

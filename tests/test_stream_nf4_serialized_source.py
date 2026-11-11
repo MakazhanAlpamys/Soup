@@ -35,7 +35,7 @@ import pytest
 from soup_cli.utils.nf4_serialized import HF_REQUIRED_QUANTIZATION
 
 _TAIL = "Layer streaming cannot dequantise it"
-_POINTER = "Point training.base at a bf16 or FP8-block copy of this model"
+_POINTER = "Point base at a bf16 or FP8-block copy of this model"
 
 #: ``quantization_config`` of an ``unsloth/*-bnb-4bit`` repository.
 NESTED_NF4 = {

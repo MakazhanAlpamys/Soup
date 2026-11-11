@@ -791,38 +791,29 @@ def default_layer_stream_cache_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".soup", "layer-stream")
 
 
-def _resolve_cache_root(cache_dir: Optional[str], is_under: Any) -> str:
+def _resolve_cache_root(cache_dir: Optional[str]) -> str:
     """Cache ROOT only (explicit arg > env override > default). Always a str."""
     if cache_dir is not None:
         return os.path.realpath(os.path.expanduser(str(cache_dir)))
-    override = os.environ.get("SOUP_LAYER_STREAM_CACHE_DIR")
-    if override and not any(ord(ch) < 0x20 for ch in override):
-        candidate = os.path.realpath(os.path.expanduser(override))
-        bounds = [
-            os.path.realpath(os.path.expanduser("~")),
-            os.path.realpath(os.getcwd()),
-            os.path.realpath(tempfile.gettempdir()),
-        ]
-        if any(is_under(candidate, bound) for bound in bounds):
-            return candidate
-    return default_layer_stream_cache_dir()
+    from soup_cli.utils.cache_roots import LAYER_STREAM_CACHE_ENV, env_cache_root
+
+    return env_cache_root(LAYER_STREAM_CACHE_ENV, default_layer_stream_cache_dir())
 
 
 def resolve_cache_root(cache_dir: Optional[str] = None) -> str:
     """Cache ROOT only (explicit arg > env override > default). No side effects."""
-    from soup_cli.utils.paths import is_under
-
-    return _resolve_cache_root(cache_dir, is_under)
+    return _resolve_cache_root(cache_dir)
 
 
 def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     """Per-model shard dir (explicit arg > env override > default).
 
-    ``SOUP_LAYER_STREAM_CACHE_DIR`` is rejected when it holds C0 control
-    characters or escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR`` — silently, because
-    an env var is operator config, not API input (mirrors spectrum_scan).
+    ``SOUP_LAYER_STREAM_CACHE_DIR`` is dropped when it holds C0 control characters
+    or escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR``, and the default root is used. The
+    value is operator config, not API input, so nothing raises; one WARNING per
+    process and value (``utils/cache_roots.py``) names the variable, the rejected
+    value, the reason and the folder used instead (mirrors spectrum_scan).
     """
-    from soup_cli.utils.paths import is_under
     from soup_cli.utils.run_provenance import base_revision_kwargs
 
     slug = model_slug(model)
@@ -830,7 +821,7 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     if revision:
         # '@' cannot occur in model_slug, so no model id aliases this slot.
         slug += "@" + revision
-    root: str = _resolve_cache_root(cache_dir, is_under)
+    root: str = _resolve_cache_root(cache_dir)
     chosen = os.path.join(root, slug)
     os.makedirs(chosen, exist_ok=True)
     return chosen

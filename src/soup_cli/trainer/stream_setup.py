@@ -353,6 +353,21 @@ class _ProbePlan:
     vocab_size: int
     predicted_bytes: int
     available_bytes: int
+    #: The base has NF4 weight a packed-state backward could save (two or more
+    #: matrices per layer). The probe measures the dense-retaining arm either way;
+    #: this only lets a refusal point at the arm the formula path would try.
+    packed_backward_possible: bool = False
+
+    @property
+    def packed_arm_hint(self) -> str:
+        if not self.packed_backward_possible:
+            return ""
+        return (
+            " The probe measured the dense-retaining NF4 backward (each layer's dense "
+            "weights held through its backward); without training.stream_vram_probe the "
+            "pre-flight prices the packed-state one, one dense matrix at a time, before "
+            "it refuses."
+        )
 
 
 def _existing_disk_anchor(path: str) -> str:
@@ -796,6 +811,10 @@ class StreamingSetupMixin:
     _stream_runtime = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
+    #: Set by :meth:`_stream_budget_lines` when the dense-retaining NF4 backward is
+    #: predicted not to fit and the packed-state one is: the setup then routes the
+    #: built model's layers to it. No config key; False for every run that fits.
+    _stream_packed_backward = False
 
     #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
     #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
@@ -1487,6 +1506,19 @@ class StreamingSetupMixin:
                 resident_ram=embed_bytes,
                 read_ahead_decision=read_ahead_decision,
             )
+            # Windows charges page-locked staging against the system COMMIT limit,
+            # which free RAM does not show: an unset stream_pin falls back to
+            # pageable staging when commit is short, an explicit true is refused
+            # when it cannot fit. Nothing on other OSes (utils/windows_commit.py).
+            from soup_cli.utils.windows_commit import apply_commit_preflight
+
+            plan = apply_commit_preflight(
+                plan,
+                stream_pin=tcfg.stream_pin,
+                on_cuda=on_cuda,
+                resident_bytes=embed_bytes,
+                notify=console.print,
+            )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
         # seq. On a large-vocab model the logits term alone dwarfs the buffer
@@ -1592,6 +1624,23 @@ class StreamingSetupMixin:
                 # not started yet, so release the runtime here.
                 self._close_stream_runtime()
                 raise
+        # The pre-flight above priced the dense-retaining NF4 backward out of the
+        # card: route every layer's NF4 linears to the packed-state one, before
+        # the probe and the recompute modes so both see the arm that will train.
+        if self._stream_packed_backward:
+            from soup_cli.utils.layer_stream_runtime import set_stream_packed_backward
+
+            try:
+                routed = set_stream_packed_backward(model, True)
+            except Exception:
+                self._close_stream_runtime()
+                raise
+            console.print(
+                f"[cyan]Packed-state NF4 backward:[/] {routed} streamed layers dequantise "
+                "one matrix at a time in the backward instead of holding the layer's dense "
+                "weights (the pre-flight above predicted holding them over the "
+                "free VRAM); one more dequantisation per matrix per micro-step, same results."
+            )
         # training.stream_recompute -- before the probe, so that the probe
         # measures the mode that will train. The default ('on') adds nothing to
         # the setup: no attribute is read and nothing is called, so the shape
@@ -1845,6 +1894,9 @@ class StreamingSetupMixin:
         prediction is demoted to advice instead, because refusing here would
         prevent the measurement that exists to overrule it.
         """
+        # Decided below, from the same prediction that decides the refusal; read by
+        # the setup once the model is built.
+        self._stream_packed_backward = False
         from soup_cli.utils.expert_stream import (
             EXPERT_LAYOUT_PER_EXPERT,
             expert_stream_vram_bytes,
@@ -1853,7 +1905,9 @@ class StreamingSetupMixin:
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
+            decide_packed_backward,
             decide_stream_fit,
+            dense_weight_charge_elements,
             dtype_bytes,
             estimate_activation_bytes,
             estimate_logits_bytes,
@@ -1927,44 +1981,53 @@ class StreamingSetupMixin:
             targets = getattr(lora, "target_modules", None)
         # Whether an NF4 linear takes the dequantise + linear arm that keeps its dense
         # weight is bitsandbytes' per-card, per-shape choice at run time
-        # (_can_use_checkpoint_visible_nf4_gemm): charge it for every NF4 layer.
-        dense_elements = sum(
+        # (_can_use_checkpoint_visible_nf4_gemm): charge it for every NF4 layer. The
+        # dense-retaining arm holds the whole layer's dense weights through its
+        # backward; the packed-state arm (below) one matrix at a time.
+        matrix_elements = [
             math.prod(spec.shape)
             for spec in (getattr(index, "quant_specs", None) or {}).values()
-        )
-        recompute_bytes = estimate_recompute_bytes(
-            hidden_size=hidden,
-            intermediate_size=inter,
-            kv_size=kv_heads * head_dim,
-            n_heads=heads,
-            seq_len=seq_len,
-            batch_size=rows,
-            lora_targets=len(targets) if isinstance(targets, (list, tuple)) else 4,
-            lora_dropout=getattr(lora, "dropout", 1.0),
-            dense_layer_elements=dense_elements,
-        )
+        ]
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
         calibrated = calibrated_logits_bytes_per_element()
-        predicted = estimate_stream_peak_vram(
-            layer_bytes=layer_bytes,
-            buffers=tcfg.stream_buffers,
-            extras_bytes=embed_bytes,
-            adapter_params=self._estimate_adapter_params(
-                tcfg, model_config, target_modules=target_modules
-            ),
-            vocab_size=vocab,
-            hidden_size=hidden,
-            intermediate_size=inter,
-            n_layers=index.n_layers,
-            seq_len=seq_len,
-            batch_size=rows,
-            logits_bytes_per_element=calibrated,
-            large_layer_bytes=large_layer_bytes,
-            persistent_bytes=scale_cache_bytes + expert_bytes,
-            loss_chunk=loss_chunk,
-            recompute_bytes=recompute_bytes,
+        adapter_params = self._estimate_adapter_params(
+            tcfg, model_config, target_modules=target_modules
         )
+
+        def predict(*, packed_backward: bool) -> int:
+            recompute_bytes = estimate_recompute_bytes(
+                hidden_size=hidden,
+                intermediate_size=inter,
+                kv_size=kv_heads * head_dim,
+                n_heads=heads,
+                seq_len=seq_len,
+                batch_size=rows,
+                lora_targets=len(targets) if isinstance(targets, (list, tuple)) else 4,
+                lora_dropout=getattr(lora, "dropout", 1.0),
+                dense_layer_elements=dense_weight_charge_elements(
+                    matrix_elements, packed_backward=packed_backward
+                ),
+            )
+            return estimate_stream_peak_vram(
+                layer_bytes=layer_bytes,
+                buffers=tcfg.stream_buffers,
+                extras_bytes=embed_bytes,
+                adapter_params=adapter_params,
+                vocab_size=vocab,
+                hidden_size=hidden,
+                intermediate_size=inter,
+                n_layers=index.n_layers,
+                seq_len=seq_len,
+                batch_size=rows,
+                logits_bytes_per_element=calibrated,
+                large_layer_bytes=large_layer_bytes,
+                persistent_bytes=scale_cache_bytes + expert_bytes,
+                loss_chunk=loss_chunk,
+                recompute_bytes=recompute_bytes,
+            )
+
+        predicted = predict(packed_backward=False)
         logits = estimate_logits_bytes(
             vocab_size=vocab,
             seq_len=seq_len if loss_chunk is None else min(seq_len, loss_chunk),
@@ -1975,10 +2038,14 @@ class StreamingSetupMixin:
             "" if rows == batch else f" ({rows} rows — chosen+rejected are one concatenated tensor)"
         )
         chunked = "" if loss_chunk is None else f" in chunks of {loss_chunk} tokens"
-        lines = [
-            f"  peak VRAM    ~{predicted / 1e9:.2f} GB at batch {batch} x seq "
-            f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB{chunked})"
-        ]
+
+        def peak_line(value: int) -> str:
+            return (
+                f"  peak VRAM    ~{value / 1e9:.2f} GB at batch {batch} x seq "
+                f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB{chunked})"
+            )
+
+        lines = [peak_line(predicted)]
         if scale_cache_bytes:
             lines.append(
                 f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "
@@ -2029,8 +2096,42 @@ class StreamingSetupMixin:
             measured_bytes=measured_available, override_bytes=tcfg.stream_vram_override
         )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
+        packed_note = ""
+        if not fit.fits and not tcfg.stream_vram_probe:
+            # The dense-retaining arm does not fit. A checkpointed layer's NF4 linears
+            # can instead save packed state and dequantise one matrix at a time, which
+            # charges the largest matrix and not the whole layer (a base with nothing
+            # to save predicts the same number and stays as it is). Automatic and
+            # derived from the numbers above: a run whose dense arm fits never gets here.
+            # Not with training.stream_vram_probe: the measurement is the authority
+            # there, and a config the probe lets through today keeps the arm it
+            # measures today.
+            decision = decide_packed_backward(
+                dense_predicted_bytes=int(predicted),
+                packed_predicted_bytes=int(predict(packed_backward=True)),
+                available_bytes=int(available),
+            )
+            if decision.packed:
+                self._stream_packed_backward = True
+                predicted = decision.predicted_bytes
+                fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
+                lines[0] = peak_line(predicted)
+                dense_gb = decision.dense_predicted_bytes / 1e9
+                lines.insert(
+                    1,
+                    "  backward     packed NF4 state, one matrix dequantised at a time: "
+                    "holding each layer's dense weights through its backward is predicted at "
+                    f"~{dense_gb:.2f} GB against {available / 1e9:.2f} GB free",
+                )
+                packed_note = (
+                    " This already assumes the packed-state NF4 backward (holding each "
+                    f"layer's dense weights through its backward was predicted at "
+                    f"{dense_gb:.2f} GB)."
+                )
         if not fit.fits:
-            reason = fit.reason if offloading_note is None else f"{fit.reason} {offloading_note}"
+            reason = fit.reason + packed_note
+            if offloading_note is not None:
+                reason = f"{reason} {offloading_note}"
             if not tcfg.stream_vram_probe:
                 raise ValueError(reason)
             if predicted > available * _PROBE_DEFERRAL_CEILING:
@@ -2098,6 +2199,7 @@ class StreamingSetupMixin:
                 vocab_size=vocab,
                 predicted_bytes=predicted,
                 available_bytes=available,
+                packed_backward_possible=max(matrix_elements, default=0) < sum(matrix_elements),
             )
         return tuple(lines), plan
 
@@ -2145,7 +2247,7 @@ class StreamingSetupMixin:
                     f"{plan.available_bytes / 1e9:.2f} GB is free, and the "
                     f"measured probe that could have overruled that prediction "
                     f"failed to run. Lower training.batch_size or "
-                    f"data.max_length."
+                    f"data.max_length.{plan.packed_arm_hint}"
                 )
             return
         if peak.failed:
@@ -2169,7 +2271,7 @@ class StreamingSetupMixin:
                 f"out of VRAM while being measured (predicted "
                 f"{plan.predicted_bytes / 1e9:.2f} GB, "
                 f"{plan.available_bytes / 1e9:.2f} GB free). Lower "
-                f"training.batch_size or data.max_length."
+                f"training.batch_size or data.max_length.{plan.packed_arm_hint}"
             )
         fit = decide_measured_fit(
             measured_bytes=peak.peak_bytes,
@@ -2184,4 +2286,4 @@ class StreamingSetupMixin:
         )
         if not fit.fits:
             self._close_stream_runtime()
-            raise ValueError(fit.reason)
+            raise ValueError(fit.reason + plan.packed_arm_hint)
