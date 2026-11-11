@@ -263,6 +263,7 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
+        "soup_cli/trainer/mlx_pretokenized.py",
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),
