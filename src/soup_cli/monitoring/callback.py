@@ -493,9 +493,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Called once from ``on_train_begin`` with the trainer's model +
         tokenizer. Each piece is only initialised when a test has not already
         injected it, so unit tests that pre-set ``_gate_suite`` /
-        ``_gate_generate_fn`` still control the harness. Malformed YAML and
-        non-mapping roots abort setup as before; other loading failures are
-        logged and leave the gate inert. The CLI (``soup train --gate``)
+        ``_gate_generate_fn`` still control the harness. Malformed YAML,
+        non-mapping roots and non-string top-level keys abort setup; other
+        loading failures are logged and leave the gate inert. The CLI (``soup train --gate``)
         already validated the suite path up front.
         """
         cfg = self.eval_gate_config

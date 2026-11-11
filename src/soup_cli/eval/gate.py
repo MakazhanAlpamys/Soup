@@ -125,7 +125,7 @@ class EvalSuite(BaseModel):
 
 
 class MalformedSuiteError(ValueError):
-    """Invalid YAML syntax or root shape that must still abort training setup."""
+    """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
 def _require_gate_tasks(suite: EvalSuite) -> None:
@@ -169,6 +169,12 @@ def load_suite(path: str) -> EvalSuite:
         )
     else:
         data = dict(raw)
+    for key in data:
+        if not isinstance(key, str):
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has a non-string key {key!r}; "
+                "top-level keys must be strings"
+            )
     suite = EvalSuite(**data)
     _require_gate_tasks(suite)
     return suite
