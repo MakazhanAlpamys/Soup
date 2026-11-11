@@ -956,6 +956,7 @@ Subcommands:
 - [`ingest`](#soup-data-ingest)
 - [`inspect`](#soup-data-inspect)
 - [`langdetect`](#soup-data-langdetect)
+- [`leakage`](#soup-data-leakage)
 - [`lint`](#soup-data-lint)
 - [`merge`](#soup-data-merge)
 - [`mix`](#soup-data-mix)
@@ -1319,7 +1320,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -1379,6 +1380,19 @@ Usage: `soup data langdetect [OPTIONS]`
 |---|---|---|---|---|
 | `--input`, `-i` | text |  | yes | Input JSONL file to tag. |
 | `--output`, `-o` | text | `langdetect.jsonl` |  | Output JSONL file with language tags. |
+
+### `soup data leakage`
+
+Check input-text overlap without writing datasets.
+
+Usage: `soup data leakage [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--train` | text |  | yes | Training JSONL under cwd. |
+| `--eval` | text |  | yes | Evaluation JSONL under cwd. |
+| `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
+| `--json` | flag | off |  | Print a machine-readable JSON report. |
 
 ### `soup data lint`
 

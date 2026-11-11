@@ -4613,3 +4613,48 @@ def brain_rot_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{_escape(str(exc))}[/]")
             raise typer.Exit(3) from exc
+
+
+@app.command(name="leakage", cls=GateCommand)
+def leakage(
+    train: str = typer.Option(..., "--train", help="Training JSONL under cwd."),
+    evaluation: str = typer.Option(..., "--eval", help="Evaluation JSONL under cwd."),
+    samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
+    as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
+):
+    """Check input-text overlap without writing datasets.
+
+    Exit 0 when clean, 2 on overlap and 3 on unusable input.
+    """
+    from soup_cli.utils.data_leakage import check_leakage
+    from soup_cli.utils.data_score import load_jsonl_rows
+
+    try:
+        report = check_leakage(
+            load_jsonl_rows(train, strict=True),
+            load_jsonl_rows(evaluation, strict=True),
+            samples=samples,
+        )
+    except (TypeError, ValueError, OSError) as error:
+        console.print(f"[red]Leakage input error: {for_terminal(error)}[/]", emoji=False)
+        raise typer.Exit(EXIT_USAGE_ERROR) from error
+
+    if as_json:
+        console.print(json.dumps(report, ensure_ascii=False), markup=False, highlight=False,
+                      soft_wrap=True, emoji=False)
+    else:
+        table = Table(title="Train/eval input-text overlap")
+        table.add_column("Metric")
+        table.add_column("Value")
+        table.add_row("Train records", str(report["train_rows"]))
+        table.add_row("Eval records", str(report["eval_rows"]))
+        table.add_row("Matched eval records", str(report["overlap_eval_rows"]))
+        table.add_row("Overlap", f"{report['overlap_percent']:.2f}%")
+        console.print(table)
+        for pair in report["samples"]:
+            console.print(
+                f"Train record {pair['train_row']} / eval record {pair['eval_row']}: "
+                f"{for_terminal(pair['prompt_preview'])}", emoji=False,
+            )
+    if report["overlap_eval_rows"]:
+        raise typer.Exit(EXIT_GATE_FAILED)
