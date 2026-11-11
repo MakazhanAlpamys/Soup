@@ -133,8 +133,8 @@ def _hash_file(path: str, max_bytes: int) -> tuple[int, str]:
         raise ValueError(f"{os.path.basename(path)!r}: must be a regular file")
     if st.st_size > max_bytes:
         raise ValueError(
-            f"bundle aggregate size would exceed cap {max_bytes} bytes "
-            f"while hashing {os.path.basename(path)!r} ({st.st_size} bytes)"
+            f"bundle aggregate size would exceed the cap: {os.path.basename(path)!r} is "
+            f"{st.st_size} bytes but only {max_bytes} bytes of the cap remain"
         )
     digest = hashlib.sha256()
     size = 0

@@ -204,7 +204,7 @@ class TestBuild:
             kernel_dirs=(),
             bundle_size_cap_bytes=100,  # smaller than oversized.bin alone
         )
-        with pytest.raises(ValueError, match="(?i)cap|exceeds|size"):
+        with pytest.raises(ValueError, match="bytes of the cap remain"):
             build_airgap_bundle(plan)
 
     def test_build_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
