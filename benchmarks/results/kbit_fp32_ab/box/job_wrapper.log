@@ -1,0 +1,95 @@
+[11:42:33Z] == environment
+[11:42:34Z] python: /usr/bin/python3.12 Python 3.12.3
+[11:48:09Z] pip check: clean; setup took 335 s
+[11:48:14Z] liger-kernel usable: LIGER_OK=1 (pip rc=0 liger-kernel 0.8.5 qwen2 supported: True )
+/workspace/tco-shared/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+torch 2.11.0+cu128 device NVIDIA GeForce RTX 4090 cuda events: 20
+CUPTI_OK
+[11:48:18Z] preflight non-zero (informational: RAM bar is the TCO record's 48 GB)
+[11:50:24Z] model download rc=0 in 126 s; hf cache 15G
+[11:50:37Z] data prepare rc=134 in 13 s
+[11:50:37Z] DATA sha256 matches the record's eba8a5bc...: eba8a5bc6074eced5adb255f3f8872d942779978171421e13f9c670494479c8a
+[11:50:37Z] throttle sampler field: clocks_throttle_reasons.active
+[11:50:37Z] RUN cell=A-r1-P arm=A repeat=1 kind=P
+[partial] case 1 soup rep1 tok/s(wall)=512.4070151084693 peak_alloc_mib=7710.0 -> /workspace/tco-cells/A-r1-P/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[11:51:36Z] DONE cell=A-r1-P rc=0 in 59 s
+[11:51:39Z] RUN cell=A-r1-T arm=A repeat=1 kind=T
+[complete] case 1 soup rep1 tok/s(wall)=1807.4473916449724 peak_alloc_mib=17425.0 -> /workspace/tco-cells/A-r1-T/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[11:55:51Z] DONE cell=A-r1-T rc=0 in 252 s
+[11:55:54Z] RUN cell=B-r1-P arm=B repeat=1 kind=P
+[partial] case 1 soup rep1 tok/s(wall)=606.7940965042164 peak_alloc_mib=5628.6 -> /workspace/tco-cells/B-r1-P/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[11:56:43Z] DONE cell=B-r1-P rc=0 in 49 s
+[11:56:46Z] RUN cell=B-r1-T arm=B repeat=1 kind=T
+[complete] case 1 soup rep1 tok/s(wall)=2402.616620737957 peak_alloc_mib=13519.9 -> /workspace/tco-cells/B-r1-T/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[11:59:58Z] DONE cell=B-r1-T rc=0 in 192 s
+[12:00:01Z] RUN cell=C-r1-P arm=C repeat=1 kind=P
+[partial] case 1 soup rep1 tok/s(wall)=612.2637548796663 peak_alloc_mib=5628.6 -> /workspace/tco-cells/C-r1-P/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[12:00:49Z] DONE cell=C-r1-P rc=0 in 48 s
+[12:00:52Z] RUN cell=C-r1-T arm=C repeat=1 kind=T
+[complete] case 1 soup rep1 tok/s(wall)=2403.804444057722 peak_alloc_mib=13519.9 -> /workspace/tco-cells/C-r1-T/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[12:04:03Z] DONE cell=C-r1-T rc=0 in 191 s
+[12:04:06Z] RUN cell=D-r1-P arm=D repeat=1 kind=P
+[partial] case 1 soup rep1 tok/s(wall)=547.4176901556738 peak_alloc_mib=7710.0 -> /workspace/tco-cells/D-r1-P/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[12:05:02Z] DONE cell=D-r1-P rc=0 in 56 s
+[12:05:05Z] RUN cell=D-r1-T arm=D repeat=1 kind=T
+[complete] case 1 soup rep1 tok/s(wall)=1840.2516335873277 peak_alloc_mib=10851.6 -> /workspace/tco-cells/D-r1-T/runs/1/soup/nvidia-geforce-rtx-4090/rep1/result.json
+[12:09:11Z] DONE cell=D-r1-T rc=0 in 246 s
+[12:09:14Z] RUN cell=A-r2-P arm=A repeat=2 kind=P
+[partial] case 1 soup rep2 tok/s(wall)=512.0649421402051 peak_alloc_mib=7710.0 -> /workspace/tco-cells/A-r2-P/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:10:11Z] DONE cell=A-r2-P rc=0 in 57 s
+[12:10:14Z] RUN cell=A-r2-T arm=A repeat=2 kind=T
+[complete] case 1 soup rep2 tok/s(wall)=1808.8367296298327 peak_alloc_mib=17425.0 -> /workspace/tco-cells/A-r2-T/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:14:24Z] DONE cell=A-r2-T rc=0 in 250 s
+[12:14:27Z] RUN cell=B-r2-P arm=B repeat=2 kind=P
+[partial] case 1 soup rep2 tok/s(wall)=602.5277750659217 peak_alloc_mib=5628.6 -> /workspace/tco-cells/B-r2-P/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:15:16Z] DONE cell=B-r2-P rc=0 in 49 s
+[12:15:19Z] RUN cell=B-r2-T arm=B repeat=2 kind=T
+[complete] case 1 soup rep2 tok/s(wall)=2406.021502123161 peak_alloc_mib=13519.9 -> /workspace/tco-cells/B-r2-T/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:18:30Z] DONE cell=B-r2-T rc=0 in 191 s
+[12:18:33Z] RUN cell=C-r2-P arm=C repeat=2 kind=P
+[partial] case 1 soup rep2 tok/s(wall)=610.2244669634476 peak_alloc_mib=5628.6 -> /workspace/tco-cells/C-r2-P/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:19:21Z] DONE cell=C-r2-P rc=0 in 48 s
+[12:19:24Z] RUN cell=C-r2-T arm=C repeat=2 kind=T
+[complete] case 1 soup rep2 tok/s(wall)=2406.30244247605 peak_alloc_mib=13519.9 -> /workspace/tco-cells/C-r2-T/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:22:35Z] DONE cell=C-r2-T rc=0 in 191 s
+[12:22:38Z] RUN cell=D-r2-P arm=D repeat=2 kind=P
+[partial] case 1 soup rep2 tok/s(wall)=552.2415890438115 peak_alloc_mib=7710.0 -> /workspace/tco-cells/D-r2-P/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:23:32Z] DONE cell=D-r2-P rc=0 in 54 s
+[12:23:35Z] RUN cell=D-r2-T arm=D repeat=2 kind=T
+[complete] case 1 soup rep2 tok/s(wall)=1840.1349385954613 peak_alloc_mib=10851.6 -> /workspace/tco-cells/D-r2-T/runs/1/soup/nvidia-geforce-rtx-4090/rep2/result.json
+[12:27:42Z] DONE cell=D-r2-T rc=0 in 247 s
+[12:27:45Z] RUN cell=A-r3-T arm=A repeat=3 kind=T
+[complete] case 1 soup rep3 tok/s(wall)=1808.7054655966554 peak_alloc_mib=17425.0 -> /workspace/tco-cells/A-r3-T/runs/1/soup/nvidia-geforce-rtx-4090/rep3/result.json
+[12:31:54Z] DONE cell=A-r3-T rc=0 in 249 s
+[12:31:57Z] RUN cell=B-r3-T arm=B repeat=3 kind=T
+[complete] case 1 soup rep3 tok/s(wall)=2405.1797249625965 peak_alloc_mib=13519.9 -> /workspace/tco-cells/B-r3-T/runs/1/soup/nvidia-geforce-rtx-4090/rep3/result.json
+[12:35:09Z] DONE cell=B-r3-T rc=0 in 192 s
+[12:35:12Z] RUN cell=C-r3-T arm=C repeat=3 kind=T
+[complete] case 1 soup rep3 tok/s(wall)=2405.5149294437015 peak_alloc_mib=13519.9 -> /workspace/tco-cells/C-r3-T/runs/1/soup/nvidia-geforce-rtx-4090/rep3/result.json
+[12:38:22Z] DONE cell=C-r3-T rc=0 in 190 s
+[12:38:26Z] RUN cell=D-r3-T arm=D repeat=3 kind=T
+[complete] case 1 soup rep3 tok/s(wall)=1840.2281129430376 peak_alloc_mib=10851.6 -> /workspace/tco-cells/D-r3-T/runs/1/soup/nvidia-geforce-rtx-4090/rep3/result.json
+[12:42:32Z] DONE cell=D-r3-T rc=0 in 246 s
+[12:42:35Z] all cells done; du of runs:
+8.7M	/workspace/out/runs/A-r1-P
+180K	/workspace/out/runs/A-r1-T
+8.7M	/workspace/out/runs/A-r2-P
+180K	/workspace/out/runs/A-r2-T
+180K	/workspace/out/runs/A-r3-T
+7.6M	/workspace/out/runs/B-r1-P
+172K	/workspace/out/runs/B-r1-T
+7.6M	/workspace/out/runs/B-r2-P
+172K	/workspace/out/runs/B-r2-T
+172K	/workspace/out/runs/B-r3-T
+7.6M	/workspace/out/runs/C-r1-P
+172K	/workspace/out/runs/C-r1-T
+7.6M	/workspace/out/runs/C-r2-P
+172K	/workspace/out/runs/C-r2-T
+172K	/workspace/out/runs/C-r3-T
+7.4M	/workspace/out/runs/D-r1-P
+180K	/workspace/out/runs/D-r1-T
+7.4M	/workspace/out/runs/D-r2-P
+180K	/workspace/out/runs/D-r2-T
+180K	/workspace/out/runs/D-r3-T
+[12:42:35Z] job wrapper end rc=0

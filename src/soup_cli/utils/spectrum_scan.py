@@ -453,33 +453,23 @@ def default_spectrum_cache_dir() -> str:
 def resolve_cache_dir(cache_dir: Optional[str] = None) -> str:
     """Resolve the cache dir (explicit arg > ``SOUP_SPECTRUM_CACHE_DIR`` > default).
 
-    The env override is rejected if it contains C0 control characters or
-    escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR`` (silent fall-through to the
-    default — an env var is operator config, not API input). The chosen dir
-    is created.
+    The env override is dropped if it contains C0 control characters or
+    escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR``, and the default is used (an env var
+    is operator config, not API input, so nothing raises). One WARNING per process
+    and value (``utils/cache_roots.py``, shared with the layer-stream cache root)
+    names the variable, the rejected value, the reason and the folder used instead.
+    The chosen dir is created.
     """
-    from soup_cli.utils.paths import is_under
-
     if cache_dir is not None:
         chosen = os.path.realpath(os.path.expanduser(str(cache_dir)))
         os.makedirs(chosen, exist_ok=True)
         return chosen
 
-    override = os.environ.get("SOUP_SPECTRUM_CACHE_DIR")
-    if override and not any(ord(ch) < 0x20 for ch in override):
-        candidate = os.path.realpath(os.path.expanduser(override))
-        bounds = [
-            os.path.realpath(os.path.expanduser("~")),
-            os.path.realpath(os.getcwd()),
-            os.path.realpath(tempfile.gettempdir()),
-        ]
-        if any(is_under(candidate, bound) for bound in bounds):
-            os.makedirs(candidate, exist_ok=True)
-            return candidate
+    from soup_cli.utils.cache_roots import SPECTRUM_CACHE_ENV, env_cache_root
 
-    default = default_spectrum_cache_dir()
-    os.makedirs(default, exist_ok=True)
-    return default
+    chosen = env_cache_root(SPECTRUM_CACHE_ENV, default_spectrum_cache_dir())
+    os.makedirs(chosen, exist_ok=True)
+    return chosen
 
 
 def _cache_path(model: str, cache_dir: Optional[str]) -> str:

@@ -1,6 +1,5 @@
 """soup migrate prints the paths it was given as typed, not as Rich markup."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -8,6 +7,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 from tests.test_migrate import LLAMA_FACTORY_SFT
 
@@ -23,7 +23,7 @@ def _wide_console(monkeypatch):
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
     "missing:warning:.yaml",
-    marks=pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name"),
+    marks=skip_colon_on_windows,
 )
 
 
@@ -134,7 +134,7 @@ def test_migrate_jsonl_refusal_names_the_file_literally(source):
     assert "got JSONL ([red]data.jsonl)" in _plain(result)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name")
+@skip_colon_on_windows
 def test_migrate_jsonl_refusal_shows_an_emoji_code_in_the_name_as_typed(source):
     data = Path("data:warning:.jsonl")
     data.write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")
@@ -145,7 +145,7 @@ def test_migrate_jsonl_refusal_shows_an_emoji_code_in_the_name_as_typed(source):
     assert "got JSONL (data:warning:.jsonl)" in _plain(result)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name")
+@skip_colon_on_windows
 def test_migrate_refused_output_path_shows_an_emoji_code_as_typed(source):
     result = _migrate(str(source), "--output", "../x:warning:.yaml", "--yes")
 
