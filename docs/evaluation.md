@@ -269,6 +269,10 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+`soup eval gate` refuses YAML booleans such as `false` and `true` before model
+construction; use numeric `0` when a zero cutoff is intended.
+
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
 handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
