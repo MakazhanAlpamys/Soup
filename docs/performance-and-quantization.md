@@ -790,6 +790,24 @@ page-locked, and on the disk tier whether the async reader's host *staging* is.
   target** if the box cannot provide it, instead of degrading to pageable and spending the
   whole margin pinning exists to provide. The refusal names the store size on the RAM tier,
   and `stream_read_ahead` on the disk tier.
+- **Windows, disk tier: commit headroom.** Windows charges every private host allocation,
+  pageable or page-locked, against the system *commit* limit (RAM + pagefile), and free RAM
+  does not show it. Page-locked staging is the larger charge, because it is packed into
+  power-of-two arenas: the 123B plan at `stream_read_ahead: 1` stages 2.17 GiB of slots and
+  page-locks 3 GiB. An experimental 123B run on a 32 GB laptop was stopped twice by the
+  harness's own commit floor with pinned staging, and completed with pageable staging in a
+  session that also differed in other ways. On a CUDA target the disk tier's pre-flight
+  therefore also reads the commit counters (`GetPerformanceInfo`). With `stream_pin`
+  **unset** it keeps pinning when the arenas leave at least 12 GiB of commit free; below
+  that it stages in pageable memory and says so in the panel; and when even the pageable
+  staging does not fit (pageable memory is committed too) it **refuses before any weight is
+  staged**, naming the numbers. `stream_pin: true` is honoured with one warning when it is
+  merely tight and refused, with the same numbers, when the arenas cannot fit at all; the
+  fixes are `stream_pin: false` (when the pageable staging fits), closing programs, a larger
+  pagefile, or a lower `stream_read_ahead`. `stream_pin: false` and every other OS are
+  unchanged, and a failure to read the counters skips the check (logged at info). The 12 GiB
+  margin is a chosen figure, not a measured bound. Only the disk tier's staging is checked;
+  the RAM tier's page-locked store is not.
 
 **Where `true` announces instead of refusing.** Page-locking needs a CUDA device to copy to.
 On a non-CUDA target there is nothing to force, so the request is **inapplicable rather than
@@ -920,6 +938,19 @@ fused 4-bit GEMM per card and per matmul shape at run time, and on the fused pat
 live. At the lengths below the loss phase stays the larger on an unchunked step, so those
 predictions do not move; a short NF4 run can rise.
 
+When that prediction does not fit the free VRAM, the pre-flight tries the packed-state backward
+before it refuses (no config key): the layer's NF4 linears then save only their packed bytes and
+quantisation tensors and dequantise one matrix at a time in the backward, so the recompute phase
+charges the layer's largest matrix instead of all of it (Mistral Large 123B: 704,643,072 bytes
+instead of 2.77 GB per layer, 4.92 GB instead of 6.98 GB predicted at 512 tokens; formula
+figures, not yet measured on a card). It costs one more dequantisation per matrix per micro-step
+and runs the same arithmetic (losses, gradients and an
+AdamW update are bit-equal to the dense arm in the CPU tests); the panel says when it was chosen.
+A run whose dense-retaining arm fits keeps it, unchanged, and so does one with `stream_vram_probe`
+on: the measurement stays the authority there and the dense arm is left to it (a probe refusal
+then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
+DPO, KTO, ORPO and SimPO), not by SFT alone; only `stream_vram_probe` is SFT-only.
+
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
 `use_cut_ce`. When the model is built, with the reason: a trainable output head, a model
@@ -1032,7 +1063,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
-- any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `training.base` at a bf16 or FP8-block copy. Refused:
+- any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `base` at a bf16 or FP8-block copy. Refused:
   - a `config.json` `quantization_config` whose `quant_method` is not `fp8`: `compressed-tensors` in any format (Kimi-K2-Thinking's `pack-quantized` INT4 among them), `gptq`, `awq`, `bitsandbytes` (or `load_in_4bit` / `load_in_8bit` with no method), `hqq`, `aqlm`, `eetq`, `torchao`, `quanto`, `fbgemm_fp8`, `mxfp4`, `mxfp8`, `nvfp4`, `gguf` and every other quantiser transformers registers, or a name it does not. Also read from `text_config` when the top level has none, and a value that is not a mapping (a string, a list, a number) is refused as malformed. `quant_method` is matched exactly, as transformers matches it: `FP8` is not `fp8`. Refused at setup, before any weight is resolved or downloaded. A config with no `quant_method` (the oMLX/oQ spelling, `bits` and `group_size` only) is decided by its tensors;
   - a tensor stored as an integer or packed type (I8, I16, I32, I64, U8, U16, U32, U64, BOOL, F4), which a plain read would cast to floats and train on: GPTQ/AWQ `qweight`, compressed-tensors `weight_packed`, bitsandbytes uint8 and int8 weights, oMLX/oQ uint32 words on an architecture other than qwen4_exp;
   - a floating-point tensor named like a quantiser's companion: `weight_scale` (compressed-tensors; DeepSeek-V3's block FP8 spells its scale `weight_scale_inv`), `weight_global_scale`, `weight_zero_point`, `input_scale`, `qzeros`, `g_idx`, `SCB`, `absmax`, `quant_map`, `W_q`, `codebooks` and the like.
@@ -1190,7 +1221,13 @@ the run refuses before either write when that volume lacks free space. With
 (the primary root also holds the embedding, head and extras); when a header cannot be
 read or the model is qwen4_exp the split is even and the panel says approximately.
 Override the two cache roots with `SOUP_SPECTRUM_CACHE_DIR` and
-`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy.
+`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy: a value
+must lie under `$HOME`, the working directory or the temp directory and carry no control
+character. A value that does not is ignored and the cache goes to the default
+(`~/.soup/layer-stream`, `~/.soup/spectrum`); Soup logs one warning per run (not at
+`--log-level quiet`) that names the variable, the rejected value, the reason and the folder
+used instead. To keep a cache on another drive, run `soup` from a working directory on that
+drive, or place the folder under `$HOME`.
 A shard cache Soup will reuse is reported at the size of its own files, on every drive it is
 striped over. One it has to write is sized from the source safetensors headers (shapes and
 dtypes only: no weight is loaded), tensor by tensor, by the rules the sharder writes with:
@@ -1337,6 +1374,14 @@ Leaving the `with` block (or calling `close()`) releases the runtime the way a t
 `build_streamed_model(lora_config=None)` is the underlying call; with a `lora_config` it builds
 the training model exactly as before.
 
+To reload a LoRA adapter trained on a streamed base (the directory `soup train` saves), pass
+`adapter="path/to/adapter"` (under the current directory, no links). The adapter goes onto the
+streamed base the way the trainer placed it, every parameter stays frozen, and the logits are the
+trained model's logits (bit for bit on CPU); `stream.model` is then the `PeftModel`. A missing or
+partial adapter, one that is not LoRA, one that uses `modules_to_save` or DoRA, a different base
+(`allow_adapter_base_mismatch=True` waives only the name check) or tensors of the wrong shape are
+refused by name.
+
 What this is for and what it is not:
 
 - **Prefill, scoring and batch forward only.** A forward reads every decoder layer once, so the
@@ -1381,9 +1426,11 @@ loop, and names `data.train_on_responses_only: false` as the remedy.
 In practice this affects thinking-style templates: `Qwen3` injects its empty thinking
 block only for the *last* assistant message, so multi-turn Qwen3 rows are refused
 (single-turn rows are fine). Llama 3.1 and Gemma 3 mask correctly on both shapes.
-`data.train_on_messages_with_train_field` and `data.train_on_prompt` have no MLX
-equivalent and are reported in the `MLX backend ignores:` line rather than silently
-dropped.
+`data.train_on_messages_with_train_field` is supported for native text SFT when
+`train_on_responses_only` is false: explicit flags override the assistant-role
+default, and selected turns include their headers. `data.train_on_prompt` has no
+MLX equivalent and is reported in the `MLX backend ignores:` line rather than
+silently dropped.
 
 After tokenization and truncation, every response-only row must retain at least one shifted
 causal-loss target. Soup rejects the row by split and row number when
