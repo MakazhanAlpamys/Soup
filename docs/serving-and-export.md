@@ -241,6 +241,39 @@ soup export --model ./output --format onnx
 soup export --model ./output --format onnx --output ./model_onnx
 ```
 
+To check a causal-LM export numerically on your own inputs, add `--validate-onnx`:
+
+```bash
+soup export --model ./merged --format onnx --validate-onnx \
+  --prompts ./prompts.txt --atol 0.0001 --output ./model_onnx
+```
+
+The prompt file is UTF-8, one text per line, or `.jsonl` with one
+`{"prompt": "..."}` object per line. The check uses the same token IDs for the source
+model and ONNX Runtime, compares **all logits**, and prints maximum absolute error,
+element-weighted mean absolute error, the tolerance and PASS/FAIL. It runs both models
+on CPU in float32, one prompt at a time, without a chat template, padding or truncation.
+The default absolute tolerance, `0.0001`, is a configurable starting point for an FP32
+smoke check; it is not a model-independent quality threshold. There is no additional
+relative tolerance. Non-finite logits never pass.
+
+The first version supports `--onnx-task text-generation` with exactly one ONNX graph,
+standard integer token inputs and a float32 `logits` output. Cached decoding, split
+graphs, other tasks and unknown inputs are refused. Inputs are limited to 1 MiB,
+32 non-empty prompts and 512 tokens per prompt; exceeding a limit refuses the check
+rather than silently checking a subset. A check on these inputs says nothing about
+held-out accuracy or generation with a KV cache.
+
+Exit codes with `--validate-onnx`: **0** means the export passed, **2** means the logits
+exceeded the tolerance (or were non-finite), and **3** means invalid inputs, missing
+validation dependencies or an unsupported/failed comparison. Exporter failures retain
+their existing exit code **1**. A failed check leaves the exported files for inspection,
+does not print the completion panel and does not register the export. For an adapter,
+the reference is its freshly merged model, checked before the temporary merge is removed.
+Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
+the flag. Install a compatible optimum/transformers stack for your model; a successful
+check on one stack is not a compatibility guarantee for other releases.
+
 ### TensorRT-LLM Export
 
 Export models to TensorRT-LLM format for high-throughput GPU inference:

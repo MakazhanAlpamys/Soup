@@ -1319,7 +1319,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -2366,6 +2366,9 @@ Usage: `soup export [OPTIONS]`
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
+| `--validate-onnx` | flag | off |  | ONNX text-generation only: compare exported logits with the source on --prompts. |
+| `--prompts` | text |  |  | Explicit text/JSONL prompts for --validate-onnx (at most 32). |
+| `--atol` | float |  |  | Absolute logits tolerance for --validate-onnx (default: 0.0001). |
 | `--deploy` | text |  |  | Auto-deploy after export. Currently supported: ollama |
 | `--deploy-name` | text |  |  | Model name for deployment (used with --deploy) |
 | `--calibration-data` | text |  |  | Path to calibration JSONL for imatrix GGUF export. |
