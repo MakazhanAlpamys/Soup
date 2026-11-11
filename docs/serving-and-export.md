@@ -371,8 +371,10 @@ to the default Transformers backend is refused with a backend hint.
 
 The initial native consumer supports ordinary linear text LoRA (including the saved
 rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
-DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
-adapter targets are refused. This does not add MLX serving or adapter fusion.
+Adapters trained with native linear RoPE scaling record `rope_scaling` in `adapter_config.json`,
+which is re-applied during generation and fusion for unquantized base models (quantized bases
+with RoPE scaling are refused). DoRA, full-finetune adapters, embedding/switch-layer targets
+and other quantized adapter targets are refused. This does not add MLX serving or adapter fusion.
 Use the base tokenizer's chat template; rendered special tokens are encoded once.
 Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
 with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`

@@ -518,13 +518,53 @@ class MLXSFTTrainerWrapper:
         self._check_train_split_size(dataset)
         self._check_eval_steps_has_rows(dataset)
 
+        self._effective_rope_scaling = None
+        model_config_override = None
+        cfg = self.config
+        if cfg.training.rope_scaling_type is not None:
+            from soup_cli.utils.mlx_rope import resolve_mlx_rope_scaling
+
+            self._effective_rope_scaling, model_config_override = resolve_mlx_rope_scaling(
+                cfg.base, cfg.data.max_length, cfg.training.rope_scaling_type
+            )
+
         from soup_cli.utils.mlx import load_mlx_model
 
-        cfg = self.config
         console.print(f"[dim]Loading MLX model: {cfg.base}[/]")
         self.model, self.tokenizer = load_mlx_model(
-            cfg.base, quantization=cfg.training.quantization
+            cfg.base,
+            quantization=cfg.training.quantization,
+            model_config=model_config_override,
         )
+
+        if cfg.training.rope_scaling_type is not None:
+            import mlx.nn as nn
+
+            quantized_types = [
+                getattr(nn, "QuantizedLinear", ()),
+                getattr(nn, "QuantizedEmbedding", ()),
+            ]
+            try:
+                from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+                quantized_types.append(QuantizedSwitchLinear)
+            except ImportError:
+                pass
+            quantized_tuple = tuple(t for t in quantized_types if isinstance(t, type))
+            for name, mod in self.model.named_modules():
+                if isinstance(mod, quantized_tuple):
+                    raise ValueError(
+                        f"MLX RoPE scaling is not supported on a quantized base model: "
+                        f"layer {name!r} has quantized type {type(mod).__name__}. "
+                        "Use an unquantized base (training.quantization: none)."
+                    )
+
+        if self._effective_rope_scaling is not None:
+            console.print(
+                f"[green]Long-context enabled:[/] RoPE {cfg.training.rope_scaling_type} "
+                f"scaling to {cfg.data.max_length} tokens "
+                f"(factor {self._effective_rope_scaling['factor']:.4g})"
+            )
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
@@ -1283,6 +1323,8 @@ class MLXSFTTrainerWrapper:
                        if eval_every is not None else {}),
                     "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
+                    **({"rope_scaling": self._effective_rope_scaling}
+                       if getattr(self, "_effective_rope_scaling", None) is not None else {}),
                     # #683: the EFFECTIVE masking, not a hardcoded False.
                     # `mask_prompt` stays upstream's meaning (a single masked
                     # prefix); `response_token_mask` is Soup's per-token mask,

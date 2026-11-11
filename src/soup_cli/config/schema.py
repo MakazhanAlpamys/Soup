@@ -9495,7 +9495,23 @@ class SoupConfig(BaseModel):
         # share SFTTrainerWrapper.setup.
         if self.task != "pretrain":
             if self.backend == "mlx":
-                off_path.append(("backend='mlx'", "backend: transformers"))
+                if self.task == "sft" and self.modality == "text":
+                    if tcfg.rope_scaling_type != "linear":
+                        raise ValueError(
+                            f"{named} {verb} not applied on backend='mlx': "
+                            "MLX text SFT currently supports rope_scaling_type='linear' only "
+                            f"(got {tcfg.rope_scaling_type!r}). Use rope_scaling_type: linear "
+                            "and training.quantization: none, or backend: transformers, "
+                            f"or remove {keys}."
+                        )
+                    if tcfg.quantization != "none":
+                        raise ValueError(
+                            f"{named} with backend='mlx' requires training.quantization='none' "
+                            f"(got {tcfg.quantization!r}). Use training.quantization: none, "
+                            f"or backend: transformers, or remove {keys}."
+                        )
+                else:
+                    off_path.append(("backend='mlx'", "backend: transformers"))
             if self.modality in ("vision", "audio"):
                 off_path.append((f"modality={self.modality!r}", "modality: text"))
             if tcfg.stream_layers:
