@@ -1624,7 +1624,7 @@ announcing kernels that were never applied (#1811).
 ```yaml
 # soup.yaml — performance options
 training:
-  use_liger: true            # Liger Kernel fused ops (measured 12.9% memory, 5.1% throughput); sft/tts only
+  use_liger: true            # Liger Kernel fused ops; gains depend on workload/stack; sft/tts only
   use_flash_attn: true       # FlashAttention v2/v3 auto-detection; sft/tts only
   gradient_checkpointing: true  # Required for long sequences
 
@@ -1643,6 +1643,12 @@ pip install "soup-cli[liger]"     # Liger Kernel fused operations
 pip install flash-attn --no-build-isolation  # FlashAttention
 pip install "soup-cli[ring-attn]" # Ring FlashAttention (sequence parallelism)
 ```
+
+Measured gains depend on sequence length, checkpointing and the native SDPA
+backend. The [H200 curve](peft-and-efficiency.md#flashattention-and-liger-measurements)
+records five repetitions per feasible arm, clocks, process peaks and the
+shared-card OOM boundary. It complements the older H100 single-point
+measurement; neither figure is a universal speedup.
 
 
 ## Live CUDA Batch-Size Probe
