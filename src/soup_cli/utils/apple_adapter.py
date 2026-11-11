@@ -474,6 +474,12 @@ def _convert_hf_to_mlx(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
 
 
 def _convert_mlx_to_hf(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
+    source_config = _read_source_config(plan.source_dir)
+    if "soup_lora" in source_config:
+        raise ValueError(
+            "MLX-to-HF conversion does not support soup_lora per-module metadata; "
+            "use Soup's native MLX loader or merge path"
+        )
     st_file = os.path.join(plan.source_dir, "adapters.safetensors")
     npz_file = os.path.join(plan.source_dir, "adapters.npz")
     if os.path.lexists(st_file):
@@ -490,7 +496,6 @@ def _convert_mlx_to_hf(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
         converted, os.path.join(plan.output_dir, "adapter_model.safetensors")
     )
 
-    source_config = _read_source_config(plan.source_dir)
     rank = _infer_rank(converted)
     target_modules = sorted({
         key[: -len(".lora_A.weight")].rsplit(".", 1)[-1]

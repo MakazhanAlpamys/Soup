@@ -247,7 +247,7 @@ def test_strict_artifact_and_warm_start_contracts(tmp_path, monkeypatch, quantiz
     resumed._load_checkpoint_weights(str(weights_file))
     resumed.model.eval()
     assert mx.abs(resumed.model(probe) - expected).max().item() < 1e-6
-    for change in ("missing", "extra", "shape", "nonfinite"):
+    for change in ("missing", "extra", "shape", "nonfinite", "integer"):
         altered = dict(weights)
         key = next(iter(altered))
         if change == "missing":
@@ -256,8 +256,10 @@ def test_strict_artifact_and_warm_start_contracts(tmp_path, monkeypatch, quantiz
             altered["unexpected.lora_a"] = mx.ones((1,))
         elif change == "shape":
             altered[key] = mx.ones((1,))
-        else:
+        elif change == "nonfinite":
             altered[key] = mx.full(altered[key].shape, float("nan"))
+        else:
+            altered[key] = mx.zeros(altered[key].shape, dtype=mx.int32)
         mx.save_safetensors(str(weights_file), altered)
         before = dict(tree_flatten(resumed.model.trainable_parameters()))
         mx.eval(before)
@@ -307,7 +309,7 @@ def test_strict_artifact_and_warm_start_contracts(tmp_path, monkeypatch, quantiz
 
 @pytest.mark.parametrize("variant", [
     "packing", "lorafa", "loraplus", "pretrain", "dpo", "orpo", "simpo", "kto", "grpo",
-    "preference",
+    "preference", "dora", "vision",
 ])
 def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, variant):
     from mlx_lm import load
@@ -325,6 +327,10 @@ def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, vari
         cfg.training.use_lorafa = True
     elif variant == "loraplus":
         cfg.training.loraplus_lr_ratio = 2
+    elif variant == "dora":
+        cfg.training.lora.use_dora = True
+    elif variant == "vision":
+        cfg.modality = "vision"
     else:
         cfg.task = variant
         if variant == "kto":
@@ -346,6 +352,36 @@ def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, vari
         MLXSFTTrainerWrapper(cfg)._apply_lora(model)
     assert not any(isinstance(module, LoRALinear) for _, module in model.named_modules())
     assert set(dict(tree_flatten(model.trainable_parameters()))) == set(before)
+
+
+def test_patterned_warm_start_refuses_uniform_source_and_publishes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = _base(tmp_path / "base")
+    rows = {"train": [{"text": "alpha beta gamma alpha"}] * 2}
+    uniform = MLXSFTTrainerWrapper(_config(base, tmp_path / "uniform", dora=False))
+    uniform.setup(rows)
+    uniform.train()
+    cfg = _config(base, tmp_path / "patterned", dora=False)
+    cfg.training.lora.alpha_pattern = {"q_proj": 12}
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup(rows)
+    with pytest.raises(ValueError, match="requires valid per-module metadata"):
+        wrapper.train(resume_from_checkpoint=str(tmp_path / "uniform/adapters.safetensors"))
+    assert not (tmp_path / "patterned/adapter_config.json").exists()
+
+
+def test_public_patterned_warm_start_keeps_compatible_recipe(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _, cfg, _ = _trained(tmp_path)
+    source = tmp_path / "adapter/adapters.safetensors"
+    cfg.output = str(tmp_path / "resumed")
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup({"train": [{"text": "alpha beta gamma alpha"}] * 2})
+    wrapper.train(resume_from_checkpoint=str(source))
+    saved = json.loads((tmp_path / "resumed/adapter_config.json").read_text())
+    original = json.loads((tmp_path / "adapter/adapter_config.json").read_text())
+    assert saved["soup_lora"] == original["soup_lora"]
+    assert (tmp_path / "resumed/adapters.safetensors").is_file()
 
 
 def test_periodic_adapter_is_reconstructible_after_interruption(tmp_path, monkeypatch):

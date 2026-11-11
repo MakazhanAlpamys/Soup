@@ -5498,9 +5498,8 @@ def _unapplied_lora_patterns_message(
     ``how`` is the clause that says why the backend drops them ("the MLX trainer
     builds every adapter from"). The text names only the fields the config set; an
     empty ``{}`` sets nothing (``peft_wiring`` reads ``if rank_pattern:``), so it
-    is not named and does not refuse. One builder serves the MLX and unsloth
-    validators so the two messages cannot drift; each validator stays separate so
-    the day one backend honours the patterns only that validator is deleted.
+    is not named and does not refuse. The unsloth validator uses this builder;
+    MLX supports patterns for ordinary text SFT and has its own scope diagnostic.
     """
     set_fields = [
         f"training.lora.{name}"

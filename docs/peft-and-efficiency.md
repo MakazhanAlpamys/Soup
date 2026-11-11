@@ -449,6 +449,8 @@ fails on its missing uniform `lora_parameters` block. Uniform legacy artifacts
 keep their existing format and loading path. Metadata is available before the
 training loop so periodic checkpoints are reconstructible after interruption.
 Warm starts require matching per-module recipes and restore weights only.
+`soup apple-adapter --direction mlx-to-hf` refuses this per-module format before
+writing converted weights, because its scalar PEFT export cannot preserve the recipe.
 Metadata writes are atomic. Reusing an output containing incompatible adapter
 weights is refused before writing; choose a fresh output directory for a
 different recipe or base identity.
@@ -456,8 +458,8 @@ different recipe or base identity.
 DoRA, LoRA+, LoRA-FA, packing, non-text/non-SFT paths, embeddings and switch/MoE
 adapter targets remain refused with patterns until their combinations are
 qualified. Heterogeneous ranks alone do not establish better quality, speed or
-memory use. Native offline lifecycle tests cover MLX 0.31.2 / MLX-LM 0.31.3 and
-0.32.4 / 0.32.2.
+memory use. Local native offline lifecycle tests cover MLX 0.31.2 / MLX-LM 0.31.3
+and 0.32.4 / 0.32.2; the hosted `mlx-smoke` job runs the latter pair only.
 
 
 ## DoRA (Weight-Decomposed LoRA)
