@@ -204,8 +204,6 @@ soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / 
 
 More export targets (ONNX, TensorRT, BitNet) and deployment options live in
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
-ONNX causal-LM exports have an opt-in logits check on explicit prompts; see
-[ONNX export validation](docs/serving-and-export.md#onnx-export) for its scope and exit codes.
 
 ## Web UI
 

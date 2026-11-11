@@ -232,8 +232,10 @@ def test_model_query_not_cached_offline_stops_with_a_clear_message(offline_cache
     assert "total_memory_bytes" not in result.output
 
 
-def test_model_query_hub_unreachable_stops_with_a_clear_message():
+def test_model_query_hub_unreachable_stops_with_a_clear_message(monkeypatch):
     # The conftest lookup finds no cache and no Hub, as an unreachable or gated repo.
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
     result = _profile("--model", "Qwen/Qwen2.5-7B-Instruct", "--gpu", "a100")
     assert result.exit_code == 1, (result.output, repr(result.exception))
     text = _plain(result)

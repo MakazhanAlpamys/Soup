@@ -180,7 +180,7 @@ def validate_onnx_export(
                 feed = {name: tensors[name].numpy().astype(input_dtypes[dtype], copy=False)
                         for name, dtype in inputs.items()}
                 reference = model(**tensors, use_cache=False).logits.cpu().numpy()
-                actual = session.run(["logits"], feed)[0]
+                actual = session.run(output_names=["logits"], input_feed=feed)[0]
                 yield reference, actual
 
     return compare_logits(pairs(), atol=atol)

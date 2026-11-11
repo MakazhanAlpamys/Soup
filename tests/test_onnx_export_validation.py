@@ -10,6 +10,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 
 def _checker():
     return importlib.import_module("soup_cli.eval.onnx_check")
@@ -64,7 +66,7 @@ def test_requested_gate_controls_completion_and_registry(tmp_path, monkeypatch, 
     assert result.exit_code == code, result.output
     assert ("ONNX Export Complete" in result.output) is passed
     assert ("PASS" if passed else "FAIL") in result.output
-    assert "0.001" in result.output
+    assert "0.001" in strip_ansi(result.output)
     assert "mean" in result.output.lower() and "max" in result.output.lower()
     assert attach.call_count == int(passed)
     assert exporter.call_count == 1
@@ -234,7 +236,7 @@ def test_runtime_uses_cpu_float32_and_identical_tokens(fake_runtime, tmp_path):
     assert runtime.InferenceSession.call_args.kwargs["providers"] == ["CPUExecutionProvider"]
     assert tokenizer.call_args.kwargs["truncation"] is False
     assert model.call_args.kwargs["use_cache"] is False
-    feed = session.run.call_args.args[1]
+    feed = session.run.call_args.kwargs["input_feed"]
     for name in feed:
         np.testing.assert_array_equal(feed[name], model.call_args.kwargs[name].numpy())
 
