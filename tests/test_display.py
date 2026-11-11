@@ -244,3 +244,49 @@ def test_display_hides_eta_for_invalid_progress(monkeypatch, step):
     rendered = _render_to_str(display._render())
     assert "Remaining:" not in rendered
     assert "Estimated finish" not in rendered
+
+
+def test_display_measures_again_when_the_step_counter_restarts(monkeypatch):
+    from types import SimpleNamespace
+
+    import soup_cli.monitoring.display as module
+
+    _freeze_local_clock(monkeypatch)
+    clock = iter([0.0, 100.0, 110.0, 135.0])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    display = TrainingDisplay(_make_config())
+    display.total_steps = 1000
+    for step in (500, 600, 0, 50):
+        display.update(step=step, epoch=0.0, loss=1.0, lr=0, speed=0.0)
+    assert "Remaining: 7m 55s" in _render_to_str(display._render())
+
+
+def test_display_start_discards_the_baseline_of_an_earlier_run(monkeypatch):
+    from types import SimpleNamespace
+
+    import soup_cli.monitoring.display as module
+
+    _freeze_local_clock(monkeypatch)
+    clock = iter([0.0, 100.0, 110.0])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    display = TrainingDisplay(_make_config())
+    display.start(total_steps=1000)
+    try:
+        display.update(step=500, epoch=0.0, loss=1.0, lr=0, speed=0.0)
+        display.update(step=600, epoch=0.0, loss=1.0, lr=0, speed=0.0)
+    finally:
+        display.stop()
+    display.start(total_steps=1000)
+    try:
+        display.update(step=700, epoch=0.0, loss=1.0, lr=0, speed=0.0)
+    finally:
+        display.stop()
+    assert "Remaining:" not in _render_to_str(display._render())
+
+
+def test_display_progress_never_passes_100_percent():
+    display = TrainingDisplay(_make_config())
+    display.total_steps = 1000
+    display.update(step=1100, epoch=3.0, loss=0.5, lr=0, speed=2.0)
+    rendered = _render_to_str(display._render())
+    assert "100%" in rendered and "110%" not in rendered

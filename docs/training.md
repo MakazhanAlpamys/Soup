@@ -64,14 +64,6 @@ Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
 paths do not use Unsloth; requesting it is refused at config load instead of
 silently falling back to transformers. Text SFT continues to support Unsloth.
 
-The live training panel estimates remaining time from the remaining optimizer
-steps and the speed in iterations per second, and shows an estimated finish in
-the machine's local time. When the trainer reports no usable speed, the panel
-measures steps and elapsed time from its first update. On resume, the steps
-loaded from the checkpoint are excluded from this measurement. The row stays
-hidden until the total and a usable speed are known. Evaluation, checkpoint
-saves and changes in step speed can shift the finish time.
-
 ## Validation split & evaluation (`training.eval_steps`)
 
 `data.val_split` (default `0.1`) holds that share of the rows out of training,
@@ -101,6 +93,16 @@ training:
 - **`val_split: 0`** trains on every row and evaluates nothing, unless the data
   brings its own validation split: an HF-hub dataset's `validation` split, or a
   pre-tokenized cache's `val` / `validation` split.
+
+The live training panel estimates remaining time from the remaining optimizer
+steps and the speed in iterations per second, and shows an estimated finish in
+the machine's local time. When the trainer reports no usable speed, the panel
+measures steps and elapsed time from its first update. On resume, the steps
+loaded from the checkpoint are excluded from this measurement. The row stays
+hidden until the total and a usable speed are known. Evaluation, checkpoint
+saves and changes in step speed can shift the finish time.
+The Speed row uses the panel's measurement when the trainer reports no usable
+speed, and progress stays between 0% and 100%.
 
 **Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
 generating completions, which costs about as much per row as training on it. So
