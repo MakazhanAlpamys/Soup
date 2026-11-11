@@ -114,7 +114,8 @@ def test_eval_compare_loads_scores_for_resolved_runs(db: Path, left: str, right:
     result = runner.invoke(app, ["eval", "compare", left, right])
 
     assert result.exit_code == 0, result.output
-    output = strip_ansi(result.output)
+    output = " ".join(strip_ansi(result.output).split())
+    assert f"Eval Comparison: {left} vs {right}" in output
     assert "0.9000" in output
     assert "0.7000" in output
     assert "-0.2000" in output
