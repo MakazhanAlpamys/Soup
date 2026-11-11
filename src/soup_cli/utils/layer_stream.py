@@ -1341,7 +1341,9 @@ def estimate_recompute_bytes(
     end of that layer's checkpoint recompute, when the chunked loss buffers are
     already freed. ``dense_layer_elements`` is one layer's NF4 weights, which
     the dequantise + linear path rebuilds in the stream dtype and ``F.linear``
-    keeps until the layer's backward; 0 for a bf16 base. The per-token terms are
+    keeps until the layer's backward; 0 for a bf16 base. On the packed-state arm
+    it is the largest single matrix instead, since one is dequantised at a time
+    (:func:`dense_weight_charge_elements`). The per-token terms are
     those of the MLP backward, the larger of the layer's two peaks per token, so
     the sum bounds both at any length. They assume separate q/k/v/o and
     gate/up/down projections and LoRA on hidden-sized inputs (``lora_targets``
@@ -1367,6 +1369,82 @@ def estimate_recompute_bytes(
         + 6 * element * intermediate_size  # gate, up and silu outputs, three gradients
     )
     return element * dense_layer_elements + seq_len * batch_size * per_token
+
+
+def dense_weight_charge_elements(
+    matrix_elements: Sequence[int], *, packed_backward: bool = False
+) -> int:
+    """Elements of dequantised NF4 weight one streamed layer holds dense in its backward.
+
+    The value to pass as ``estimate_recompute_bytes(dense_layer_elements=...)``.
+    ``matrix_elements`` is the element count of each NF4 matrix of ONE layer.
+
+    On the dequantise + ``F.linear`` arm, ``F.linear`` saves its dense weight and
+    the layer's checkpoint recompute rebuilds all of them together before the
+    backward uses any, so the layer holds the SUM. On the packed-state arm
+    (``packed_dequant_nf4_linear``, engaged by the pre-flight itself) each linear
+    saves only its packed bytes and dequantises one matrix at a time, so the layer
+    holds the LARGEST. Mistral Large 123B: 1,384,120,320 elements (2.77 GB in
+    bf16) against 352,321,536 (704,643,072 bytes). A base with no NF4 matrix
+    charges 0 either way.
+    """
+    sizes = list(matrix_elements)
+    if any(isinstance(size, bool) or not isinstance(size, int) or size < 0 for size in sizes):
+        raise ValueError(
+            f"matrix_elements must be non-negative ints; got {matrix_elements!r}"
+        )
+    if not sizes:
+        return 0
+    return max(sizes) if packed_backward else sum(sizes)
+
+
+@dataclass(frozen=True)
+class PackedBackwardDecision:
+    """Which NF4 backward arm a streamed run takes, and what the pre-flight then charges."""
+
+    packed: bool
+    #: The prediction of the chosen arm, the one the fit check should judge.
+    predicted_bytes: int
+    dense_predicted_bytes: int
+    packed_predicted_bytes: int
+    available_bytes: int
+
+    @property
+    def fits(self) -> bool:
+        return self.predicted_bytes <= self.available_bytes
+
+
+def decide_packed_backward(
+    *, dense_predicted_bytes: int, packed_predicted_bytes: int, available_bytes: int
+) -> PackedBackwardDecision:
+    """Route a checkpointed layer's NF4 linears to the packed-state backward, or not.
+
+    The dense-retaining arm is the shipped default and stays so whenever its
+    prediction fits the free VRAM (:func:`decide_stream_fit` accepts equality).
+    When it does not fit, the packed-state arm is taken if it is the smaller
+    prediction: it is the only arm that could fit, and when it does not either it
+    is the best case the refusal should be judged on. Equal
+    predictions mean there is nothing to save (no NF4 weight, or one matrix per
+    layer), and the shipped arm stays.
+    """
+    for value in (dense_predicted_bytes, packed_predicted_bytes, available_bytes):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                "byte counts must be non-negative ints; got "
+                f"dense={dense_predicted_bytes!r}, packed={packed_predicted_bytes!r}, "
+                f"available={available_bytes!r}"
+            )
+    packed = (
+        dense_predicted_bytes > available_bytes
+        and packed_predicted_bytes < dense_predicted_bytes
+    )
+    return PackedBackwardDecision(
+        packed=packed,
+        predicted_bytes=packed_predicted_bytes if packed else dense_predicted_bytes,
+        dense_predicted_bytes=dense_predicted_bytes,
+        packed_predicted_bytes=packed_predicted_bytes,
+        available_bytes=available_bytes,
+    )
 
 
 def estimate_stream_peak_vram(
@@ -1923,10 +2001,14 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         # The number the disk tier used to predict as zero. It is host memory,
         # so it does not belong in the VRAM line below, and it is held for the
         # whole run — an operator choosing a depth is choosing this.
+        # A plan that is not pinned (stream_pin: false, or the Windows commit
+        # pre-flight's fallback) stages pageable memory: "page-locked when the
+        # box allows" would contradict the note printed beneath it.
+        staged = "page-locked when the box allows" if plan.pinned else "pageable"
         lines.append(
             f"  host staging read_ahead {plan.read_ahead} -> "
             f"{plan.staging_bytes / 1e6:.0f} MB "
-            f"(page-locked when the box allows)"
+            f"({staged})"
         )
     lines += [
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "

@@ -1,0 +1,96 @@
+{
+ "arm": "D",
+ "prepare_calls": 0,
+ "events": [
+  {
+   "t": 1794139508.700997,
+   "msg": "arm D installed (patched peft.prepare_model_for_kbit_training: False)"
+  }
+ ],
+ "python": "3.12.3",
+ "census_at_trainer_construction": {
+  "dtypes": {
+   "bias [float32]": {
+    "tensors": 84,
+    "mib": 0.5
+   },
+   "embed_tokens [float32]": {
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   "lm_head [float32]": {
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   "lora_AB [bfloat16]": {
+    "tensors": 392,
+    "mib": 77.0
+   },
+   "nf4_weight [uint8]": {
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   "norm [float32]": {
+    "tensors": 57,
+    "mib": 0.8
+   }
+  },
+  "module_classes": {
+   "PeftModelForCausalLM": 1,
+   "Qwen2ForCausalLM": 1,
+   "Qwen2DecoderLayer": 28,
+   "Qwen2Attention": 28,
+   "LigerSwiGLUMLP": 28,
+   "LigerRMSNorm": 57,
+   "Qwen2RotaryEmbedding": 1
+  },
+  "causal_lm_forward": {
+   "class": "Qwen2ForCausalLM",
+   "forward_module": "liger_kernel.transformers.model.qwen2",
+   "forward_name": "lce_forward"
+  }
+ },
+ "use_liger_kernel_arg": true,
+ "census_at_train_end": {
+  "dtypes": {
+   "bias [bfloat16]": {
+    "tensors": 84,
+    "mib": 0.2
+   },
+   "embed_tokens [float32]": {
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   "lm_head [float32]": {
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   "lora_AB [bfloat16]": {
+    "tensors": 392,
+    "mib": 77.0
+   },
+   "nf4_weight [uint8]": {
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   "norm [float32]": {
+    "tensors": 57,
+    "mib": 0.8
+   }
+  },
+  "module_classes": {
+   "PeftModelForCausalLM": 1,
+   "Qwen2ForCausalLM": 1,
+   "Qwen2DecoderLayer": 28,
+   "Qwen2Attention": 28,
+   "LigerSwiGLUMLP": 28,
+   "LigerRMSNorm": 57,
+   "Qwen2RotaryEmbedding": 1
+  },
+  "causal_lm_forward": {
+   "class": "Qwen2ForCausalLM",
+   "forward_module": "liger_kernel.transformers.model.qwen2",
+   "forward_name": "lce_forward"
+  }
+ }
+}

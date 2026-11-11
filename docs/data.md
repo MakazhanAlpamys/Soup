@@ -472,6 +472,13 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
+`--count` is the number of rows requested. Rows the provider did not return, and rows that
+fail validation, are asked for again. A row dropped as a duplicate (of `--dedup-with`, or of
+an earlier row in the same run) counts toward `--count`: the file then holds fewer rows, the
+summary shows how many were requested and how many duplicates were removed, and the command
+exits 0. If three requests in a row return no valid row, the command stops, saves the rows it
+has to the output file and exits 1.
+
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
@@ -1477,6 +1484,35 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+**Native MLX text SFT** also consumes this cache with both
+`data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional
+Arrow reader with `pip install 'soup-cli[mlx]' datasets`. The consumer uses the
+same fingerprint gate and legacy missing-metadata advisory as Transformers,
+without importing Torch, PEFT or TRL. Corrupt metadata, changed key inputs
+and incomplete shards fail without a raw-data fallback. The CLI retains the
+existing source-availability contract; a cache does not make an unavailable
+configured source valid.
+
+Native cached batches use the stored IDs and explicit target labels exactly:
+no template render, retokenization, added BOS/EOS or regenerated response mask.
+Labels may differ from input IDs; `-100` ignores a target. Padding labels remain
+ignored even when PAD=EOS, and the causal shift applies to labels and tokens
+together. Every row is checked for integer IDs/labels (bools/floats are refused),
+vocabulary bounds, matching lengths, right-padding attention masks and at least
+one retained causal target after truncation. A single bad train/validation row
+stops the run. The native sampler retains its existing whole-batch behaviour;
+loading preserves the cache's split/row identity. Saved metadata records cache
+consumption, and rewind records the same stored-label objective.
+
+The producer's masking policy is frozen in its labels; raw native and Transformers
+template heuristics can differ, so cache consumption does not rewrite one into
+the other. Native qualification covers ordinary text LoRA with dense and genuine
+4-bit bases. The existing native custom-template override refusal remains;
+consuming a cache does not enable arbitrary raw template overrides or other tasks.
+Keys bind configured names/paths/settings, not source-file contents, shipped
+model-template contents or model-weight hashes. Unchanged names do not prove
+unchanged data/model contents; only use legacy metadata-free caches you trust.
 
 Rows are rendered with `data.chat_template` when it is set, the same as live
 training. The `pre_tokenized` training config must name the same template, since

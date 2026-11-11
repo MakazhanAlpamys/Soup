@@ -210,7 +210,7 @@ training:
 ```
 
 - **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model. `--resume` refuses a checkpoint without `adapter_config.json`, from another task (an MLX SFT adapter included), or from another base, before any tensor loads.
-- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, even when the row would fit; the transformers backend makes that cut only on a row that does not fit `data.max_length` (#1209). Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
+- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template. Both backends keep the whole prompt when both complete inputs fit `data.max_length`; only an overflowing pair has its prompt capped at `max_length // 2` (keeping the start) and completions at what remains. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
 - **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
 - **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
@@ -256,11 +256,11 @@ training:
   TRL's ORPO trainer does: rendered to text with the chat template (keeping
   only the prefix the prompt and `prompt + answer` renderings share), the
   answer located even when the tokenizer merges the last prompt token into it,
-  BOS prepended and EOS appended when missing. A prompt longer than
-  `max_length // 2` tokens is cut to that many, keeping its end, with the BOS
-  in front, and the answers to the remaining room, even when the row would fit;
-  the transformers backend makes that cut only on a row that does not fit
-  `data.max_length` (#1209). TRL's own earlier answer cut, which can leave the shorter
+  BOS prepended and EOS appended when missing. Both backends keep the whole
+  prompt when both complete inputs, including BOS/EOS, fit `data.max_length`.
+  If either input overflows, both prompts are capped at `max_length // 2`,
+  keeping their ends with the BOS in front, and each answer to its remaining room.
+  TRL's own earlier answer cut, which can leave the shorter
   answer empty, is not reproduced. A pair the template cannot split is skipped
   with a count; a row with no room for an answer is refused.
 - **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
@@ -316,15 +316,10 @@ That shows the objective moving, not alignment quality.
   micro-batch and the micro-batches are averaged with equal weight, as the
   transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
-  the same code. MLX SimPO, like MLX DPO and ORPO, cuts by the prompt alone: a
-  prompt longer than `max_length // 2` tokens is cut to that many, keeping its
-  end, and the answers to the remaining room, even when the row would fit. The
-  transformers SimPO path applies the same cap only when a row does not fit
-  `data.max_length` (TRL 0.29.1 cuts only the answers, so a long prompt reached
-  the model whole); Soup refuses a row whose shorter answer that cut empties.
-  Rows that fit with a prompt of at most `max_length // 2` tokens train on the
-  same tokens on either backend; a row that fits with a longer prompt keeps its
-  whole prompt on transformers and loses its start on MLX.
+  the same code. Both backends keep the whole prompt when both complete inputs
+  fit `data.max_length`. If either input overflows, both prompts are capped at
+  `max_length // 2`, keeping their ends with the BOS in front, and each answer
+  to its remaining room. Soup refuses a row with no room for an answer.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
@@ -784,8 +779,18 @@ training:
 ## Cloud GPU Training
 
 No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
-from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
-the environment only when a live submission starts.
+from your `soup.yaml`. The **effective** config — the loaded object with every CLI override
+already applied — is base64-embedded as **data**; credentials are read from the environment only
+when a live submission starts.
+
+`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
+local HF repo, so a cloud run would silently ignore them.
+
+A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
+id (every built-in template sets one, so users hit this first). The same applies to local model
+paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
+time rather than silently shipped. Uploading local input files is tracked in
+[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit

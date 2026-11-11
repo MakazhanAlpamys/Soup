@@ -77,7 +77,7 @@ SUPPORTED_SOURCE_FORMATS = (
     "Layer streaming cannot dequantise it: it reads plain floating-point weights "
     "(bfloat16, float16, float32), DeepSeek-V3's block FP8 (quant_method 'fp8' with "
     f"weight_block_size, on model_type {', '.join(FP8_BLOCK_ARCHS)}) and, on qwen4_exp "
-    "only, oMLX/oQ affine bundles. Point training.base at a bf16 or FP8-block copy of "
+    "only, oMLX/oQ affine bundles. Point base at a bf16 or FP8-block copy of "
     "this model, or dequantise it to bf16 first."
 )
 
