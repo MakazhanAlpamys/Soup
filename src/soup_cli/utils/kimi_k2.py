@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
+import re
 from typing import Any, Mapping, NamedTuple, Optional, Tuple
 
 KIMI_K2_MODEL_TYPE = "kimi_k2"
@@ -528,6 +530,382 @@ def load_resident_model_config(
     from transformers import DeepseekV3Config
 
     return DeepseekV3Config.from_dict(kimi_k2_native_config_dict(config_dict), **unused)
+
+
+#: Tensor key suffixes the resident load ignores entirely: the published K2 checkpoint
+#: carries 61 stale per-layer rotary buffers (BF16, shape [7]) that neither K2's own code
+#: (a non-persistent buffer) nor the native class (no per-layer rotary module) reads.
+_RESIDENT_IGNORED_SUFFIXES = (".rotary_emb.inv_freq",)
+
+
+def _local_kimi_k2_dir(base: str) -> bool:
+    """A local directory whose ``config.json`` declares ``model_type: kimi_k2`` (JSON only)."""
+    if not os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        return False
+    read = _raw_config_dict(base, {})
+    return read is not None and read[0].get("model_type") == KIMI_K2_MODEL_TYPE
+
+
+def _resolve_resident_device(device_map: Any, torch: Any):
+    """The single device an accelerate-style ``device_map`` asks the whole model to live on.
+
+    ``None`` loads on CPU; ``"auto"`` is accelerate's "one device" plan, resolved to the
+    current CUDA device when one is available and to CPU otherwise; a plain device string
+    or accelerate's whole-model entry (a single-entry dict ``{"": <rank|device>}``,
+    what a per-rank map reduces to) names the target. Multi-device maps
+    (``"balanced"`` and friends, dicts with more than the ``""`` entry) are refused: v1
+    moves one whole model to one device, never shards it.
+    """
+    if device_map is None:
+        return torch.device("cpu")
+    if isinstance(device_map, str):
+        if device_map == "auto":
+            if torch.cuda.is_available():
+                return torch.device("cuda", torch.cuda.current_device())
+            return torch.device("cpu")
+        if device_map in ("balanced", "balanced_low_0", "sequential"):
+            raise NotImplementedError(
+                f"resident Kimi K2 route: device_map {device_map!r} is a multi-device "
+                "accelerate plan the v1 loader does not implement; pass 'auto', a plain "
+                "device string (e.g. 'cuda:0'), or leave device_map unset (loads on CPU)."
+            )
+        return torch.device(device_map)
+    if isinstance(device_map, dict) and len(device_map) == 1 and "" in device_map:
+        target = device_map[""]
+        if isinstance(target, bool):
+            target = None  # refused below
+        if isinstance(target, int):
+            return torch.device("cuda", target)
+        if isinstance(target, (str, torch.device)):
+            return torch.device(target)
+    raise NotImplementedError(
+        f"resident Kimi K2 route: device_map {device_map!r} is a multi-device accelerate "
+        "map the v1 loader does not resolve; pass 'auto', a plain device string "
+        "(e.g. 'cuda:0'), or leave device_map unset (loads on CPU)."
+    )
+
+
+def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
+    """The RESIDENT (non-streamed) route's model loader (#2104): a guarded Kimi K2
+    checkpoint loaded natively into ``DeepseekV3ForCausalLM``, FP8-block weights
+    dequantised per-tensor on load.
+
+    Every base that is not Kimi K2 (a hub id :func:`~soup_cli.utils.kimi.is_resident_kimi_k2_base`
+    admits, or a local directory whose ``config.json`` declares ``model_type: kimi_k2``)
+    passes straight through to ``AutoModelForCausalLM.from_pretrained(base,
+    **model_kwargs)``, so call sites may call this unconditionally.
+
+    For a K2 base the config goes through :func:`load_resident_model_config` (the guard
+    refuses Thinking/0905/bad configs, naming every failing field), the safetensors are
+    read tensor by tensor — each FP8 block weight is dequantised to ``dtype`` against its
+    float32 ``_scale_inv`` exactly as the streamed sharder does
+    (:func:`~soup_cli.utils.fp8_block.dequantize_fp8_block`), raw FP8 bytes released
+    before the next tensor — and the state dict is assigned onto a meta skeleton built
+    under ``init_empty_weights``.
+
+    Honoured ``model_kwargs``: ``dtype`` (default ``torch.bfloat16``), ``revision``, and
+    ``attn_implementation`` (set on the config). ``trust_remote_code`` is accepted and
+    ignored: this route never runs a repository's code. ``quantization_config`` is
+    refused — the resident route loads bf16 only; train on a dequantised copy or use the
+    streamed route for 4-bit. A caller-supplied ``config`` (e.g. the long-context rope
+    override) is refused too: per-config rope overrides are not supported on the resident
+    K2 route yet (follow-up), and a foreign config would bypass the guard — drop the
+    kwarg or use the streamed route. ``device_map``: v1 loads on CPU and then moves to
+    one device — ``"auto"`` resolves to the current CUDA device when one is available,
+    else CPU; a plain device string (``"cpu"``, ``"cuda:0"``, ...) or accelerate's
+    whole-model entry (a single-entry dict like ``{"": 0}``) names it directly; any
+    multi-device accelerate map is refused rather than guessed.
+
+    Parameters load at ``dtype``; float buffers keep their stored dtype (the checkpoint
+    and ``from_pretrained`` keep ``e_score_correction_bias`` float32), and integer
+    buffers keep their exact dtype.
+
+    A hub id's weights resolve through ``huggingface_hub.snapshot_download`` with the
+    safetensors/json allow-pattern — normal cache behaviour, same as transformers would
+    use; on first real use that is the user's explicit request to train K2 and may fetch
+    the full multi-TB repository.
+
+    The model is returned on the requested device in the requested dtype; train/eval mode
+    is the caller's to set. No layer streaming is involved on this route: nothing here
+    reads or builds a streamed shard cache.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.kimi import is_resident_kimi_k2_base
+
+    if not is_resident_kimi_k2_base(base) and not _local_kimi_k2_dir(base):
+        return AutoModelForCausalLM.from_pretrained(base, **model_kwargs)
+
+    model_kwargs = dict(model_kwargs)
+    revision = model_kwargs.pop("revision", None)
+    if model_kwargs.pop("quantization_config", None) is not None:
+        raise ValueError(
+            "resident Kimi K2 route: model_kwargs['quantization_config'] is set, but the "
+            "resident route loads bf16 only. Remove it and load the FP8-block checkpoint "
+            "dequantised (this loader does that), train on a dequantised bf16 copy, or "
+            "use the streamed route for 4-bit training."
+        )
+    dtype = model_kwargs.pop("dtype", torch.bfloat16)
+    device_map = model_kwargs.pop("device_map", None)
+    model_kwargs.pop("trust_remote_code", None)  # never used: no remote code runs here
+    attn_implementation = model_kwargs.pop("attn_implementation", None)
+    if model_kwargs.pop("config", None) is not None:
+        # Ruling D17: a caller-supplied config would bypass the guard, and with
+        # trust_remote_code resolved it would even be code AutoConfig already ran.
+        raise UnsupportedKimiK2Error(
+            "resident Kimi K2 route: model_kwargs['config'] (a pre-built config, e.g. the "
+            "long-context rope override) is not supported yet — the guarded published K2 "
+            "config is the only admitted one on this route, and a foreign config would "
+            "bypass that guard. Remove the config kwarg (drop the rope override), or use "
+            "the streamed route."
+        )
+    if model_kwargs:
+        raise ValueError(
+            "resident Kimi K2 route: unsupported model_kwargs "
+            f"{sorted(model_kwargs)}; supported: dtype, revision, "
+            "attn_implementation, device_map, trust_remote_code."
+        )
+
+    device = _resolve_resident_device(device_map, torch)
+
+    config = load_resident_model_config(base, revision=revision)
+
+    if os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        weights_dir = os.path.realpath(os.path.expanduser(base))
+    else:
+        from huggingface_hub import snapshot_download
+
+        weights_dir = snapshot_download(
+            repo_id=base, revision=revision, allow_patterns=["*.safetensors", "*.json"],
+        )
+
+    from soup_cli.utils.fp8_block import (
+        SUPPORTED_FP8_FORMAT,
+        FP8BlockPlan,
+        UnsupportedFP8Error,
+        dequantize_fp8_block,
+        plan_fp8_block,
+        quantization_config_of,
+    )
+    from soup_cli.utils.layer_shard import (
+        _canonical_stream_key,
+        _discover_safetensors,
+        _read_source_tensors,
+    )
+    from soup_cli.utils.safetensors_reader import read_header, read_into
+
+    shard_paths = _discover_safetensors(weights_dir)
+    tensors = _read_source_tensors(shard_paths)
+    try:
+        plan = plan_fp8_block(quantization_config_of(config), tensors, arch="deepseek_v3")
+    except UnsupportedFP8Error as exc:
+        # plan_fp8_block's tail names the streamed route; this is the resident one.
+        message = str(exc)
+        if message.endswith(SUPPORTED_FP8_FORMAT):
+            message = message[: -len(SUPPORTED_FP8_FORMAT)] + _FP8_RESIDENT_SUPPORT
+        raise ValueError(message) from exc
+
+    _torch_dtypes = {
+        "F8_E4M3": torch.float8_e4m3fn,
+        "BF16": torch.bfloat16,
+        "F16": torch.float16,
+        "F32": torch.float32,
+        "F64": torch.float64,
+        "I64": torch.int64,
+        "I32": torch.int32,
+        "I16": torch.int16,
+        "I8": torch.int8,
+        "U8": torch.uint8,
+        "BOOL": torch.bool,
+    }
+
+    # Every tensor's (file, byte range), canonical key, so an FP8 weight's scale is found
+    # whether or not it sits in the same shard.
+    entries = {}
+    for path in shard_paths:
+        for key, entry in read_header(path).items():
+            entries[_canonical_stream_key(key)] = (path, entry)
+
+    from accelerate import init_empty_weights
+    from transformers import DeepseekV3ForCausalLM
+
+    if attn_implementation is not None:
+        config._attn_implementation = attn_implementation
+    with init_empty_weights():
+        model = DeepseekV3ForCausalLM(config)
+    model.tie_weights()
+    # Only the model's own buffers keep their stored dtype (e_score_correction_bias is
+    # float32 in the checkpoint and in from_pretrained's own load); everything else —
+    # parameters and per-expert tensors awaiting the fuse — takes the requested dtype.
+    buffer_keys = {name for name, _buffer in model.named_buffers()}
+
+    state = {}
+    handles = {}
+    dequantised = 0
+    try:
+        for key in sorted(entries):
+            path, entry = entries[key]
+            raw_dtype, shape = tensors[key]
+            if plan is not None and key in plan.weights:
+                scale_key = FP8BlockPlan.scale_key(key)
+                scale_path, scale_entry = entries[scale_key]
+                raw_weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
+                read_into(_shard_handle(handles, path), entry, raw_weight)
+                raw_scale = torch.empty(tensors[scale_key][1], dtype=torch.float32)
+                read_into(_shard_handle(handles, scale_path), scale_entry, raw_scale)
+                state[key] = dequantize_fp8_block(
+                    raw_weight, raw_scale, plan.block, name=key, dtype=dtype
+                )
+                dequantised += 1
+                del raw_weight, raw_scale
+            elif plan is not None and key in plan.scales:
+                continue  # consumed by its weight's dequantisation, never a parameter
+            elif key.endswith(_RESIDENT_IGNORED_SUFFIXES):
+                continue  # stale per-layer rotary buffer; the native class has none
+            else:
+                stored_dtype = _torch_dtypes[raw_dtype]
+                tensor = torch.empty(shape, dtype=stored_dtype)
+                read_into(_shard_handle(handles, path), entry, tensor)
+                if key in buffer_keys:
+                    # A float buffer keeps its stored dtype; only parameters (and the
+                    # per-expert tensors the fuse turns into parameters) take ``dtype``.
+                    state[key] = tensor
+                else:
+                    state[key] = tensor if stored_dtype == dtype else tensor.to(dtype)
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    _fuse_per_expert_state(state, config)
+
+    model_state = model.state_dict()
+    expected = set(model_state)
+    if getattr(config, "tie_word_embeddings", False):
+        # K2 publishes tie_word_embeddings=true: no separate lm_head tensor in the shards.
+        expected.discard("lm_head.weight")
+    unexpected = sorted(set(state) - expected)
+    if unexpected:
+        raise ValueError(
+            "checkpoint holds tensors the native DeepseekV3 model has no parameters for: "
+            + ", ".join(unexpected[:_MAX_LISTED])
+            + (
+                f" and {len(unexpected) - _MAX_LISTED} more"
+                if len(unexpected) > _MAX_LISTED
+                else ""
+            )
+        )
+    missing = sorted(expected - set(state))
+    if missing:
+        raise ValueError(
+            "checkpoint is missing tensors the native DeepseekV3 model needs: "
+            + ", ".join(missing[:_MAX_LISTED])
+            + (f" and {len(missing) - _MAX_LISTED} more" if len(missing) > _MAX_LISTED else "")
+        )
+    mismatched = sorted(
+        key for key in state
+        if tuple(int(dim) for dim in model_state[key].shape)
+        != tuple(int(dim) for dim in state[key].shape)
+    )
+    if mismatched:
+        raise ValueError(
+            "checkpoint tensors whose shapes differ from the native model's parameters: "
+            + ", ".join(mismatched[:_MAX_LISTED])
+        )
+    model.load_state_dict(state, assign=True, strict=False)
+    if getattr(config, "tie_word_embeddings", False):
+        # assign=True replaced embed_tokens; re-point the tied head at the loaded tensor.
+        model.lm_head.weight = model.get_input_embeddings().weight
+
+    if console is not None:
+        detail = f", {dequantised} FP8 block weights dequantised" if dequantised else ""
+        console.print(
+            f"[green]Kimi K2 resident load:[/] {len(state)} tensors{detail} "
+            f"({dtype}, device {device})"
+        )
+    return model.to(device)
+
+
+def _shard_handle(handles: dict, path: str):
+    """The cached read handle for one shard file, opened on first use."""
+    handle = handles.get(path)
+    if handle is None:
+        handle = open(path, "rb")
+        handles[path] = handle
+    return handle
+
+
+#: Per-expert checkpoint spelling (the published K2 index, and what ``save_pretrained``
+#: writes for the fused native model) -> the fused 3-D parameters the native model holds
+#: in transformers 5, the layout :func:`transformers.AutoModelForCausalLM.from_pretrained`
+#: itself produces via its qwen2_moe conversion (MergeModulelist + Concatenate).
+_EXPERT_KEY_RE = re.compile(r"^(.*)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+
+
+def _fuse_per_expert_state(state: dict, config: Any) -> None:
+    """Merge ``mlp.experts.<i>.*.weight`` tensors into the fused ``gate_up_proj`` /
+    ``down_proj`` parameters, in place, one preallocated copy per layer.
+
+    Per-expert tensors stay per-expert on disk and in the read loop; this is the single
+    materialisation the fused native module tree needs. Any expert index missing, or any
+    of the three projections missing for one expert, is refused by name.
+    """
+    import torch
+
+    grouped = {}
+    for key in list(state):
+        match = _EXPERT_KEY_RE.match(key)
+        if match is not None:
+            grouped.setdefault(match.group(1), {}).setdefault(
+                int(match.group(2)), {}
+            )[match.group(3)] = state.pop(key)
+    if not grouped:
+        return
+    n_routed = int(config.n_routed_experts)
+    for prefix, experts in sorted(grouped.items()):
+        indices = sorted(experts)
+        incomplete = [
+            index
+            for index in indices
+            if set(experts[index]) != {"gate_proj", "up_proj", "down_proj"}
+        ]
+        if incomplete or indices != list(range(n_routed)):
+            raise ValueError(
+                f"checkpoint layer {prefix} holds per-expert tensors for experts "
+                f"{indices}, not every index 0..{n_routed - 1} with gate_proj, up_proj "
+                f"and down_proj (incomplete: {incomplete}). The checkpoint is damaged or "
+                "not a complete Kimi K2 copy."
+            )
+        for projection in ("gate_proj", "up_proj", "down_proj"):
+            reference_shape = tuple(int(dim) for dim in experts[0][projection].shape)
+            for index in range(1, n_routed):
+                shape = tuple(int(dim) for dim in experts[index][projection].shape)
+                if shape != reference_shape:
+                    raise ValueError(
+                        f"checkpoint layer {prefix} holds {projection} tensors of "
+                        f"differing shapes: expert 0 has {list(reference_shape)}, but "
+                        f"{prefix}.mlp.experts.{index}.{projection}.weight has "
+                        f"{list(shape)}. The checkpoint is damaged."
+                    )
+        gate_shape = experts[0]["gate_proj"].shape
+        down_shape = experts[0]["down_proj"].shape
+        gate_up = torch.empty(
+            (n_routed, 2 * int(gate_shape[0]), int(gate_shape[1])),
+            dtype=experts[0]["gate_proj"].dtype,
+        )
+        down = torch.empty(
+            (n_routed, int(down_shape[0]), int(down_shape[1])),
+            dtype=experts[0]["down_proj"].dtype,
+        )
+        for index in range(n_routed):
+            parts = experts[index]
+            rows = int(parts["gate_proj"].shape[0])
+            gate_up[index, :rows].copy_(parts["gate_proj"])
+            gate_up[index, rows:].copy_(parts["up_proj"])
+            down[index].copy_(parts["down_proj"])
+            del parts["gate_proj"], parts["up_proj"], parts["down_proj"]
+        state[prefix + ".mlp.experts.gate_up_proj"] = gate_up
+        state[prefix + ".mlp.experts.down_proj"] = down
 
 
 def _tiktoken_available() -> bool:

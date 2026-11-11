@@ -1521,7 +1521,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model
 
@@ -1626,9 +1626,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            cfg.base, **model_kwargs,
-            **base_revision_kwargs(cfg.base),
+        from soup_cli.utils.kimi_k2 import load_resident_model
+
+        self.model = load_resident_model(
+            cfg.base,
+            model_kwargs={**model_kwargs, **base_revision_kwargs(cfg.base)},
+            console=console,
         )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 

@@ -5,6 +5,9 @@ A local twin of the streamed loader's tests, built on synthetic tmp_path configs
 """
 
 import json
+import os
+import re
+import shutil
 
 import pytest
 
@@ -220,3 +223,464 @@ def test_resident_falls_through_to_autoconfig_for_other_model_types(tmp_path):
     direct = AutoConfig.from_pretrained(config_dir)
     assert type(loaded) is type(direct) is LlamaConfig
     assert loaded.hidden_size == 32
+
+
+# ==========================================================================
+# load_resident_model: the native resident model load with FP8 dequant-on-load
+# =========================================================================
+pytest.importorskip("torch")
+
+
+_TINY = dict(
+    vocab_size=128, hidden_size=64, intermediate_size=128, moe_intermediate_size=32,
+    num_hidden_layers=3, first_k_dense_replace=1, num_attention_heads=4,
+    num_key_value_heads=4, n_shared_experts=1, n_routed_experts=8, n_group=1, topk_group=1,
+    num_experts_per_tok=2, kv_lora_rank=16, q_lora_rank=24, qk_nope_head_dim=16,
+    qk_rope_head_dim=8, v_head_dim=16, max_position_embeddings=2048, bos_token_id=0,
+    eos_token_id=1,
+)
+_TINY_YARN = {
+    "beta_fast": 1.0, "beta_slow": 1.0, "factor": 32.0, "mscale": 1.0, "mscale_all_dim": 1.0,
+    "original_max_position_embeddings": 64,
+}
+_BLOCK = (16, 32)
+#: The per-expert checkpoint spelling -> which fused native parameter it lands in.
+_EXPERT_KEY_RE = re.compile(r"^(.*)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+#: The real checkpoint carries 61 of these (BF16 [56]); neither K2's code (non-persistent
+#: buffer) nor the native class reads them, so the resident load must tolerate them.
+_STALE_INV_FREQ = "self_attn.rotary_emb.inv_freq"
+_STALE_VALUE = 12345.0
+
+
+def _native_tiny_config():
+    """The control's config, from keyword arguments: never through Soup's loader."""
+    from transformers import DeepseekV3Config
+
+    rope = {"rope_type": "yarn", "rope_theta": 50000.0, **_TINY_YARN}
+    return DeepseekV3Config(
+        **_TINY, rope_parameters=rope, rms_norm_eps=1e-6, routed_scaling_factor=2.827,
+        norm_topk_prob=True, tie_word_embeddings=False, num_mtp_layers=0,
+    )
+
+
+def _fp8_harness():
+    """benchmarks/harness/fp8_block_quantize.py, loaded the way test_fp8_block_streaming does."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    harness = Path(__file__).resolve().parent.parent / "benchmarks" / "harness"
+    if str(harness) not in sys.path:
+        sys.path.insert(0, str(harness))
+    spec = importlib.util.spec_from_file_location(
+        "fp8_block_quantize", harness / "fp8_block_quantize.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _reference_dequant(weight_fp8, scale_inv, block):
+    """Written here, independently of Soup and the harness: one block at a time."""
+    import torch
+
+    rows, cols = weight_fp8.shape
+    block_rows, block_cols = block
+    out = torch.full((rows, cols), float("nan"), dtype=torch.float32)
+    for i in range((rows + block_rows - 1) // block_rows):
+        for j in range((cols + block_cols - 1) // block_cols):
+            rs = slice(i * block_rows, min((i + 1) * block_rows, rows))
+            cs = slice(j * block_cols, min((j + 1) * block_cols, cols))
+            out[rs, cs] = weight_fp8[rs, cs].to(torch.float32) * scale_inv[i, j]
+    assert not torch.isnan(out).any()  # every element was written exactly once
+    return out
+
+
+@pytest.fixture(scope="module")
+def resident_checkpoints(tmp_path_factory):
+    """{"k2-bf16", "k2-fp8", "native"}: the same seeded weights, three spellings."""
+    torch = pytest.importorskip("torch")
+    from safetensors.torch import load_file, save_file
+    from transformers import DeepseekV3ForCausalLM
+
+    root = tmp_path_factory.mktemp("kimi-k2-resident")
+    torch.manual_seed(11)
+    model = DeepseekV3ForCausalLM(_native_tiny_config()).to(torch.float32).eval()
+    generator = torch.Generator().manual_seed(23)
+    with torch.no_grad():
+        for layer in model.model.layers[1:]:
+            bias = layer.mlp.gate.e_score_correction_bias
+            bias.copy_(torch.randn(bias.shape, generator=generator) * 2.0)
+        for parameter in model.parameters():
+            parameter.data = parameter.data.to(torch.bfloat16)
+    native = root / "native"
+    model.save_pretrained(str(native))
+    state = load_file(str(native / "model.safetensors"))
+    stale = {
+        f"model.layers.{idx}.{_STALE_INV_FREQ}": torch.full((7,), _STALE_VALUE).to(torch.bfloat16)
+        for idx in range(_TINY["num_hidden_layers"])
+    }
+    k2_bf16 = root / "k2-bf16"
+    k2_bf16.mkdir()
+    save_file({**state, **stale}, str(k2_bf16 / "model.safetensors"), metadata={"format": "pt"})
+    (k2_bf16 / "config.json").write_text(json.dumps(_MINIMAL_K2), encoding="utf-8")
+
+    k2_fp8 = root / "k2-fp8"
+    _fp8_harness().convert_checkpoint(
+        str(k2_bf16), str(k2_fp8), block=_BLOCK, log=lambda _line: None
+    )
+    assert not any(name.endswith(".py") for name in os.listdir(k2_fp8))
+    return {"k2-bf16": str(k2_bf16), "k2-fp8": str(k2_fp8), "native": str(native)}
+
+
+def _reference_model(resident_checkpoints):
+    import torch
+    from transformers import DeepseekV3ForCausalLM
+
+    return DeepseekV3ForCausalLM.from_pretrained(
+        resident_checkpoints["native"], dtype=torch.float32
+    ).eval()
+
+
+def _ids(torch):
+    generator = torch.Generator().manual_seed(17)
+    return torch.randint(0, 128, (2, 12), generator=generator)
+
+
+def test_resident_model_of_the_bf16_copy_matches_native_from_pretrained(resident_checkpoints):
+    import torch
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    model = load_resident_model(
+        resident_checkpoints["k2-bf16"], model_kwargs={"dtype": torch.float32}
+    )
+    assert type(model) is DeepseekV3ForCausalLM
+    reference = _reference_model(resident_checkpoints)
+    ids = _ids(torch)
+    with torch.no_grad():
+        got = model(ids).logits
+        want = reference(ids).logits
+    assert (got - want).abs().max() < 1e-5  # bf16-storage rounding only
+
+
+def test_resident_model_of_the_fp8_copy_dequantises_like_the_independent_reference(
+    resident_checkpoints,
+):
+    import torch
+    from safetensors.torch import load_file
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    fp8_dir = resident_checkpoints["k2-fp8"]
+    model = load_resident_model(fp8_dir, model_kwargs={"dtype": torch.float32})
+    assert type(model) is DeepseekV3ForCausalLM
+
+    # Weight by weight against an independent per-block dequant loop, not our own helper.
+    # Per-expert tensors fuse into the native model's stacked experts; compare the fused
+    # parameter against the same fusion built from the independent reference dequants.
+    fp8_state = load_file(os.path.join(fp8_dir, "model.safetensors"))
+    loaded = model.state_dict()
+    experts = {}
+    for key, value in fp8_state.items():
+        if key.endswith("_scale_inv") or key.endswith(_STALE_INV_FREQ):
+            continue
+        match = _EXPERT_KEY_RE.match(key)
+        if match is not None:
+            experts.setdefault(match.group(1), {}).setdefault(
+                int(match.group(2)), {}
+            )[match.group(3)] = key
+            continue
+        scale = fp8_state.get(key + "_scale_inv")
+        want = value if scale is None else _reference_dequant(value, scale, _BLOCK)
+        got = loaded[key].to(torch.float32)
+        assert torch.allclose(got, want.to(torch.float32), rtol=1e-5, atol=1e-6), key
+    for prefix, per_expert in sorted(experts.items()):
+        n = len(per_expert)
+
+        def _ref(key):
+            return _reference_dequant(
+                fp8_state[key], fp8_state[key + "_scale_inv"], _BLOCK
+            )
+
+        gate_up = torch.stack(
+            [
+                torch.cat([_ref(per_expert[e]["gate_proj"]), _ref(per_expert[e]["up_proj"])], dim=0)
+                for e in range(n)
+            ],
+            dim=0,
+        )
+        down = torch.stack([_ref(per_expert[e]["down_proj"]) for e in range(n)], dim=0)
+        got_gate_up = loaded[prefix + ".mlp.experts.gate_up_proj"].to(torch.float32)
+        got_down = loaded[prefix + ".mlp.experts.down_proj"].to(torch.float32)
+        assert torch.allclose(got_gate_up, gate_up, rtol=1e-5, atol=1e-6), prefix
+        assert torch.allclose(got_down, down, rtol=1e-5, atol=1e-6), prefix
+
+    reference = _reference_model(resident_checkpoints)
+    ids = _ids(torch)
+    with torch.no_grad():
+        got = model(ids).logits
+        want = reference(ids).logits
+    # FP8-block weight quantisation noise through three bf16 layers: measured max delta
+    # 0.021 against logits of abs max ~0.58 (K2's sigmoid scoring keeps logits small).
+    assert (got - want).abs().max() < 5e-2
+
+
+def test_resident_model_refuses_an_fp8_weight_missing_its_scale(tmp_path, resident_checkpoints):
+    import torch
+    from safetensors.torch import load_file, save_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-fp8"]
+    dst = tmp_path / "fp8-missing-scale"
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    victim = sorted(key for key in state if key.endswith("_scale_inv"))[0]
+    del state[victim]
+    save_file(state, str(dst / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+
+    weight_key = victim[: -len("_scale_inv")]
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(str(dst), model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert weight_key in message
+    assert victim in message
+    _assert_no_streamed_wording(message)
+
+
+def test_resident_model_refuses_a_loader_quantization_config(resident_checkpoints):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(
+            resident_checkpoints["k2-fp8"],
+            model_kwargs={
+                "dtype": torch.float32,
+                "quantization_config": {"quant_method": "bitsandbytes", "load_in_4bit": True},
+            },
+        )
+    message = str(caught.value)
+    assert "quantization_config" in message
+    assert "bf16" in message
+    assert "dequantised" in message
+
+
+def test_resident_model_passes_through_for_non_k2_bases(tmp_path, monkeypatch):
+    import transformers
+
+    from soup_cli.utils import layer_shard
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    config_dir = _write_config(
+        tmp_path,
+        {
+            "model_type": "llama",
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_attention_heads": 2,
+            "num_hidden_layers": 1,
+            "num_key_value_heads": 2,
+            "vocab_size": 128,
+        },
+    )
+    sentinel = object()
+    calls = {}
+
+    def fake_from_pretrained(base, **kwargs):
+        calls["base"] = base
+        calls["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(
+        transformers.AutoModelForCausalLM, "from_pretrained", fake_from_pretrained
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("the FP8 dequant machinery was touched")
+
+    monkeypatch.setattr(layer_shard, "_discover_safetensors", _boom)
+
+    model_kwargs = {"dtype": "bfloat16", "device_map": "cpu"}
+    result = load_resident_model(config_dir, model_kwargs=dict(model_kwargs))
+    assert result is sentinel
+    assert calls["base"] == config_dir
+    assert calls["kwargs"] == model_kwargs
+
+
+def test_resident_model_of_the_fp8_copy_never_loads_remote_code(resident_checkpoints, monkeypatch):
+    import torch
+    import transformers.dynamic_module_utils as dynamic
+    import transformers.models.auto.configuration_auto as configuration_auto
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError("remote code was loaded")
+
+    monkeypatch.setattr(dynamic, "get_class_from_dynamic_module", _refuse)
+    monkeypatch.setattr(configuration_auto, "get_class_from_dynamic_module", _refuse)
+
+    model = load_resident_model(
+        resident_checkpoints["k2-fp8"], model_kwargs={"dtype": torch.float32}
+    )
+    assert model.config.model_type == "deepseek_v3"
+
+
+# ==========================================================================
+# Fix round (review + cold critic): device maps, config kwarg, buffer dtypes,
+# tied weights, expert-shape validation
+# ==========================================================================
+
+
+def _record_model_to(monkeypatch):
+    """A spy on DeepseekV3ForCausalLM.to recording the device instead of moving."""
+    import torch
+    from transformers import DeepseekV3ForCausalLM
+
+    recorded = []
+
+    def fake_to(self, device=None, *args, **kwargs):
+        recorded.append(torch.device(device) if device is not None else None)
+        return self
+
+    monkeypatch.setattr(DeepseekV3ForCausalLM, "to", fake_to)
+    return recorded
+
+
+def test_resident_model_resolves_device_map_auto(resident_checkpoints, monkeypatch):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    recorded = _record_model_to(monkeypatch)
+    load_resident_model(
+        resident_checkpoints["k2-bf16"], model_kwargs={"device_map": "auto"}
+    )
+    expected = (
+        torch.device("cuda", torch.cuda.current_device())
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+    assert recorded == [expected]
+
+
+def test_resident_model_resolves_single_entry_device_map(resident_checkpoints, monkeypatch):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    recorded = _record_model_to(monkeypatch)
+    load_resident_model(
+        resident_checkpoints["k2-bf16"], model_kwargs={"device_map": {"": 0}}
+    )
+    assert recorded == [torch.device("cuda", 0)]
+
+
+def test_resident_model_refuses_a_multi_device_map(resident_checkpoints):
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    with pytest.raises(NotImplementedError) as caught:
+        load_resident_model(
+            resident_checkpoints["k2-bf16"],
+            model_kwargs={"device_map": {"": 0, "model.layers.0": 1}},
+        )
+    assert "device_map" in str(caught.value)
+
+
+def test_resident_model_refuses_a_prebuilt_config(resident_checkpoints):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import (
+        UnsupportedKimiK2Error,
+        load_resident_model,
+    )
+
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        load_resident_model(
+            resident_checkpoints["k2-bf16"],
+            model_kwargs={"dtype": torch.float32, "config": _native_tiny_config()},
+        )
+    message = str(caught.value)
+    assert "config" in message
+    assert "rope" in message
+    assert "streamed route" in message
+
+
+def test_resident_model_keeps_float_buffers_at_their_stored_dtype(resident_checkpoints):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    model = load_resident_model(
+        resident_checkpoints["k2-bf16"], model_kwargs={"dtype": torch.bfloat16}
+    )
+    # e_score_correction_bias is float32 in the checkpoint and in from_pretrained's own
+    # load (_keep_in_fp32_modules); only parameters take the requested dtype.
+    bias = model.model.layers[1].mlp.gate.e_score_correction_bias
+    assert bias.dtype == torch.float32
+    assert model.model.embed_tokens.weight.dtype == torch.bfloat16
+    ids = _ids(torch)
+    with torch.no_grad():
+        logits = model(ids).logits
+    assert logits.shape == (2, 12, 128)
+
+
+def test_resident_model_loads_a_tied_checkpoint(tmp_path):
+    import torch
+    from safetensors.torch import load_file, save_file
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    torch.manual_seed(11)
+    config = _native_tiny_config()
+    config.tie_word_embeddings = True
+    model = DeepseekV3ForCausalLM(config).to(torch.float32).eval()
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.data = parameter.data.to(torch.bfloat16)
+    tied = tmp_path / "tied"
+    model.save_pretrained(str(tied))
+    # The published layout: no separate lm_head tensor in the shards.
+    state = load_file(str(tied / "model.safetensors"))
+    state = {key: value for key, value in state.items() if key != "lm_head.weight"}
+    save_file(state, str(tied / "model.safetensors"), metadata={"format": "pt"})
+    (tied / "config.json").write_text(
+        json.dumps(dict(_MINIMAL_K2, tie_word_embeddings=True)), encoding="utf-8"
+    )
+
+    loaded = load_resident_model(str(tied), model_kwargs={"dtype": torch.float32})
+    assert loaded.lm_head.weight is loaded.model.embed_tokens.weight
+    ids = _ids(torch)
+    with torch.no_grad():
+        logits = loaded(ids).logits
+    assert logits.shape == (2, 12, 128)
+
+
+def test_resident_model_refuses_mismatched_expert_shapes(tmp_path, resident_checkpoints):
+    import torch
+    from safetensors.torch import load_file, save_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    dst = tmp_path / "bad-experts"
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    victim = "model.layers.1.mlp.experts.1.gate_proj.weight"
+    state[victim] = torch.cat([state[victim], state[victim][:1]], dim=0)
+    save_file(state, str(dst / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(str(dst), model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert victim in message
+    assert "[33, 64]" in message
+    assert "[32, 64]" in message
