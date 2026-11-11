@@ -20,6 +20,7 @@ NO top-level torch: this module is imported by five trainer modules.
 """
 
 import contextlib
+import functools
 import math
 import os
 import shutil
@@ -744,31 +745,205 @@ def _distributed_launch() -> bool:
     return _world_size() > 1
 
 
-def refuse_if_distributed_launch() -> None:
-    """Refuse layer streaming in a process that is one rank of a multi-process launch (#2585).
+#: The one task that streams under a distributed launch (BETA, #2585). The rest need a
+#: loss with a second forward or rollouts, none of which is measured data-parallel.
+DISTRIBUTED_STREAM_TASKS = ("sft",)
+
+#: Seconds a rank waits on a silent peer, applied once the setup is done (C8, BETA, #2585).
+#: The group is created with the trainer's 1800 s because the first collective after the
+#: setup waits for the slower rank's download and sharding; a peer that stops answering
+#: later should end the run in minutes, not half an hour. Not a config key: it follows
+#: the launch.
+DISTRIBUTED_STREAM_TIMEOUT_SECONDS = 300
+
+
+def _local_world_size() -> Optional[int]:
+    """``LOCAL_WORLD_SIZE`` as an int; ``None`` when it is unset, empty or malformed."""
+    try:
+        return int(os.environ.get("LOCAL_WORLD_SIZE", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _accelerate_flag(name: str) -> bool:
+    """An accelerate launcher flag (``ACCELERATE_USE_DEEPSPEED`` ...) spelled ``true``."""
+    return os.environ.get(name, "false").strip().lower() == "true"
+
+
+def distributed_stream_blockers(
+    cfg,
+    *,
+    resume: Optional[str] = None,
+    hf_resume: bool = False,
+    push_as: Optional[str] = None,
+    gate: Optional[str] = None,
+    deepspeed: Any = None,
+    fsdp: Any = None,
+    b1: bool = False,
+) -> list:
+    """What stops ``cfg`` from streaming under a distributed launch (empty: nothing).
+
+    One line per blocking item, named the way the user set it, so a refusal tells which
+    setting to remove. The keyword arguments are the ``soup train`` options that are not
+    in the config. The slice that is allowed (BETA): ``task=sft``, one rank per host
+    (``LOCAL_WORLD_SIZE`` is exactly 1; unset cannot be confirmed), plain adapter
+    averaging. Refused: DeepSpeed and FSDP (also when only the launcher says so through
+    ``ACCELERATE_USE_*``: they shard or wrap the model), resume (every rank would need
+    the checkpoint, only rank 0 writes one), a push to the Hub and the eval gate (rank-0
+    work that stalls the other ranks past the group timeout), multipack and RAFT (their
+    trainers do not carry the adapter sync) and ``moe_lora`` (an expert adapter can get
+    no tokens in a step, which the flat sync layout was not measured against).
+
+    The rewind flight recorder is not listed: it defaults to on, and the SFT setup already
+    switches it off under a distributed launch with one console line.
+
+    ``b1=True`` is the TCP launch (``SOUP_STREAM_DP_*``, no ``torchrun``): there is no
+    ``LOCAL_WORLD_SIZE`` to read (one rank per node is how it is launched), and four more
+    settings are blocked because they would make the nodes disagree. HF is not distributed
+    there, so each node sees only its own loss: the loss watchdog and spike recovery would stop
+    or rewind one node alone, packing would give the nodes different step counts (a node
+    waits for a sync the others never reach), and the accumulation auto-tuner reacts to one
+    node's memory.
+    """
+    blockers = []
+    task = getattr(cfg, "task", None)
+    if task not in DISTRIBUTED_STREAM_TASKS:
+        blockers.append(f"task={task!r}")
+    local_size = _local_world_size()
+    if b1:
+        pass
+    elif local_size is None or local_size < 1:
+        blockers.append(
+            "LOCAL_WORLD_SIZE unset or invalid (one rank per host cannot be confirmed)"
+        )
+    elif local_size > 1:
+        blockers.append(f"LOCAL_WORLD_SIZE={local_size} (more than one rank per host)")
+    if deepspeed or _accelerate_flag("ACCELERATE_USE_DEEPSPEED"):
+        blockers.append("--deepspeed")
+    if fsdp or _accelerate_flag("ACCELERATE_USE_FSDP"):
+        blockers.append("--fsdp")
+    if resume is not None:
+        blockers.append("--resume")
+    if hf_resume:
+        blockers.append("--hf-resume")
+    if push_as:
+        blockers.append("--push-as")
+    tcfg = cfg.training
+    eval_gate = getattr(tcfg, "eval_gate", None)
+    if gate:
+        blockers.append("--gate")
+    if eval_gate is not None and getattr(eval_gate, "enabled", False):
+        blockers.append("training.eval_gate")
+    if getattr(tcfg, "multipack", False):
+        blockers.append("training.multipack")
+    if getattr(tcfg, "moe_lora", False):
+        blockers.append("training.moe_lora")
+    if getattr(cfg.data, "format", None) == "raft":
+        blockers.append("data.format='raft'")
+    if b1:
+        for name in ("packing", "loss_watchdog", "loss_spike_recovery", "grad_accum_auto_tune"):
+            if getattr(tcfg, name, False):
+                blockers.append(f"training.{name}")
+    return blockers
+
+
+def _refuse_b1_with_launcher(names: list, world_size: int) -> None:
+    raise ValueError(
+        f"{', '.join(names)} set together with WORLD_SIZE={world_size}: data-parallel layer "
+        "streaming has two launches that must not be mixed. Use torchrun / accelerate launch "
+        "(WORLD_SIZE) when the nodes can reach each other, or the SOUP_STREAM_DP_* variables on "
+        "plain `soup train` processes (WORLD_SIZE unset) when they cannot."
+    )
+
+
+def refuse_if_distributed_launch(
+    cfg,
+    *,
+    resume: Optional[str] = None,
+    hf_resume: bool = False,
+    push_as: Optional[str] = None,
+    gate: Optional[str] = None,
+    deepspeed: Any = None,
+    fsdp: Any = None,
+) -> bool:
+    """Decide layer streaming in a process that is one rank of a multi-process launch (#2585).
 
     ``refuse_if_data_parallel`` steps aside under torchrun / accelerate / deepspeed,
-    because DataParallel is never applied there. Nothing else in the streaming path
-    supports more than one process, so stepping aside let the run go on to fail late
-    or to train something other than what was asked: the decoder's base weights stay
-    on ``meta`` by design while ``DistributedDataParallel`` requires one device type,
-    and where the launcher creates no process group each process would train its own
-    unsynchronised copy without an error.
+    because DataParallel is never applied there. This is the check that does not: the
+    decoder's base weights stay on ``meta`` by design while ``DistributedDataParallel``
+    requires one device type, so what makes such a run correct is Soup's own adapter
+    average (``utils/adapter_grad_sync.py``), and only the slice measured with it is
+    allowed (BETA). ``distributed_stream_blockers`` names that slice and what is left
+    out; anything on that list is refused here with the blocking items named, before any
+    download, shard or copy.
 
-    This is checked first, before any download, shard or copy. It is a runtime check
-    and not a config validator on purpose: the same config is loaded by commands that
-    run fine in a shell with a launcher variable left over. The same ``WORLD_SIZE``
-    reading as ``_distributed_launch`` applies, so unset, ``1`` and malformed values
-    are not refused.
+    Returns ``True`` for an allowed distributed launch (the caller announces BETA and
+    installs the sync), ``False`` when the process is not distributed. It is a runtime
+    check and not a config validator on purpose: the same config is loaded by commands
+    that run fine in a shell with a launcher variable left over. The same ``WORLD_SIZE``
+    reading as ``_distributed_launch`` applies, so unset, ``1`` and malformed values are
+    not distributed and behave as before.
+
+    The other launch (B1, nodes that cannot reach each other's addresses) is switched on by the
+    ``SOUP_STREAM_DP_*`` variables on plain, non-distributed processes
+    (``utils/adapter_grad_transport.py``). They are validated here, BY NAME, before anything
+    else, and the same blockers apply (``b1=True``); setting them together with
+    ``WORLD_SIZE>1`` is refused. A ``ValueError`` in every refusal.
     """
+    from soup_cli.utils.adapter_grad_transport import B1_ENV_NAMES, read_b1_env
+
+    b1_env = read_b1_env()
     world_size = _world_size()
+    if b1_env is not None:
+        if world_size > 1:
+            _refuse_b1_with_launcher(
+                [name for name in B1_ENV_NAMES if os.environ.get(name) is not None], world_size
+            )
+        blockers = distributed_stream_blockers(
+            cfg,
+            resume=resume,
+            hf_resume=hf_resume,
+            push_as=push_as,
+            gate=gate,
+            deepspeed=deepspeed,
+            fsdp=fsdp,
+            b1=True,
+        )
+        if blockers:
+            raise ValueError(
+                "training.stream_layers=true with SOUP_STREAM_DP_* set (data-parallel over TCP, "
+                f"rank {b1_env.rank} of {b1_env.world_size}): distributed layer streaming is not "
+                f"supported yet with {', '.join(blockers)}, see #{DISTRIBUTED_STREAM_ISSUE}. It "
+                "is BETA for task='sft', without --deepspeed, --fsdp, --resume, --hf-resume, "
+                "--push-as, an eval gate (--gate / training.eval_gate), training.multipack, "
+                "training.moe_lora, training.packing, training.loss_watchdog, "
+                "training.loss_spike_recovery, training.grad_accum_auto_tune or "
+                "data.format='raft'. Remove the blocking setting, or unset the SOUP_STREAM_DP_* "
+                "variables to train on one node."
+            )
+        return True
     if world_size <= 1:
-        return
-    raise ValueError(
-        f"training.stream_layers=true under a distributed launch (WORLD_SIZE={world_size}): "
-        f"distributed layer streaming is not supported yet, see #{DISTRIBUTED_STREAM_ISSUE}. "
-        "Run on one process (no torchrun/accelerate launch), or set stream_layers: false."
+        return False
+    blockers = distributed_stream_blockers(
+        cfg,
+        resume=resume,
+        hf_resume=hf_resume,
+        push_as=push_as,
+        gate=gate,
+        deepspeed=deepspeed,
+        fsdp=fsdp,
     )
+    if blockers:
+        raise ValueError(
+            f"training.stream_layers=true under a distributed launch (WORLD_SIZE={world_size}): "
+            f"distributed layer streaming is not supported yet with {', '.join(blockers)}, "
+            f"see #{DISTRIBUTED_STREAM_ISSUE}. It is BETA for task='sft' on one rank per "
+            "host, without --deepspeed, --fsdp, --resume, --hf-resume, --push-as, an eval "
+            "gate (--gate / training.eval_gate), training.multipack, training.moe_lora or "
+            "data.format='raft'. Run on one process (no torchrun/accelerate launch), set "
+            "stream_layers: false, or remove the blocking setting."
+        )
+    return True
 
 
 def refuse_if_data_parallel(device) -> None:
@@ -810,6 +985,27 @@ def refuse_if_data_parallel(device) -> None:
     )
 
 
+def _closes_dp_group_on_failure(method):
+    """Close the B1 group's sockets when the decorated setup raises.
+
+    The group opens early in ``_setup_streaming_transformers`` and the streamed runtime that
+    would close it (``_close_stream_runtime``) does not exist yet; a peer then fails at once
+    on the closed connection instead of waiting out the group timeout. A decorator and not a
+    ``try`` in ``SFTTrainerWrapper.setup``: the dispatch there stays one plain call per branch
+    (#1697 / #1581 read it), and the refusal stays the first statement of the method.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except BaseException:
+            self._close_dp_group()
+            raise
+
+    return wrapper
+
+
 class StreamingSetupMixin:
     """Builds a layer-streamed model in place of the resident load.
 
@@ -831,6 +1027,15 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
+    #: True once the setup accepted a distributed launch (BETA): the trainer must then
+    #: carry the adapter-gradient sync, and a resume is refused.
+    _distributed_stream = False
+    #: The B1 group (``TcpStarGroup``) of this rank; ``None`` for the ``torch.distributed`` form
+    #: and for every run that is not distributed.
+    _dp_group = None
+    #: The frozen-base items this rank sends to the cross-rank init check (C5), computed
+    #: by the streaming setup when the launch is distributed; ``None`` otherwise.
+    _stream_base_items = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
 
@@ -915,6 +1120,7 @@ class StreamingSetupMixin:
                 stack.enter_context(context)
             yield stack
 
+    @_closes_dp_group_on_failure
     def _setup_streaming_transformers(self, cfg, tcfg):
         """v0.72.0 BETA — layer streaming. The resident base load NEVER happens.
 
@@ -923,10 +1129,18 @@ class StreamingSetupMixin:
         decoder layer from CPU RAM into a small pool of pre-allocated VRAM
         buffers. Peak VRAM becomes the size of ONE layer instead of the model.
         """
-        # FIRST, ahead of every import and every other check: this configuration is not
-        # supported across processes (#2585), and a refusal must not cost a tokenizer
-        # load, a weight resolve or a shard write.
-        refuse_if_distributed_launch()
+        # FIRST, ahead of every import and every other check: only a measured slice of
+        # this configuration runs across processes (#2585), and a refusal must not cost
+        # a tokenizer load, a weight resolve or a shard write.
+        distributed = refuse_if_distributed_launch(
+            cfg,
+            deepspeed=self._launch_deepspeed(),
+            fsdp=getattr(self, "fsdp_config", None),
+        )
+        self._distributed_stream = distributed
+        self._dp_group = None
+        if distributed:
+            self._join_distributed_stream()
 
         from dataclasses import replace
 
@@ -1571,6 +1785,9 @@ class StreamingSetupMixin:
         )
         self.model = model
         self._stream_runtime = runtime
+        if distributed:
+            self._bypass_accelerate_wrap(model)
+            self._stream_base_items = self._distributed_base_items(shard_dir, index)
         # #792 — on the materialised adapters, before the probe measures a step.
         from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
 
@@ -1627,6 +1844,131 @@ class StreamingSetupMixin:
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
         )
+
+    def _join_distributed_stream(self) -> None:
+        """Say that a distributed streaming run is BETA; for B1, join the group (blocks).
+
+        The group is formed FIRST, before any download or shard: a rank that cannot reach rank 0
+        (a wrong address, a different world size, a version skew) fails in seconds instead of
+        after a long setup, and a rank 0 that dies during its setup closes the sockets, so its
+        peers fail at once instead of waiting out the timeout.
+        """
+        from soup_cli.utils.adapter_grad_transport import open_b1_group, read_b1_env
+        from soup_cli.utils.terminal import for_terminal
+
+        b1_env = read_b1_env()
+        if b1_env is None:
+            console.print(
+                f"[yellow]Distributed layer streaming is BETA:[/] data-parallel over "
+                f"{_world_size()} ranks (task=sft, one rank per host, LoRA gradients "
+                f"averaged by Soup); see #{DISTRIBUTED_STREAM_ISSUE} for what is not "
+                "supported yet."
+            )
+            return
+        console.print(
+            f"[yellow]Distributed layer streaming is BETA (B1, TCP):[/] data-parallel over "
+            f"{b1_env.world_size} ranks through one connection to rank 0; this is rank "
+            f"{b1_env.rank} (task=sft, LoRA gradients averaged by Soup and weighted by token "
+            f"count); see #{DISTRIBUTED_STREAM_ISSUE} for what is not supported yet."
+        )
+        self._dp_group = open_b1_group(
+            b1_env, announce=lambda message: console.print(f"[dim]{for_terminal(message)}[/]")
+        )
+        console.print(
+            f"[green]Data-parallel group ready:[/] {b1_env.world_size} ranks connected "
+            f"(this is rank {b1_env.rank})."
+        )
+
+    def _is_dp_follower(self) -> bool:
+        """True on a B1 rank other than 0: it trains and syncs, but writes nothing."""
+        group = getattr(self, "_dp_group", None)
+        return group is not None and group.rank != 0
+
+    @staticmethod
+    def _bypass_accelerate_wrap(model) -> None:
+        """C4: keep accelerate from wrapping the streamed model in DDP, and say so once.
+
+        On a GPU launch accelerate wraps a model in ``DistributedDataParallel``, and torch
+        refuses a module whose parameters sit on ``meta`` and on the card. The flag makes
+        ``Accelerator.prepare_model`` return the model untouched; the trainer class that
+        the SFT setup builds averages the adapters instead (``AdapterGradSync``).
+        """
+        from soup_cli.utils.adapter_sync_trainer import mark_accelerate_prepared
+
+        mark_accelerate_prepared(model)
+        console.print(
+            "[dim]accelerate's DistributedDataParallel wrap is bypassed for the streamed "
+            "model; the adapter gradients are averaged across ranks by Soup.[/]"
+        )
+
+    @staticmethod
+    def _distributed_base_items(shard_dir: str, index) -> dict:
+        """C5: the frozen-base items of this rank (see ``utils/distributed_init_check``).
+
+        A failure (an unreadable shard) is returned as ``{"error": ...}``, not raised: the
+        other ranks are about to wait in the all-gather for this one, and they should refuse
+        by name instead of waiting out the group timeout.
+        """
+        from soup_cli.utils.distributed_init_check import frozen_base_items
+        from soup_cli.utils.run_provenance import active_base_revision
+
+        try:
+            return frozen_base_items(shard_dir, index, revision=active_base_revision())
+        except Exception as exc:  # noqa: BLE001 -- the gather must still be reached
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    def _finish_distributed_stream_setup(self) -> None:
+        """What a distributed streaming run does once its trainer exists (BETA, #2585).
+
+        C5: every rank starts from the same trainable layout and frozen base (refused by name
+        otherwise) and from rank 0's adapter values (broadcast). It comes first on purpose:
+        its all-gather is the first collective after the setup and waits for the slower
+        rank at the launch timeout. C8: then the group timeout is shortened. C7: the
+        per-step metrics file of this rank.
+        """
+        from soup_cli.utils.distributed_init_check import verify_and_sync_init
+        from soup_cli.utils.stream_dp_runtime import (
+            apply_group_timeout,
+            attach_stream_dp_metrics,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        group = getattr(self, "_dp_group", None)
+        if group is None:
+            report = verify_and_sync_init(self.model, self._stream_base_items)
+        else:
+            from soup_cli.utils.adapter_sync_trainer import check_token_weighting
+
+            check_token_weighting(self.trainer, group)
+            report = verify_and_sync_init(self.model, self._stream_base_items, group=group)
+        differing = (
+            f"; rank(s) {', '.join(str(rank) for rank in report.differing_ranks)} started "
+            "from different adapter values (a different seed?) and took rank 0's"
+            if report.differing_ranks
+            else ""
+        )
+        console.print(
+            f"[green]Distributed init:[/] {report.world_size} ranks agree on the trainable "
+            f"layout ({report.n_tensors} tensors, {report.n_elements:,} elements) and the "
+            f"frozen base; adapters broadcast from rank 0 "
+            f"({report.broadcast_bytes / 1e6:.1f} MB in {report.seconds:.1f} s){differing}."
+        )
+        if group is None:
+            timeout = apply_group_timeout(DISTRIBUTED_STREAM_TIMEOUT_SECONDS)
+        else:
+            timeout = apply_group_timeout(DISTRIBUTED_STREAM_TIMEOUT_SECONDS, group=group)
+        if timeout.api is not None:
+            console.print(
+                f"[dim]Group timeout set to {timeout.seconds:g} s ({timeout.api}): a peer that "
+                "stops answering ends this run within that time.[/]"
+            )
+        else:
+            console.print(
+                "[yellow]Group timeout left at its launch value:[/] "
+                f"{for_terminal(timeout.reason)}. A peer that stops answering is waited for "
+                "until that timeout."
+            )
+        attach_stream_dp_metrics(self.trainer, self._output_dir)
 
     def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
         """Large-layer bytes the VRAM pre-flight charges.
@@ -1748,6 +2090,9 @@ class StreamingSetupMixin:
             return
         if not getattr(self.trainer.args, "should_save", True):
             return
+        group = getattr(self, "_dp_group", None)
+        if group is not None and group.rank != 0:
+            return  # B1: HF believes every node saves; Soup's rank 0 alone wrote an adapter
         from soup_cli.utils.layer_stream_runtime import assert_streamed_adapter_saved
 
         assert_streamed_adapter_saved(self.trainer.model, output_dir)
@@ -1757,6 +2102,25 @@ class StreamingSetupMixin:
         runtime = getattr(self, "_stream_runtime", None)
         if runtime is not None:
             runtime.close()
+        # A B1 run's sockets close with it: a peer then fails at once on the closed
+        # connection instead of waiting for this rank until the group timeout.
+        self._close_dp_group()
+
+    def _launch_deepspeed(self) -> Any:
+        """The ``--deepspeed`` setting the launch refusal must name; ``None`` here.
+
+        Only ``task='sft'`` can run across processes (BETA), so only ``SFTTrainerWrapper``
+        reports its DeepSpeed config. This module builds no trainer and carries no DeepSpeed
+        guard of its own (#359): it asks the wrapper that does, instead of reading the config
+        itself. Every other task is refused as a distributed launch on its task alone.
+        """
+        return None
+
+    def _close_dp_group(self) -> None:
+        """Close the B1 group's sockets, if this run has one (idempotent)."""
+        group = getattr(self, "_dp_group", None)
+        if group is not None:
+            group.close()
 
     def _remove_stream_loss_chunk_hook(self) -> None:
         """Take the chunked head and loss off the model when training ends (#1693).

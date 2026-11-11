@@ -476,7 +476,17 @@ training:
 soup train --config soup.yaml
 ```
 
-**Single process only, for now.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), `soup train` refuses a `stream_layers: true` config at startup with "distributed layer streaming is not supported yet" ([#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585)); run it as one process, or set `stream_layers: false` to train resident across the cards.
+**Across processes: BETA, `task: sft` only.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), a streamed run is data-parallel over the ranks. Each rank streams its own copy of the frozen base, and Soup averages the LoRA gradients across the ranks itself, after the backward pass and before gradient clipping. Accelerate's `DistributedDataParallel` wrap is skipped, because it cannot hold a model whose base weights stay on `meta`. The setup prints a `Distributed layer streaming is BETA` line.
+
+What runs: `task: sft` with exactly one rank per machine (`LOCAL_WORLD_SIZE=1`, e.g. `--gpus 1 --nodes N`, see [Multi-node launch](#multi-node-launch)). `soup train` refuses anything else at startup, before any download or sharding, with "distributed layer streaming is not supported yet with ...". The message names the blocking settings:
+
+- another task, or more than one rank per machine;
+- `--deepspeed` or `--fsdp`;
+- `--resume`, `--hf-resume` or `--push-as`;
+- an eval gate (`--gate` or `training.eval_gate`);
+- `training.multipack`, `training.moe_lora` or `data.format: raft`.
+
+See [#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585). The averaging is checked against a single-process run on the same rows, with two CPU processes over Gloo. A run across GPU machines with `torchrun` or `accelerate launch` has not been measured. For machines that cannot reach each other's addresses, see [Data-parallel streaming across machines](#data-parallel-streaming-across-machines-beta). To train without it, run one process, or set `stream_layers: false` to train resident across the cards.
 
 **Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
 Transformers' own implementation for the model config, the meta skeleton used by
@@ -1313,6 +1323,65 @@ snapshot still passes these checks: when its layout changes into a refused one a
 the next run stops with the same message and leaves the copy in place.
 
 
+### Data-parallel streaming across machines (BETA)
+
+The `torchrun` / `accelerate launch` form above needs every node to reach every other node. Machines that cannot (rented nodes behind a port mapping, two clouds, a home network) cannot form that group: `torch.distributed` opens further connections to addresses each node publishes, and behind a port mapping those are private ones. This launch needs one reachable TCP port instead. There is no new config key: it is switched on by environment variables and needs `training.stream_layers: true` and `task: sft`.
+
+**What it is.** Every node runs an ordinary, non-distributed `soup train` with layer streaming. Soup gives each node its share of the training rows (rows `r`, `r + W`, `r + 2W`, ... for rank `r` of `W` nodes, every share cut to the length of the shortest so that all nodes run the same number of steps; the dropped rows are counted and printed). After the backward pass of each optimizer step, before gradient clipping, every node sends its LoRA gradients to rank 0 over one TCP connection. Rank 0 averages them **weighted by each node's token count** (`sum(N_r * g_r) / sum(N_r)`, where `N_r` is the number of loss tokens in that node's accumulation window; a plain mean is wrong whenever the nodes hold different token counts) and sends the one result back, so every node applies the same bytes. Rank 0 alone shows the progress panel and writes the tracker rows, the tokenizer, the adapter and the checkpoints; the other nodes train and sync and write no adapter. Each node writes its own `stream_dp_metrics.rank<R>.jsonl` (one line per optimizer step: `t_step`, `t_sync`, `sync_bytes`).
+
+```bash
+# node 0 (listens on 29500 inside its machine)
+export SOUP_STREAM_DP_RANK=0
+export SOUP_STREAM_DP_WORLD_SIZE=2
+export SOUP_STREAM_DP_BIND_PORT=29500
+export SOUP_STREAM_DP_TOKEN="<the shared secret>"
+soup train --config soup.yaml
+
+# node 1 (reaches node 0 at its public address and the external port that maps to 29500)
+export SOUP_STREAM_DP_RANK=1
+export SOUP_STREAM_DP_WORLD_SIZE=2
+export SOUP_STREAM_DP_ADDR=203.0.113.7:41123
+export SOUP_STREAM_DP_TOKEN="<the same secret>"
+soup train --config soup.yaml
+```
+
+| Variable | Set on | Meaning |
+|----------|--------|---------|
+| `SOUP_STREAM_DP_RANK` | every node | This node's rank, `0` to `WORLD_SIZE - 1`; exactly one node is `0` |
+| `SOUP_STREAM_DP_WORLD_SIZE` | every node | Number of nodes, 2 or more, the same everywhere (only 2 was measured) |
+| `SOUP_STREAM_DP_BIND_PORT` | rank 0 | The port rank 0 listens on inside its own machine: on every interface, unless `ADDR` names a loopback or private address to bind (see "The token") |
+| `SOUP_STREAM_DP_ADDR` | ranks above 0; optional on rank 0 | `host:port` where this node reaches rank 0: its public address and, behind a port mapping, the **external** port that maps to `BIND_PORT`. On rank 0 a loopback or private address (for example `127.0.0.1:29500`) is the address rank 0 binds, alone, and then needs no token |
+| `SOUP_STREAM_DP_TOKEN` | every node | The shared secret of the handshake, 16 to 256 characters without control characters. **Required** when `ADDR` is a public address, and on rank 0 when it would listen on every interface (no `ADDR`); optional on a loopback or private one (see "The token") |
+
+Setting any of them turns the launch on, and `soup train` then checks all of them before any download and refuses a missing, malformed or inconsistent one by name (a rank at or above the world size, a world below 2, `ADDR` missing on a node that is not rank 0, `TOKEN` missing while `ADDR` is a public address, or on rank 0 while `ADDR` is unset). A leftover `SOUP_STREAM_DP_*` variable without `stream_layers: true` is refused too, and so is setting them together with `WORLD_SIZE` above 1: the two launches are not mixed, and `WORLD_SIZE`, `RANK` and `MASTER_*` stay unset. The settings refused under "Across processes" above are refused here too (another task, `--deepspeed`, `--fsdp`, `--resume`, `--hf-resume`, `--push-as`, an eval gate, `training.multipack`, `training.moe_lora`, `data.format: raft`), plus four more: `training.packing`, `training.loss_watchdog`, `training.loss_spike_recovery` and `training.grad_accum_auto_tune`, because each node would act on its own loss or memory. Use the same Soup version, the same config and the same data file on every node; a mismatch of version, world size, rank or buffer layout is refused at the handshake by name, and the init check compares the adapter layout and the frozen base before the first step. Ranks above 0 retry for up to 1800 s until rank 0 listens, so the start order does not matter.
+
+**The token.** `SOUP_STREAM_DP_TOKEN` is the secret of an HMAC over a fresh nonce: a node that does not hold it cannot join, and a stranger that reaches the port is turned away. Generate it once and copy it to every node over a channel you already trust (for example `ssh`):
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Soup never prints it, and a malformed value is refused with a message that does not show the value; keep it out of the config file, the command line and version control. **The token is required when `SOUP_STREAM_DP_ADDR` is a public internet address.** `soup train` then stops before it opens a socket, naming `SOUP_STREAM_DP_TOKEN` and the address, for example `SOUP_STREAM_DP_TOKEN is required when SOUP_STREAM_DP_ADDR=203.0.113.7:41123 is a public internet address and is not set`. It stays optional (rank 0 then prints `no token: anyone who can reach the port may join`) only when the address is loopback (`127.0.0.0/8`, `::1`), private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local (`169.254.0.0/16`, `fe80::/10`) or the name `localhost`. Every other IP address counts as public, including shared carrier-grade NAT space (`100.64.0.0/10`) and the documentation ranges such as `203.0.113.0/24`. A host name that is not an IP literal is **not resolved** and counts as public unless it is `localhost`: a name that points at a private address still needs the token, because a lookup can fail, answer differently on another node, or be changed by whoever controls the zone. The rule is checked on `SOUP_STREAM_DP_ADDR` wherever it is set and in `TcpStarGroup` for code that builds the group directly. **Rank 0 without `ADDR` listens on every interface (`0.0.0.0`), which public networks can reach, so it needs the token too:** `soup train` stops before it binds, with `SOUP_STREAM_DP_TOKEN is required on rank 0 while SOUP_STREAM_DP_ADDR is not set`, and the message names the two ways out. Set the token on every node, or set `SOUP_STREAM_DP_ADDR` on rank 0 to the loopback or private address it should bind to (`SOUP_STREAM_DP_ADDR=127.0.0.1:29500` for two processes on one machine, or the machine's own `192.168.x.y` on a LAN): rank 0 then listens on that one address only and the token stays optional. That address has to belong to the machine, or the bind fails with a message that says so. A public `ADDR` on rank 0 (a port mapping, which is not an address of the machine) still means every interface and the token, and `0.0.0.0` or `::` as `ADDR` count as public. The handshake refuses a group in which only some nodes hold the token. The token authenticates who joins; it does not encrypt the traffic, and the gradients travel in the clear. Put the connection through your own tunnel if that matters.
+
+**Timeouts.** Until the setup is done (download, sharding and pinning on the slower node) a wait lasts up to 1800 s. After that the group timeout is 300 s (`Group timeout set to 300 s` is printed; it is not configurable): a peer that sends nothing for 300 s fails the step with a `PeerTimeoutError` that names its rank. The 300 s also counts anything that keeps one node from reaching the next sync, such as a rank-0 checkpoint save or a large difference in step time between the nodes.
+
+**When a peer dies.** A process that exits or is killed closes its socket, and the other side sees that at once instead of waiting for the timeout: `soup train` stops with a `PeerClosedError` that names the rank, for example `rank 1 closed the connection after 0 of 21 bytes of a frame header (it exited or was lost)`, and exits non-zero. There is no hang and no partial adapter. The last checkpoint rank 0 saved (`checkpoint-<step>` under its output directory) reloads with PEFT as an adapter; `--resume` is refused in this launch, so a new run starts again from step 0. A silent peer (a stopped process, a cut network) is found only by the 300 s timeout.
+
+**What was measured.** Measured 2026-11-08/09 on two rented RTX 5060 Ti / 4060 Ti nodes, each with its own host and public address and 11 to 13 ms from the other: `Qwen2.5-0.5B` with LoRA r=16 on `q_proj` and `v_proj` for 50 steps, and `Qwen2.5-1.5B` with LoRA r=16 on all linear layers (18,464,768 parameters) for 100 steps; a batch of 4 rows per node (times 2 accumulation steps in the larger run), fp32 adapters, synthetic and easy data:
+
+- The two nodes' adapters were bitwise equal at step 0 and after every step (101 of 101 compared in the larger run), and rank 0's adapter reloaded with PEFT and matched the final trainable tensors exactly.
+- The weighted average rebuilt offline from each node's gradient before the sync matched the synced gradient to a relative error of 1.0e-7 or less (4.4e-8 to 6.8e-8 in the larger run); a plain mean would have differed by 0.26% to 17.7% of the largest gradient entry on the steps checked.
+- Each step moved `4 x trainable parameters` bytes each way (73,859,072 for the larger run) and the bytes on the wire matched that within 5%.
+- Killing node 1 with `SIGKILL` at step 30 stopped node 0 with the `PeerClosedError` above 2.0 s later (exit after 3.9 s; timed across two clocks, good to about 0.3 s); `checkpoint-25` reloaded.
+
+**Limits.**
+
+- **There is no speed-up.** On that link the 2-node run took 9.71 s per step against 1.81 s for one node on the same card with the same 16-row union batch, 5.4 times slower, because the 73.9 MB exchange (median 7.75 s) dominates; the smaller run took 0.74 s against 0.26 s. This launch is a proof that the data-parallel path is correct across machines. It can pay off only when the compute per optimizer step is much larger than the transfer; the sync runs once per optimizer step, so `training.gradient_accumulation_steps` spreads it over more compute.
+- **Throughput is far below the link.** The 1.5B run moved 9 to 10 MB/s per direction (about 75 Mbit/s) while a single-flow TCP test on the same path reached 601 Mbit/s one way and 422 Mbit/s the other (180 Mbit/s in a second run of the second direction). Soup requests 8 MiB send and receive buffers on its sockets and the Linux kernel on the measured nodes granted 425,984 bytes, after which it stops tuning the window of those sockets; that matches the observed rate, but running without the request was not tried, so it is a likely cause and not a proven one. The granted size is written once at debug level (logger `soup_cli.utils.adapter_grad_transport`).
+- **One operation carries at most 64 MiB** (67,108,864 bytes). The adapter sync splits a larger buffer into chunks itself (two for the 73.9 MB case), so a training run is not limited by it; code that calls the group directly is.
+- **Rank 0 is the hub.** Every other node talks only to rank 0, so rank 0's traffic grows with the number of nodes. Two nodes were measured; the validator accepts more.
+- **Not measured:** a silent peer or a killed rank 0 across machines, NF4, a model larger than the card, more than two nodes, model quality (the data was trivially easy by construction), and a second day or a second pair of machines.
+
 ### Forward-only inference mode (API only, no CLI yet)
 
 The streaming runtime can also *run* a model that does not fit in VRAM, without training it.
@@ -1556,6 +1625,10 @@ soup train --config soup.yaml --gpus 8 --nodes 2 \
 `--num_processes 16 --num_machines 2` to Accelerate, which starts eight workers
 on each machine. One GPU per node is also supported. `--gpus auto` detects the
 local count, so use it only when every node has the same number of visible GPUs.
+
+With `training.stream_layers: true`, launch with `--gpus 1`. Streaming runs one rank per machine, as BETA and for `task: sft` only.
+The **Layer Streaming** section above lists what is refused.
+For nodes that cannot reach each other (rented machines behind a port mapping), use [Data-parallel streaming across machines](#data-parallel-streaming-across-machines-beta) instead of this launch.
 
 `--nodes` defaults to 1. With multiple nodes, `--master-addr` is required;
 `--node-rank` defaults to 0 and `--master-port` to 29500. Ranks must be distinct

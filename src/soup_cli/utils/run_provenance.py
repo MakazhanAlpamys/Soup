@@ -180,6 +180,16 @@ def base_revision_kwargs(model_id: str) -> dict[str, str]:
     return identity.load_kwargs(model_id) if identity is not None else {}
 
 
+def active_base_revision() -> str | None:
+    """The commit the active run bound its base to; ``None`` when unbound or not known.
+
+    Read-only (it resolves nothing): the cross-rank init check of data-parallel layer
+    streaming compares it between ranks.
+    """
+    identity = _ACTIVE_BASE.get()
+    return identity.revision if identity is not None else None
+
+
 def _validate_metadata(data: Any) -> dict[str, Any]:
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
             or data["schema_version"] != 1):

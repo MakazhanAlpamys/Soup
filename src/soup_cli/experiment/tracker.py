@@ -153,6 +153,9 @@ def generate_run_id() -> str:
 class ExperimentTracker:
     """SQLite-backed experiment tracker for training runs and evaluations."""
 
+    #: ``soup train`` asks a tracker whether it keeps the run (see :class:`NullTracker`).
+    records_runs = True
+
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or _get_db_path()
         self._conn: Optional[sqlite3.Connection] = None
@@ -683,3 +686,78 @@ class ExperimentTracker:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+
+class NullTracker:
+    """A tracker that records nothing, for the ranks that do not own the run (C6).
+
+    Under data-parallel layer streaming every rank runs ``soup train`` but one run is one
+    row: rank 0 records it, the others get this object, which has the methods ``soup
+    train`` calls on a tracker, creates no database and writes no row. ``start_run`` hands
+    back the id it was given, or an empty one; the callback skips a tracker without an id.
+    """
+
+    records_runs = False
+
+    def start_run(
+        self,
+        config_dict: dict,
+        device: str,
+        device_name: str,
+        gpu_info: dict,
+        experiment_name: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> str:
+        # Never empty: `soup train` hands the id on (e.g. `--profile` refuses an empty
+        # run_id), and an exception on this rank alone would leave its peers waiting.
+        # The id is not persisted anywhere.
+        return run_id or generate_run_id()
+
+    def mark_running(self, run_id: str, *, pid: int) -> None:
+        return None
+
+    def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
+        return None
+
+    def record_base_revision(
+        self, run_id: str, *, revision: Optional[str], source: str,
+    ) -> None:
+        return None
+
+    def log_metrics(
+        self,
+        run_id: str,
+        step: int,
+        epoch: float = 0.0,
+        loss: Optional[float] = 0.0,
+        lr: float = 0.0,
+        grad_norm: Optional[float] = None,
+        speed: float = 0.0,
+        gpu_mem: str = "",
+        val_loss: Optional[float] = None,
+        val_reward: Optional[float] = None,
+    ) -> None:
+        return None
+
+    def finish_run(
+        self,
+        run_id: str,
+        initial_loss: float,
+        final_loss: float,
+        total_steps: int,
+        duration_secs: float,
+        output_dir: str,
+    ) -> None:
+        return None
+
+    def fail_run(self, run_id: str, *, error: Optional[str] = None) -> None:
+        return None
+
+    def get_run(self, run_id: str) -> Optional[dict]:
+        return None
+
+    def get_metrics(self, run_id: str) -> list[dict]:
+        return []
+
+    def close(self) -> None:
+        return None
