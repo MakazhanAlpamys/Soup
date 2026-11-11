@@ -1,0 +1,4 @@
+/workspace/tco-shared/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+torch 2.11.0+cu128 device NVIDIA GeForce RTX 4090 cuda events: 20
+CUPTI_OK
