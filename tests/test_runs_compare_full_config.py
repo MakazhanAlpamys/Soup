@@ -114,16 +114,25 @@ def test_matching_configs_and_absent_evaluations_are_explicit(tracker):
     assert "No stored evaluation scores." in text
 
 
+@pytest.mark.parametrize("side", ["first", "second"])
 @pytest.mark.parametrize("stored", ["null", "broken{", "[]"])
-def test_unavailable_config_is_not_reported_as_identical(tracker, stored):
-    _start(tracker, "first", {})
-    _start(tracker, "second", {"unique_config_key": 1})
-    tracker._get_conn().execute("UPDATE runs SET config_json=? WHERE run_id='first'", (stored,))
+def test_unavailable_config_is_not_reported_as_identical(tracker, stored, side):
+    _start(tracker, "first", {"only_first": 1})
+    _start(tracker, "second", {"only_second": 1})
+    tracker._get_conn().execute("UPDATE runs SET config_json=? WHERE run_id=?", (stored, side))
     tracker._get_conn().commit()
     text = _compare("first", "second")
-    assert "Config comparison unavailable: config for first not stored." in text
+    assert f"Config comparison unavailable: config for {side} not stored." in text
     assert "No config differences." not in text
-    assert "unique_config_key" not in text
+    assert "only_first" not in text and "only_second" not in text
+
+
+@pytest.mark.parametrize("training", [5, None, {"lora": None}, {"lora": []}])
+def test_non_mapping_training_or_lora_keeps_the_summary(tracker, training):
+    _start(tracker, "first", {"training": training})
+    _start(tracker, "second", {"training": {"lora": {"r": 8}}})
+    text = _compare("first", "second")
+    assert "LoRA r" in text and "Config Differences" in text
 
 
 def test_config_paths_values_and_benchmarks_render_literally(tracker):
