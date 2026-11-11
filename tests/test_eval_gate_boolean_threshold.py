@@ -37,7 +37,14 @@ def test_direct_task_refuses_boolean_threshold(value: bool) -> None:
     assert "must be a number, not a boolean" in str(exc.value)
 
 
-@pytest.mark.parametrize("spelling", ["false", "true", "off", "ON"])
+BOOLEAN_SPELLINGS = [
+    spelling
+    for word in ("yes", "no", "on", "off", "true", "false")
+    for spelling in (word, word.title(), word.upper())
+]
+
+
+@pytest.mark.parametrize("spelling", BOOLEAN_SPELLINGS)
 def test_yaml_boolean_threshold_is_refused(
     spelling: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
