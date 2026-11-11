@@ -17,6 +17,20 @@ def _checker():
     return importlib.import_module("soup_cli.eval.onnx_check")
 
 
+def test_help_explains_validation_codes_and_the_tolerance_policy():
+    from soup_cli.cli import app
+
+    result = CliRunner().invoke(app, ["export", "--help"], terminal_width=160)
+    text = " ".join(strip_ansi(result.output).replace("│", " ").split())
+    assert result.exit_code == 0, result.output
+    assert "0=PASS" in text
+    assert "2=numerical FAIL" in text
+    assert "3=unusable validation" in text
+    assert "option conflicts also use 2" in text
+    assert "1e-4" in text and "FP32 smoke check" in text
+    assert "not a quality threshold" in text
+
+
 def _fake_exporter(monkeypatch, action=None):
     module = ModuleType("optimum.exporters.onnx")
     module.main_export = Mock(side_effect=action)
@@ -85,6 +99,25 @@ def test_bad_validation_options_stop_before_export(tmp_path, monkeypatch, args):
     assert result.exit_code == 3, result.output
     exporter.assert_not_called()
     assert "ONNX Export Complete" not in result.output
+
+
+@pytest.mark.parametrize("flag", ["--verbose", "--no-install-deps"])
+@pytest.mark.parametrize("validation", [False, True])
+def test_legacy_option_conflict_exit_two_is_not_a_numerical_fail(
+    tmp_path, monkeypatch, flag, validation,
+):
+    exporter = _fake_exporter(monkeypatch)
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("Hi\n", encoding="utf-8")
+    args = [flag]
+    if validation:
+        args.extend(["--validate-onnx", "--prompts", str(prompts)])
+    result = _invoke(tmp_path, args)
+    assert result.exit_code == 2, result.output
+    assert "require --format gguf" in " ".join(strip_ansi(result.output).split())
+    assert "ONNX Logits Validation" not in result.output
+    assert "FAIL" not in result.output
+    exporter.assert_not_called()
 
 
 @pytest.mark.parametrize("atol", ["nan", "inf", "-1"])

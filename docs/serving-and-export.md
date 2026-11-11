@@ -264,14 +264,29 @@ graphs, other tasks and unknown inputs are refused. Inputs are limited to 1 MiB,
 rather than silently checking a subset. A check on these inputs says nothing about
 held-out accuracy or generation with a KV cache.
 
-Exit codes with `--validate-onnx`: **0** means the export passed, **2** means the logits
-exceeded the tolerance (or were non-finite), and **3** means invalid inputs, missing
-validation dependencies or an unsupported/failed comparison. Exporter failures retain
-their existing exit code **1**. A failed check leaves the exported files for inspection,
+After the requested validation runs, exit **0** means PASS and **2** means a numerical
+FAIL: logits exceeded the tolerance or were non-finite. Exit **3** means invalid
+validation input, missing validation dependencies or an unsupported/failed comparison.
+Exporter failures retain their existing exit code **1**.
+
+Exit **2** is also an existing export usage code: for example, `--verbose` or
+`--no-install-deps` with ONNX is refused before export because those options require
+GGUF. A script must not classify exit 2 alone as numerical drift. The numerical case
+prints the `ONNX Logits Validation` report with `FAIL` and error figures; option
+conflicts print their option-specific diagnostic and no validation report. Invalid
+validation arguments print `ONNX validation input error` and exit 3; an unusable
+comparison prints `ONNX validation could not run` and exits 3. These existing export
+option-conflict codes are unchanged with or without the validation flag.
+
+A failed check leaves the exported files for inspection,
 does not print the completion panel and does not register the export. For an adapter,
 the reference is its freshly merged model, checked before the temporary merge is removed.
 Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
 the flag.
+
+**Exporter/dependency support remains a separate decision.** The environment below is
+a local qualification record, not a maintainer-approved supported-version combination.
+The validation feature does not select a new exporter or alter dependency requirements.
 
 **Keep the export environment separate when using released Optimum packages.** The tested
 `optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires

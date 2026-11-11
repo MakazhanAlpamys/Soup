@@ -83,13 +83,20 @@ def export(
     ),
     validate_onnx: bool = typer.Option(
         False, "--validate-onnx",
-        help="ONNX text-generation only: compare exported logits with the source on --prompts.",
+        help=(
+            "ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, "
+            "3=unusable validation. Other export option conflicts also use 2; "
+            "inspect the diagnostic."
+        ),
     ),
     prompts: Optional[str] = typer.Option(
         None, "--prompts", help="Explicit text/JSONL prompts for --validate-onnx (at most 32).",
     ),
     atol: Optional[float] = typer.Option(
-        None, "--atol", help="Absolute logits tolerance for --validate-onnx (default: 0.0001).",
+        None, "--atol", help=(
+            "Absolute logits tolerance for --validate-onnx. Default 1e-4 "
+            "(FP32 smoke check, not a quality threshold)."
+        ),
     ),
     deploy: Optional[str] = typer.Option(
         None,
