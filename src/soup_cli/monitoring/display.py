@@ -103,7 +103,7 @@ class TrainingDisplay:
         if kwargs.get("val_reward") is not None:
             self.val_reward = kwargs["val_reward"]
 
-        if "frac_reward_zero_std" in kwargs and self.config.task == "grpo":
+        if "frac_reward_zero_std" in kwargs and getattr(self.config, "task", None) == "grpo":
             self.frac_reward_zero_std = reward_group_fraction(kwargs["frac_reward_zero_std"])
 
         if self._live:
@@ -138,7 +138,7 @@ class TrainingDisplay:
             lines.append(f"Val loss: {self.val_loss:.4f}")
         if self.val_reward is not None:
             lines.append(f"Val reward: {self.val_reward:.4f}")
-        if self.config.task == "grpo" and self.frac_reward_zero_std is not None:
+        if getattr(self.config, "task", None) == "grpo" and self.frac_reward_zero_std is not None:
             lines.append(f"Zero-spread groups: {self.frac_reward_zero_std:.1%}")
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")

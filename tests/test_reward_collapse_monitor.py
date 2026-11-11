@@ -130,3 +130,11 @@ def test_invalid_reading_breaks_the_warning_streak(caplog):
     _log(callback, 5, float("nan"))
     _log(callback, 6)
     assert "reward diversity" not in caplog.text
+
+
+def test_display_accepts_existing_config_stand_ins_without_task():
+    display = TrainingDisplay(SimpleNamespace(training=SimpleNamespace(epochs=1),
+                                              base="test", experiment_name=""))
+    display.update(step=1, epoch=0, loss=1., lr=1e-5)
+    assert "Loss:" in _render(display)
+    assert "Zero-spread groups" not in _render(display)

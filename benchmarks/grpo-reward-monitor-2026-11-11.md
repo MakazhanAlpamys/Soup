@@ -21,8 +21,8 @@ all six steps in both cases. Combined PyTorch peak allocated memory was
 retained, including loss, gradient norm, rewards and the fraction read by Soup.
 
 The initial callback/display regressions produced 8 failures and 11 passing
-controls on unchanged main. The 19 feature cases and existing callback/display
-tests then passed (35 total). They cover threshold boundaries, invalid readings,
+controls on unchanged main. The 20 feature cases and existing callback/display
+tests then passed (36 total). They cover threshold boundaries, invalid readings,
 repeated log events, evaluation-only logs, healthy streak reset, world-rank-zero
 reporting, new-run reset, unchanged log inputs and no training-stop request.
 
