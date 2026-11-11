@@ -6,7 +6,11 @@ import pytest
 
 from soup_cli.config.aliases import CONFIG_ALIASES
 from soup_cli.config.schema import SoupConfig, TrainingConfig
-from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+from soup_cli.config.unknown_keys import (
+    NO_SUGGESTION_REMEDY,
+    find_unknown_config_keys,
+    format_unknown_keys,
+)
 from tests.conftest import strip_ansi
 
 _BASE_CONFIG = """
@@ -357,6 +361,7 @@ class TestNamesThatAreNotTheTrainingSettings:
         )
         assert refused.splitlines()[0].lower().endswith("refused.")
         assert f"'training.{key}'" in refused
+        assert (NO_SUGGESTION_REMEDY in refused) is (key == "learning_rate_decay")
 
     def test_a_note_is_a_fact_not_a_replacement(self):
         # The notes only name settings that exist, and none of them is offered as "use X".

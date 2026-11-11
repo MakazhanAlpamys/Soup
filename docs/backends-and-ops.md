@@ -1302,6 +1302,7 @@ field has been a hard error since v0.74:
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
 # sweep parameter does not match any config field: unknown config key 'lora_rank' - refused.
+# Check the spelling against the docs or a `soup init` template; a key from a newer Soup needs an upgrade (`pip install -U soup-cli`).
 echo $?   # 1
 ```
 
