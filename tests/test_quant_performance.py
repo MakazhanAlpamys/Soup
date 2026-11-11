@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 
 import pytest
 
@@ -221,3 +222,63 @@ def test_cli_quality_drop_still_exits_two_with_performance(tmp_path, monkeypatch
     payload = json.loads(result.output)
     assert payload["rows"][0]["verdict"] == "MAJOR"
     assert payload["performance"]["latency_change_pct"] == pytest.approx(-50.0)
+
+
+@pytest.mark.parametrize("fmt", ["json", "markdown"])
+def test_without_performance_preserves_legacy_long_line_wrapping(tmp_path, monkeypatch, fmt):
+    from rich.console import Console
+
+    from soup_cli.cli import app
+    from soup_cli.commands import eval as eval_command
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(eval_command, "console", Console(width=24, color_system=None))
+    monkeypatch.setattr(quant_check, "make_model_generator", lambda *a, **kw: lambda _: "ok")
+    for side in ("before", "after"):
+        (tmp_path / side).mkdir()
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text('{"prompt": "question", "expected": "ok"}\n', encoding="utf-8")
+    long_name = "long_model_name_" * 8
+    rendered = (json.dumps({"model": long_name}) if fmt == "json"
+                else f"| model | {long_name} |")
+    monkeypatch.setattr(quant_check, "render", lambda result, **kw: rendered)
+    expected = StringIO()
+    # This is the pre-feature rendering contract, including its narrow-terminal wrap.
+    Console(file=expected, width=24, color_system=None).print(
+        rendered, markup=False, highlight=False,
+    )
+    assert expected.getvalue() != rendered + "\n"
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", str(tasks), "--format", fmt,
+    ])
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert result.output == expected.getvalue()
+
+
+@pytest.mark.parametrize("options", [
+    ["--performance-warmup", "1"], ["--performance-repeats", "3"], ["--device", "cpu"],
+])
+def test_explicit_performance_options_require_the_flag_even_at_default_values(
+    tmp_path, monkeypatch, options,
+):
+    from soup_cli.cli import app
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner
+
+    monkeypatch.chdir(tmp_path)
+    for side in ("before", "after"):
+        (tmp_path / side).mkdir()
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text('{"prompt": "question", "expected": "ok"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        quant_check, "make_model_generator", lambda *a, **kw: pytest.fail("Must not load a model"),
+    )
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", str(tasks), *options,
+    ])
+    assert result.exit_code == 3, (result.output, result.exception)
+    assert "require --performance" in result.output

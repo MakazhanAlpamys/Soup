@@ -1381,6 +1381,7 @@ def gate_cmd(
 
 @app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
+    ctx: typer.Context,
     before: str = typer.Option(
         ..., "--before",
         help="Before-quantization model path or registry://<id>",
@@ -1443,9 +1444,13 @@ def quant_check_cmd(
     if performance and allow_stub:
         console.print("[red]--performance cannot measure deterministic --allow-stub generators.[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
-    if not performance and (
-        device is not None or performance_warmup != 1 or performance_repeats != 3
-    ):
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    performance_options_supplied = any(
+        ctx.get_parameter_source(name) not in (None, ParameterSource.DEFAULT)
+        for name in ("device", "performance_warmup", "performance_repeats")
+    )
+    if not performance and performance_options_supplied:
         console.print("[red]--device and performance budgets require --performance.[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
@@ -1587,7 +1592,10 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags, and disable
         # highlighting so JSON output is not polluted with ANSI escape codes.
-        console.print(rendered, markup=False, highlight=False, soft_wrap=True)
+        if performance:
+            console.print(rendered, markup=False, highlight=False, soft_wrap=True)
+        else:
+            console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
