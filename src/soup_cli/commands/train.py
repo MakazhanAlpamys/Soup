@@ -1245,7 +1245,44 @@ def train(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
+        # #1430: --push-as and --gate are handled after this branch, so they
+        # would be dropped with no message. Refuse rather than run without them.
+        dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
+        if dropped:
+            one = len(dropped) == 1
+            console.print(
+                f"[red]{markup_escape(', '.join(dropped))} {'is' if one else 'are'} "
+                f"not supported with --cloud:[/] {'it runs' if one else 'they run'} "
+                "locally, against local files and a local HF repo, and a cloud run "
+                f"would silently ignore {'it' if one else 'them'}. Run without "
+                f"--cloud, or drop {'the flag' if one else 'the flags'}."
+            )
+            raise typer.Exit(2)
         try:
+            # #1430: the stub carries the *effective* config — the loaded object
+            # with every override above already applied — because embedding the
+            # file's text loses them. Refuse inputs the stub cannot carry while
+            # this is still free: a paid boot cannot fix a missing data file.
+            import yaml
+
+            from soup_cli.cloud._shipped import refuse_unshipped_inputs
+            from soup_cli.config.loader import load_config_from_string
+
+            refuse_unshipped_inputs(cfg)
+            effective_yaml = yaml.safe_dump(
+                cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
+            )
+            # The overrides above are assigned after the load and the models do not
+            # validate on assignment, so no validator has seen this config. The
+            # remote `soup train` loads the text through all of them: do it here,
+            # before a stub exists, rather than after the paid boot.
+            try:
+                load_config_from_string(effective_yaml)
+            except ValueError as exc:
+                raise ValueError(
+                    "the effective config (the file with the command-line overrides "
+                    f"applied) would be refused on the remote machine: {exc}"
+                ) from exc
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
@@ -1255,6 +1292,7 @@ def train(
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
+                config_yaml=effective_yaml,
             )
             stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
