@@ -37,7 +37,9 @@ def test_accepts_only_the_intended_controls_and_separate_output_paths():
 
 
 @pytest.mark.parametrize("field", [
-    "tokenized_data_sha256", "initial_adapter_sha256", "shape", "dtype", "harness_sha256",
+    "source_commit", "harness_sha256", "student_snapshot", "teacher_snapshot",
+    "tokenized_data_sha256", "initial_adapter_sha256", "shape", "runtime", "dtype",
+    "warmup_steps", "measured_steps", "timing_scope",
 ])
 def test_refuses_apparent_memory_savings_from_a_different_workload(field):
     dense, chunked = _pair()
@@ -57,6 +59,14 @@ def test_refuses_a_dense_control_that_already_uses_the_optimization():
     dense, chunked = _pair()
     dense["config"]["training"].update(distill_chunk_size=128, distill_checkpoint=True)
     with pytest.raises(ValueError, match="shipped defaults"):
+        _MODULE.validate_pair(dense, chunked)
+
+
+@pytest.mark.parametrize("control", ["distill_chunk_size", "distill_checkpoint"])
+def test_refuses_a_chunked_arm_missing_one_of_its_controls(control):
+    dense, chunked = _pair()
+    chunked["config"]["training"][control] = dense["config"]["training"][control]
+    with pytest.raises(ValueError, match="both opt-in controls"):
         _MODULE.validate_pair(dense, chunked)
 
 

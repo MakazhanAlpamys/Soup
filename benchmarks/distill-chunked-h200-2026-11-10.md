@@ -77,13 +77,13 @@ eight-run record, without selecting the fastest repetition.
 | Dense | 0.2124 (0.2095–0.2201) | 19288 (18610–19554) | 31.656 GiB |
 | Chunk 128 + checkpoint | 0.2820 (0.2813–0.2823) | 14525 (14508–14562) | 21.400 GiB |
 
-At this operating point checkpointed chunks reduce total allocated peak by **32.4%** (1.479x less memory), while mean step time is **32.8% longer**. This is a memory/time tradeoff, not a training speedup. All eight runs completed; every repetition of an arm had the same peak byte count.
+At this operating point checkpointed chunks reduce total allocated peak by **32.4%** (1.479x less memory), while mean step time is **32.8% longer** by the ratio of medians. The four adjacent pairs are **28.0%, 30.9%, 34.5% and 34.8% longer**, a **28.0–34.8%** paired range. In run order the dense step times fell from 0.2201 through 0.2149 and 0.2099 to 0.2095 s, while chunked times were 0.2817, 0.2813, 0.2823 and 0.2823 s. These are observations of the recorded runs; no cause is assigned to the trend. This is a memory/time tradeoff, not a training speedup. All eight runs completed; every repetition of an arm had the same peak byte count.
 
 All four pairs passed the frozen short-run numerical gates: first-step relative loss error <=1e-5, first-step gradient relative L2 <=1%, and maximum relative loss drift across 11 updates <=1%. Observed maxima: first loss 0, first-gradient relative L2 0.004448, trajectory loss 0.295%. Final adapter differences are recorded as descriptive values, not a held-out quality gate.
 
 BF16 training is not bit-reproducible even within one arm on this stack. Same-arm controls show up to 0.431% first-gradient relative L2 and 0.339% trajectory loss difference. These controls distinguish ordinary repeat variability from the dense/chunked comparison; they do not prove identical final quality.
 
-All sampled SM clocks were 1980 MHz. The two arms use the same dependency versions; see the raw runtime/dtype fields. The existing 138 kernel/config tests plus 9 comparison-guard tests pass (147 total); whole-tree Ruff passes.
+All sampled SM clocks were 1980 MHz. The two arms use the same dependency versions; see the raw runtime/dtype fields. The existing 138 kernel/config tests plus 18 comparison-guard tests pass (156 total); whole-tree Ruff passes.
 
 These measurements compare the current dense default to the already-shipped
 opt-in controls. They do not compare against the pre-#736 low-precision kernel,
@@ -138,6 +138,6 @@ weights. Existing distillation numerical/mask/checkpoint tests and the new
 comparison guards are exercised with:
 
 ```bash
-pytest tests/test_issue722_chunked_distill.py tests/test_issue722_benchmark_protocol.py --no-cov
+pytest tests/test_issue722_chunked_distill.py tests/test_distill_chunked_benchmark_protocol.py --no-cov
 ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 ```
