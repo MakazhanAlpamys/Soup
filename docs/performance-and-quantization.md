@@ -1190,7 +1190,13 @@ the run refuses before either write when that volume lacks free space. With
 (the primary root also holds the embedding, head and extras); when a header cannot be
 read or the model is qwen4_exp the split is even and the panel says approximately.
 Override the two cache roots with `SOUP_SPECTRUM_CACHE_DIR` and
-`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy.
+`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy: a value
+must lie under `$HOME`, the working directory or the temp directory and carry no control
+character. A value that does not is ignored and the cache goes to the default
+(`~/.soup/layer-stream`, `~/.soup/spectrum`); Soup logs one warning per run (not at
+`--log-level quiet`) that names the variable, the rejected value, the reason and the folder
+used instead. To keep a cache on another drive, run `soup` from a working directory on that
+drive, or place the folder under `$HOME`.
 A shard cache Soup will reuse is reported at the size of its own files, on every drive it is
 striped over. One it has to write is sized from the source safetensors headers (shapes and
 dtypes only: no weight is loaded), tensor by tensor, by the rules the sharder writes with:
