@@ -1369,11 +1369,20 @@ from that directory, including subdirectories, detached HEADs and linked worktre
 it is not the commit of Soup's installation, the config file's directory or the
 model's Hugging Face repository. `dirty` includes staged, unstaged and untracked
 files; ignored files do not count. `soup runs show` and `soup runs compare` show the
-saved values even after the working tree has moved on.
+saved values even after the working tree has moved on. In particular, an untracked
+`soup.yaml` or output directory makes the observation dirty.
 
 Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
 failed probes or a changing HEAD record `unknown` without stopping training. The
 read-only local probe has a two-second total deadline and makes no network calls.
+Every Git call disables repository-configured filesystem monitoring and optional
+index updates; Git's `safe.directory` ownership checks are not overridden. Only a
+bounded prefix of status output is read, and the child is stopped as soon as a
+change is observed. Soup stores only the full 40- or 64-digit hexadecimal commit
+and the dirty flag, never a remote URL, branch name, file name or diff. The commit
+is validated before recording and again before display; malformed observations
+in an edited database display as unknown.
+
 The nullable `runs.code_commit` and `runs.code_dirty` columns are added to existing
 databases in place; older rows remain unknown, never backfilled from today's
 checkout. Restarting a preallocated run ID clears its previous code observation.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,13 +38,73 @@ class CodeRevision:
             raise ValueError("code dirty state must be unknown without a commit")
 
 
+def _bounded_git_output(argv: list[str], env: dict[str, str], deadline: float, limit: int) -> bytes:
+    """Read a small prefix, cancelling status as soon as any change is observed.
+
+    A reader thread permits a deadline on pipe reads on Windows as well as Unix;
+    it never reads more than ``limit`` bytes. The child is stopped and reaped even
+    on timeout. HEAD needs at most 64 hex digits and a newline; status needs one
+    byte, never the potentially large/private list of changed paths.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
+    process = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        bufsize=0, env=env,
+    )
+    finished = threading.Event()
+    output = bytearray()
+    failures: list[OSError] = []
+
+    def read_prefix() -> None:
+        try:
+            while len(output) < limit:
+                part = process.stdout.read(limit - len(output))
+                if not part:
+                    break
+                output.extend(part)
+        except OSError as exc:
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    reader = threading.Thread(target=read_prefix, name="soup-git-observation", daemon=True)
+    try:
+        reader.start()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not finished.wait(remaining):
+            raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
+        if failures:
+            raise failures[0]
+        if len(output) == limit:
+            if limit != 1:
+                raise ValueError("Git object ID output exceeds its bound")
+            # A status prefix is sufficient. Do not drain the rest of the pipe.
+            return bytes(output)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
+        code = process.wait(timeout=remaining)
+        if code:
+            raise subprocess.CalledProcessError(code, argv)
+        return bytes(output)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        reader.join(timeout=0.1)
+        process.stdout.close()
+
+
 def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
     """Observe HEAD and tracked/untracked changes with a two-second total deadline.
 
     Git is optional. Missing Git, an unborn HEAD, a non-repository or a failed
     observation stays unknown. Re-read HEAD to reject a concurrent commit rather
     than pair one commit's ID with another commit's status. This cannot freeze
-    edits made after the observation. No paths, file contents or diff are stored.
+    edits made after the observation. Repository fsmonitor hooks are disabled,
+    Git's ownership checks are preserved, and no paths or file contents are stored.
     """
     unknown = CodeRevision()
     deadline = time.monotonic() + _PROBE_TIMEOUT_SECONDS
@@ -58,25 +119,20 @@ def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
             return unknown
 
         def git(*args: str) -> str:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
-            result = subprocess.run(
-                [program, "-C", directory, *args],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, encoding="utf-8", errors="replace", timeout=remaining, env=env,
-                check=True,
+            output = _bounded_git_output(
+                [program, "-c", "core.fsmonitor=false", "-C", directory, *args],
+                env, deadline, 1 if args[0] == "status" else 66,
             )
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
-            return result.stdout.strip()
+            return output.decode("ascii")
 
-        commit = git("rev-parse", "--verify", "HEAD")
+        commit = git("rev-parse", "--verify", "HEAD").strip()
         if _COMMIT.fullmatch(commit) is None:
             return unknown
         status = git("status", "--porcelain=v1", "--untracked-files=normal",
                      "--ignore-submodules=none")
-        if git("rev-parse", "--verify", "HEAD") != commit:
+        if git("rev-parse", "--verify", "HEAD").strip() != commit:
             return unknown
         return CodeRevision(commit=commit, dirty=bool(status))
     except (OSError, ValueError, subprocess.SubprocessError):

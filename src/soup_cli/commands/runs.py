@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from soup_cli.utils.code_revision import CodeRevision
 from soup_cli.utils.run_cost import format_cost_usd
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -22,9 +23,20 @@ console = Console()
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
 
 
-def _code_state(run: dict) -> str:
-    """Do not mistake an older run's NULL for a clean working tree."""
+def _recorded_code_revision(run: dict) -> CodeRevision:
+    """Validate stored provenance too: a local database can be edited."""
     dirty = run.get("code_dirty")
+    if type(dirty) is int and dirty in (0, 1):
+        dirty = bool(dirty)
+    try:
+        return CodeRevision(commit=run.get("code_commit"), dirty=dirty)
+    except ValueError:
+        return CodeRevision()
+
+
+def _code_state(run: dict) -> str:
+    """Do not mistake an older or malformed observation for a clean tree."""
+    dirty = _recorded_code_revision(run).dirty
     if dirty is None:
         return "unknown"
     return "dirty" if dirty else "clean"
@@ -211,7 +223,7 @@ def show(
         f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
-        f"Code commit: {for_terminal(run.get('code_commit') or 'unknown')}",
+        f"Code commit: {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
         f"Code state: {_code_state(run)}",
         f"Task:       {for_terminal(run.get('task') or '-')}",
         f"Device:     {for_terminal(run.get('device_name') or '-')} "
@@ -293,7 +305,8 @@ def compare(
         ("Task", r1.get("task") or "-", r2.get("task") or "-"),
         ("Device", r1.get("device_name") or "-", r2.get("device_name") or "-"),
         ("Status", r1.get("status") or "-", r2.get("status") or "-"),
-        ("Code commit", r1.get("code_commit") or "unknown", r2.get("code_commit") or "unknown"),
+        ("Code commit", _recorded_code_revision(r1).commit or "unknown",
+         _recorded_code_revision(r2).commit or "unknown"),
         ("Code state", _code_state(r1), _code_state(r2)),
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
         ("Final Loss", _fmt_float(r1.get("final_loss")), _fmt_float(r2.get("final_loss"))),
