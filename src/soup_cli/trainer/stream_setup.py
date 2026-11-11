@@ -1448,6 +1448,19 @@ class StreamingSetupMixin:
                 resident_ram=embed_bytes,
                 read_ahead_decision=read_ahead_decision,
             )
+            # Windows charges page-locked staging against the system COMMIT limit,
+            # which free RAM does not show: an unset stream_pin falls back to
+            # pageable staging when commit is short, an explicit true is refused
+            # when it cannot fit. Nothing on other OSes (utils/windows_commit.py).
+            from soup_cli.utils.windows_commit import apply_commit_preflight
+
+            plan = apply_commit_preflight(
+                plan,
+                stream_pin=tcfg.stream_pin,
+                on_cuda=on_cuda,
+                resident_bytes=embed_bytes,
+                notify=console.print,
+            )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
         # seq. On a large-vocab model the logits term alone dwarfs the buffer
