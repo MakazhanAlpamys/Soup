@@ -80,9 +80,11 @@ from soup_cli.utils.adapter_grad_transport import (
     ProtocolError,
     TcpStarGroup,
     TorchDistributedGroup,
+    address_is_public,
     b1_rank_or_none,
     read_b1_env,
     refuse_b1_without_streaming,
+    require_token_for_public_address,
     resolve_group,
 )
 from soup_cli.utils.stream_dp_runtime import shard_rows
@@ -113,8 +115,17 @@ def _free_port() -> int:
 # the launch: SOUP_STREAM_DP_* is validated at startup, every refusal by name
 # --------------------------------------------------------------------------
 
+_TOKEN = "shared-secret-0123456789"
 _RANK_0 = {ENV_RANK: "0", ENV_WORLD_SIZE: "2", ENV_BIND_PORT: "41000"}
-_RANK_1 = {ENV_RANK: "1", ENV_WORLD_SIZE: "2", ENV_ADDR: "203.0.113.7:41123"}
+# 203.0.113.7 is a public address (the documentation range is not private), so rank 1 carries
+# the token the launch then requires; _RANK_1_NO_TOKEN is the same launch without it
+_RANK_1 = {
+    ENV_RANK: "1",
+    ENV_WORLD_SIZE: "2",
+    ENV_ADDR: "203.0.113.7:41123",
+    ENV_TOKEN: _TOKEN,
+}
+_RANK_1_NO_TOKEN = {name: value for name, value in _RANK_1.items() if name != ENV_TOKEN}
 
 
 class TestB1Env:
@@ -133,9 +144,10 @@ class TestB1Env:
         env = read_b1_env(_RANK_1)
         assert (env.rank, env.world_size) == (1, 2)
         assert (env.host, env.port, env.bind_port) == ("203.0.113.7", 41123, None)
+        assert env.token == _TOKEN
 
     def test_the_other_variable_is_optional_but_checked_when_present(self):
-        env = read_b1_env({**_RANK_0, ENV_ADDR: "node0.example.com:41123"})
+        env = read_b1_env({**_RANK_0, ENV_ADDR: "node0.example.com:41123", ENV_TOKEN: _TOKEN})
         assert (env.host, env.port, env.bind_port) == ("node0.example.com", 41123, 41000)
         env = read_b1_env({**_RANK_1, ENV_BIND_PORT: "41000"})
         assert env.bind_port == 41000
@@ -267,6 +279,211 @@ class TestB1Env:
         assert f"{ENV_TOKEN} must be 16 to 256 characters" in str(excinfo.value)
         assert "the value is not shown" in str(excinfo.value)
         assert token.strip() == "" or token.strip() not in str(excinfo.value)
+
+
+def _needs_token(what: str) -> str:
+    """The refusal of a public address without SOUP_STREAM_DP_TOKEN, spelled out in full."""
+    return (
+        f"SOUP_STREAM_DP_TOKEN is required when {what} is a public internet address and is not "
+        "set: anyone who can reach the port could join the group. Set the same "
+        "SOUP_STREAM_DP_TOKEN (16 to 256 characters) on every node. It is optional only for "
+        "loopback, private (RFC 1918, fc00::/7) and link-local addresses and for localhost."
+    )
+
+
+_PUBLIC_HOSTS = [
+    "203.0.113.7",  # the documentation range is not private
+    "8.8.8.8",
+    "11.0.0.1",  # just above 10/8
+    "172.15.255.255",  # just below 172.16/12
+    "172.32.0.1",  # just above 172.16/12
+    "192.169.0.1",  # just above 192.168/16
+    "169.253.0.1",  # just below 169.254/16
+    "100.64.0.1",  # shared (carrier-grade NAT) space is not on the list
+    "0.0.0.0",
+    "[2001:db8::7]",
+    "[2606:4700::1111]",
+    "[fec0::1]",  # site-local, deprecated, not unique-local
+    "[::]",
+    "[::ffff:8.8.8.8]",  # an IPv4-mapped address is judged by its IPv4 half
+    "node0.example.com",  # a name that is not an IP literal is public: it is not resolved
+    "localhost.example.com",
+    "my-localhost",
+]
+_PRIVATE_HOSTS = [
+    "127.0.0.1",
+    "127.255.255.254",
+    "10.0.0.1",
+    "10.255.255.255",
+    "172.16.0.1",
+    "172.31.255.255",
+    "192.168.0.1",
+    "192.168.255.254",
+    "169.254.0.1",
+    "169.254.169.254",
+    "[::1]",
+    "[fc00::1]",
+    "[fd12:3456:789a::1]",
+    "[fe80::1]",
+    "[::ffff:10.0.0.1]",
+    "[::ffff:127.0.0.1]",
+    "localhost",
+    "LocalHost",
+]
+
+
+class TestPublicAddressNeedsAToken:
+    """SOUP_STREAM_DP_TOKEN is required on a public address and optional on a private one."""
+
+    @pytest.mark.parametrize("host", _PUBLIC_HOSTS)
+    def test_a_public_address_is_public(self, host):
+        assert address_is_public(host) is True
+
+    @pytest.mark.parametrize("host", _PRIVATE_HOSTS)
+    def test_a_loopback_private_or_link_local_address_is_not(self, host):
+        assert address_is_public(host) is False
+
+    @pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "localhost.", "[::1]", "::1"])
+    def test_localhost_and_a_bare_or_bracketed_ipv6_literal_are_read_the_same(self, host):
+        assert address_is_public(host) is False
+
+    def test_a_bare_ipv6_literal_is_judged_like_the_bracketed_one(self):
+        assert address_is_public("2001:db8::7") is True
+        assert address_is_public("[2001:db8::7]") is True
+        assert address_is_public("fd12::1") is False
+
+    @pytest.mark.parametrize("host", _PUBLIC_HOSTS)
+    def test_a_peer_with_a_public_address_and_no_token_is_refused_by_name(self, host):
+        address = f"{host}:41123"
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: address})
+        # the address reaches the message through for_terminal, which also escapes what Rich
+        # would read as a markup tag: "[fec0::1]" is shown as "\[fec0::1]"
+        shown = address.replace("[fec0", "\\[fec0")
+        assert str(excinfo.value) == _needs_token(f"{ENV_ADDR}={shown}")
+
+    def test_both_families_of_a_public_literal_are_refused_with_the_address_in_the_text(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: "198.51.100.9:7"})
+        assert str(excinfo.value) == _needs_token("SOUP_STREAM_DP_ADDR=198.51.100.9:7")
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: "[2001:db8::7]:7"})
+        assert str(excinfo.value) == _needs_token("SOUP_STREAM_DP_ADDR=[2001:db8::7]:7")
+
+    def test_rank_0_with_a_public_address_and_no_token_is_refused_too(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_0, ENV_ADDR: "203.0.113.7:41123"})
+        assert str(excinfo.value) == _needs_token("SOUP_STREAM_DP_ADDR=203.0.113.7:41123")
+
+    @pytest.mark.parametrize("host", _PRIVATE_HOSTS)
+    def test_a_private_address_works_without_a_token(self, host):
+        env = read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: f"{host}:41123"})
+        assert env.token is None
+        assert env.host == host
+
+    @pytest.mark.parametrize("host", _PUBLIC_HOSTS)
+    def test_a_public_address_with_a_token_passes_the_gate(self, host):
+        env = read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: f"{host}:41123", ENV_TOKEN: _TOKEN})
+        assert (env.host, env.token) == (host, _TOKEN)
+
+    def test_rank_0_without_an_address_listens_on_every_interface_without_a_gate(self):
+        # nothing names an address to judge: the documented case, and the token stays optional
+        env = read_b1_env(_RANK_0)
+        assert (env.host, env.token, env.bind_host) == (None, None, "0.0.0.0")
+
+    def test_a_malformed_token_is_refused_for_what_it_is_before_the_address_is_judged(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_1_NO_TOKEN, ENV_TOKEN: "short"})
+        assert str(excinfo.value).startswith(f"{ENV_TOKEN} must be 16 to 256 characters")
+
+    def test_a_malformed_address_is_still_refused_as_malformed(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            read_b1_env({**_RANK_1_NO_TOKEN, ENV_ADDR: "http://203.0.113.7:1"})
+        assert "is not valid" in str(excinfo.value)
+
+    def test_the_refusal_does_not_echo_terminal_escapes(self):
+        with pytest.raises(B1ConfigError) as excinfo:
+            TcpStarGroup(rank=1, world_size=2, host="evil\x1b[31m.example.com", port=1)
+        assert "evil" in str(excinfo.value)
+        assert "\x1b" not in str(excinfo.value)
+
+    def test_the_helper_judges_only_the_address_and_treats_an_empty_token_as_none(self):
+        require_token_for_public_address("203.0.113.7", _TOKEN, what="x")
+        require_token_for_public_address("10.0.0.1", None, what="x")
+        with pytest.raises(B1ConfigError) as excinfo:
+            require_token_for_public_address("203.0.113.7", None, what="x")
+        assert str(excinfo.value) == _needs_token("x")
+        with pytest.raises(B1ConfigError) as excinfo:
+            require_token_for_public_address("203.0.113.7", "", what="x")
+        assert str(excinfo.value) == _needs_token("x")
+
+
+class TestPublicAddressNeedsATokenInTheGroup:
+    """The same gate in ``TcpStarGroup``, so a direct caller cannot skip it. Both fire before
+    any socket is opened: the two methods that open one are replaced by a tripwire."""
+
+    @pytest.fixture
+    def no_socket(self, monkeypatch):
+        opened = []
+
+        def tripwire(self, *args, **kwargs):
+            opened.append(args)
+            raise AssertionError("a socket was opened before the token gate")
+
+        monkeypatch.setattr(TcpStarGroup, "_connect_to_root", tripwire)
+        monkeypatch.setattr(TcpStarGroup, "_accept_peers", tripwire)
+        return opened
+
+    @pytest.fixture
+    def sockets_are_stubbed(self, monkeypatch):
+        reached = []
+
+        def note(self, *args, **kwargs):
+            reached.append(args)
+
+        monkeypatch.setattr(TcpStarGroup, "_connect_to_root", note)
+        monkeypatch.setattr(TcpStarGroup, "_accept_peers", note)
+        return reached
+
+    @pytest.mark.parametrize("host", ["203.0.113.7", "[2001:db8::7]", "node0.example.com"])
+    def test_a_peer_aimed_at_a_public_address_without_a_token_is_refused_first(
+        self, host, no_socket
+    ):
+        with pytest.raises(B1ConfigError) as excinfo:
+            TcpStarGroup(rank=1, world_size=2, host=host, port=41123)
+        assert str(excinfo.value) == _needs_token(f"host {host}")
+        assert no_socket == []
+
+    def test_an_empty_token_is_no_token(self, no_socket):
+        with pytest.raises(B1ConfigError) as excinfo:
+            TcpStarGroup(rank=1, world_size=2, host="203.0.113.7", port=1, token="")
+        assert str(excinfo.value) == _needs_token("host 203.0.113.7")
+        assert no_socket == []
+
+    def test_rank_0_bound_to_one_public_address_without_a_token_is_refused_first(
+        self, no_socket
+    ):
+        with pytest.raises(B1ConfigError) as excinfo:
+            TcpStarGroup(rank=0, world_size=2, bind_host="203.0.113.5", bind_port=41000)
+        assert str(excinfo.value) == _needs_token("bind_host 203.0.113.5")
+        assert no_socket == []
+
+    @pytest.mark.parametrize("bind_host", ["0.0.0.0", "::", "127.0.0.1", "10.1.2.3", "::1"])
+    def test_rank_0_on_every_interface_or_a_private_one_needs_no_token(
+        self, bind_host, sockets_are_stubbed
+    ):
+        TcpStarGroup(rank=0, world_size=2, bind_host=bind_host, bind_port=41000)
+        assert len(sockets_are_stubbed) == 1
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "10.0.0.1", "192.168.1.5", "[::1]", "localhost"])
+    def test_a_peer_aimed_at_a_private_address_needs_no_token(self, host, sockets_are_stubbed):
+        TcpStarGroup(rank=1, world_size=2, host=host, port=41123)
+        assert len(sockets_are_stubbed) == 1
+
+    def test_a_public_address_with_a_token_reaches_the_socket(self, sockets_are_stubbed):
+        TcpStarGroup(rank=1, world_size=2, host="203.0.113.7", port=41123, token=_TOKEN)
+        TcpStarGroup(rank=0, world_size=2, bind_host="203.0.113.5", bind_port=41000, token=_TOKEN)
+        assert len(sockets_are_stubbed) == 2
 
 
 class TestStreamingIsRequired:
