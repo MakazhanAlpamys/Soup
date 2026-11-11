@@ -570,8 +570,18 @@ def test_resident_model_resolves_device_map_auto(resident_checkpoints, monkeypat
     assert recorded == [expected]
 
 
-def test_resident_model_resolves_single_entry_device_map(resident_checkpoints, monkeypatch):
+def _fake_cuda(monkeypatch, *, count):
+    """Pin the loader's CUDA probes so both the serving and the refusing branch are
+    testable on any host (the weights never move: ``.to`` is spied on separately)."""
     import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: count > 0)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: count)
+    return torch
+
+
+def test_resident_model_resolves_single_entry_device_map(resident_checkpoints, monkeypatch):
+    torch = _fake_cuda(monkeypatch, count=1)
 
     from soup_cli.utils.kimi_k2 import load_resident_model
 
@@ -580,6 +590,35 @@ def test_resident_model_resolves_single_entry_device_map(resident_checkpoints, m
         resident_checkpoints["k2-bf16"], model_kwargs={"device_map": {"": 0}}
     )
     assert recorded == [torch.device("cuda", 0)]
+
+
+def test_resident_model_refuses_an_unavailable_cuda_device(resident_checkpoints, monkeypatch):
+    _fake_cuda(monkeypatch, count=0)
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    for device_map in ({"": 0}, "cuda:0"):
+        with pytest.raises(ValueError) as caught:
+            load_resident_model(
+                resident_checkpoints["k2-bf16"], model_kwargs={"device_map": device_map}
+            )
+        message = str(caught.value)
+        assert "cuda:0" in message
+        assert "refusing before loading" in message
+
+
+def test_resident_model_refuses_an_out_of_range_cuda_ordinal(resident_checkpoints, monkeypatch):
+    _fake_cuda(monkeypatch, count=2)
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(
+            resident_checkpoints["k2-bf16"], model_kwargs={"device_map": {"": 5}}
+        )
+    message = str(caught.value)
+    assert "cuda:5" in message
+    assert "serves 2 CUDA device(s)" in message
 
 
 def test_resident_model_refuses_a_multi_device_map(resident_checkpoints):

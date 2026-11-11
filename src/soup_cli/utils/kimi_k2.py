@@ -555,7 +555,29 @@ def _resolve_resident_device(device_map: Any, torch: Any):
     what a per-rank map reduces to) names the target. Multi-device maps
     (``"balanced"`` and friends, dicts with more than the ``""`` entry) are refused: v1
     moves one whole model to one device, never shards it.
+
+    An explicit CUDA target (``"cuda:N"``, ``{"": N}``) is validated here, before a single
+    weight is read: the host must have the device, else a ``ValueError`` names the
+    request and refuses — not a raw ``RuntimeError`` from ``model.to`` after the whole
+    checkpoint is already in RAM.
     """
+    device = _resident_device_target(device_map, torch)
+    if device.type == "cuda":
+        count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if count == 0 or (device.index or 0) >= count:
+            raise ValueError(
+                f"resident Kimi K2 route: device_map asks for {device}, but this host "
+                f"serves {count} CUDA device(s) "
+                f"(torch.cuda.is_available()={torch.cuda.is_available()}); refusing "
+                "before loading the checkpoint. Pass a device this host serves, 'auto', "
+                "or leave device_map unset (loads on CPU)."
+            )
+    return device
+
+
+def _resident_device_target(device_map: Any, torch: Any):
+    """The raw device a ``device_map`` names, with multi-device plans refused. ``"auto"``
+    resolves to the current CUDA device when available, else CPU."""
     if device_map is None:
         return torch.device("cpu")
     if isinstance(device_map, str):
