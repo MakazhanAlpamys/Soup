@@ -796,6 +796,9 @@ class TestSystemToolsWithAFixedLocation:
 
         tools("sysctl")
         monkeypatch.setattr(mlx, "is_apple_silicon", lambda: True)
+        # A cold platform.processor() can run uname on Linux. This test counts
+        # only Soup's explicit sysctl call, independent of that process cache.
+        monkeypatch.setattr(mlx.platform, "processor", lambda: "arm64")
         run = _Recorder(stdout="17179869184\n")
         monkeypatch.setattr(subprocess, "run", run)
 
