@@ -472,6 +472,13 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
+`--count` is the number of rows requested. Rows the provider did not return, and rows that
+fail validation, are asked for again. A row dropped as a duplicate (of `--dedup-with`, or of
+an earlier row in the same run) counts toward `--count`: the file then holds fewer rows, the
+summary shows how many were requested and how many duplicates were removed, and the command
+exits 0. If three requests in a row return no valid row, the command stops, saves the rows it
+has to the output file and exits 1.
+
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
@@ -795,6 +802,12 @@ to `prompt`).
   and a file with `{"messages": ..., "chosen": ..., "rejected": ...}` detects as `chatml`
   (losing the answers). Standalone validation of these layouts needs `--format dpo`.
   Tasks outside those seven get no automatic `dpo` resolution.
+- **KTO row validation:** For `task: kto`, training checks after loading that every row
+  in both the train and val splits contains `prompt`, `completion` **and** `label`.
+  If `data.format: auto` detects the file as a different format (e.g. `chatml`, `alpaca`,
+  `dpo`), this check catches the mismatch before any model is loaded and names the
+  detected format, the three required fields, and the fix (`data.format: kto`).
+  This applies to both live training and `soup train --dry-run` (#2423).
 - **Ignored keys:** A top-level `system` key, `scores`, and `ids` are ignored (system instructions
   belong in the conversation message list).
 - **Refusals:** A refused row is dropped with `Warning: N of M rows dropped: they do not convert as 'dpo'. First: row I: <reason>.`

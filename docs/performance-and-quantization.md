@@ -1190,7 +1190,13 @@ the run refuses before either write when that volume lacks free space. With
 (the primary root also holds the embedding, head and extras); when a header cannot be
 read or the model is qwen4_exp the split is even and the panel says approximately.
 Override the two cache roots with `SOUP_SPECTRUM_CACHE_DIR` and
-`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy.
+`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy: a value
+must lie under `$HOME`, the working directory or the temp directory and carry no control
+character. A value that does not is ignored and the cache goes to the default
+(`~/.soup/layer-stream`, `~/.soup/spectrum`); Soup logs one warning per run (not at
+`--log-level quiet`) that names the variable, the rejected value, the reason and the folder
+used instead. To keep a cache on another drive, run `soup` from a working directory on that
+drive, or place the folder under `$HOME`.
 A shard cache Soup will reuse is reported at the size of its own files, on every drive it is
 striped over. One it has to write is sized from the source safetensors headers (shapes and
 dtypes only: no weight is loaded), tensor by tensor, by the rules the sharder writes with:
@@ -1336,6 +1342,14 @@ a matching 0/1 `attention_mask`) and refuse an empty batch by name. `score_seque
 Leaving the `with` block (or calling `close()`) releases the runtime the way a training run does.
 `build_streamed_model(lora_config=None)` is the underlying call; with a `lora_config` it builds
 the training model exactly as before.
+
+To reload a LoRA adapter trained on a streamed base (the directory `soup train` saves), pass
+`adapter="path/to/adapter"` (under the current directory, no links). The adapter goes onto the
+streamed base the way the trainer placed it, every parameter stays frozen, and the logits are the
+trained model's logits (bit for bit on CPU); `stream.model` is then the `PeftModel`. A missing or
+partial adapter, one that is not LoRA, one that uses `modules_to_save` or DoRA, a different base
+(`allow_adapter_base_mismatch=True` waives only the name check) or tensors of the wrong shape are
+refused by name.
 
 What this is for and what it is not:
 
