@@ -1,4 +1,9 @@
-"""Resident K2 fails at configuration, before remote-code/model construction."""
+"""Resident K2 fails at configuration, before remote-code/model construction.
+
+#2104 task 2: the refusal lifts for Kimi-K2-Base and Kimi-K2-Instruct on sft/grpo
+(the resident native route); Kimi-K2-Thinking and Kimi-K2-Instruct-0905 stay refused
+for every task, and Base/Instruct stay refused for the other tasks (streamed remedy).
+"""
 
 from dataclasses import replace
 from unittest.mock import Mock
@@ -13,12 +18,16 @@ from tests.conftest import strip_ansi
 
 BASES = ("moonshotai/Kimi-K2-Base", "moonshotai/Kimi-K2-Instruct",
          "moonshotai/Kimi-K2-Instruct-0905", "moonshotai/Kimi-K2-Thinking")
+ADMITTED_BASES = ("moonshotai/Kimi-K2-Base", "moonshotai/Kimi-K2-Instruct")
+REFUSED_BASES = ("moonshotai/Kimi-K2-Instruct-0905", "moonshotai/Kimi-K2-Thinking")
 REASON = "Resident Kimi K2 is unsupported on Transformers 5.x"
-BLOCKED = ("kimi-k2-sft", "kimi-k2-thinking-grpo")
+BLOCKED = ("kimi-k2-thinking-grpo",)
+K2_TASKS = ("sft", "grpo")
 
 
 def _assert_route_text(text, base):
     if base.casefold() in {"moonshotai/kimi-k2-base", "moonshotai/kimi-k2-instruct"}:
+        # Refused for a task outside {sft, grpo}: the streamed route is the remedy there.
         assert "training.stream_layers: true" in text
         assert "guarded" in text.lower()
         assert "not available until it merges" not in text
@@ -33,14 +42,41 @@ def _assert_route_text(text, base):
         assert "stream_layers" not in text and "#2107" not in text
 
 
-@pytest.mark.parametrize("base", BASES)
-@pytest.mark.parametrize("task", ["sft", "grpo"])
+@pytest.mark.parametrize("base", REFUSED_BASES)
+@pytest.mark.parametrize("task", ["sft", "grpo", "dpo"])
 def test_resident_k2_refuses_with_a_specific_remedy(base, task):
     with pytest.raises(ValueError, match=REASON) as error:
         load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
     assert base in str(error.value)
     _assert_route_text(str(error.value), base)
     assert "remote code" in str(error.value)
+
+
+@pytest.mark.parametrize("base", ADMITTED_BASES)
+@pytest.mark.parametrize("task", K2_TASKS)
+def test_resident_k2_admits_base_and_instruct_on_sft_and_grpo(base, task):
+    # Mutation check (a): re-adding Base/Instruct to the refused set fails this test.
+    cfg = load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
+    assert cfg.base == base
+    assert cfg.task == task
+
+
+@pytest.mark.parametrize("base", ADMITTED_BASES)
+def test_resident_k2_refuses_base_and_instruct_for_other_tasks(base):
+    with pytest.raises(ValueError, match=REASON) as error:
+        load_config_from_string(f"base: {base}\ntask: dpo\ndata: {{train: data.jsonl}}\n")
+    assert base in str(error.value)
+    _assert_route_text(str(error.value), base)
+
+
+def test_schema_admission_depends_on_the_task():
+    # Same base, two tasks: dpo is refused naming the base, sft loads (config only, no
+    # model download happens at config validation).
+    yaml_base = "base: moonshotai/Kimi-K2-Base\ndata: {train: data.jsonl}\n"
+    with pytest.raises(ValueError, match="moonshotai/Kimi-K2-Base"):
+        load_config_from_string(yaml_base + "task: dpo\n")
+    cfg = load_config_from_string(yaml_base + "task: sft\n")
+    assert cfg.base == "moonshotai/Kimi-K2-Base"
 
 
 @pytest.mark.parametrize("base", ["moonshotai/Kimi-K2.5", "moonshotai/Kimi-K2.6",
@@ -57,11 +93,19 @@ def test_a_relative_local_directory_is_not_mistaken_for_the_public_repo(tmp_path
     assert cfg.base == BASES[0]
 
 
-@pytest.mark.parametrize("base", BASES)
+@pytest.mark.parametrize("base", REFUSED_BASES)
 def test_hub_id_case_does_not_bypass_the_guard(base):
     with pytest.raises(ValueError, match=REASON) as error:
         load_config_from_string(f"base: {base.upper()}\ndata: {{train: data.jsonl}}\n")
     _assert_route_text(str(error.value), base)
+
+
+@pytest.mark.parametrize("base", ADMITTED_BASES)
+@pytest.mark.parametrize("task", K2_TASKS)
+def test_hub_id_case_does_not_block_the_admission(base, task):
+    cfg = load_config_from_string(f"base: {base.upper()}\ntask: {task}\n"
+                                  f"data: {{train: data.jsonl}}\n")
+    assert cfg.base == base.upper()
 
 
 @pytest.mark.parametrize("override", ["training: {stream_layers: true, batch_size: 1}",
@@ -74,7 +118,7 @@ def test_guard_does_not_claim_other_loading_routes(override):
     assert cfg.base == "moonshotai/Kimi-K2-Base"
 
 
-@pytest.mark.parametrize("base", [BASES[0], BASES[-1]])
+@pytest.mark.parametrize("base", REFUSED_BASES)
 @pytest.mark.parametrize("mode", ["--dry-run", "--yes"])
 def test_train_cli_refuses_before_any_model_or_config_download(tmp_path, monkeypatch, base, mode):
     from soup_cli.cli import app
@@ -99,6 +143,35 @@ def test_train_cli_refuses_before_any_model_or_config_download(tmp_path, monkeyp
     metadata.assert_not_called()
 
 
+@pytest.mark.parametrize("mode", ["--dry-run", "--yes"])
+def test_train_cli_admits_base_sft_past_config_validation(tmp_path, monkeypatch, mode):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(
+        f"base: {BASES[0]}\ndata: {{train: data.jsonl, val_split: 0}}\n", encoding="utf-8",
+    )
+    (tmp_path / "data.jsonl").write_text(
+        '{"instruction":"Q", "output":"A"}\n', encoding="utf-8",
+    )
+    build = Mock(side_effect=AssertionError("admitted K2 reached trainer construction"))
+    metadata = Mock(side_effect=AssertionError("admitted K2 requested model metadata"))
+    monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", build)
+    monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", metadata)
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", mode])
+    output = " ".join(strip_ansi(result.output).split())
+    assert REASON not in output, (output, result.exception)
+    if mode == "--dry-run":
+        # A dry run validates the config and stops before trainer construction.
+        assert result.exit_code == 0, (output, result.exception)
+        build.assert_not_called()
+    else:
+        assert isinstance(result.exception, AssertionError)
+        assert "reached trainer construction" in str(result.exception)
+        build.assert_called_once()
+    metadata.assert_not_called()
+
+
 @pytest.mark.parametrize("name", BLOCKED)
 def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeypatch, name):
     from soup_cli.cli import app
@@ -106,13 +179,7 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     recipe = RECIPES[name]
     assert recipe.unavailable_reason.startswith(REASON)
     _assert_route_text(recipe.unavailable_reason, recipe.model)
-    if name == "kimi-k2-sft":
-        assert len(recipe.description) <= 100
-        assert "resident unsupported" in recipe.description
-        assert "guarded streaming only" in recipe.description
-        assert "recipes use" in recipe.description
-    else:
-        _assert_route_text(recipe.description, recipe.model)
+    _assert_route_text(recipe.description, recipe.model)
     assert "unsupported" in recipe.description.lower()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "1000")
@@ -131,7 +198,25 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     assert not (tmp_path / "soup.yaml").exists()
 
 
-def test_catalog_unavailability_is_limited_to_the_two_affected_recipes():
+def test_catalog_admits_the_sft_recipe_and_writes_soup_yaml(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    recipe = RECIPES["kimi-k2-sft"]
+    assert recipe.unavailable_reason is None
+    assert len(recipe.description) <= 100
+    assert "unsupported" not in recipe.description.lower()
+    assert "resident" in recipe.description.lower()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLUMNS", "1000")
+    runner = CliRunner()
+    used = runner.invoke(app, ["recipes", "use", "kimi-k2-sft", "--yes"])
+    assert used.exit_code == 0, strip_ansi(used.output)
+    written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+    assert "base: moonshotai/Kimi-K2-Base" in written
+    assert "quantization: none" in written
+
+
+def test_catalog_unavailability_is_limited_to_the_thinking_grpo_recipe():
     assert {name for name, recipe in RECIPES.items() if recipe.unavailable_reason} == set(BLOCKED)
 
 
@@ -139,10 +224,13 @@ def test_snapshot_records_each_recipes_own_route_reason():
     from scripts.generate_recipe_snapshot import build_snapshot
 
     snapshot = build_snapshot()
-    for name in BLOCKED:
-        record = snapshot["recipes"][name]
-        assert record == {"$unavailable": RECIPES[name].unavailable_reason}
-        _assert_route_text(record["$unavailable"], RECIPES[name].model)
+    grpo = snapshot["recipes"]["kimi-k2-thinking-grpo"]
+    assert grpo == {"$unavailable": RECIPES["kimi-k2-thinking-grpo"].unavailable_reason}
+    _assert_route_text(grpo["$unavailable"], RECIPES["kimi-k2-thinking-grpo"].model)
+    sft = snapshot["recipes"]["kimi-k2-sft"]
+    assert "$unavailable" not in sft
+    assert sft["base"] == "moonshotai/Kimi-K2-Base"
+    assert sft["training.quantization"] == "none"
 
 
 def test_snapshot_does_not_hide_an_unrelated_config_error(monkeypatch):

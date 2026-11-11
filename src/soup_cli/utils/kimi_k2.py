@@ -84,6 +84,20 @@ _UNEXPECTED_REASON = (
     "unexpected field {name}: training.stream_layers admits kimi_k2 only with the published K2 "
     "config fields"
 )
+#: The resident route's wording (ruling D15): no streamed-route naming anywhere in a
+#: resident refusal, and the resident loader dequantises the published FP8 block spelling.
+_UNEXPECTED_REASON_RESIDENT = (
+    "unexpected field {name}: the resident route admits kimi_k2 only with the published K2 "
+    "config fields"
+)
+#: The resident route's FP8 support wording (ruling D15): replaces ``fp8_block``'s
+#: streamed tail in a resident refusal.
+_FP8_RESIDENT_SUPPORT = (
+    "The resident route dequantises one FP8 format: DeepSeek-V3 FP8 block "
+    "(weight_block_size [128,128], e4m3, float scales) - see "
+    "docs/performance-and-quantization.md."
+)
+_UNEXPECTED_REASONS = {"stream": _UNEXPECTED_REASON, "resident": _UNEXPECTED_REASON_RESIDENT}
 #: Published keys a config may leave out: the rewrite drops ``auto_map`` anyway, and a copy
 #: dequantised to bf16 carries no ``quantization_config``. Every other published key must be
 #: present: a missing one would not be refused by the allowlist, and the native class would
@@ -250,38 +264,57 @@ def _rope_failures(rope: Any) -> list:
     return failures
 
 
-def _quantization_failures(quant: Any) -> list:
+def _quantization_failures(quant: Any, route: str = "stream") -> list:
     """Unquantised, or the FP8 block spelling the sharder dequantises (``utils/fp8_block``)."""
-    from soup_cli.utils.fp8_block import UnsupportedFP8Error, fp8_block_size
+    from soup_cli.utils.fp8_block import SUPPORTED_FP8_FORMAT, UnsupportedFP8Error, fp8_block_size
 
     if quant is _ABSENT or quant is None:
         return []
     try:
         block = fp8_block_size(quant, arch=NATIVE_MODEL_TYPE)
     except UnsupportedFP8Error as exc:
-        return [GuardFailure("quantization_config", _brief(quant), str(exc))]
+        detail = str(exc)
+        if route == "resident":
+            # fp8_block's tail names layer streaming (its other callers are the streamed
+            # sharder); a resident refusal must not (D15). The problem sentence is
+            # route-neutral; swap the support tail for the resident route's own.
+            detail = detail.removesuffix(SUPPORTED_FP8_FORMAT).rstrip()
+            detail = f"{detail} {_FP8_RESIDENT_SUPPORT}"
+        return [GuardFailure("quantization_config", _brief(quant), detail)]
     if block is not None:
         return []
     if isinstance(quant, Mapping) and "quant_method" in quant:
-        return [
-            GuardFailure(
-                "quantization_config.quant_method", _brief(quant["quant_method"]),
+        if route == "resident":
+            detail = (
+                "the resident route reads Kimi K2 unquantised or dequantises DeepSeek-V3's "
+                "block FP8 (the format K2-Base and K2-Instruct are published in); it does not "
+                "handle this one (Kimi-K2-Thinking's is compressed-tensors INT4)"
+            )
+        else:
+            detail = (
                 "layer streaming reads Kimi K2 unquantised or in DeepSeek-V3's block FP8 (the "
                 "format K2-Base and K2-Instruct are published in); it does not dequantise this "
-                "one (Kimi-K2-Thinking's is compressed-tensors INT4)",
+                "one (Kimi-K2-Thinking's is compressed-tensors INT4)"
             )
+        return [
+            GuardFailure("quantization_config.quant_method", _brief(quant["quant_method"]), detail)
         ]
-    return [
-        GuardFailure(
-            "quantization_config", _brief(quant),
-            "not a quantization_config layer streaming can read",
-        )
-    ]
+    if route == "resident":
+        detail = "not a quantization_config the resident route can read"
+    else:
+        detail = "not a quantization_config layer streaming can read"
+    return [GuardFailure("quantization_config", _brief(quant), detail)]
 
 
-def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
+def kimi_k2_guard_failures(
+    raw: Mapping[str, Any], route: str = "stream"
+) -> Tuple[GuardFailure, ...]:
     """Every field of a ``kimi_k2`` config the native class would not compute like K2, in
     guard order; ``()`` when the config is admitted.
+
+    ``route`` words the refusal reasons: ``"stream"`` (the default, the streamed loader's
+    wording, pinned byte-identical by its suite) or ``"resident"`` (no streamed-route
+    naming anywhere, ruling D15).
 
     The order is the table in ``benchmarks/gate-kimi-k2-admission.md`` (G1b), then every
     published key that is absent (second review; ``auto_map`` and ``quantization_config`` may
@@ -350,7 +383,7 @@ def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
         "the two compute alike",
     )
     failures.extend(_rope_failures(value("rope_scaling")))
-    failures.extend(_quantization_failures(value("quantization_config")))
+    failures.extend(_quantization_failures(value("quantization_config"), route))
     # Every published key present (second review): absent, the native class would compute
     # with its own default for it. A key whose row above already refused it is named once.
     named = {failure.field for failure in failures}
@@ -365,7 +398,10 @@ def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
             name = _key_name(key)
             quoted = name if name.startswith(("'", '"')) else f"'{name}'"
             failures.append(
-                GuardFailure(name, _brief(raw[key]), _UNEXPECTED_REASON.format(name=quoted))
+                GuardFailure(
+                    name, _brief(raw[key]),
+                    _UNEXPECTED_REASONS[route].format(name=quoted),
+                )
             )
     return tuple(failures)
 
@@ -485,7 +521,7 @@ def load_resident_model_config(
         if read is None or read[0].get("model_type") != KIMI_K2_MODEL_TYPE:
             raise
     config_dict, unused = read
-    failures = kimi_k2_guard_failures(config_dict)
+    failures = kimi_k2_guard_failures(config_dict, route="resident")
     if failures:
         raise _refusal(failures, route="resident")
 

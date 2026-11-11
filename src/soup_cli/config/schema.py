@@ -9586,12 +9586,16 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _reject_resident_kimi_k2(self) -> "SoupConfig":
-        """K2 remote code cannot import or train on the supported 5.x stack."""
+        """Resident K2 remote code cannot import or train on the supported 5.x stack.
+
+        #2104 task 2: Kimi-K2-Base / -Instruct are admitted on sft/grpo (the resident
+        route); every other task, and Thinking / 0905 for all tasks, stays refused.
+        """
         from soup_cli.utils.kimi import resident_kimi_k2_refusal
 
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
-            stream_layers=self.training.stream_layers,
+            stream_layers=self.training.stream_layers, task=self.task,
         )
         if reason is not None:
             raise ValueError(

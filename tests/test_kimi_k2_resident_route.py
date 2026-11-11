@@ -10,9 +10,10 @@ import pytest
 
 pytest.importorskip("transformers")
 
-#: A minimal K2-shaped config: every published required key present (tiny dimensions), no
-#: auto_map, no quantization_config (both are optional). Spelled out inline on purpose: the
-#: shared tiny builder lives in tests/test_kimi_k2_streaming.py and its extraction is Task 4.
+#: A minimal K2-shaped config: every published required key present (tiny dimensions), an
+#: auto_map (optional; the rewrite drops it), no quantization_config (optional). Spelled out
+#: inline on purpose: the shared tiny builder lives in tests/test_kimi_k2_streaming.py and its
+#: extraction is Task 4.
 _MINIMAL_K2 = {
     "architectures": ["DeepseekV3ForCausalLM"],
     "attention_bias": False,
@@ -107,6 +108,97 @@ def test_resident_refusal_names_the_field_without_streamed_wording(tmp_path):
     assert "stream" not in message
     assert "layer streaming" not in message
     assert "training.stream_layers" not in message
+
+
+#: Kimi-K2-Thinking's quantization_config spelling (compressed-tensors INT4): the guard's
+#: quant_method refusal row is one of the two streamed-wording leak sites (ruling D15).
+_THINKING_INT4_QUANT = {
+    "quant_method": "compressed-tensors",
+    "format": "pack-quantized",
+    "quantization_status": "compressed",
+}
+
+
+#: An FP8 quantization_config in a misspelled spelling (per-tensor FP8 without
+#: weight_block_size): fp8_block's refusal tail names layer streaming — the third D15
+#: leak site, reached through the UnsupportedFP8Error branch.
+_MISSPELLED_FP8_QUANT = {"quant_method": "fp8", "activation_scheme": "dynamic"}
+
+
+def _assert_no_streamed_wording(message):
+    lowered = message.lower()
+    assert "stream" not in lowered
+    assert "layer streaming" not in lowered
+    assert "training.stream_layers" not in lowered
+
+
+def test_resident_refusal_for_an_unexpected_key_has_no_streamed_wording(tmp_path):
+    from soup_cli.utils.kimi_k2 import (
+        UnsupportedKimiK2Error,
+        load_resident_model_config,
+    )
+
+    raw = dict(_MINIMAL_K2, ep_size=1)
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        load_resident_model_config(_write_config(tmp_path, raw))
+    message = str(caught.value)
+    assert "'ep_size'" in message
+    _assert_no_streamed_wording(message)
+
+
+def test_resident_refusal_for_a_thinking_style_quant_config_has_no_streamed_wording(tmp_path):
+    from soup_cli.utils.kimi_k2 import (
+        UnsupportedKimiK2Error,
+        load_resident_model_config,
+    )
+
+    raw = dict(_MINIMAL_K2, quantization_config=_THINKING_INT4_QUANT)
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        load_resident_model_config(_write_config(tmp_path, raw))
+    message = str(caught.value)
+    assert "quantization_config.quant_method" in message
+    assert "compressed-tensors" in message
+    _assert_no_streamed_wording(message)
+
+
+def test_resident_refusal_for_a_misspelled_fp8_config_has_no_streamed_wording(tmp_path):
+    from soup_cli.utils.kimi_k2 import (
+        UnsupportedKimiK2Error,
+        load_resident_model_config,
+    )
+
+    raw = dict(_MINIMAL_K2, quantization_config=_MISSPELLED_FP8_QUANT)
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        load_resident_model_config(_write_config(tmp_path, raw))
+    message = str(caught.value)
+    assert "per-tensor FP8" in message
+    assert "resident route dequantises" in message
+    _assert_no_streamed_wording(message)
+
+
+def test_streamed_refusal_for_these_cases_keeps_its_streamed_wording():
+    # The 186-test streamed suite pins the streamed messages; this pins the three leak-site
+    # rows keep their streamed wording when the route is the streamed one.
+    from soup_cli.utils.kimi_k2 import (
+        UnsupportedKimiK2Error,
+        kimi_k2_native_config_dict,
+    )
+
+    with pytest.raises(UnsupportedKimiK2Error) as unexpected:
+        kimi_k2_native_config_dict(dict(_MINIMAL_K2, ep_size=1))
+    assert "training.stream_layers admits kimi_k2" in str(unexpected.value)
+
+    with pytest.raises(UnsupportedKimiK2Error) as quant:
+        kimi_k2_native_config_dict(
+            dict(_MINIMAL_K2, quantization_config=_THINKING_INT4_QUANT)
+        )
+    assert "layer streaming reads Kimi K2 unquantised" in str(quant.value)
+
+    with pytest.raises(UnsupportedKimiK2Error) as fp8:
+        kimi_k2_native_config_dict(
+            dict(_MINIMAL_K2, quantization_config=_MISSPELLED_FP8_QUANT)
+        )
+    assert "Layer streaming dequantises one FP8 format" in str(fp8.value)
 
 
 def test_resident_falls_through_to_autoconfig_for_other_model_types(tmp_path):

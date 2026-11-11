@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import KIMI_K2_NO_SUPPORTED_ROUTE_REASON
 
 
 @dataclass(frozen=True)
@@ -2812,8 +2812,10 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
-        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
+        description=(
+            "Kimi K2 SFT: native resident route on transformers 5.x (sft/grpo); "
+            "Thinking: no route yet."
+        ),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -2832,7 +2834,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
-  quantization: 4bit
+  quantization: none  # resident v1 is bf16-only; 4-bit stays on the streamed route (#2104)
   moe_lora: true
 
 output: ./output
