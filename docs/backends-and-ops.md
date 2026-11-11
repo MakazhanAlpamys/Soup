@@ -1036,6 +1036,18 @@ soup runs clean --all --dry-run
 
 By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
 
+`soup runs compare` keeps the side-by-side run summary and lists all differences
+in the stored config, including nested settings such as `training.lora.dropout`
+and `training.seed`. Lists are compared as whole values. `<not stored>` means a key
+is absent; `null` is a recorded JSON null. Missing or invalid historical configs
+are reported as unavailable rather than identical. The summary also shows the
+recorded training-data SHA-256, or `unknown` when no hash was captured.
+Evaluation comparison uses the latest stored score for each benchmark and run,
+with the signed difference **right minus left**; `-` means that side has no score.
+This reads local experiment records without a registry push, rerunning evaluation
+or hashing the current dataset. It does not establish that two evaluation runs
+used the same scorer or data, and it adds no code-revision provenance.
+
 
 ## Alternative Model Hubs
 
