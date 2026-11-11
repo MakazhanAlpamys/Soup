@@ -4640,8 +4640,7 @@ def leakage(
         raise typer.Exit(EXIT_USAGE_ERROR) from error
 
     if as_json:
-        console.print(json.dumps(report, ensure_ascii=False), markup=False, highlight=False,
-                      soft_wrap=True, emoji=False)
+        typer.echo(json.dumps(report, ensure_ascii=False))
     else:
         table = Table(title="Train/eval input-text overlap")
         table.add_column("Metric")

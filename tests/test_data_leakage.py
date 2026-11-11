@@ -2,10 +2,15 @@
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+
+
+def _plain(text):
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
 
 
 def _check(train, evaluation, **kwargs):
@@ -148,7 +153,7 @@ def test_clean_cli_returns_zero_and_json(tmp_path, monkeypatch):
 def test_cli_table_includes_percentage(tmp_path, monkeypatch):
     result = _cli(tmp_path, monkeypatch, [{"text": "q"}], [{"text": "q"}, {"text": "other"}])
     assert result.exit_code == 2, result.output
-    assert "50.00%" in result.output
+    assert "50.00%" in _plain(result.output)
 
 
 @pytest.mark.parametrize("broken", ['{"text":', "42\n", "{}\n", "\n"])
