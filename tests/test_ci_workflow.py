@@ -126,7 +126,15 @@ def test_ci_init_accepts_supported_python_versions(tmp_path, monkeypatch, versio
 
 @pytest.mark.parametrize(
     "version",
-    ["03.11", "3.011", "3.00", "00.11", "3.11\n", "\u0663.\u0661\u0661"],
+    [
+        "03.11",
+        "3.011",
+        "3.00",
+        "00.11",
+        "3.11\n",
+        "\u0663.\u0661\u0661",
+        "3.1\u0661",
+    ],
 )
 def test_ci_init_rejects_leading_zero_python_versions(tmp_path, monkeypatch, version):
     monkeypatch.chdir(tmp_path)
