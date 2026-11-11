@@ -370,17 +370,30 @@ def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
     return tuple(failures)
 
 
-def _refusal(failures: Tuple[GuardFailure, ...]) -> UnsupportedKimiK2Error:
+def _refusal(failures: Tuple[GuardFailure, ...], route: str = "stream") -> UnsupportedKimiK2Error:
     listed = "; ".join(
         f"{item.field}={item.value} ({item.reason})" for item in failures[:_MAX_LISTED]
     )
     if len(failures) > _MAX_LISTED:
         listed += f"; and {len(failures) - _MAX_LISTED} more"
+    if route == "stream":
+        lead = (
+            f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') streams through transformers' own "
+            f"DeepseekV3 class"
+        )
+        scope = _OUT_OF_SCOPE
+    else:
+        lead = (
+            f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') runs resident through transformers' "
+            f"own DeepseekV3 class"
+        )
+        scope = _OUT_OF_SCOPE.replace(
+            "layer streaming does not admit them yet", "the resident route does not admit them yet"
+        )
     return UnsupportedKimiK2Error(
-        f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') streams through transformers' own "
-        f"DeepseekV3 class, admitted only for a config it computes like K2's own modelling "
+        f"{lead}, admitted only for a config it computes like K2's own modelling "
         f"code: Kimi-K2-Base and Kimi-K2-Instruct as published (FP8 block, or dequantised to "
-        f"bf16). {_OUT_OF_SCOPE} This config differs: {listed}."
+        f"bf16). {scope} This config differs: {listed}."
     )
 
 
@@ -447,6 +460,38 @@ def load_stream_model_config(model_id: str, *, trust_remote_code: bool = False, 
     from transformers import DeepseekV3Config
 
     return DeepseekV3Config.from_dict(native, **unused)
+
+
+def load_resident_model_config(
+    model_id: str, *, revision: str | None = None, **kwargs: Any
+):
+    """The RESIDENT (non-streamed) route's config loader (#2104), the twin of
+    :func:`load_stream_model_config`.
+
+    ``AutoConfig``'s config for every model it loads; when it refuses (a ``ValueError``: K2
+    is "custom code" to it), the raw ``config.json`` is read — no remote code is executed —
+    and a ``model_type: kimi_k2`` config goes through :func:`kimi_k2_guard_failures` into
+    :func:`kimi_k2_native_config_dict` and ``DeepseekV3Config``. The checkpoint itself is
+    never modified: the rewrite is in-memory only. Any other model_type re-raises
+    ``AutoConfig``'s own error, and a refusal names every field the guard rejects, worded
+    for the resident route rather than the streamed one.
+    """
+    from transformers import AutoConfig
+
+    try:
+        return AutoConfig.from_pretrained(model_id, revision=revision, **kwargs)
+    except ValueError:
+        read = _raw_config_dict(model_id, dict(kwargs, revision=revision))
+        if read is None or read[0].get("model_type") != KIMI_K2_MODEL_TYPE:
+            raise
+    config_dict, unused = read
+    failures = kimi_k2_guard_failures(config_dict)
+    if failures:
+        raise _refusal(failures, route="resident")
+
+    from transformers import DeepseekV3Config
+
+    return DeepseekV3Config.from_dict(kimi_k2_native_config_dict(config_dict), **unused)
 
 
 def _tiktoken_available() -> bool:
