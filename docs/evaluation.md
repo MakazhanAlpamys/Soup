@@ -1120,9 +1120,12 @@ unusable reply rather than a transient outage: it is not retried. The error name
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
 
-`soup eval judge --rubric` requires criterion names to be unique after trimming
-surrounding whitespace and ignoring case. A duplicate name exits `1` before
-sending a judge request.
+Rubric files supplied to `soup eval judge --rubric` and
+`training.grpo_judge_rubric` require unique criterion names after trimming
+surrounding whitespace and ignoring case. In v0.78.0, previously accepted
+duplicate names are refused when the file is loaded. Rename or remove the
+duplicate. The eval CLI exits `1` before sending a judge request, and GRPO
+ranking rejects the rubric at trainer setup.
 
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
