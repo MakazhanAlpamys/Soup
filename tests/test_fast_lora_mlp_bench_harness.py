@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import strip_ansi
+from tests.conftest import strip_ansi
 
 pytest.importorskip("torch")
 
