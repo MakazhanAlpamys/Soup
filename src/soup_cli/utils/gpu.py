@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     import torch
+    from rich.console import Console
+
+    from soup_cli.config.schema import SoupConfig
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -307,6 +310,23 @@ def resolve_quantization(
         return "none", msg
 
     return quantization, None
+
+
+def apply_quantization_guard(cfg: SoupConfig, device: str, console: Console) -> None:
+    """Resolve ``cfg.training.quantization`` for ``device`` and print the warning, if any.
+
+    The one place ``soup train`` and every ``soup sweep`` arm decide this, so a CPU run
+    prints the same text and trains with the same value whichever command started it.
+    Call it before anything records ``cfg`` (the tracker stores what actually trained).
+    """
+    resolved, warning = resolve_quantization(
+        device=device,
+        backend=cfg.backend,
+        quantization=cfg.training.quantization,
+    )
+    if warning:
+        console.print(f"[yellow]{warning}[/]")
+    cfg.training.quantization = resolved
 
 
 def get_gpu_info(backend: Optional[str] = None) -> dict:

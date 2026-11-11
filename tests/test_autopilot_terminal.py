@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 
 import pytest
 import yaml
@@ -12,6 +11,7 @@ from soup_cli.autopilot import generate_config
 from soup_cli.autopilot.analyzer import HardwareProfile
 from soup_cli.cli import app
 from soup_cli.commands import autopilot
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 SPELLINGS = [
@@ -19,6 +19,11 @@ SPELLINGS = [
     ("x[red]n", "x[red]n"),
     ("x\\[n", "x\\[n"),
     ("x\x9b\u202en", "xn"),
+]
+_FILENAME_SPELLINGS = [
+    pytest.param(value, shown, marks=skip_colon_on_windows)
+    if ":" in value else (value, shown)
+    for value, shown in SPELLINGS
 ]
 
 
@@ -68,10 +73,8 @@ def test_model_and_hardware_names_in_decision_panel(input_file, monkeypatch, val
     assert config["data"]["train"] == os.path.realpath(input_file)
 
 
-@pytest.mark.parametrize("value,shown", SPELLINGS)
+@pytest.mark.parametrize("value,shown", _FILENAME_SPELLINGS)
 def test_dataset_and_output_path_keep_literal_names(input_file, fixed_hardware, value, shown):
-    if sys.platform == "win32" and ":" in value:
-        pytest.skip("colon is not a valid Windows filename character")
     data = input_file.parent / f"rows-{value}.jsonl"
     data.parent.mkdir(parents=True, exist_ok=True)
     input_file.rename(data)

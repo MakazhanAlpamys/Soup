@@ -41,9 +41,9 @@ model = AutoModelForCausalLM.from_pretrained(MODEL_ID, device_map="auto")
 def respond(message, history):
     messages = []
     for user, assistant in history:
-        messages.append({{"role": "user", "content": user}})
-        messages.append({{"role": "assistant", "content": assistant}})
-    messages.append({{"role": "user", "content": message}})
+        messages.append({"role": "user", "content": user})
+        messages.append({"role": "assistant", "content": assistant})
+    messages.append({"role": "user", "content": message})
     prompt = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True,
     )
@@ -72,7 +72,7 @@ _GRADIO_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: gradio
 sdk_version: 4.0.0
 app_file: app.py
@@ -114,12 +114,12 @@ for msg in st.session_state["messages"]:
 
 prompt = st.chat_input("Ask me anything")
 if prompt:
-    st.session_state["messages"].append({{"role": "user", "content": prompt}})
+    st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
         messages = [
-            {{"role": m["role"], "content": m["content"]}}
+            {"role": m["role"], "content": m["content"]}
             for m in st.session_state["messages"]
         ]
         chat_prompt = tokenizer.apply_chat_template(
@@ -135,7 +135,7 @@ if prompt:
         )
         st.markdown(reply)
         st.session_state["messages"].append(
-            {{"role": "assistant", "content": reply}}
+            {"role": "assistant", "content": reply}
         )
 '''
 
@@ -149,7 +149,7 @@ _STREAMLIT_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: streamlit
 sdk_version: 1.30.0
 app_file: app.py

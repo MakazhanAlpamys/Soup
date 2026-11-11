@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = CliRunner()
@@ -1171,7 +1172,7 @@ def test_doctor_nonexistent_config_exits_2(tmp_path, monkeypatch):
         pytest.param(
             "missing-:smile:.yaml",
             "missing-:smile:.yaml",
-            marks=pytest.mark.skipif(sys.platform == "win32", reason="colon in Windows filename"),
+            marks=skip_colon_on_windows,
             id="literal-emoji-alias",
         ),
     ],
@@ -1205,7 +1206,6 @@ def test_doctor_load_error_exception_exits_2(monkeypatch):
     out = _strip_ansi(result.output)
     assert "Config could not be loaded: disk read failed" in out
     assert "All checks passed!" not in out
-
 
 
 # --- NF4 note on Blackwell consumer cards (sm_120), #776 ---
