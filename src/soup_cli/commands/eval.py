@@ -537,6 +537,22 @@ def judge(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
+    # Resolve --run-id before any judge request: a missing or ambiguous run is
+    # refused, and a unique prefix is saved under the run's full id.
+    resolved_run_id = None
+    if run_id:
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+
+        lookup_tracker = ExperimentTracker()
+        try:
+            run_row = lookup_tracker.get_run(run_id)
+            if run_row is None:
+                console.print(f"[red]{run_lookup_failure(lookup_tracker, run_id)}[/]")
+                raise typer.Exit(1)
+            resolved_run_id = run_row["run_id"]
+        finally:
+            lookup_tracker.close()
+
     # Load target data
     target_path = Path(target)
     if not target_path.exists():
@@ -659,7 +675,7 @@ def judge(
     _display_judge_results(results)
 
     # Save to tracker
-    if run_id:
+    if resolved_run_id:
         from soup_cli.experiment.tracker import ExperimentTracker
         tracker = ExperimentTracker()
         tracker.save_eval_result(
@@ -671,7 +687,7 @@ def judge(
                 "category_scores": results.category_scores,
                 "total_evaluated": len(results.scores),
             },
-            run_id=run_id,
+            run_id=resolved_run_id,
         )
         console.print("[green]Results saved to experiment tracker.[/]")
 

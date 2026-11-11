@@ -66,6 +66,10 @@ def _commands():
             lambda r: ["eval", "aider", "--model", "m", "--output", "out", "--run-id", r],
             id="eval-aider",
         ),
+        pytest.param(
+            lambda r: ["eval", "judge", "--target", "responses.jsonl", "--run-id", r],
+            id="eval-judge",
+        ),
     ]
 
 
