@@ -51,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (174 recipes)
+# Recipe catalog (177 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4089,6 +4089,40 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-27b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-27B",
+        task="grpo",
+        size="27B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "large"),
+        description="Qwen 3.5 27B text GRPO reasoning training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-27B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+
+output: ./output
+""",
+    ),
     "qwen3.5-35b-a3b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-35B-A3B",
         task="sft",
@@ -4237,6 +4271,45 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-122b-a10b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="grpo",
+        size="122B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 122B-A10B text MoE GRPO (Apache-2.0, 10B active). "
+            "Untuned multi-GPU starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "qwen3.5-397b-a17b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-397B-A17B",
         task="sft",
@@ -4269,6 +4342,45 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-397b-a17b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-397B-A17B",
+        task="grpo",
+        size="397B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 397B-A17B text MoE GRPO (Apache-2.0, 17B active). "
+            "Untuned multi-node starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-397B-A17B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
   gradient_checkpointing: true
 
 output: ./output

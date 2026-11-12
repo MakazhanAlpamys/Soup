@@ -220,6 +220,21 @@ def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_windows_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep layer streaming's Windows commit pre-flight off this machine's real counters.
+
+    ``utils.windows_commit.read_commit_info`` reads the system commit total and limit,
+    and the staging pre-flight falls back to pageable staging when they are tight. A
+    test that drives the setup path with a simulated CUDA device would otherwise get a
+    different ``pin=`` on a Windows box with little commit left than on one with plenty.
+    A test of the check patches the reader (and ``_on_windows``) itself.
+    """
+    from soup_cli.utils import windows_commit
+
+    monkeypatch.setattr(windows_commit, "read_commit_info", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _restore_working_directory():
     """Put the working directory back after every test.
 

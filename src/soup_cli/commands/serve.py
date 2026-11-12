@@ -12,15 +12,13 @@ import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
-
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Generator
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.stop_strings import StopFilter, StopStringError, cut_at_stop, parse_stop
 from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
@@ -1980,6 +1978,37 @@ def _stop_event_criteria(stop_event):
     return StoppingCriteriaList([_StopOnEvent()])
 
 
+def _stop_strings_criteria(tokenizer, stop_strings, prompt_length: int):
+    """A ``StoppingCriteriaList`` that ends generation once the reply holds a stop string.
+
+    The reply is what ``_generate_response`` returns: every token after the prompt,
+    decoded and stripped. The whole reply is decoded each step, as the reply streamer
+    does, because a window of the last few tokens would not decode the way the same
+    tokens do in context (see ``_reply_streamer_class``), and the match has to be on the
+    text that is cut. Generation ends after the token that completes the stop string; the
+    caller cuts the text.
+    """
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    from soup_cli.utils.stop_strings import find_stop
+
+    stops = tuple(stop_strings)
+
+    class _StopOnString(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kwargs):
+            new_ids = input_ids[0, prompt_length:].tolist()
+            reply = tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            return torch.full(
+                (input_ids.shape[0],),
+                find_stop(reply, stops) is not None,
+                device=input_ids.device,
+                dtype=torch.bool,
+            )
+
+    return StoppingCriteriaList([_StopOnString()])
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -1996,6 +2025,7 @@ def _generate_response(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     streamer: Any = None,
     stop_event: Any = None,
+    stop_strings: Any = (),
 ):
     """Generate a response from the model.
 
@@ -2003,6 +2033,12 @@ def _generate_response(
     produced; the full reply is still returned. ``stop_event`` (a
     ``threading.Event``) ends generation after the current token once it is set.
     Both are only passed by the streaming SSE path, never for a plain reply.
+
+    ``stop_strings`` (#2549) ends generation after the token that completes one of
+    them, on the plain ``generate`` path only: assisted decoding (a draft model or
+    n-gram lookup) and beam search keep generating, and the caller's cut still removes
+    the stop string. The reply returned is NOT cut here; the caller cuts it with
+    ``cut_at_stop`` so it learns which stop string matched.
     """
     import torch
 
@@ -2054,8 +2090,17 @@ def _generate_response(
             gen_kwargs["logits_processor"] = logits_processor
         if streamer is not None:
             gen_kwargs["streamer"] = streamer
+        criteria = []
         if stop_event is not None:
-            gen_kwargs["stopping_criteria"] = _stop_event_criteria(stop_event)
+            criteria.extend(_stop_event_criteria(stop_event))
+        if stop_strings and assistant_model is None and ngram_config is None and _can_stream(model):
+            criteria.extend(
+                _stop_strings_criteria(tokenizer, stop_strings, input_ids.shape[1])
+            )
+        if criteria:
+            from transformers import StoppingCriteriaList
+
+            gen_kwargs["stopping_criteria"] = StoppingCriteriaList(criteria)
         # v0.53.6 #104 — n-gram speculative decoding (transformers backend).
         # Mutually exclusive with a real draft `assistant_model`.
         if ngram_config is not None and assistant_model is None:
@@ -2318,6 +2363,13 @@ def _create_app(
             min_length=1,
             max_length=512,
             description="Stable key used by the soup loop canary router.",
+        )
+        # #2549 — a string, a list of at most four strings, or null. Typed Any on
+        # purpose: the handler checks it with parse_stop so a bad value is a 400 that
+        # names the field, not the 422 pydantic would answer with.
+        stop: Any = Field(
+            default=None,
+            description="Stop string, or up to 4 of them; the reply is cut before the first.",
         )
 
     # Resolved adapter map (name → path)
@@ -2586,18 +2638,32 @@ def _create_app(
         x_user_id: Optional[str],
         x_conversation_id: Optional[str],
         internal: bool = False,
+        *,
+        frames_factory: Any = None,
+        report: Optional[dict] = None,
     ):
         """Answer one chat request; returns ``(reply, response_id)``.
 
         ``reply`` is the response dict, or a ``StreamingResponse`` when the request
-        asked for a stream. ``/v1/messages`` calls this too, with no header values.
+        asked for a stream. ``/v1/messages`` calls this too.
         ``internal`` marks the loop's own check (``chat_completions`` has verified the
         token): the answer is not written to the trace log and the request is never routed
         to a canary bucket, so it is not counted in the canary statistics either; it is
         answered as unkeyed traffic is, by the stable side.
+
+        ``frames_factory`` (``response_id -> frames``) picks the wire format of a streamed
+        reply (the OpenAI chunks when ``None``, the Anthropic events for ``/v1/messages``);
+        ``report`` receives the stop string that ended a plain reply as
+        ``report["stop_sequence"]``.
         """
         response_id = str(uuid.uuid4())
         record_writer = None if internal else trace_log_writer
+        # #2549 — refuse a bad stop value before anything runs.
+        try:
+            stops = parse_stop(request.stop, field="stop")
+        except StopStringError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         # Check adapter selection (from request body)
         # Treat an empty public request value like an omitted adapter. The
         # empty string is reserved internally as the explicit base-model
@@ -2681,6 +2747,8 @@ def _create_app(
                     conversation_id=conversation_id,
                     trace_adapter=used_adapter,
                     canary_bucket=canary_bucket,
+                    stop=stops,
+                    frames=frames_factory(response_id) if frames_factory else None,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -2749,6 +2817,9 @@ def _create_app(
                                 logits_processor=processors or None,
                                 ngram_config=ngram_config,
                                 kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                                # Reasoning blocks are cut out of the finished text, so a
+                                # stop string is looked for after that, not mid-generation.
+                                stop_strings=stops if reasoning_parser is None else (),
                             )
                 except Exception:
                     _record_canary_outcome(canary_tracking, False)
@@ -2764,6 +2835,14 @@ def _create_app(
                     response_text = strip_reasoning(
                         response_text, reasoning_parser,
                     )
+
+                # #2549 — cut the reply before the first stop string; the stop string
+                # itself is not returned and the reply ended on it, whatever else ended it.
+                response_text, matched_stop = cut_at_stop(response_text, stops)
+                if matched_stop is not None:
+                    finish_reason = "stop"
+                if report is not None:
+                    report["stop_sequence"] = matched_stop
 
                 # output_constraint is validated upstream; v0.33.0 #53 wires
                 # it through outlines / lm-format-enforcer into the generate
@@ -2823,7 +2902,14 @@ def _create_app(
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
     @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
-    def anthropic_messages(payload: dict, response: Response) -> dict:
+    def anthropic_messages(
+        payload: dict,
+        response: Response,
+        x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
+    ) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,
             validate_anthropic_payload,
@@ -2832,12 +2918,25 @@ def _create_app(
         # v0.53.7 #102: streaming live (Anthropic event shape).
         wants_stream = isinstance(payload, dict) and bool(payload.get("stream"))
 
+        # #2549 — stop_sequences is checked before the generic conversion below, which
+        # answers "Invalid request" without saying why: a client has to learn which
+        # field is wrong. The message names the field and repeats nothing of the value.
+        try:
+            stops = parse_stop(
+                payload.get("stop_sequences") if isinstance(payload, dict) else None,
+                field="stop_sequences",
+                allow_string=False,
+            )
+        except StopStringError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         try:
             validate_anthropic_payload(payload)
             openai_payload = from_anthropic(payload)
-            # Drop the OpenAI-side ``stream`` field — the streaming path is
-            # handled below using the Anthropic event shape, not OpenAI SSE.
-            openai_payload.pop("stream", None)
+            # ``stream`` picks the wire format below: the same generation as
+            # /v1/chat/completions, sent as Anthropic events instead of OpenAI chunks.
+            openai_payload["stream"] = wants_stream
+            openai_payload["stop"] = list(stops)
             request = ChatCompletionRequest(**openai_payload)
         except (TypeError, ValueError) as exc:
             # Security: do not echo internal validator/converter details
@@ -2848,8 +2947,27 @@ def _create_app(
             logger.debug("/v1/messages pydantic error: %s", exc)
             raise HTTPException(status_code=400, detail="Invalid request")
 
-        # No header values: /v1/messages takes neither X-Conversation-Id nor X-User-Id.
-        chat_response, response_id = _run_chat(request, None, None)
+        out_model = openai_payload.get("model", model_name)
+
+        if wants_stream:
+            # #2515 — the events leave as the model generates, from the generator the
+            # OpenAI stream uses; stop_reason and the token counts close the stream.
+            # The reply carries the answer's id (X-Response-Id header, and
+            # message.response_id in message_start) as /v1/chat/completions does.
+            stream_reply, _stream_response_id = _run_chat(
+                request, x_user_id, x_conversation_id,
+                frames_factory=lambda rid: _AnthropicStreamFrames(
+                    out_model, response_id=rid
+                ),
+            )
+            stream_reply.headers["Cache-Control"] = "no-store"
+            stream_reply.headers["X-Accel-Buffering"] = "no"
+            return stream_reply
+
+        report: dict = {}
+        chat_response, response_id = _run_chat(
+            request, x_user_id, x_conversation_id, report=report
+        )
 
         # Map OpenAI chat response back to Anthropic shape.
         text = ""
@@ -2867,7 +2985,6 @@ def _create_app(
             if isinstance(chat_response, dict)
             else ""
         )
-        out_model = openai_payload.get("model", model_name)
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)
         # #2361 — a run cut off at max_tokens is ``max_tokens``, not a turn end.
@@ -2877,27 +2994,8 @@ def _create_app(
                 finish_reason = chat_response["choices"][0]["finish_reason"]
             except (KeyError, IndexError, TypeError):
                 finish_reason = None
-        stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
-
-        if wants_stream:
-            # v0.53.7 #102 streaming live — emit Anthropic event-shape SSE.
-            return StreamingResponse(
-                _stream_anthropic_messages(
-                    msg_id=msg_id,
-                    model=out_model,
-                    text=text,
-                    input_tokens=in_tokens,
-                    output_tokens=out_tokens,
-                    stop_reason=stop_reason,
-                    response_id=response_id,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-store",
-                    "X-Accel-Buffering": "no",
-                    _RESPONSE_ID_HEADER: response_id,
-                },
-            )
+        stop_sequence = report.get("stop_sequence")
+        stop_reason = _anthropic_stop_reason(finish_reason, stop_sequence)
 
         response.headers[_RESPONSE_ID_HEADER] = response_id
         return {
@@ -2907,6 +3005,7 @@ def _create_app(
             "model": out_model,
             "content": [{"type": "text", "text": text}],
             "stop_reason": stop_reason,
+            "stop_sequence": stop_sequence,
             "usage": {
                 "input_tokens": in_tokens,
                 "output_tokens": out_tokens,
@@ -3183,73 +3282,165 @@ def _sanitise_sse_field(value: str, *, max_len: int) -> str:
     return cleaned[:max_len]
 
 
-def _stream_anthropic_messages(
-    *,
-    msg_id: str,
-    model: str,
-    text: str,
-    input_tokens: int,
-    output_tokens: int,
-    stop_reason: str = "end_turn",
-    response_id: str = "",
-) -> "Generator[str, None, None]":
-    """v0.53.7 #102 — yield Anthropic event-shape SSE frames.
+def _anthropic_stop_reason(finish_reason: Optional[str], stop_sequence: Optional[str]) -> str:
+    """Anthropic's ``stop_reason`` for how a reply ended.
 
-    Emits the canonical 4-event sequence:
-    - ``message_start``: opens the message envelope (and, when ``response_id`` is set,
-      carries it as ``message.response_id``).
-    - ``content_block_delta``: one frame per word (best-effort streaming;
-      the underlying handler ran the full generation eagerly).
-    - ``message_delta`` + ``message_stop``: closes the stream.
+    A stop sequence that matched is ``stop_sequence``, whatever else ended the run (#2549);
+    a run cut off at ``max_tokens`` is ``max_tokens`` (#2361); anything else is ``end_turn``.
     """
-    import json as _json
+    if stop_sequence is not None:
+        return "stop_sequence"
+    return "max_tokens" if finish_reason == "length" else "end_turn"
 
-    # M-A: sanitise caller-influenced fields before SSE embedding.
-    msg_id = _sanitise_sse_field(msg_id, max_len=64)
-    model = _sanitise_sse_field(model, max_len=200)
 
+def _count_prompt_tokens(tokenizer, messages) -> int:
+    """How many tokens the prompt for ``messages`` takes, for ``message_start``'s usage.
+
+    The same rendering and tokenization ``_generate_response`` uses. The count is only
+    reported, never relied on, so a tokenizer that cannot be asked reports ``0``.
+    """
+    from soup_cli.utils.vllm import encode_chat_prompt
+
+    try:
+        inputs = encode_chat_prompt(
+            messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+        )
+        return int(inputs["input_ids"].shape[1])
+    except Exception:  # noqa: BLE001 - usage numbers must not fail a reply
+        logger.debug("could not count the prompt tokens", exc_info=True)
+        return 0
+
+
+class _OpenAIStreamFrames:
+    """The ``chat.completion.chunk`` SSE frames of a streamed ``/v1/chat/completions`` reply."""
+
+    needs_prompt_tokens = False
+
+    def __init__(self, model_name: str, response_id: Optional[str] = None) -> None:
+        self._model_name = model_name
+        self._response_id = response_id
+        self._chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        self._created = int(time.time())
+
+    def _chunk(self, delta: dict, finish_reason: Optional[str]) -> str:
+        chunk = {
+            "id": self._chat_id,
+            "object": "chat.completion.chunk",
+            "created": self._created,
+            "model": self._model_name,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+        # The id the trace log and POST /v1/feedback use rides in every chunk, next to
+        # the OpenAI-style ``id`` above.
+        if self._response_id is not None:
+            chunk["response_id"] = self._response_id
+        return f"data: {json.dumps(chunk)}\n\n"
+
+    def start(self, prompt_tokens: int) -> list[str]:
+        return []
+
+    def text(self, text: str) -> str:
+        return self._chunk({"content": text}, None)
+
+    def error(self) -> str:
+        return 'data: {"error": "Internal server error"}\n\n'
+
+    def end(
+        self, finish_reason: Optional[str], completion_tokens: int, stop_sequence: Optional[str]
+    ) -> list[str]:
+        return [self._chunk({}, finish_reason), "data: [DONE]\n\n"]
+
+
+class _AnthropicStreamFrames:
+    """The Anthropic Messages SSE events of a streamed ``/v1/messages`` reply (#2515).
+
+    The sequence is the one the Anthropic SDKs expect: ``message_start``, one
+    ``content_block_start``, a ``content_block_delta`` per piece of text,
+    ``content_block_stop``, ``message_delta`` carrying ``stop_reason`` and the output
+    token count, then ``message_stop``. A failure after the stream has started is an
+    ``error`` event, which ends the stream.
+    """
+
+    needs_prompt_tokens = True
+
+    def __init__(self, model: str, response_id: Optional[str] = None) -> None:
+        # M-A: sanitise caller-influenced fields before SSE embedding.
+        self._model = _sanitise_sse_field(model, max_len=200)
+        self._msg_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        self._response_id = response_id
+
+    @staticmethod
     def _frame(event_type: str, data: dict) -> str:
-        return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
-    envelope: dict = {
-        "id": msg_id,
-        "type": "message",
-        "role": "assistant",
-        "content": [],
-        "model": model,
-        "stop_reason": None,
-        "usage": {
-            "input_tokens": int(input_tokens),
-            "output_tokens": 0,
-        },
-    }
-    if response_id:
-        envelope["response_id"] = response_id
-    yield _frame("message_start", {"type": "message_start", "message": envelope})
+    def start(self, prompt_tokens: int) -> list[str]:
+        envelope: dict = {
+            "id": self._msg_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": self._model,
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": int(prompt_tokens), "output_tokens": 0},
+        }
+        if self._response_id:
+            envelope["response_id"] = self._response_id
+        return [
+            self._frame("message_start", {"type": "message_start", "message": envelope}),
+            self._frame(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+        ]
 
-    # Stream word-by-word so SSE consumers see incremental progress, even
-    # though the underlying generation is already complete.
-    words = (text or "").split(" ")
-    for idx, word in enumerate(words):
-        chunk_text = word if idx == 0 else f" {word}"
-        yield _frame(
+    def text(self, text: str) -> str:
+        return self._frame(
             "content_block_delta",
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "text_delta", "text": chunk_text},
+                "delta": {"type": "text_delta", "text": text},
             },
         )
 
-    yield _frame(
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason},
-            "usage": {"output_tokens": int(output_tokens)},
-        },
-    )
-    yield _frame("message_stop", {"type": "message_stop"})
+    def error(self) -> str:
+        return self._frame(
+            "error",
+            {
+                "type": "error",
+                "error": {"type": "api_error", "message": "Internal server error"},
+            },
+        )
+
+    def end(
+        self, finish_reason: Optional[str], completion_tokens: int, stop_sequence: Optional[str]
+    ) -> list[str]:
+        return [
+            self._frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            self._frame(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": _anthropic_stop_reason(finish_reason, stop_sequence),
+                        "stop_sequence": stop_sequence,
+                    },
+                    "usage": {"output_tokens": int(completion_tokens)},
+                },
+            ),
+            self._frame("message_stop", {"type": "message_stop"}),
+        ]
 
 
 # The worker thread of a streamed reply, and how long to wait on it once the reply has
@@ -3346,14 +3537,17 @@ class _StripEmitter:
         return body
 
 
-def _iter_generated_text(tokenizer, generate, outcome: dict):
+def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None):
     """Run ``generate`` on a worker thread and yield its text as it is produced.
 
     ``generate(streamer=..., stop_event=...)`` is called on a new thread, in a copy
     of the caller's ``contextvars`` context (a request-local selection such as the
     per-user bank must be visible to it). Pieces come from a ``TextIteratorStreamer``
     that holds a word back until it is complete and keeps the whole reply in its
-    token cache (see ``_reply_streamer_class``).
+    token cache (see ``_reply_streamer_class``). A caller that passes its own
+    ``stop_event`` can set it to end generation early and still read the stream to its
+    end, as ``_stream_response`` does once a stop string has been reached; closing this
+    generator sets it too, as below.
     ``generate``'s return value lands in ``outcome["result"]``; an exception it
     raised is re-raised here once the text that came before it has been yielded.
 
@@ -3368,7 +3562,8 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
     import contextvars
 
     streamer = _reply_streamer_class()(tokenizer, skip_prompt=True, skip_special_tokens=True)
-    stop_event = threading.Event()
+    if stop_event is None:
+        stop_event = threading.Event()
     failure: list = []
 
     def worker() -> None:
@@ -3431,6 +3626,8 @@ def _stream_response(
     reasoning_parser=None,
     response_id=None, conversation_id=None,
     trace_adapter=None, canary_bucket=None,
+    stop=(),
+    frames=None,
 ):
     """Generator that yields SSE chunks for streaming responses.
 
@@ -3446,38 +3643,39 @@ def _stream_response(
       sequences, which ``generate`` refuses to combine with a streamer
       (``_can_stream``).
 
-    ``response_id`` (a fresh uuid when not given) rides in every chunk next to the
-    OpenAI-style ``id``. The conversation record is written once the answer is
-    generated, before the remaining chunks and the final chunk go out. A client that
-    disconnects while tokens are streaming still leaves the record its id refers to:
-    the text it was sent, with ``finish_reason`` ``"client_disconnected"``.
+    ``stop`` (#2549) are the stop strings: the reply is cut before the first one. While
+    streaming, text that could be the start of a stop string is held back (see
+    ``StopFilter``), generation is ended as soon as one is complete, and the held text
+    follows when the reply ends without a match. Every other request is cut after the
+    reply is complete.
+
+    ``frames`` is the wire format (#2515): ``_OpenAIStreamFrames`` for
+    ``/v1/chat/completions`` (the default), ``_AnthropicStreamFrames`` for
+    ``/v1/messages``. The generation, the stripping, the stop handling and the
+    full-generation cases above are the same for both.
+
+    ``response_id`` (a fresh uuid when not given) rides in every OpenAI chunk next to the
+    OpenAI-style ``id`` (and in ``message_start`` of an Anthropic stream, as
+    ``message.response_id``, when the frames were built with it). The conversation record
+    is written once the answer is generated, before the remaining chunks and the final
+    chunk go out. A client that disconnects while tokens are streaming still leaves the
+    record its id refers to: the text it was sent, with ``finish_reason``
+    ``"client_disconnected"``.
     """
-    chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
     if response_id is None:
         response_id = str(uuid.uuid4())
-
-    def content_chunk(text: str) -> str:
-        chunk = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": text},
-                    "finish_reason": None,
-                }
-            ],
-            "response_id": response_id,
-        }
-        return f"data: {json.dumps(chunk)}\n\n"
-
+    if frames is None:
+        frames = _OpenAIStreamFrames(model_name, response_id=response_id)
+    stops = tuple(stop)
+    stopper = StopFilter(stops)
     prompt_tokens_for_log = None
     completion_tokens_for_log = 0
     sent = ""  # the text already sent while the reply was being generated
     try:
+        for frame in frames.start(
+            _count_prompt_tokens(tokenizer, messages) if frames.needs_prompt_tokens else 0
+        ):
+            yield frame
         # v0.71.17 #260 — re-select the per-user bank inside the generator's own
         # context. set_active_user runs in the sync endpoint thread, but this
         # generator is iterated later by the async event loop in a DIFFERENT
@@ -3531,14 +3729,19 @@ def _stream_response(
                 and _can_stream(model)
             ):
                 outcome: dict = {}
-                pieces = _iter_generated_text(tokenizer, generate, outcome)
+                stop_event = threading.Event()
+                pieces = _iter_generated_text(tokenizer, generate, outcome, stop_event)
                 emitter = _StripEmitter()
                 try:
                     for piece in pieces:
-                        text = emitter.feed(piece)
+                        # After a stop string only the end of the stream is wanted:
+                        # what the model still says is read and dropped.
+                        text = stopper.feed(emitter.feed(piece))
                         if text:
                             sent += text
-                            yield content_chunk(text)
+                            yield frames.text(text)
+                        if stopper.matched is not None:
+                            stop_event.set()
                 except GeneratorExit:
                     # Client gone mid-stream: stop generate() first, then leave the record
                     # its response_id refers to, holding the text it was actually sent.
@@ -3574,7 +3777,7 @@ def _stream_response(
         if canary_outcome is not None:
             canary_outcome(False)
         logger.exception("Stream generation error")
-        yield 'data: {"error": "Internal server error"}\n\n'
+        yield frames.error()
         return
 
     if canary_outcome is not None:
@@ -3588,12 +3791,21 @@ def _stream_response(
             response_text, reasoning_parser,
         )
 
+    # #2549 — the finished reply, cut before the first stop string. When the stop string
+    # was reached while streaming, this is what was sent; when it was not (the
+    # streamer held text back, or the request is not streamed), what follows below sends
+    # the rest of this text, never what comes after the stop string.
+    response_text, matched_stop = cut_at_stop(response_text, stops)
+    matched_stop = stopper.matched or matched_stop
+    if matched_stop is not None:
+        finish_reason = "stop"
+
     # v0.40.3 (#33 (b)) — passive request log on the streaming path, as a version 1
     # conversation record. Latency is measured from the BEFORE-generation mark passed
     # in by the chat_completions handler. Skipped if the writer is None or `started`
     # is missing; errors are swallowed (passive log). Written before the remaining
     # chunks and the final chunk, so the record exists by the time the client has
-    # the whole answer and its response_id.
+    # the whole answer and its response_id. It holds the reply as cut at a stop string.
     if started is not None:
         _write_conversation_record(
             trace_log_writer,
@@ -3616,31 +3828,16 @@ def _stream_response(
         # send the finished reply word by word.
         words = response_text.split(" ")
         for idx, word in enumerate(words):
-            yield content_chunk(word if idx == 0 else f" {word}")
+            yield frames.text(word if idx == 0 else f" {word}")
     elif response_text.startswith(sent):
         # Whatever the streamer did not release; the stripped reply is what counts.
         if len(response_text) > len(sent):
-            yield content_chunk(response_text[len(sent):])
+            yield frames.text(response_text[len(sent):])
     else:
         # The incremental decode and the final decode disagree (a tokenizer that
         # decodes a suffix differently from the same text in context): what was
         # already sent stays sent.
         logger.debug("streamed text differs from the final decode; nothing more is sent")
 
-    # Final chunk
-    final_chunk = {
-        "id": chat_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model_name,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": finish_reason,
-            }
-        ],
-        "response_id": response_id,
-    }
-    yield f"data: {json.dumps(final_chunk)}\n\n"
-    yield "data: [DONE]\n\n"
+    # Final chunk(s): the finish reason, and for Anthropic the token count too.
+    yield from frames.end(finish_reason, int(completion_tokens_for_log), matched_stop)

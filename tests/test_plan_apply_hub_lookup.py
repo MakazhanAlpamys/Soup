@@ -18,7 +18,7 @@ from soup_cli.utils.terraform_plan import build_plan
 from tests._tiny_checkpoint import TINY_LLAMA, write_tiny_model
 from tests.conftest import strip_ansi
 
-LINE = "Reading the model's config.json from the Hub"
+LINE = model_shape.HUB_REQUEST_LINE
 
 
 def _plain(text: str) -> str:

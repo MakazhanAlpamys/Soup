@@ -1,0 +1,136 @@
+{
+  "argv": [
+    "/workspace/payload/benchmarks/harness/ds_compare/soup_arm.py",
+    "--arm",
+    "S0",
+    "--shape",
+    "A",
+    "--workdir",
+    "/workspace/out/results/A/80/S0/rep1.work",
+    "--out",
+    "/workspace/out/results/A/80/S0/rep1.raw.json",
+    "--model",
+    "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "--soup-bin",
+    "/workspace/payload/benchmarks/harness/ds_compare/venv_s0/bin/soup",
+    "--rep",
+    "1"
+  ],
+  "arm": "S0",
+  "attempt": 2,
+  "budget_gb": 80,
+  "cap_applied": false,
+  "cap_gb": null,
+  "child_exit_code": 1,
+  "command": [
+    "/workspace/payload/benchmarks/harness/ds_compare/venv_s0/bin/soup",
+    "train",
+    "--config",
+    "soup.yaml",
+    "--yes"
+  ],
+  "cost_usd": null,
+  "error": "ng layer shards -> /root/.soup/layer-stream/workspace__payload__benchmarks__harness__ds_compare__model\n                                                                                                                  training.stream_layers                                                                                                                  \n  Layer streaming BETA \u2014 arch llama, tier ram                                                                                                                                                                                                             \n    base store   13.96 GB across 32 layers (pinned)                                                                                                                                                                                                       \n    VRAM buffers 2 x 436 MB = 872 MB                                                                                                                                                                                                                      \n    resident     0 MB embeddings + adapters                                                                                                                                                                                                               \n    peak VRAM    ~1.57 GB at batch 1 x seq 256 (logits 0.46 GB)                                                                                                                                                                                           \n    free VRAM    84.74 GB                                                                                                                                                                                                                                 \n    forecast     11124-16359 tok/s \u2014 a compute-bound bound, not a promise                                                                                                                                                                                 \n                 (from 788.21 TFLOPS measured on this card now @ 1980 MHz)                                                                                                                                                                                \n                                                                                                                                                                                                                                                          \nLayer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.\nexpandable_segments allocator hint is unavailable on this platform (silently ignored on Windows) \u2014 not enabled\n\nError: RuntimeError: non-layer weights left unmaterialised after tying: ['model.embed_tokens.weight', 'lm_head.weight']\nRun with --verbose for the full traceback.",
+  "exit_code": 1,
+  "kind": "soup",
+  "model": {
+    "id": "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "revision": "d10aef7999a2b5ba950ab3974312feeedbfe0b77"
+  },
+  "peak_vram_mib": 728.0,
+  "rep": 1,
+  "rerun_recompute_on": false,
+  "sampler": {
+    "foreign_gpu_processes": {
+      "apps_seen": {
+        "2268262": {
+          "first_seen": 1794039198.048757,
+          "last_seen": 1794039198.048757,
+          "max_mib": 616.0,
+          "name": "[Not Found]"
+        }
+      },
+      "foreign_pids": null,
+      "pid_namespace_visible": false
+    },
+    "gpu_idle_baseline_mib": 9.0,
+    "preflight_busy": false,
+    "rss_peak_bytes": 1344344064.0,
+    "rss_samples": 10,
+    "whole_run": {
+      "busy_samples": 1,
+      "gpu_util_mean_pct": 0.10526315789473684,
+      "samples": 19,
+      "sm_clock_busy_median_mhz": 1980.0,
+      "vram_peak_mib": 728.0
+    }
+  },
+  "schema": "ds_compare.run.v1",
+  "shape": "A",
+  "soup": {
+    "adapter_target_modules": null,
+    "applied_changes": [],
+    "dropped_keys": [
+      "training.seed"
+    ],
+    "expected_target_modules": [
+      "q_proj",
+      "v_proj"
+    ],
+    "extra_env": {},
+    "stream_log": {
+      "arch": "llama",
+      "oom_in_log": false,
+      "store_gb": 13.96,
+      "store_layers": 32,
+      "store_pinned": true,
+      "tier": "ram",
+      "vram_cap_applied_in_log": false
+    },
+    "target_modules_match": null,
+    "tracker_db": {
+      "duration_secs": null,
+      "final_loss": null,
+      "initial_loss": null,
+      "metric_rows": 0,
+      "run_id": "run_20261107_081312_5b8ab088",
+      "status": "running",
+      "total_steps": null
+    },
+    "unavailable_keys_at_2c9a078": [
+      "training.seed",
+      "training.stream_pin",
+      "training.stream_recompute",
+      "training.stream_loss_chunk",
+      "training.fast_lora",
+      "training.stream_vram_probe"
+    ],
+    "yaml": "base: /workspace/payload/benchmarks/harness/ds_compare/model\ntask: sft\ndata:\n  train: rows.jsonl\n  format: alpaca\n  val_split: 0\n  max_length: 256\ntraining:\n  epochs: 4\n  lr: 0.0002\n  batch_size: 1\n  gradient_accumulation_steps: 1\n  quantization: none\n  lora:\n    r: 8\n    alpha: 16\n    dropout: 0.05\n  optimizer: adamw_torch\n  scheduler: constant\n  warmup_ratio: 0.0\n  weight_decay: 0.0\n  max_grad_norm: 1.0\n  logging_steps: 1\n  save_steps: 1000000\n  stream_layers: true\noutput: ./output\n",
+    "yaml_sha256": "e6b9e4361af22fa48f25ce75396b7951ad88743b12cddb22abc5aaf0babb54ac"
+  },
+  "started_at": 1794039190.4404676,
+  "status": "failed",
+  "versions": {
+    "accelerate": "1.15.0",
+    "cuda_available": false,
+    "cuda_runtime": null,
+    "datasets": "5.1.0",
+    "deepspeed": "0.19.9",
+    "peft": "0.21.2",
+    "python": "3.11.14",
+    "soup-cli": "0.77.2",
+    "soup_cli_commit": "9ca9819747a624da4cbbff03cc8e1a7d2a81100d",
+    "soup_cli_editable": false,
+    "torch": "2.9.1+cu128",
+    "transformers": "5.22.2",
+    "trl": "0.29.1"
+  },
+  "void": true,
+  "void_attempts": 2,
+  "void_reasons": [
+    "non-zero exit (1) that is not an out-of-memory"
+  ],
+  "wall_seconds": 9.55271291732788,
+  "wall_seconds_child": 9.151554107666016,
+  "warmup": false
+}

@@ -549,7 +549,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
+    from soup_cli.utils.gpu import (
+        apply_quantization_guard,
+        configure_mps_async_load,
+        detect_device,
+        get_gpu_info,
+    )
 
     cfg = SoupConfig(**config_dict)
 
@@ -557,6 +562,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     device, device_name = detect_device()
     configure_mps_async_load(device)
     gpu_info = get_gpu_info()
+
+    # The same quantization guard `soup train` applies (#423): bitsandbytes cannot run on a
+    # CPU, so an arm that asked for 4bit/8bit there trains with none and says so. Per arm,
+    # not per sweep -- `quantization` can itself be swept, so only some arms downgrade, and
+    # each arm's output then says what that arm ran. Before `start_run`, which stores `cfg`.
+    apply_quantization_guard(cfg, device, console)
 
     # Load data -- the same split `soup train` would use (#1223).
     val_notice = validation_notice(cfg)

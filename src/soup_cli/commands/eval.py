@@ -219,13 +219,15 @@ def aider(
 
     tracker = None
     if run_id:
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
-        if tracker.get_run(run_id) is None:
-            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+        run_data = tracker.get_run(run_id)
+        if run_data is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
+        run_id = run_data["run_id"]
 
     try:
         output_dir = prepare_output_dir(output)
@@ -819,19 +821,20 @@ def compare(
 ):
     """Compare eval results between two training runs."""
     from soup_cli.eval.leaderboard import compare_runs
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
-    # Verify runs exist
-    for rid in [run1, run2]:
+    resolved_ids: list[str] = []
+    for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]Run not found: {rid}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
             raise typer.Exit(1)
+        resolved_ids.append(run_data["run_id"])
 
     try:
-        comparison = compare_runs(tracker, run1, run2)
+        comparison = compare_runs(tracker, *resolved_ids)
     except ValueError as exc:
         console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from None
@@ -1317,6 +1320,33 @@ def gate_cmd(
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if write_baseline:
+        import os
+
+        from soup_cli.utils.paths import check_report_output_path, quote_path
+
+        try:
+            check_report_output_path(write_baseline, "--write-baseline")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write --write-baseline:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
+
+        inputs = [("--suite", suite)]
+        for task in eval_suite.tasks:
+            if task.type == "custom" and task.tasks:
+                inputs.append((f"task {task.name!r} --tasks", task.tasks))
+            elif task.type == "judge" and task.prompts:
+                inputs.append((f"task {task.name!r} --prompts", task.prompts))
+        output_identity = os.path.normcase(os.path.realpath(write_baseline))
+        for field, input_path in inputs:
+            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+                message = (
+                    f"--write-baseline {quote_path(write_baseline)} aliases "
+                    f"{field} {quote_path(input_path)}; choose a different --write-baseline"
+                )
+                console.print(f"[red]{for_terminal(message)}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR)
 
     try:
         baseline_scores = resolve_baseline(

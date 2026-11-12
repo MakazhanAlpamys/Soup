@@ -1,0 +1,46 @@
+{
+  "schema": "root-context73-handoff-v1",
+  "status": "passed",
+  "run_id": "l40s-strict-two-layer-sft8192-20261105-02",
+  "app_id": "ap-<redacted>",
+  "app_state": "stopped",
+  "active_tasks": 0,
+  "scope": "One exact real-token AdamW update through original layers 0 and 1, 8192 context and 124 supervised tokens",
+  "fixture_split": "train",
+  "source_revision": "a76e109f4b66807d88fa92b5d7e0dead1a354494",
+  "artifact_dir": "results/modal-l40s-strict-two-layer-sft-8192-02",
+  "source_pins": {
+    "decoder_sft73_v2.py": "91a337747fc09e1ec94cd4f01160342a4108b32fb66a995fbcfe18465a355d2f",
+    "decoder_restore73_v2.py": "54bb27bda885a6d9ff0b4125c5ee76d1917be46bd54b6f22a0cff530d339dde0",
+    "modal_decoder73_v2.py": "416d828936241a51a99f3f5b656d5711d5e8baa25838aa1bc5c74bdd198881c3",
+    "verify_context73.py": "45cf75a42acf78cb253050186b154605cf8bc09e235ea4a21a545c2e45a1f009"
+  },
+  "accepted_receipt_sha256": {
+    "result.json": "361542da9b15f6d9ffa0505b0f805153de7811489c327f4a13fb61ba17925b4f",
+    "restore-result.json": "c3d04c9a35094edcd966e3c19b5ab4bf24d82fcd1785b5de3ec8af58ef53ead7",
+    "summary.json": "aa30b472ab856bf3ee0a5fa110a8c480bdf7a7e7dfb4c4194fb033bd1c7bda29",
+    "manifest.json": "cc9a2e2c7f98e345d72414bdb489ae1abff2d7794101fb452cc43139c0e46b5d",
+    "state.pt": "b76bd82e301072de2f0ecaefbc2c3eaf9a11f2fc4a6f9e824a97754d46613ca2"
+  },
+  "exact_native_staged_tensors": 34,
+  "same_numerical_bytes_as_rejected_attempt": true,
+  "fresh_restore": {
+    "training_pid": 380,
+    "restore_pid": 589,
+    "adapters": 8,
+    "adamw_moments": 16,
+    "adamw_step_counters": 8,
+    "cpu_and_cuda_rng_exact": true
+  },
+  "allocator_cap_bytes": 6710886400,
+  "maximum_reserved_bytes": 6421479424,
+  "sampled_device_peak_mib": 6717,
+  "rejected_prior": "ROOT_CONTEXT73_ATTEMPT01_01.json",
+  "follow_up": {
+    "scope": "All 88 original layers, same fixture and allocator cap; independent full-depth update with a new initialization",
+    "run_id": "l40s-strict-full88-sft8192-20261105-01",
+    "wrapper": "modal_decoder74_v2.py",
+    "wrapper_sha256": "e76d3ab63f7a3d58f0e4477468f7db594d5cc298af96e0ad9b5138e121129b11",
+    "output_dir": "results/modal-l40s-strict-full88-sft-8192-01"
+  }
+}

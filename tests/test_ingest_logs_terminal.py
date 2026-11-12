@@ -1,6 +1,5 @@
 """Offline ingest diagnostics display the original log path safely."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +7,7 @@ from rich.console import Console
 
 from soup_cli.cli import app
 from soup_cli.commands import ingest as ingest_cmd
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 
@@ -22,7 +22,7 @@ from tests.conftest import make_cli_runner, strip_ansi
             ":warning:",
             ":warning:",
             id="emoji-alias",
-            marks=pytest.mark.skipif(os.name == "nt", reason="Colon is not a Windows filename"),
+            marks=skip_colon_on_windows,
         ),
     ],
 )

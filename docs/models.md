@@ -101,6 +101,56 @@ The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
 
+`soup recipes use qwen3.5-27b-grpo` selects the same 27B language decoder for
+`./data/reasoning_train.jsonl`, with a reference answer in an `answer` column or
+the final assistant message. It inherits the 4B/9B GRPO starting values:
+`lr: 1e-5`, three epochs, four generations, `grpo_beta: 0.1` and the `accuracy`
+reward. The 4096-token limit, auto batch size, eight accumulation steps, LoRA
+rank 16 / alpha 32 and 4-bit quantization also match the shipped 27B SFT/DPO
+recipes; gradient checkpointing is explicit. These are inherited starting values.
+The pinned public configuration's full text architecture and LoRA attachment
+have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
+forward/backward check. This does not validate full 27B weights, GRPO rollouts,
+NF4 execution, GPU memory fit or training quality.
+
+`soup recipes use qwen3.5-122b-a10b-grpo` selects the 122B-A10B language
+MoE for text reasoning rows whose final assistant message holds the reference
+answer. The shipped `format: auto` path is tested with that ChatML layout.
+It inherits one epoch, batch size 1, sixteen accumulation steps, LoRA rank 32 /
+alpha 64, zero dropout, a 4096-token limit, 4-bit quantization and checkpointing
+from the 122B SFT recipe. The 35B MoE GRPO sibling supplies learning rate 1e-5,
+four generations, beta 0.1 and the `accuracy` reward. `moe_lora: true` includes
+fused experts; the SFT-only auxiliary-loss option is omitted.
+These are untuned starting values. GRPO promotes the configured batch size of
+1 to at least 4 for four generations, so it is not a one-completion workload.
+Ten billion active parameters do not mean ten billion resident parameters:
+the whole 122B base, rollout state and reference-model requirements matter.
+No GPU count or memory-fit recommendation has been measured. The public config
+was verified at `dc4d348443bc740c68e2d77492492c11606384d5`; offline tests use
+a tiny random native hybrid text MoE with expert LoRA. They do not qualify full
+122B weights, tokenizer/rollout behavior, full GRPO training, NF4 execution,
+distributed training, GPU memory fit or reward quality.
+
+`soup recipes use qwen3.5-397b-a17b-grpo` selects the 397B-A17B language MoE
+for the same text reasoning rows: the reference answer is the final assistant
+message or an `answer` column. It inherits one epoch, batch size 1, 32
+accumulation steps, LoRA rank 32 / alpha 64, zero dropout, a 4096-token limit,
+4-bit quantization and checkpointing from the 397B SFT recipe. The Qwen3.5 MoE
+GRPO rows (35B-A3B, 122B-A10B) supply learning rate 1e-5, four generations,
+beta 0.1 and the `accuracy` reward. `moe_lora: true` includes fused experts; the
+SFT-only auxiliary-loss option is omitted. These are untuned starting values,
+and GRPO promotes the configured batch size of 1 to at least 4 for four
+generations. Seventeen billion active parameters do not mean seventeen billion
+resident parameters: the whole 397B base, rollout state and reference-model
+requirements matter, and the SFT sibling already needs multi-node DeepSpeed or
+FSDP. No GPU count or memory-fit recommendation has been measured. The public
+config was verified at `8472618112abcbd45acbcdc58436aff4233c23f7` (60 text
+layers, 512 experts, 10 active); offline tests use a tiny random native hybrid
+text MoE with the same three-linear-to-one-full attention pattern and expert
+LoRA. They do not qualify full 397B weights, tokenizer/rollout behavior, full
+GRPO training, NF4 execution, distributed training, GPU memory fit or reward
+quality.
+
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
 from the decoder-layer shard and can be served from the original safetensors
