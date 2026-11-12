@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -768,3 +769,246 @@ def test_sft_refuses_a_rope_override_before_fetching_a_tokenizer_or_config(monke
     with pytest.raises(ValueError) as caught:
         wrapper._setup_transformers(cfg, cfg.training)
     assert "rope_scaling_type 'yarn'" in str(caught.value)
+
+
+# ==========================================================================
+# Maintainer follow-up 2026-11-12, item (a): the committed published tensor
+# names cover what the resident loader writes (#2104)
+# =========================================================================
+#
+# The maintainer: "Do not fetch model.safetensors.index.json inside a test:
+# commit the list of names or a header map." The list lives at
+# tests/fixtures/kimi_k2/published_tensor_names.txt: the weight_map keys of
+# moonshotai/Kimi-K2-Base's model.safetensors.index.json at the admission
+# gate's pinned revision; the file's header comment records the revision, the
+# index's own sha256, the fetch date and the name count. These tests are the
+# only consumers and read the committed file, never the network. The
+# documented mutation path is editing that file: renaming a published name
+# must make the coverage check fail.
+
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "kimi_k2"
+_PUBLISHED_NAMES_TXT = _FIXTURES_DIR / "published_tensor_names.txt"
+#: Recorded in the fixture's header: the pinned index's name count.
+_PUBLISHED_NAME_COUNT = 139_644
+
+
+def _published_names():
+    """The committed published tensor names (header comments stripped)."""
+    lines = _PUBLISHED_NAMES_TXT.read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def test_the_committed_published_names_match_the_pinned_index():
+    names = _published_names()
+    assert len(names) == _PUBLISHED_NAME_COUNT
+    assert names == sorted(set(names))
+    # Structural sanity probes. Two correct the first-guess reading (both are recorded in
+    # the fixture's header): layer 0 is dense — the first routed-expert layer is layer 1 —
+    # and K2-Base publishes lm_head.weight untied, so it IS in the list.
+    for present in (
+        "model.embed_tokens.weight",
+        "model.layers.0.mlp.gate_proj.weight",  # dense layer 0: no experts under it
+        "model.layers.1.mlp.experts.0.gate_proj.weight",
+        "model.layers.1.mlp.experts.0.gate_proj.weight_scale_inv",
+        "model.layers.60.mlp.experts.383.down_proj.weight",
+        "model.layers.60.mlp.experts.383.down_proj.weight_scale_inv",
+        "model.layers.1.mlp.gate.e_score_correction_bias",
+        "model.norm.weight",
+        "lm_head.weight",
+    ):
+        assert present in names, present
+    assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in names
+
+
+def _published_subset_cases():
+    """(published name, expected key in the loaded state dict, expected shape).
+
+    Shapes derive from the tiny dims (``_TINY``). Per-expert published spellings map to
+    the fused native parameters the loader writes (``...mlp.experts.gate_up_proj`` /
+    ``...mlp.experts.down_proj``), and published layer numbers (1..60) map onto the tiny
+    model's single MoE layer (1): the checkpoint naming scheme, not the layer count, is
+    what this pins.
+    """
+    t = _TINY
+    h = t["hidden_size"]
+    i = t["intermediate_size"]
+    m = t["moe_intermediate_size"]
+    e = t["n_routed_experts"]
+    a = t["num_attention_heads"]
+    kv = t["kv_lora_rank"]
+    q = t["q_lora_rank"]
+    head = t["qk_nope_head_dim"] + t["qk_rope_head_dim"]
+    v = t["v_head_dim"]
+    vocab = t["vocab_size"]
+    gate_up = "model.layers.1.mlp.experts.gate_up_proj"
+    down = "model.layers.1.mlp.experts.down_proj"
+    return [
+        ("model.embed_tokens.weight", None, (vocab, h)),
+        ("model.layers.0.self_attn.q_a_proj.weight", None, (q, h)),
+        ("model.layers.0.self_attn.q_a_layernorm.weight", None, (q,)),
+        ("model.layers.0.self_attn.q_b_proj.weight", None, (a * head, q)),
+        # K2's published MQA spelling: one kv down-projection with the rope key baked in.
+        (
+            "model.layers.0.self_attn.kv_a_proj_with_mqa.weight",
+            None,
+            (kv + t["qk_rope_head_dim"], h),
+        ),
+        ("model.layers.0.self_attn.kv_a_layernorm.weight", None, (kv,)),
+        (
+            "model.layers.0.self_attn.kv_b_proj.weight",
+            None,
+            (a * (t["qk_nope_head_dim"] + v), kv),
+        ),
+        ("model.layers.0.self_attn.o_proj.weight", None, (h, a * v)),
+        ("model.layers.0.input_layernorm.weight", None, (h,)),
+        ("model.layers.0.post_attention_layernorm.weight", None, (h,)),
+        ("model.layers.0.mlp.gate_proj.weight", None, (i, h)),  # dense layer 0
+        ("model.layers.0.mlp.up_proj.weight", None, (i, h)),
+        ("model.layers.0.mlp.down_proj.weight", None, (h, i)),
+        ("model.layers.1.mlp.gate.weight", None, (e, h)),  # the router
+        ("model.layers.1.mlp.shared_experts.gate_proj.weight", None, (m, h)),
+        ("model.layers.1.mlp.shared_experts.up_proj.weight", None, (m, h)),
+        ("model.layers.1.mlp.shared_experts.down_proj.weight", None, (h, m)),
+        # Routed experts: per-expert checkpoint spelling -> the fused stacked parameter;
+        # expert 0 and the last (tiny 7, published 383) on both projections.
+        ("model.layers.1.mlp.experts.0.gate_proj.weight", gate_up, (e, 2 * m, h)),
+        ("model.layers.1.mlp.experts.7.up_proj.weight", gate_up, (e, 2 * m, h)),
+        ("model.layers.60.mlp.experts.383.gate_proj.weight", gate_up, (e, 2 * m, h)),
+        ("model.layers.1.mlp.experts.0.down_proj.weight", down, (e, h, m)),
+        ("model.layers.60.mlp.experts.383.down_proj.weight", down, (e, h, m)),
+        ("model.norm.weight", None, (h,)),
+        ("lm_head.weight", None, (vocab, h)),
+    ]
+
+
+_PUBLISHED_SUBSET = _published_subset_cases()
+
+
+def _assert_published_subset_in(names):
+    """Every representative published name is in the committed list (fails loudly,
+    naming the misses — this is what a mutated file must trip)."""
+    present = set(names)
+    missing = [name for name, _key, _shape in _PUBLISHED_SUBSET if name not in present]
+    assert not missing, f"published names missing from the committed list: {missing}"
+
+
+@pytest.fixture(scope="module")
+def tiny_k2_built(tmp_path_factory):
+    """The shared seeded tiny K2 checkpoints: bf16 + FP8 + dequantised materialisation."""
+    from tests.kimi_k2_tiny import build_tiny_k2_checkpoints
+
+    return build_tiny_k2_checkpoints(tmp_path_factory.mktemp("kimi-k2-task6"))
+
+
+@pytest.fixture(scope="module")
+def tiny_k2_loaded_state(tiny_k2_built):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    model = load_resident_model(
+        tiny_k2_built["bf16"][0], model_kwargs={"dtype": torch.bfloat16}
+    )
+    return model.state_dict()
+
+
+@pytest.mark.parametrize(
+    ("published", "fused_key", "shape"),
+    _PUBLISHED_SUBSET,
+    ids=[published for published, _key, _shape in _PUBLISHED_SUBSET],
+)
+def test_published_names_cover_the_loaded_state_dict(
+    tiny_k2_loaded_state, published, fused_key, shape
+):
+    """Coverage (maintainer item a): each representative published spelling the loader
+    consumes has its counterpart in the loaded state dict — fused for per-expert tensors,
+    identical otherwise — at the shape the tiny dims imply."""
+    _assert_published_subset_in(_published_names())
+    key = fused_key if fused_key is not None else published
+    assert key in tiny_k2_loaded_state, key
+    assert tuple(tiny_k2_loaded_state[key].shape) == shape, key
+
+
+def test_published_names_coverage_fails_when_the_file_is_mutated():
+    """The mutation-flavoured check: the coverage test above genuinely reads the committed
+    file, so the documented mutation path is editing the file — rename one published name
+    and the coverage check must fail (a constant baked into the test could not fail this
+    way)."""
+    names = _published_names()
+    victim = "model.layers.1.mlp.experts.0.gate_proj.weight"
+    tampered = [
+        "model.layers.1.mlp.experts.0.gate_project.weight" if name == victim else name
+        for name in names
+    ]
+    assert victim in names
+    with pytest.raises(AssertionError):
+        _assert_published_subset_in(tampered)
+
+
+# ==========================================================================
+# Maintainer follow-up 2026-11-12, item (c): the FP8 resident load is bit for
+# bit the dequantised materialisation (#2104)
+# =========================================================================
+#
+# Streamed precedent: test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly
+# (tests/test_fp8_block_streaming.py) pins the streamed build's logits/loss/grads against
+# a resident model holding the dequantised weights. This cell is the resident-route
+# counterpart: load_resident_model on the FP8 checkpoint must materialise, BIT FOR BIT,
+# the same parameters a plain native from_pretrained produces on the dequantised folder
+# the fixtures' builder writes (built["fp8"] = (FP8 K2 folder, dequantised folder)).
+#
+# Comparison scope: parameters only (named_parameters). Buffers are excluded by design:
+# e_score_correction_bias is a float32 buffer in both loads (the loader keeps stored
+# buffer dtypes per the D-fix F3), so the bit-for-bit claim covers parameters, where both
+# models hold bfloat16.
+
+
+def _resident_fp8_vs_reference(fp8_dir, deq_dir):
+    import torch
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    got = load_resident_model(str(fp8_dir), model_kwargs={"dtype": torch.bfloat16})
+    want = DeepseekV3ForCausalLM.from_pretrained(str(deq_dir), dtype=torch.bfloat16)
+    return got, want
+
+
+def _assert_parameters_bit_identical(got, want):
+    import torch
+
+    got_parameters = dict(got.named_parameters())
+    want_parameters = dict(want.named_parameters())
+    assert set(got_parameters) == set(want_parameters)
+    for name in sorted(got_parameters):
+        left, right = got_parameters[name], want_parameters[name]
+        assert left.dtype == right.dtype, (name, left.dtype, right.dtype)
+        assert torch.equal(left, right), name
+
+
+def test_resident_fp8_load_is_bit_for_bit_the_dequantised_materialisation(tiny_k2_built):
+    """Maintainer item c: the FP8 resident load equals, bit for bit, a resident native
+    model holding the same dequantised weights (streamed-side pin:
+    test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly)."""
+    got, want = _resident_fp8_vs_reference(*tiny_k2_built["fp8"])
+    _assert_parameters_bit_identical(got, want)
+
+
+def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_k2_built):
+    """The mandatory mutation check for item c: flip one FP8 block scale in the
+    checkpoint and the bit-for-bit comparison must fail — i.e. the parity cell above
+    would catch this mutation, so it cannot pass on a stale or shortcut dequant."""
+    from safetensors.torch import load_file, save_file
+
+    fp8_dir, deq_dir = tiny_k2_built["fp8"]
+    mutated = tmp_path / "fp8-flipped-scale"
+    mutated.mkdir()
+    state = load_file(os.path.join(fp8_dir, "model.safetensors"))
+    victim = sorted(key for key in state if key.endswith("_scale_inv"))[0]
+    state[victim] = state[victim] * 2.0
+    save_file(state, str(mutated / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(fp8_dir, "config.json"), mutated / "config.json")
+
+    got, want = _resident_fp8_vs_reference(str(mutated), deq_dir)
+    with pytest.raises(AssertionError):
+        _assert_parameters_bit_identical(got, want)
