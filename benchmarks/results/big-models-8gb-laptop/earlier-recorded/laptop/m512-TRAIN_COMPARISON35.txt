@@ -1,0 +1,80 @@
+Bounded training comparison, captured2026-11-03 before fresh reload finished
+
+full512-train-02 completed all three updates, saved352 adapter tensors and exited
+zero under the unchanged guard. Guard elapsed728.812s; child and monitor cleanup
+were clean. This receipt comparison does not yet establish fresh-process reload
+or the final artifact audit. TRAIN_COMPARISON35.json contains exact byte counters,
+seven before/after trim observations and SHA256 hashes of all16 input receipts.
+No base payload, model or CUDA operation was loaded by this comparison.
+
+Run                           Stage34 seq128   Full512 untrimmed   Full512 trim
+Completed optimizer updates   3                1                   3
+Guard outcome                 completed        system_commit_floor completed
+Whole-device peak, MiB        4598             5512                5602
+Min global headroom, GiB       3.799            0.381               2.301
+Min available RAM, GiB        5.513            5.623               6.481
+Last sampled GPU, MiB         0                0                   0
+
+The zero final device value is the last regular GPU sample for Stage34 and trim;
+only the interrupted untrimmed run has an explicit gpu_final record. All three
+guards report clean worker/child/monitor cleanup. The untrimmed result JSON still
+says running because its worker was interrupted; the guard is the failure record.
+
+The completed trim run's final Torch peak allocated was4,968,217,088 bytes
+(4.627013GiB), peak reserved5,691,670,528 bytes (5.300781GiB). There is no final
+synchronized Torch peak for the interrupted arm. Its last recorded completed
+optimizer boundary was allocated peak4,754,831,872/reserved peak5,597,298,688.
+Do not treat this partial number as the final untrimmed full-run peak.
+
+What the boundary observation demonstrates
+
+The first optimizer trim preserved live allocation2,760,923,136 bytes and both
+peak counters exactly. Reserved bytes fell5,597,298,688 ->3,028,287,488, releasing
+2,569,011,200 bytes of unused cache. Own private commit fell11,138,105,344 ->
+8,800,948,224, a2,337,157,120-byte decrease; global commit decreased2,335,444,992.
+Before the second forward, reserve remained3,028,287,488 bytes versus5,597,298,688
+in the interrupted arm. All seven trims preserved live bytes and both peaks;
+four followed heldout forwards and three followed optimizer updates. The durable
+first-step control comparison occurred before the second forward.
+
+This supports measured release of unused cache and worker private commit at the
+declared boundary. It does not demonstrate reduced allocation or device peak:
+the completed trim run's sampled device peak was90MiB higher than the shorter
+interrupted run, and its maximum sampled own private commit was also higher.
+
+Session confound and interpretation limits
+
+The trim run began with global commit936,075,264 bytes lower than the interrupted
+run. At the first optimizer boundary BEFORE its optimizer trim, the arithmetic
+system-minus-worker-private residual was already2,222,059,520 bytes lower, while
+worker private differed by only+1,331,200 bytes. Global commit changes cannot all
+be assigned to this worker or to cache trimming. The residual does not identify
+another process, driver, kernel component or pagefile ownership. No such causal
+attribution is made here. Overall completion/headroom also reflects session state.
+
+The repeated-text full512 steps took58.8837124/57.3891322/55.2947517 seconds; the
+interrupted arm's sole completed step took70.5146468 seconds. Stage34 seq128 took
+67.8154223/62.4906745/60.6023008 seconds. These include checks and durable telemetry,
+and the trim run includes synchronized releases. Different sequence lengths,
+routes, sessions and cache conditions prevent an optimized-throughput conclusion.
+
+Numeric and artifact evidence checked without model loading
+
+The complete trim report covers all88 decoder layers,616 packed projections,
+352 FP32 adapter tensors,1056 gradient rows and1056 update rows. Its138 protected
+source/store hashes match before/after. Runtime assertions report two slots,
+pageable backing2,324,713,472 bytes and pinned source0. Initial heldout records
+(including full-logits digests) and every recorded first-step numerical field
+except seconds exactly match the authenticated untrimmed control. Full gradient
+byte digests were not recorded, so equality is not claimed beyond those fields.
+
+Heldout losses changed1.07907724/1.09838057 ->1.05054331/1.05818546. The five texts
+are repeated to512 visible tokens for capacity testing; this is not useful-task
+learning or general quality evidence. Saved tensor inventory352 is checked in
+the worker receipt. Adapter bytes and fresh-process full-logits equality are for
+the separate final artifact audit after reload closes successfully.
+
+The compact JSON SHA256 at capture is:
+c5ac295c54b9430d0b960f9eb99a631b633d73dfd0dea4ec2a1787bd7a9b352a
+Both comparison files are historical snapshots; preserve their pending-reload
+status when the later final audit is added separately.
