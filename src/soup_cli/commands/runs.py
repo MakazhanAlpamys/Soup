@@ -391,6 +391,16 @@ def _checkpoint_to_keep(
     return None, False
 
 
+def _resolved_output_dir(output_dir: Optional[str]) -> Optional[Path]:
+    """A run's recorded ``output_dir`` through ``os.path.realpath``; None if absent or invalid."""
+    if not output_dir:
+        return None
+    try:
+        return Path(os.path.realpath(output_dir))
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -412,7 +422,8 @@ def clean(
     """Intelligently clean up redundant checkpoint files to reclaim disk space.
 
     The checkpoint with the lowest loss recorded at its step is left whole; when
-    no checkpoint has a recorded loss, the latest one is.
+    no checkpoint has a recorded loss, the latest one is. When runs share an
+    output directory, each run's is left whole.
     """
     import shutil
 
@@ -440,57 +451,64 @@ def clean(
         console.print("[yellow]No runs to clean.[/]")
         raise typer.Exit()
 
-    total_bytes_to_reclaim = 0
-    files_to_delete = []
-    dirs_to_delete = []
+    # Cross-platform containment: project convention requires
+    # os.path.realpath + commonpath because Path.resolve() + relative_to()
+    # silently mismatches on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
 
+    # Runs that share an output directory share its checkpoints, so each
+    # directory is handled once, with every run recorded there (#2724).
+    runs_at_dir: dict[Path, list[dict]] = {}
     for run in runs_to_clean:
-        out_dir_str = run.get("output_dir")
-        if not out_dir_str:
+        output_dir = _resolved_output_dir(run.get("output_dir"))
+        if output_dir is None or not is_under_cwd(output_dir) or not output_dir.exists():
             continue
-        # Cross-platform containment: project convention requires
-        # os.path.realpath + commonpath because Path.resolve() + relative_to()
-        # silently mismatches on Windows 8.3 short names.
-        from soup_cli.utils.paths import is_under_cwd
+        runs_at_dir.setdefault(output_dir, []).append(run)
 
-        try:
-            output_dir = Path(os.path.realpath(out_dir_str))
-        except (OSError, ValueError):
-            continue
-        if not is_under_cwd(output_dir):
-            continue
-        if not output_dir.exists():
-            continue
+    cleaning = {run["run_id"] for run in runs_to_clean}
+    if runs_at_dir and not all_runs:
+        # A run that is not being cleaned still keeps its best checkpoint.
+        for other in tracker.list_runs(limit=100000):
+            if other["run_id"] in cleaning:
+                continue
+            output_dir = _resolved_output_dir(other.get("output_dir"))
+            if output_dir in runs_at_dir:
+                runs_at_dir[output_dir].append(other)
 
-        metrics = tracker.get_metrics(run["run_id"])
+    total_bytes_to_reclaim = 0
+    # Ordered sets, so each path is listed, counted and deleted once.
+    files_to_delete: dict[Path, None] = {}
+    dirs_to_delete: dict[Path, None] = {}
 
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
-        if fallback:
-            console.print(
-                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
-                emoji=False,
-            )
+        keep_steps: set[int] = set()
+        for run in runs_here:
+            metrics = tracker.get_metrics(run["run_id"])
+            keep_step, fallback = _checkpoint_to_keep(metrics, steps)
+            if keep_step is not None:
+                keep_steps.add(keep_step)
+            if fallback and run["run_id"] in cleaning:
+                console.print(
+                    f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                    f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                    emoji=False,
+                )
         for ckpt in checkpoints:
-            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
+            if _checkpoint_step(ckpt) in keep_steps:
                 continue
 
             if keep_weights:
-                for opt_file in ckpt.glob("optimizer*.pt"):
-                    total_bytes_to_reclaim += opt_file.stat().st_size
-                    files_to_delete.append(opt_file)
-                for opt_file in ckpt.glob("optimizer*.safetensors"):
-                    total_bytes_to_reclaim += opt_file.stat().st_size
-                    files_to_delete.append(opt_file)
-                for sch_file in ckpt.glob("scheduler.pt"):
-                    total_bytes_to_reclaim += sch_file.stat().st_size
-                    files_to_delete.append(sch_file)
-            else:
+                for pattern in ("optimizer*.pt", "optimizer*.safetensors", "scheduler.pt"):
+                    for state_file in ckpt.glob(pattern):
+                        if state_file not in files_to_delete:
+                            total_bytes_to_reclaim += state_file.stat().st_size
+                            files_to_delete[state_file] = None
+            elif ckpt not in dirs_to_delete:
                 size = sum(f.stat().st_size for f in ckpt.rglob('*') if f.is_file())
                 total_bytes_to_reclaim += size
-                dirs_to_delete.append(ckpt)
+                dirs_to_delete[ckpt] = None
 
     if total_bytes_to_reclaim == 0:
         console.print(
