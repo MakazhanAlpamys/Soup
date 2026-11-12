@@ -1,0 +1,131 @@
+{
+  "protocol": "stage83-modal-full88-sft16384-v1",
+  "run_id": "l40s-strict-full88-sft16384-20261106-01",
+  "sequence": 16384,
+  "status": "passed",
+  "artifact_sha256": {
+    "plan.json": "0959e47a523dea0d08ef0d3975849e0cec3edf2768b6ef6f16434c883e11516d",
+    "source.log": "1188ddd8492e01a1aa99ce156621f9f1b245d825696f31f21d530ebafe72c835",
+    "device-samples.csv": "d077439eec166c0c3efeb47f979673112923ef281bcbc69032320e24e3d92777",
+    "worker.log": "2a7ef197356ae4ffddfa8c0e4f45cce5b7b532520c0705f328dcbeae73467269",
+    "result.json": "b6eddf4e63da432d99c9b5450b7cf1ba0ef0d76fcacfda5df0976f3112e28595",
+    "progress.jsonl": "981a0fe8083a569af42441f86d79d354a7fea454dbeb791672fb8b87ead20020",
+    "checkpoint-001/manifest.json": "a1ea2ac38dac36aac77313278ab4cacfe2a4a1e28365a55ac1eed03ba928c259",
+    "checkpoint-001/state.pt": "a79fa51a04907851dd69b54b1861583aa427350102559defc1087e94d1dd2ddf",
+    "restore.log": "ec7a12c6ad5b7de85980ecb5f366f278f81c6276c7adf828cbd7defff48ddc46",
+    "restore-result.json": "ec7a12c6ad5b7de85980ecb5f366f278f81c6276c7adf828cbd7defff48ddc46"
+  },
+  "minimum_colocated_free_bytes": 104716085136,
+  "stage81_verification_sha256": "a35870c613d555a21d330a71c11585d8b3142c5fc48698b772f5352756e080a8",
+  "source_exit_code": 0,
+  "source_seconds": 260.601962283,
+  "source": {
+    "disk_free_before_network_bytes": 9223372036848189440,
+    "file_count": 15,
+    "files": {
+      "config.json": {
+        "bytes": 1210,
+        "reused": false,
+        "sha256": "8cd418b68e9039ffe41d2ddc8f87ced9d38207bb9ac8945a31535a8c20c89f6c"
+      },
+      "model-00001-of-00013.safetensors": {
+        "bytes": 4908032482,
+        "reused": false,
+        "sha256": "bde57e09b2f94219e3eef2cdf50c3bcc93d9442405165d2c95c1178e08bf52fe"
+      },
+      "model-00002-of-00013.safetensors": {
+        "bytes": 4998617418,
+        "reused": false,
+        "sha256": "2f3be80a3f58d41f233c3d305f9eca54a8e558997b1a6ef17777e05771ad7e2d"
+      },
+      "model-00003-of-00013.safetensors": {
+        "bytes": 4998617618,
+        "reused": false,
+        "sha256": "2429a2876cca6090fd8c5f4cc1cccdd6171b09292fc81d352e948dbbaaf1814d"
+      },
+      "model-00004-of-00013.safetensors": {
+        "bytes": 4998617615,
+        "reused": false,
+        "sha256": "0c0c511778029789115e906622ca2ed626cff12c40d8556f77b60f2358d85c48"
+      },
+      "model-00005-of-00013.safetensors": {
+        "bytes": 4998617603,
+        "reused": false,
+        "sha256": "5c11c222332afb37eeeb782591bb7917e653f2010e3c96813442de55c609de38"
+      },
+      "model-00006-of-00013.safetensors": {
+        "bytes": 4998617611,
+        "reused": false,
+        "sha256": "b5bfaf620910e28b21b0fc49e8ff3a246f6d96b5788224bcab417ed3bd69475f"
+      },
+      "model-00007-of-00013.safetensors": {
+        "bytes": 4998617610,
+        "reused": false,
+        "sha256": "af1a42074a3e38a18cf5488b02752db9230b14c4f994e191dc6ce5317fce5adf"
+      },
+      "model-00008-of-00013.safetensors": {
+        "bytes": 4998617605,
+        "reused": false,
+        "sha256": "6dbb2ec4901d48f30227f2f79415da22022886cb3f4c137daadb905aada590a9"
+      },
+      "model-00009-of-00013.safetensors": {
+        "bytes": 4998617610,
+        "reused": false,
+        "sha256": "674a8e6de8054b47790a9320b31db6b4b437021da98b7cda3543c0923bb6fbe2"
+      },
+      "model-00010-of-00013.safetensors": {
+        "bytes": 4998617608,
+        "reused": false,
+        "sha256": "4a201c940508b094ca82279684fd9357cf73f30aa2fa75d4c370595ba69874dd"
+      },
+      "model-00011-of-00013.safetensors": {
+        "bytes": 4998617598,
+        "reused": false,
+        "sha256": "eb2d07f4e29dadf2b12a0615b301b706cad46964576deb364918ff31391d7639"
+      },
+      "model-00012-of-00013.safetensors": {
+        "bytes": 4998617606,
+        "reused": false,
+        "sha256": "85a9821ab6f9b08a03f7abb6adf98d08240f157fcd020a7678545225dc50426b"
+      },
+      "model-00013-of-00013.safetensors": {
+        "bytes": 4557575486,
+        "reused": false,
+        "sha256": "703585f35d9867960dd63f11e779821f97151b5b57b0accf20b93f052d852254"
+      },
+      "model.safetensors.index.json": {
+        "bytes": 364056,
+        "reused": false,
+        "sha256": "b071f2c74b4603e04ab6c46282f82a85edbe01e3054d898d821c117b133fefec"
+      }
+    },
+    "inventory_sha256": "7c19b6f8315df459761537b3bb59440b22c665ca26a7040d7f7c57ea2db027f9",
+    "repo": "unsloth/Mistral-Large-Instruct-2407-bnb-4bit",
+    "required_free_bytes": 86999345040,
+    "revision": "a76e109f4b66807d88fa92b5d7e0dead1a354494",
+    "schema": "stage61-full-mistral-nf4-source-v1",
+    "scratch_bytes": 22548578304,
+    "source_bytes": 64450766736,
+    "xet_enabled": true
+  },
+  "worker_pid": 450,
+  "worker_exit_code": 0,
+  "worker_seconds": 3621.113291297,
+  "checkpoint_committed": true,
+  "peak_summary": {
+    "peak_allocated": 6107063296,
+    "peak_reserved": 6295650304
+  },
+  "restore_exit_code": 0,
+  "restore_verified": true,
+  "device": {
+    "device_uuid": "GPU-<redacted>",
+    "device_name": "NVIDIA L40S",
+    "count": 14381,
+    "observed_peak_used_mib": 6597,
+    "device_total_mib": 46068,
+    "all_observations_within_8192_mib": true,
+    "interval_ms": 250,
+    "scope": "whole device during update"
+  }
+}

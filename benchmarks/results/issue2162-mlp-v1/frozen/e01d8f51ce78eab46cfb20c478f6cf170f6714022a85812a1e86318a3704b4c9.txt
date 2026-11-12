@@ -1,0 +1,219 @@
+"""Prepare, then execute one frozen six-process diagnostic without service changes."""
+import argparse
+import csv
+import hashlib
+import io
+import json
+import os
+import subprocess
+import sys
+import time
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+import psutil
+
+ROOT = Path('D:/Soup-2162-v1')
+RUN = ROOT/'mlp-diagnostic-v1'
+SOURCE = ROOT/'source-mlp-diagnostic-v1'
+GPU = 'GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4'
+CAP = 8*2**30
+
+
+def digest(path):
+    with path.open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def save(name, payload):
+    (RUN/name).write_text(json.dumps(payload, indent=2)+'\n', encoding='utf-8')
+
+
+def status(phase, **extra):
+    temporary = RUN/'state.tmp'
+    temporary.write_text(json.dumps(dict(phase=phase, updated_at=datetime.now(timezone.utc).isoformat(),
+                                         **extra), indent=2)+'\n')
+    temporary.replace(RUN/'state.json')
+
+
+def material_check():
+    material = json.loads((ROOT/'preflight-v2.json').read_text())
+    checks = {}
+    for folder, entries in [(Path('D:/Soup-2050-v1/model'), material['model']['files']),
+                             (Path('D:/Soup-2050-v1/source/.local2050/mistral-nf4-shards'),
+                              material['shard_files'])]:
+        for entry in entries:
+            path = folder/entry['file']
+            actual = digest(path)
+            assert actual == entry['sha256'], str(path)
+            checks[str(path)] = actual
+    assert len(checks) == 41
+    return dict(verified=True, files_sha256=checks)
+
+
+def inventory(admission=False):
+    fields = 'index,uuid,memory.total,memory.used,utilization.gpu,temperature.gpu,power.limit,clocks.sm'
+    result = subprocess.run(['nvidia-smi', '--query-gpu='+fields,
+                             '--format=csv,noheader,nounits'], capture_output=True, text=True,
+                            timeout=20)
+    assert result.returncode == 0 and not result.stderr.strip(), 'GPU driver failure'
+    rows = list(csv.reader(io.StringIO(result.stdout)))
+    assert len(rows) == 4 and all(len(row) == 8 for row in rows), 'GPU inventory failure'
+    assert [float(row[6]) for row in rows] == [420, 350, 420, 420], 'power changed'
+    assert all(float(row[5]) <= 75 for row in rows), 'temperature guard'
+    selected = next(row for row in rows if row[1].strip() == GPU)
+    assert all(float(row[4]) <= 5 for row in rows if row[1].strip() != GPU), 'competing GPU'
+    active = any(p.name().lower() == 'runner.worker.exe' for p in psutil.process_iter())
+    check = subprocess.run(['wsl', '-d', 'AuthGuard-CI', '--', 'pgrep', '-x', 'Runner.Worker'],
+                           capture_output=True, timeout=15)
+    assert check.returncode in (0, 1), 'CI state unavailable'
+    assert not active and check.returncode == 1, 'CI worker active'
+    assert psutil.virtual_memory().available >= 32*2**30, 'host memory guard'
+    if admission:
+        assert float(selected[4]) <= 5 and float(selected[5]) <= 60, 'selected GPU not idle'
+        assert (float(selected[2])-float(selected[3]))*2**20 >= CAP+2*2**30, 'GPU memory'
+    return dict(unix_s=time.time(), gpus=rows, windows_ci=False, linux_ci=False,
+                host_free=psutil.virtual_memory().available)
+
+
+def worker(tag, command, env):
+    steady = 0
+    deadline = time.monotonic()+90
+    with (RUN/(tag+'-readiness.jsonl')).open('x') as log:
+        while steady < 3:
+            try:
+                row = inventory(admission=True)
+                steady += 1
+            except AssertionError as exc:
+                if str(exc) not in ('selected GPU not idle', 'competing GPU', 'CI worker active'):
+                    raise
+                row = dict(unix_s=time.time(), admission_error=str(exc))
+                steady = 0
+            log.write(json.dumps(row | {'consecutive': steady})+'\n'); log.flush()
+            assert time.monotonic() < deadline, 'admission timeout'
+            if steady < 3:
+                time.sleep(1)
+    with (RUN/(tag+'.log')).open('x') as log, (RUN/(tag+'-resources.jsonl')).open('x') as resources:
+        child = subprocess.Popen(command, cwd=SOURCE, env=env, stdout=log, stderr=log)
+        started = time.monotonic()
+        failure = None
+        try:
+            while child.poll() is None:
+                row = inventory()
+                try:
+                    process = psutil.Process(child.pid)
+                    rss = process.memory_info().rss + sum(
+                        item.memory_info().rss for item in process.children(recursive=True)
+                        if item.is_running())
+                except psutil.NoSuchProcess:
+                    rss = 0
+                resources.write(json.dumps(row | {'rss': rss})+'\n'); resources.flush()
+                assert rss <= 16*2**30, 'worker RSS guard'
+                assert time.monotonic()-started < 900, 'worker duration guard'
+                time.sleep(1)
+        except BaseException as exc:
+            failure = repr(exc)
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=30)
+        code = child.wait()
+    ledger.append(dict(tag=tag, returncode=code, guard_failure=failure))
+    save('ledger.json', ledger)
+    assert code == 0 and failure is None, tag+' failed; preserve attempt'
+
+
+def prepare(expected):
+    archive = ROOT/'mlp-diagnostic-v1-source.zip'
+    assert not RUN.exists() and not SOURCE.exists(), 'preserve existing preparation'
+    assert digest(archive) == expected
+    RUN.mkdir()
+    status('preparing')
+    with zipfile.ZipFile(archive) as package:
+        assert package.testzip() is None
+        assert sum(i.file_size for i in package.infolist()) < 80*2**20
+        base = os.path.normcase(os.path.realpath(SOURCE))
+        for item in package.infolist():
+            assert os.path.commonpath([base, os.path.normcase(os.path.realpath(SOURCE/item.filename))]) == base
+            assert ((item.external_attr >> 16) & 0o170000) != 0o120000
+        package.extractall(SOURCE)
+    env = dict(os.environ, PYTHONPATH=str(SOURCE/'src'), CUDA_VISIBLE_DEVICES='',
+               OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
+    tests = subprocess.run([sys.executable, '-m', 'pytest', 'tests/test_stream_mlp_retention.py',
+                            *[f'tests/test_stream_projection_{name}.py' for name in
+                              ('retention','census','exactness','timing','statistics','reallocation','scoped')],
+                            '--no-cov', '-q'], cwd=SOURCE, env=env, capture_output=True, text=True,
+                           timeout=240)
+    (RUN/'cpu-tests.log').write_text(tests.stdout+tests.stderr)
+    assert tests.returncode == 0, 'remote CPU tests failed before freeze/models'
+    save('material-preflight.json', material_check())
+    census = ROOT/'census-v1/seq2048.json'
+    reference = ROOT/'exactness-v1/seq2048-auto.json'
+    (RUN/'census.json').write_bytes(census.read_bytes())
+    (RUN/'reference.json').write_bytes(reference.read_bytes())
+    (RUN/'protocol.md').write_bytes((SOURCE/'diagnostic-protocol.md').read_bytes())
+    sources = {str(p.relative_to(SOURCE)).replace('\\','/'): digest(p)
+               for p in SOURCE.rglob('*') if p.is_file() and p.suffix in ('.py', '.md', '.toml')}
+    save('source-hashes.json', sources)
+    roster = [f'{arm}-{variant}' for variant in ('normal', 'profile')
+              for arm in ('native', 'qkvo', 'mixed')]
+    save('freeze.json', dict(at=datetime.now(timezone.utc).isoformat(), archive_sha256=expected,
+                             controller_sha256=digest(Path(__file__)),
+                             protocol_sha256=digest(RUN/'protocol.md'),
+                             sources_sha256=digest(RUN/'source-hashes.json'),
+                             census_sha256=digest(census), reference_sha256=digest(reference),
+                             roster=roster, updates_per_process=2, timing_pairs=0))
+    status('prepared', remote_cpu_tests_passed=True, model_processes=0)
+
+
+def run():
+    freeze = json.loads((RUN/'freeze.json').read_text())
+    assert json.loads((RUN/'state.json').read_text())['phase'] == 'prepared'
+    assert digest(Path(__file__)) == freeze['controller_sha256']
+    publication = json.loads((ROOT/'mlp-diagnostic-v1-publication.json').read_text())
+    assert publication['verified'] and publication['protocol_sha256'] == freeze['protocol_sha256']
+    assert publication['url'].startswith('https://github.com/MakazhanAlpamys/Soup/issues/2162#')
+    save('publication.json', publication)
+    sources = json.loads((RUN/'source-hashes.json').read_text())
+    def verify_sources():
+        for name, value in sources.items():
+            assert digest(SOURCE/name) == value, name
+    verify_sources()
+    env = dict(os.environ, PYTHONPATH=str(SOURCE/'src'), CUDA_VISIBLE_DEVICES=GPU,
+               OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
+               CUBLAS_WORKSPACE_CONFIG=':4096:8')
+    status('profiler-capability', completed=0)
+    worker('profiler-capability', [sys.executable, str(SOURCE/'diagnostic-capability.py'),
+                                  str(RUN/'profiler-capability.json')], env)
+    reference = json.loads((RUN/'reference.json').read_text())
+    for index, tag in enumerate(freeze['roster']):
+        verify_sources()
+        arm, variant = tag.split('-')
+        status('diagnostic', current=tag, completed=index)
+        command = [sys.executable, '-u', str(SOURCE/'benchmarks/harness/stream_mlp_diagnostic.py'),
+                   '--weights', 'D:/Soup-2050-v1/model', '--shards',
+                   'D:/Soup-2050-v1/source/.local2050/mistral-nf4-shards', '--gpu', GPU,
+                   '--census', str(RUN/'census.json'), '--reference', str(RUN/'reference.json'),
+                   '--out', str(RUN/(tag+'.json')), '--arm', arm]
+        if variant == 'profile':
+            command.append('--profile')
+        worker(tag, command, env)
+        receipt = json.loads((RUN/(tag+'.json')).read_text())
+        assert receipt['status'] == 'ok' and receipt['steps'] == reference['steps']
+    verify_sources()
+    save('material-preservation.json', material_check())
+    status('completed', completed=6)
+
+
+ledger = []
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--prepare', metavar='ARCHIVE_SHA256')
+    args = parser.parse_args()
+    try:
+        prepare(args.prepare) if args.prepare else run()
+    except BaseException as exc:
+        if RUN.exists():
+            status('failed', error=repr(exc), completed=sum(e['tag'] != 'profiler-capability'
+                   and e['returncode'] == 0 for e in ledger))
+        raise
