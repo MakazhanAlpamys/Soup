@@ -392,6 +392,8 @@ soup adapters checkout v18 --output soup.yaml
 soup adapters branches
 ```
 
+**What `adapters diff` compares:** each LoRA module present in both adapters is one row, measured on its effective delta `ΔW = scaling · B·A`, where `scaling` is that adapter's own `lora_alpha / r` (`lora_alpha / sqrt(r)` with `use_rslora`, per-module `rank_pattern` / `alpha_pattern` applied). Adapters of different ranks therefore compare directly, the same factors under a different `lora_alpha` show as a change, and a re-parameterised pair with the same `ΔW` shows none. The effective rank is that of each module's `ΔW`. Any other tensor (`modules_to_save` weights, biases, a half-present pair) is diffed element-wise by name.
+
 **Four merge strategies (pure numpy, no torch import at module level):**
 
 | Strategy | Math | Use case |
