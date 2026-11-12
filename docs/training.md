@@ -1317,7 +1317,7 @@ training:
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 — #808
-  vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
+  # vllm_sleep_mode: true             # refused as of v0.78.0: GRPO starts no vLLM engine — #2765
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
   rollout_func: my_module:my_rollout  # module:function resolver (openenv; trusted operator code)
@@ -1361,7 +1361,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
+All flags shipped as schema gates in v0.50.0. The `openenv` rollout and PRM training (`task: prm`) are live. `vllm_sleep_mode: true` is refused at load as of v0.78.0 (#2765): GRPO never sets TRL's `use_vllm`, so it generates with `model.generate` and starts no vLLM engine to put to sleep. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
 
 
 ## DPO Training

@@ -229,9 +229,10 @@ training:
         SoupConfig(**raw)
 
 
-def test_soupconfig_vllm_sleep_mode_happy():
-    cfg = load_config_from_string(_grpo_yaml("  vllm_sleep_mode: true\n"))
-    assert cfg.training.vllm_sleep_mode is True
+def test_soupconfig_vllm_sleep_mode_refused_on_grpo():
+    """#2765: GRPO starts no vLLM engine, so the key is refused, not accepted."""
+    with pytest.raises((ValidationError, ValueError), match="has no effect"):
+        load_config_from_string(_grpo_yaml("  vllm_sleep_mode: true\n"))
 
 
 def test_soupconfig_vllm_sleep_mode_on_sft_rejected():

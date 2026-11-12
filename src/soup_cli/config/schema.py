@@ -1849,10 +1849,9 @@ class TrainingConfig(BaseModel):
     vllm_sleep_mode: bool = Field(
         default=False,
         description=(
-            "Enable vLLM sleep/standby between rollouts (memory savings "
-            "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
-            "runtimes by the GRPO trainer."
+            "Refused as of v0.78.0 when true (#2765): GRPO does not start "
+            "vLLM (use_vllm is never set), so there is no engine to put to "
+            "sleep between rollouts. Only the default false loads."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -8099,6 +8098,10 @@ class SoupConfig(BaseModel):
 
         Sleep mode is a between-rollouts feature; setting it on a non-RL
         task is a probable footgun and silently no-ops, so reject loudly.
+
+        #2765: GRPO itself starts no vLLM engine either, so ``true`` is refused
+        on every task and backend. The task and backend messages above stay,
+        so a config that is wrong in more than one way names the first problem.
         """
         if not self.training.vllm_sleep_mode:
             return self
@@ -8114,7 +8117,15 @@ class SoupConfig(BaseModel):
             validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        return self
+        # #2765 - GRPO never sets TRL's ``use_vllm``, so it generates with
+        # ``model.generate`` and starts no vLLM engine: there is nothing to
+        # put to sleep, on either backend. Refuse instead of printing that
+        # sleep mode is enabled.
+        raise ValueError(
+            "training.vllm_sleep_mode has no effect: GRPO does not start vLLM "
+            "(use_vllm is never set), so there is no engine to put to sleep. "
+            "Refused as of v0.78.0. Delete the line."
+        )
 
     # ---- v0.53.0 Quant Menu II cross-validators ----------------------------
 
