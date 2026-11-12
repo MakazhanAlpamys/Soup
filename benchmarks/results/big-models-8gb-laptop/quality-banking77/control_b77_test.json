@@ -1,0 +1,51 @@
+{
+ "suite": "b77_test",
+ "n": 3080,
+ "base_vs_control": {
+  "a_acc_pct": 69.57792207792208,
+  "b_acc_pct": 83.18181818181817,
+  "delta_points": 13.603896103896103,
+  "ci95_points": [
+   12.24025974025974,
+   14.967532467532468
+  ],
+  "a_right_b_wrong": 51,
+  "a_wrong_b_right": 470,
+  "mcnemar_exact_p": 6.0700922320911514e-86,
+  "identical_generated_ids": null
+ },
+ "base_vs_streamed_ft": {
+  "a_acc_pct": 69.57792207792208,
+  "b_acc_pct": 82.82467532467533,
+  "delta_points": 13.246753246753247,
+  "ci95_points": [
+   11.883116883116882,
+   14.642857142857144
+  ],
+  "a_right_b_wrong": 54,
+  "a_wrong_b_right": 462,
+  "mcnemar_exact_p": 7.846639991810964e-82,
+  "identical_generated_ids": null
+ },
+ "streamed_ft_vs_control": {
+  "a_acc_pct": 82.82467532467533,
+  "b_acc_pct": 83.18181818181817,
+  "delta_points": 0.35714285714285715,
+  "ci95_points": [
+   0.032467532467532464,
+   0.6818181818181818
+  ],
+  "a_right_b_wrong": 8,
+  "a_wrong_b_right": 19,
+  "mcnemar_exact_p": 0.052238985896110535,
+  "identical_generated_ids": null
+ },
+ "control_valid_pct": 100.0,
+ "generated_ids_identical_streamed_vs_control": 3033,
+ "control_adapter": {
+  "adapter_config_json_sha256": "49e4b49ce2662ed3f3ce38bb51eb3d3a1744489da4b762d45e7b35f44e8e85cf",
+  "adapter_model_safetensors_sha256": "78722e57538a408d1fb244fcc19be62c3b77a27884a95dba3e7c254b4a3029f5",
+  "path": "/workspace/out/artifacts/control/adapter_final"
+ },
+ "note": "informational (arm R, the protocol); decides no gate"
+}

@@ -164,6 +164,49 @@ class TestBuild:
         with pytest.raises(ValueError, match="(?i)cap|exceeds|size"):
             build_airgap_bundle(plan)
 
+    def test_build_refuses_oversize_without_opening_the_file(self, tmp_path, monkeypatch):
+        """A single file bigger than the cap must be refused by stat alone.
+
+        Regression for the aggregate-cap check running only *after*
+        ``_hash_file`` streamed the whole file through SHA-256: a stray
+        multi-GB file under a dataset dir used to hang for as long as the
+        full read took before the cap error ever surfaced. The stat-based
+        check must reject it without ever calling ``open()`` on it.
+        """
+        monkeypatch.chdir(tmp_path)
+        model = _make_model_dir(tmp_path)
+        oversized = model / "oversized.bin"
+        oversized.write_bytes(b"x" * 200_000)
+        import builtins
+
+        from soup_cli.utils.airgap_bundle import (
+            AirgapBundlePlan,
+            build_airgap_bundle,
+        )
+
+        real_open = builtins.open
+
+        def guarded_open(file, *args, **kwargs):
+            target = file if isinstance(file, str) else os.fspath(file)
+            if target == str(oversized):
+                raise AssertionError(
+                    "oversized.bin must not be opened before the cap check"
+                )
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", guarded_open)
+
+        plan = AirgapBundlePlan(
+            output=str(tmp_path / "bundle.tar"),
+            model_dir=str(model),
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
+            bundle_size_cap_bytes=100,  # smaller than oversized.bin alone
+        )
+        with pytest.raises(ValueError, match="bytes of the cap remain"):
+            build_airgap_bundle(plan)
+
     def test_build_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         model = _make_model_dir(tmp_path)

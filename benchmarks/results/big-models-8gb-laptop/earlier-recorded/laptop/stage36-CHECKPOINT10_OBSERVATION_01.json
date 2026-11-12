@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "observed_at": "2026-11-03T21:04:37.644520+05:00",
+  "completed_steps": 10,
+  "operation": "train-002-010",
+  "guard_elapsed_seconds": 867.9839999999967,
+  "step_median_seconds": 55.09875645000284,
+  "checkpoint_path": "<EXP>\\dense123_adapt36\\results\\campaign-01\\train-002-010\\worker\\checkpoint-010",
+  "checkpoint_state_sha256": "7e5168ef7d79af890b4dd4569c2eb420d487fba49e38a0e376fa481e8b0dedd2",
+  "checkpoint_state_bytes": 320495125,
+  "manifest_sha256": "a8ac1911e009d9d7f63c14dbd3bf30dd28c1c8f9229285f1b6c5c164c097c62c",
+  "closed_receipts_verified": {
+    "<EXP>\\dense123_adapt36\\results\\campaign-01\\train-002-010\\worker\\result.json": "a3a4362e232d2733e979fa88b67b62a5547cc257a6a2bac288fbfcc6ba5bcdb1",
+    "<EXP>\\dense123_adapt36\\results\\campaign-01\\train-002-010\\guard\\summary.json": "9f4f0cad475383da71a9a68084f3472f59bcb2f16bab15c6b1d1a52b674a7c22",
+    "<EXP>\\dense123_adapt36\\results\\campaign-01\\train-002-010\\guard\\input_pins.json": "c86b561f350a9064a5a798b7d907d09ba98ead7c64d15d2b9ca32138b7ddfc61"
+  },
+  "immutable_before_after_equal": true,
+  "resident_frozen_before_after_equal": true,
+  "torch_peak_allocated_bytes": 4854387200,
+  "torch_peak_reserved_bytes": 5595201536,
+  "remaining_campaign_status": "running",
+  "next_operation": {
+    "id": "train-010-020",
+    "command": "train",
+    "completed_steps": 10,
+    "updates": 10
+  },
+  "planned_total_steps": 120,
+  "final_quality_evaluated": false,
+  "scope": "First closed ordinary training chunk and saved bytes verified. No torch import or checkpoint tensor load; no new full source/store rehash."
+}
