@@ -273,12 +273,19 @@ def show(
             _plot_loss_curve(metrics)
 
 
-@app.command()
+@app.command(short_help="Compare two local training runs side by side.")
 def compare(
     run_1: str = typer.Argument(..., help="First run ID (or prefix)"),
     run_2: str = typer.Argument(..., help="Second run ID (or prefix)"),
 ):
-    """Compare two training runs side by side."""
+    """Compare two local training runs side by side. The summary includes stored dataset
+    SHA-256 hashes and the Code commit and Code state startup observations. The
+    config table shows differing paths and labels fields absent
+    from one run as not stored. If either full config is unavailable, the command
+    identifies that run and skips the config table. The evaluation table uses the
+    latest stored score for each benchmark and shows the right-minus-left delta
+    when both runs have a score.
+    """
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.registry.diff import config_diff, eval_delta
 

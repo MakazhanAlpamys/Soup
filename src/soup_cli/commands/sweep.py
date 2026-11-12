@@ -554,6 +554,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         detect_device,
         get_gpu_info,
     )
+    from soup_cli.utils.launcher import is_in_distributed
+    from soup_cli.utils.run_provenance import (
+        BaseRevision,
+        base_revision_scope,
+        write_run_provenance,
+    )
 
     cfg = SoupConfig(**config_dict)
 
@@ -597,12 +603,33 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         # be a second, shorter chain that never grew past v0.40.0, so ten task
         # values and every `backend: mlx` config were trained as plain SFT here
         # while the tracker recorded the configured task.
-        trainer_wrapper = build_trainer(cfg, device=device)
-        trainer_wrapper.setup(dataset)
-
+        base_identity = BaseRevision(
+            cfg.base,
+            binding_supported=(
+                cfg.backend == "transformers" and cfg.training.hub == "hf"
+                and not is_in_distributed()
+            ),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, device=device)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
         # Train
         display = TrainingDisplay(cfg, device_name=device_name)
-        result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        with base_revision_scope(base_identity):
+            result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        write_run_provenance(result["output_dir"], base_identity.metadata(run_id))
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
         tracker.finish_run(
             run_id=run_id,
             initial_loss=result["initial_loss"],

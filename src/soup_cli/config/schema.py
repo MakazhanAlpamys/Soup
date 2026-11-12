@@ -1849,10 +1849,10 @@ class TrainingConfig(BaseModel):
     vllm_sleep_mode: bool = Field(
         default=False,
         description=(
-            "Enable vLLM sleep/standby between rollouts (memory savings "
-            "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
-            "runtimes by the GRPO trainer."
+            "vLLM sleep/standby between rollouts. Has no effect in this "
+            "version: GRPO does not use a vLLM server for rollouts, so there "
+            "is no engine to put to sleep. Refused at load as of v0.78.0 when set "
+            "to true."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -8094,11 +8094,15 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_vllm_sleep_mode(self) -> "SoupConfig":
-        """v0.50.0 Part B — ``vllm_sleep_mode`` requires task='grpo' and a
-        vLLM-compatible backend (transformers/unsloth).
+        """``vllm_sleep_mode`` is refused: it never reached a vLLM engine.
 
-        Sleep mode is a between-rollouts feature; setting it on a non-RL
-        task is a probable footgun and silently no-ops, so reject loudly.
+        v0.50.0 Part B made it require task='grpo' and a vLLM-compatible
+        backend (transformers/unsloth); those two gates still run first and
+        keep their wording. A config that passes both used to load and do
+        nothing: the GRPO wrapper copies the flag into TRL's
+        ``vllm_enable_sleep_mode``, which TRL reads only under ``use_vllm``,
+        and Soup never sets ``use_vllm`` (GRPO generates with the model's own
+        ``generate``). The field is kept so this message can name it.
         """
         if not self.training.vllm_sleep_mode:
             return self
@@ -8114,7 +8118,11 @@ class SoupConfig(BaseModel):
             validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "training.vllm_sleep_mode has no effect: GRPO does not use a vLLM server "
+            "for rollouts in this version, so there is no vLLM engine to put to sleep "
+            "between rollouts. Refused as of v0.78.0. Delete the line."
+        )
 
     # ---- v0.53.0 Quant Menu II cross-validators ----------------------------
 
