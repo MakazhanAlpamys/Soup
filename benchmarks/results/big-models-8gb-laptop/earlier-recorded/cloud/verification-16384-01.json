@@ -1,0 +1,142 @@
+{
+  "schema": "root-context83-independent-verification-v1",
+  "status": "passed",
+  "verified_at": "2026-11-07T01:27:43.609325+05:00",
+  "run_id": "l40s-strict-full88-sft16384-20261106-01",
+  "app": {
+    "app_id": "ap-<redacted>",
+    "description": "soup-stage83-full88-sft16384",
+    "state": "stopped",
+    "tasks": "0",
+    "created_at": "2026-11-07 00:19:27+05:00",
+    "stopped_at": "2026-11-07 01:25:02+05:00"
+  },
+  "scope": {
+    "model": "unsloth/Mistral-Large-Instruct-2407-bnb-4bit",
+    "revision": "a76e109f4b66807d88fa92b5d7e0dead1a354494",
+    "context_tokens": 16384,
+    "supervised_tokens": 124,
+    "adamw_updates": 1,
+    "original_layers": 88,
+    "evidence_gap_tokens": 15942
+  },
+  "layers": {
+    "forward_count": 88,
+    "reverse_count": 88,
+    "tape_bytes": 35433480192,
+    "exact_attention_release_count": 88,
+    "min_attention_release_bytes": 402653184
+  },
+  "loss": 0.8498985171318054,
+  "checkpoint": {
+    "state_sha256": "a79fa51a04907851dd69b54b1861583aa427350102559defc1087e94d1dd2ddf",
+    "state_bytes": 320486997,
+    "trainable_parameters": 26673152,
+    "adapters_exact": 352,
+    "moments_exact": 704,
+    "steps_exact": 352,
+    "rng_sha256": {
+      "cpu": "8dc2fadf564c415423d0858efe91c38487d6fd29b665d509073fb3405e895e2f",
+      "cuda": "284a41d31513cb9eff0a0c8e163c4b2a8d08b6ecf237aea45913496e0488ade8"
+    }
+  },
+  "pids": {
+    "update": 450,
+    "fresh_restore": 485
+  },
+  "allocator": {
+    "cap_bytes": 6710886400,
+    "train": {
+      "peak_allocated": 6107063296,
+      "peak_reserved": 6295650304
+    },
+    "restore": {
+      "peak_allocated": 320077824,
+      "peak_reserved": 320864256
+    },
+    "headroom_bytes": 415236096,
+    "phase_peaks": {
+      "embedding": {
+        "allocated": 0,
+        "reserved": 0,
+        "peak_allocated": 402653184,
+        "peak_reserved": 419430400
+      },
+      "terminal_loss": {
+        "allocated": 0,
+        "reserved": 0,
+        "peak_allocated": 6107063296,
+        "peak_reserved": 6167724032
+      },
+      "optimizer_checkpoint": {
+        "allocated": 0,
+        "reserved": 0,
+        "peak_allocated": 427950080,
+        "peak_reserved": 429916160
+      },
+      "forward": {
+        "layer": 0,
+        "allocated": 0,
+        "reserved": 0,
+        "peak_allocated": 4783907840,
+        "peak_reserved": 6232735744
+      },
+      "attention_forward": {
+        "layer": 87,
+        "allocated": 748856320,
+        "reserved": 5184159744,
+        "peak_allocated": 4381254656,
+        "peak_reserved": 5184159744
+      },
+      "mlp_vjp": {
+        "layer": 87,
+        "allocated": 578840576,
+        "reserved": 610271232,
+        "peak_allocated": 3800066048,
+        "peak_reserved": 4406116352
+      },
+      "attention_vjp": {
+        "layer": 87,
+        "allocated": 237124608,
+        "reserved": 6295650304,
+        "peak_allocated": 6030573568,
+        "peak_reserved": 6295650304
+      }
+    }
+  },
+  "device_samples": {
+    "device_uuid": "GPU-<redacted>",
+    "device_name": "NVIDIA L40S",
+    "count": 14381,
+    "observed_peak_used_mib": 6597,
+    "device_total_mib": 46068,
+    "all_observations_within_8192_mib": true,
+    "interval_ms": 250,
+    "scope": "whole device during update"
+  },
+  "device_sampling_scope": "Whole GPU sampled every 250 ms during the update. Transients between samples are unmeasured.",
+  "seconds": {
+    "source": 260.601962283,
+    "worker": 3618.44269536,
+    "restore": 7.006722007000008
+  },
+  "sha256": {
+    "ROOT_CONTEXT83_LAUNCH_01.json": "19f18fa0e5f91057f7fde63012167b76ea89a6a1aec3d7bcc434758553c4e2b3",
+    "modal_decoder83.py": "97c51ac431926c221cc904cae0f3ca522c69a484d6a44dda8c8dc1ddaef50426",
+    "stage81_verification.json": "a35870c613d555a21d330a71c11585d8b3142c5fc48698b772f5352756e080a8",
+    "retrieval.json": "00997f9faa1dfe1638a784edb2da64e636ce26d0b49f4331e283a6b298f4fcdf",
+    "launch.log": "9052abc6e9b2648479d29090dd804aba470f9a633fb9681cef11c12f59739d2c",
+    "app-stopped.json": "beae7069403b3ea5487150e221f37f6472611a625d6423e3c1011d70fa468191",
+    "evidence/summary.json": "10ca8c42009b87817c512da89b45a92b6adb0a7b34d5c5ee4089a960eab308f9",
+    "evidence/plan.json": "0959e47a523dea0d08ef0d3975849e0cec3edf2768b6ef6f16434c883e11516d",
+    "evidence/source.log": "1188ddd8492e01a1aa99ce156621f9f1b245d825696f31f21d530ebafe72c835",
+    "evidence/device-samples.csv": "d077439eec166c0c3efeb47f979673112923ef281bcbc69032320e24e3d92777",
+    "evidence/worker.log": "2a7ef197356ae4ffddfa8c0e4f45cce5b7b532520c0705f328dcbeae73467269",
+    "evidence/result.json": "b6eddf4e63da432d99c9b5450b7cf1ba0ef0d76fcacfda5df0976f3112e28595",
+    "evidence/progress.jsonl": "981a0fe8083a569af42441f86d79d354a7fea454dbeb791672fb8b87ead20020",
+    "evidence/checkpoint-001/manifest.json": "a1ea2ac38dac36aac77313278ab4cacfe2a4a1e28365a55ac1eed03ba928c259",
+    "evidence/checkpoint-001/state.pt": "a79fa51a04907851dd69b54b1861583aa427350102559defc1087e94d1dd2ddf",
+    "evidence/restore.log": "ec7a12c6ad5b7de85980ecb5f366f278f81c6276c7adf828cbd7defff48ddc46",
+    "evidence/restore-result.json": "ec7a12c6ad5b7de85980ecb5f366f278f81c6276c7adf828cbd7defff48ddc46"
+  }
+}

@@ -1372,6 +1372,14 @@ model's processor, and trains the language tower; the LoRA targets resolve to th
 Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
 `backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
 
+`soup recipes use minimax-m3-dpo` writes that configuration for `MiniMaxAI/MiniMax-M3`:
+`modality: vision`, `format: dpo` rows of text-only `prompt` / `chosen` / `rejected`, and the
+LoRA block of `minimax-m3-sft` (rank 32 / alpha 64, `target_modules: auto`, which resolves to
+the language tower's attention), with `lr: 5e-6` and `dpo_beta: 0.1` from the other MoE DPO
+recipes. Its processor is custom code, so run `soup train --trust-remote-code`. These are
+untuned starting values: the tests run one DPO step on a tiny LLaVA that has the wrapper's
+shape, not on the 428B weights, NF4 or a multi-GPU setup.
+
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
 
