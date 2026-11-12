@@ -456,6 +456,15 @@ class TestMLXRoPELifecycleNative:
             },
         )
 
+        def _rope_scales(m):
+            import mlx.nn as nn
+
+            return {
+                name: float(module.scale)
+                for name, module in m.named_modules()
+                if isinstance(module, nn.RoPE)
+            }
+
         trainer = MLXSFTTrainerWrapper(cfg)
         trainer.setup(dataset)
         assert trainer._effective_rope_scaling == {
@@ -463,6 +472,8 @@ class TestMLXRoPELifecycleNative:
             "factor": expected_factor,
             "original_max_position_embeddings": orig_len,
         }
+        scales = _rope_scales(trainer.model)
+        assert scales and set(scales.values()) == {1.0 / expected_factor}
 
         # Train and save adapter
         result = trainer.train()
@@ -485,6 +496,17 @@ class TestMLXRoPELifecycleNative:
         assert loaded_config["max_position_embeddings"] == extended_len
         assert loaded_config["rope_scaling"]["type"] == "linear"
         assert loaded_config["rope_scaling"]["factor"] == expected_factor
+
+        reloaded_scales = _rope_scales(model)
+        assert reloaded_scales and set(reloaded_scales.values()) == {1.0 / expected_factor}
+
+        # Verify forward execution at sequence length past original context (81 tokens > 64)
+        import mlx.core as mx
+
+        extended_tokens = mx.array([[1, 2, 3] * 27])  # 81 tokens
+        logits = model(extended_tokens)
+        assert logits.shape == (1, 81, 32)
+        assert np.all(np.isfinite(np.array(logits)))
 
         # 3. Refusal: load_native_model with mismatching base original length
         mismatch_adapter = tmp_path / "mismatch_adapter"
@@ -514,3 +536,160 @@ class TestMLXRoPELifecycleNative:
             "original_max_position_embeddings": orig_len,
         }
         assert fused_config["max_position_embeddings"] == extended_len
+
+    def test_mutation_omitting_model_config_refuses_at_setup(
+        self, tmp_path, monkeypatch
+    ):
+        """Mutation test: omitting model_config forwarding raises refusal on unscaled RoPE."""
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.config.schema import SoupConfig
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+        from soup_cli.utils import mlx as mlx_utils
+
+        base = self._create_tiny_llama(tmp_path / "base_mut", orig_ctx=64)
+        output = tmp_path / "mut_output"
+
+        cfg = SoupConfig(
+            base=str(base),
+            backend="mlx",
+            output=str(output),
+            data={"train": "dummy.jsonl", "max_length": 128},
+            training={
+                "quantization": "none",
+                "rope_scaling_type": "linear",
+                "epochs": 1,
+                "batch_size": 1,
+                "lr": 0.01,
+            },
+        )
+        trainer = MLXSFTTrainerWrapper(cfg)
+
+        real_load = mlx_utils.load_mlx_model
+
+        # Mutation: drop model_config override to verify mutation turns red
+        def buggy_load(path, quantization="4bit", model_config=None):
+            del model_config
+            return real_load(path, quantization=quantization)
+
+        monkeypatch.setattr(mlx_utils, "load_mlx_model", buggy_load)
+        with pytest.raises(
+            ValueError, match="does not apply native MLX RoPE scaling"
+        ):
+            trainer.setup({"train": [{"text": "alpha beta gamma"}]})
+
+    def test_base_without_rope_refused_by_name(self, tmp_path, monkeypatch):
+        """A base model architecture without RoPE is refused by name."""
+        monkeypatch.chdir(tmp_path)
+        import mlx.nn as nn
+
+        from soup_cli.config.schema import SoupConfig
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+        from soup_cli.utils import mlx as mlx_utils
+
+        base = self._create_tiny_llama(tmp_path / "base_norope", orig_ctx=64)
+
+        class DummyLinearModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(32, 32)
+
+            def __call__(self, x):
+                return self.linear(x)
+
+        real_load = mlx_utils.load_mlx_model
+
+        def load_norope(path, quantization="4bit", model_config=None):
+            del model_config
+            _, tok = real_load(path, quantization=quantization)
+            return DummyLinearModel(), tok
+
+        monkeypatch.setattr(mlx_utils, "load_mlx_model", load_norope)
+
+        cfg = SoupConfig(
+            base=str(base),
+            backend="mlx",
+            output=str(tmp_path / "out_norope"),
+            data={"train": "dummy.jsonl", "max_length": 128},
+            training={
+                "quantization": "none",
+                "rope_scaling_type": "linear",
+                "epochs": 1,
+                "batch_size": 1,
+                "lr": 0.01,
+            },
+        )
+        trainer = MLXSFTTrainerWrapper(cfg)
+        with pytest.raises(
+            ValueError, match="does not contain rotary embedding \\(nn.RoPE\\) modules"
+        ):
+            trainer.setup({"train": [{"text": "alpha beta gamma"}]})
+
+    def test_patterned_adapter_with_rope_scaling_validation(self):
+        """Patterned adapter (#2133) carrying rope_scaling is validated identically."""
+        from soup_cli.utils.mlx_generation import _validate_adapter_rope_scaling
+
+        patterned_valid = {
+            "model": "meta-llama/Llama-3.2-1B",
+            "fine_tune_type": "lora",
+            "soup_lora": {"recipe": {"r": 8, "alpha": 16}},
+            "rope_scaling": {
+                "type": "linear",
+                "factor": 2.0,
+                "original_max_position_embeddings": 64,
+            },
+        }
+        # Valid patterned adapter with rope_scaling passes
+        _validate_adapter_rope_scaling(patterned_valid)
+
+        bad_factor = dict(patterned_valid)
+        bad_factor["rope_scaling"] = dict(patterned_valid["rope_scaling"])
+        bad_factor["rope_scaling"]["factor"] = 0.5
+        with pytest.raises(
+            ValueError, match="rope_scaling factor must be a finite number > 1.0"
+        ):
+            _validate_adapter_rope_scaling(bad_factor)
+
+        bad_orig = dict(patterned_valid)
+        bad_orig["rope_scaling"] = dict(patterned_valid["rope_scaling"])
+        bad_orig["rope_scaling"]["original_max_position_embeddings"] = -10
+        with pytest.raises(
+            ValueError, match="original_max_position_embeddings must be a positive integer"
+        ):
+            _validate_adapter_rope_scaling(bad_orig)
+
+    def test_sft_when_max_length_at_or_below_base_context_length_preserves_unscaled_rope(
+        self, tmp_path, monkeypatch
+    ):
+        """When data.max_length <= orig_ctx, native unscaled RoPE is preserved with a log line."""
+        monkeypatch.chdir(tmp_path)
+        import mlx.nn as nn
+
+        from soup_cli.config.schema import SoupConfig
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        base = self._create_tiny_llama(tmp_path / "base_unit", orig_ctx=64)
+        output = tmp_path / "output_unit"
+
+        cfg = SoupConfig(
+            base=str(base),
+            backend="mlx",
+            output=str(output),
+            data={"train": "dummy.jsonl", "max_length": 64},  # equal to orig_ctx=64
+            training={
+                "quantization": "none",
+                "rope_scaling_type": "linear",
+                "epochs": 1,
+                "batch_size": 1,
+                "lr": 0.01,
+            },
+        )
+        trainer = MLXSFTTrainerWrapper(cfg)
+        trainer.setup({"train": [{"text": "alpha beta gamma"}]})
+
+        assert trainer._effective_rope_scaling is None
+        scales = {
+            name: float(m.scale)
+            for name, m in trainer.model.named_modules()
+            if isinstance(m, nn.RoPE)
+        }
+        assert scales and set(scales.values()) == {1.0}

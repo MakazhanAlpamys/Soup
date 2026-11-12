@@ -55,6 +55,37 @@ def _finite(value: Any) -> bool:
         return False
 
 
+def _validate_adapter_rope_scaling(config: dict[str, Any]) -> None:
+    """Validate RoPE scaling metadata on a native adapter."""
+    if "rope_scaling" not in config:
+        return
+    rope_cfg = config["rope_scaling"]
+    if not isinstance(rope_cfg, dict):
+        raise ValueError("Native MLX metadata rope_scaling must be a dictionary")
+    rope_type = rope_cfg.get("type") or rope_cfg.get("rope_type")
+    if rope_type != "linear":
+        raise ValueError(
+            f"Native MLX generation currently supports linear RoPE scaling only, "
+            f"got {rope_type!r}"
+        )
+    factor = rope_cfg.get("factor")
+    if not _finite(factor) or factor <= 1.0:
+        raise ValueError(
+            "Native MLX metadata rope_scaling factor must be a finite number > 1.0"
+        )
+    orig_max = rope_cfg.get("original_max_position_embeddings")
+    if (
+        orig_max is None
+        or isinstance(orig_max, bool)
+        or not isinstance(orig_max, int)
+        or orig_max <= 0
+    ):
+        raise ValueError(
+            "Native MLX metadata rope_scaling original_max_position_embeddings "
+            "must be a positive integer"
+        )
+
+
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     """Validate metadata before loading optional dependencies or allocating a model."""
     config_path = path / "adapter_config.json"
@@ -78,6 +109,7 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("--base does not match the native MLX metadata model identity")
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
+    _validate_adapter_rope_scaling(config)
     params = config.get("lora_parameters")
     if not isinstance(params, dict):
         raise ValueError("Native MLX metadata requires lora_parameters")
@@ -109,32 +141,6 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Native MLX metadata requires unique resolved target keys")
     if not (path / "adapters.safetensors").is_file():
         raise ValueError("Native MLX adapter is missing adapters.safetensors")
-    if "rope_scaling" in config:
-        rope_cfg = config["rope_scaling"]
-        if not isinstance(rope_cfg, dict):
-            raise ValueError("Native MLX metadata rope_scaling must be a dictionary")
-        rope_type = rope_cfg.get("type") or rope_cfg.get("rope_type")
-        if rope_type != "linear":
-            raise ValueError(
-                f"Native MLX generation currently supports linear RoPE scaling only, "
-                f"got {rope_type!r}"
-            )
-        factor = rope_cfg.get("factor")
-        if not _finite(factor) or factor <= 1.0:
-            raise ValueError(
-                "Native MLX metadata rope_scaling factor must be a finite number > 1.0"
-            )
-        orig_max = rope_cfg.get("original_max_position_embeddings")
-        if (
-            orig_max is None
-            or isinstance(orig_max, bool)
-            or not isinstance(orig_max, int)
-            or orig_max <= 0
-        ):
-            raise ValueError(
-                "Native MLX metadata rope_scaling original_max_position_embeddings "
-                "must be a positive integer"
-            )
     return config
 
 
@@ -260,6 +266,23 @@ def load_native_model(
                     "Native MLX generation with RoPE scaling does not support "
                     "quantized base models; use an unquantized base."
                 )
+        expected_scale = 1.0 / config["rope_scaling"]["factor"]
+        rope_scales = [
+            float(module.scale)
+            for _, module in model.named_modules()
+            if isinstance(module, nn.RoPE)
+        ]
+        if not rope_scales:
+            raise ValueError(
+                f"Base checkpoint {base!r} does not contain rotary embedding (nn.RoPE) modules; "
+                "cannot apply native MLX linear RoPE context extension."
+            )
+        if any(abs(scale - expected_scale) > 1e-5 for scale in rope_scales):
+            raise ValueError(
+                f"Base checkpoint {base!r} does not apply native MLX RoPE scaling "
+                f"(expected scale {expected_scale:.6g}, found {rope_scales}); "
+                "model architecture may not support native linear RoPE scaling."
+            )
     if config:
         layers = getattr(model, "layers", [])
         if config["num_layers"] > len(layers):

@@ -559,12 +559,35 @@ class MLXSFTTrainerWrapper:
                         "Use an unquantized base (training.quantization: none)."
                     )
 
-        if self._effective_rope_scaling is not None:
-            console.print(
-                f"[green]Long-context enabled:[/] RoPE {cfg.training.rope_scaling_type} "
-                f"scaling to {cfg.data.max_length} tokens "
-                f"(factor {self._effective_rope_scaling['factor']:.4g})"
-            )
+            if self._effective_rope_scaling is not None:
+                expected_scale = 1.0 / self._effective_rope_scaling["factor"]
+                rope_scales = [
+                    float(module.scale)
+                    for _, module in self.model.named_modules()
+                    if isinstance(module, nn.RoPE)
+                ]
+                if not rope_scales:
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not contain rotary embedding "
+                        "(nn.RoPE) modules; cannot apply native MLX linear RoPE context extension."
+                    )
+                if any(abs(scale - expected_scale) > 1e-5 for scale in rope_scales):
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not apply native MLX RoPE scaling "
+                        f"(expected scale {expected_scale:.6g}, found {rope_scales}); "
+                        "model architecture may not support native linear RoPE scaling."
+                    )
+                console.print(
+                    f"[green]Long-context enabled:[/] RoPE {cfg.training.rope_scaling_type} "
+                    f"scaling to {cfg.data.max_length} tokens "
+                    f"(factor {self._effective_rope_scaling['factor']:.4g})"
+                )
+            else:
+                console.print(
+                    f"[dim]RoPE scaling ({cfg.training.rope_scaling_type}) requested but "
+                    f"data.max_length ({cfg.data.max_length}) <= base context length; "
+                    "unscaled native RoPE preserved.[/]"
+                )
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
