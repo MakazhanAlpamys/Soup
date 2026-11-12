@@ -501,6 +501,18 @@ class MLXSFTTrainerWrapper:
         """Load MLX model, configure LoRA, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
+        if self.config.training.packing:
+            from soup_cli.trainer.mlx_packing import validate_packing_config
+
+            validate_packing_config(self.config)
+            local_config = Path(self.config.base) / "config.json"
+            if local_config.is_file():
+                model_type = json.loads(local_config.read_text()).get("model_type")
+                if model_type != "llama":
+                    raise ValueError(
+                        "MLX packing supports full-attention Llama only; "
+                        f"architecture {model_type!r} is unsupported"
+                    )
         if self.config.data.format == "pre_tokenized":
             if self.config.task != "sft" or self.config.modality != "text":
                 raise ValueError("Native pre_tokenized consumption supports text SFT only")
@@ -525,6 +537,10 @@ class MLXSFTTrainerWrapper:
         self.model, self.tokenizer = load_mlx_model(
             cfg.base, quantization=cfg.training.quantization
         )
+        if cfg.training.packing:
+            from soup_cli.trainer.mlx_packing import validate_packing_model
+
+            validate_packing_model(self.model)
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
@@ -566,7 +582,7 @@ class MLXSFTTrainerWrapper:
             )
         keys = set(target_keys)
         use_dora = bool(lora_cfg.use_dora)
-        if use_dora:
+        if use_dora or getattr(cfg.training, "packing", False):
             import mlx.nn as nn
 
             # Upstream also converts embeddings and switch layers. This first
@@ -586,8 +602,9 @@ class MLXSFTTrainerWrapper:
                 or (isinstance(module, nn.QuantizedLinear) and module.bits != 4)
             ]
             if missing or unsupported:
+                feature = "DoRA" if use_dora else "packing"
                 raise ValueError(
-                    "MLX DoRA requires dense linear targets (unquantized or 4-bit); "
+                    f"MLX {feature} requires dense linear targets (unquantized or 4-bit); "
                     f"unmatched targets: {sorted(missing)}; "
                     f"unsupported targets: {sorted(set(unsupported))}."
                 )
@@ -880,6 +897,47 @@ class MLXSFTTrainerWrapper:
                 else None
             )
             train_hooks = {}
+
+        packing_metadata = None
+        if cfg.training.packing:
+            from functools import partial
+
+            from soup_cli.trainer.mlx_packing import (
+                PackedDataset,
+                packed_iterate_batches,
+                packed_loss,
+            )
+
+            kind = "labels" if cached_labels else "mask" if use_token_mask else "span"
+            options = {"kind": kind, "max_length": max_seq_length,
+                       "vocab_size": self.model.args.vocab_size}
+            train_dataset = PackedDataset(train_dataset, **options)
+            val_dataset = PackedDataset(val_dataset, **options) if val_dataset else None
+            if len(train_dataset) % grad_accumulation_steps:
+                raise ValueError(
+                    "MLX packing requires pack count divisible by gradient_accumulation_steps"
+                )
+            iters = int(cfg.training.epochs) * len(train_dataset)
+            args.iters = iters
+            # Save/eval/report settings remain explicit configured iteration units.
+            if eval_every is None:
+                args.steps_per_eval = max(1, iters // 4) if val_dataset else max(1000, iters + 1)
+                steps_per_eval = args.steps_per_eval
+            if not cfg.training.save_steps:
+                args.steps_per_save = steps_per_save = iters
+            train_hooks = {
+                "loss": packed_loss,
+                "iterate_batches": partial(
+                    packed_iterate_batches, accumulation=grad_accumulation_steps, seed=data_seed,
+                ),
+            }
+            packing_metadata = train_dataset.metadata
+            console.print(
+                f"[dim]MLX packing: {packing_metadata['records']} records in "
+                f"{packing_metadata['packs']} isolated packs, "
+                f"{packing_metadata['utilization']:.1%} context utilization, "
+                f"{packing_metadata['supervised_tokens']} supervised tokens/epoch[/]"
+            )
 
         # #686: the optimizer was `AdamW(learning_rate=<scalar>)` and nothing
         # else, so `warmup_ratio`, `scheduler`, `weight_decay` and `optimizer`
@@ -1196,7 +1254,9 @@ class MLXSFTTrainerWrapper:
             display.start(iters)
 
         rewind = None
-        if cfg.training.rewind_log:
+        if cfg.training.rewind_log and cfg.training.packing:
+            console.print("[yellow]Rewind log off: packing combines dataset rows[/]")
+        if cfg.training.rewind_log and not cfg.training.packing:
             rewind = _start_rewind(
                 output_dir=output_dir,
                 rows=train_rows,
@@ -1290,6 +1350,7 @@ class MLXSFTTrainerWrapper:
                     "mask_prompt": bool(args.mask_prompt),
                     "response_token_mask": use_token_mask,
                     "pre_tokenized": cached_labels,
+                    **({"packing": packing_metadata} if packing_metadata is not None else {}),
                     "train_on_responses_only": responses_only,
                     "train_on_messages_with_train_field": train_field,
                     "mask_history": mask_history,
