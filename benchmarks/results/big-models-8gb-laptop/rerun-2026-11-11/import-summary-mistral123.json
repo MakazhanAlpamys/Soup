@@ -1,0 +1,15 @@
+{
+  "base": "<ASSETS>\\mistral123-nf4-a76e109f",
+  "store": "<CACHE>\\<ASSETS>__mistral123-nf4-a76e109f",
+  "import_seconds": 228.1,
+  "copy_seconds_approx": 132.7,
+  "verify_seconds": 91.2,
+  "tensor_count": 2645,
+  "payload_bytes": 64449162720,
+  "layer_count": 88,
+  "import_verified": true,
+  "standalone_verified": true,
+  "peak_rss_GB": 0.822,
+  "peak_private_GB": 2.637,
+  "min_system_available_GB": 6.86
+}

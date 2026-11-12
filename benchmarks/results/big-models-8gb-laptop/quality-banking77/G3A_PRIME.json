@@ -1,0 +1,8 @@
+{
+ "n": 32,
+ "identical_logits_sha256_and_ce": true,
+ "differing_ids": [],
+ "adapter_sha256_first": "1a9847ec4ed14a3a2b9fa3be1ba5c6ab9700898fdccd6475214b86dbb4c12659",
+ "adapter_sha256_second": "1a9847ec4ed14a3a2b9fa3be1ba5c6ab9700898fdccd6475214b86dbb4c12659",
+ "note": "G3a' (a recorded deviation): two fresh processes loading the saved adapter into the streamed engine; not the in-training-process comparison of the protocol."
+}
