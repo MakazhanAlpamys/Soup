@@ -194,8 +194,8 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #        whose newest label is good: a thumb up or a rating of 4-5 in the feedback log, an
 #        `up` thumb in the --thumbs-db database (the newest thumb per prompt and answer), a
 #        `thumbs_up` serve trace. An answer that was only rated bad gives no training row. The
-#        same prompt and answer count once. It trains with lr 1e-4, 5 epochs and LoRA rank 64
-#        (alpha 16);
+#        same prompt and answer count once. It trains with the recipe below (lr 5e-4, 8 epochs,
+#        LoRA r 64 / alpha 128 on all linear modules, micro-batch 2 x accumulation 4, seed 42);
 #   dpo  an edit is a pair (chosen = the edited text, rejected = the answer), next to the
 #        pairs from serve traces and the thumbs database;
 #   kto  the answer as given, labelled by thumbs (+1 good, -1 bad) and ratings (4-5 good,
