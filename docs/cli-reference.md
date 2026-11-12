@@ -664,7 +664,7 @@ Usage: `soup bench infer [OPTIONS] MODEL`
 |---|---|---|---|---|
 | `MODEL` | text |  | yes | Path to model (LoRA adapter or full model) to benchmark |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
-| `--max-tokens` | integer | `128` |  | Maximum tokens to generate per prompt |
+| `--max-tokens` | integer, at least 1 | `128` |  | Maximum tokens to generate per prompt |
 | `--num-prompts`, `-n` | integer | `3` |  | Number of prompts to run for averaging (ignored when --prompts-file is set) |
 | `--prompts-file` | text |  |  | Path to custom prompts file (.txt or .jsonl) |
 | `--p50` | flag | off |  | Print p50 (median) per-prompt latency. v0.53.9 #26. |
