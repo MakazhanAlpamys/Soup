@@ -1142,7 +1142,8 @@ def _maybe_attach_export(
 
     Resolution order:
       1. ``--registry-id`` (explicit override)
-      2. Auto-match by source model output dir
+      2. Auto-match: the newest entry whose tracked run wrote ``source_model``
+         (see ``lookup_entry_by_output_dir``)
     Silent no-op if no match is found and no explicit id was given. Failures
     are surfaced as warnings, never as a hard CLI exit (the export itself
     succeeded).

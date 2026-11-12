@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from soup_cli.experiment.tracker import ExperimentTracker
 
 
 def attach_artifact(
@@ -64,35 +68,70 @@ def write_eval_json(
 
 
 def lookup_entry_by_output_dir(output_dir: str) -> Optional[str]:
-    """Find a registry entry whose stored ``output`` directory matches.
+    """Find the registry entry whose training run wrote ``output_dir``.
 
     Used by ``soup export`` to auto-attach artifacts when the user did not
-    pass ``--registry-id`` explicitly. Returns None if no match.
+    pass ``--registry-id`` explicitly. A registry row stores no output
+    directory, so each entry is matched through its ``run_id``: the
+    experiment tracker's ``output_dir`` for that run is compared with
+    ``output_dir`` by ``realpath`` (#2726). An entry without a ``run_id``,
+    or whose run is no longer in the tracker, never matches.
+
+    Entries are scanned newest first (``RegistryStore.list`` order), so when
+    several match (one run registered twice, or several runs trained into the
+    same directory) the most recently registered entry wins. Returns None if
+    nothing matches or the tracker cannot be read.
     """
     import warnings
 
     from soup_cli.registry.store import RegistryStore
 
     lookup_limit = 1000
-    target_real = os.path.realpath(output_dir)
+    target_real = os.path.normcase(os.path.realpath(output_dir))
     with RegistryStore() as store:
         rows = store.list(limit=lookup_limit)
-        if len(rows) >= lookup_limit:
-            warnings.warn(
-                f"lookup_entry_by_output_dir scanned only the most recent "
-                f"{lookup_limit} registry entries; older entries with a "
-                "matching output dir will be missed. Pass --registry-id "
-                "explicitly to disambiguate.",
-                ResourceWarning,
-                stacklevel=2,
-            )
-        for entry in rows:
-            stored = entry.get("output") or ""
-            if not stored:
-                continue
-            try:
-                if os.path.realpath(stored) == target_real:
-                    return entry.get("id")
-            except (OSError, ValueError):
-                continue
+    if len(rows) >= lookup_limit:
+        warnings.warn(
+            f"lookup_entry_by_output_dir scanned only the most recent "
+            f"{lookup_limit} registry entries; older entries with a "
+            "matching output dir will be missed. Pass --registry-id "
+            "explicitly to disambiguate.",
+            ResourceWarning,
+            stacklevel=2,
+        )
+    candidates = [entry for entry in rows if entry.get("run_id")]
+    if not candidates:
+        return None
+
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    try:
+        tracker = ExperimentTracker()
+    except (sqlite3.Error, OSError):
+        return None
+    try:
+        run_dirs: dict[str, Optional[str]] = {}
+        for entry in candidates:
+            run_id = entry["run_id"]
+            if run_id not in run_dirs:
+                run_dirs[run_id] = _run_output_dir_real(tracker, run_id)
+            if run_dirs[run_id] == target_real:
+                return entry.get("id")
+    finally:
+        tracker.close()
     return None
+
+
+def _run_output_dir_real(tracker: ExperimentTracker, run_id: str) -> Optional[str]:
+    """Normalised realpath of the directory the tracker says ``run_id`` wrote, or None."""
+    try:
+        run = tracker.get_run(run_id)
+    except (sqlite3.Error, OSError):
+        return None
+    stored = (run or {}).get("output_dir") or ""
+    if not stored:
+        return None
+    try:
+        return os.path.normcase(os.path.realpath(stored))
+    except (OSError, ValueError):
+        return None
