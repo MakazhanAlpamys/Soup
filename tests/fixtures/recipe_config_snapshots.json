@@ -266,6 +266,7 @@
     "training.rollout_func": null,
     "training.rope_scaling_type": null,
     "training.save_steps": 100,
+    "training.save_strategy": "steps",
     "training.scheduler": "cosine",
     "training.seed": null,
     "training.simpo_gamma": 0.5,

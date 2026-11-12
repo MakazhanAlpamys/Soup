@@ -14,6 +14,7 @@ from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils import final_answer
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -526,8 +527,7 @@ class GRPOTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             **self._build_precision_kwargs(),
             "report_to": self.report_to,
             "remove_unused_columns": False,
