@@ -4,6 +4,7 @@ import contextlib
 import ipaddress
 import json as json_mod
 import logging
+import math
 import os
 import secrets
 import subprocess
@@ -478,6 +479,22 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _json_finite(value):
+    """Return ``value`` with every non-finite float replaced by ``None``.
+
+    JSON has no Infinity or NaN, and the tracker keeps an infinite grad_norm,
+    loss or eval score exactly as it was logged (SQLite stores NaN as NULL but
+    keeps +/-inf). ``null`` is what the run charts already draw as a gap.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_finite(item) for item in value]
+    return value
+
+
 def create_app(host: str = "127.0.0.1", port: int = 7860):
     """Create the Soup Web UI FastAPI application."""
     if not _is_loopback(host):
@@ -498,8 +515,19 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import HTMLResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
+
+    class _FiniteJSONResponse(JSONResponse):
+        """JSONResponse that sends a non-finite float as ``null``.
+
+        Starlette renders with ``allow_nan=False``, so one infinite value in a
+        tracker row or a dataset sample raised inside ``render`` and the whole
+        route answered 500.
+        """
+
+        def render(self, content) -> bytes:
+            return super().render(_json_finite(content))
 
     # #731: FastAPI's interactive docs describe every route, parameter and
     # schema, and served none of it behind a token -- so a `soup ui --public`
@@ -522,6 +550,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         swagger_ui_oauth2_redirect_url=(
             "/docs/oauth2-redirect" if _docs_enabled else None
         ),
+        default_response_class=_FiniteJSONResponse,
     )
 
     # Install before CORS so a 413 from the size cap still carries the same
@@ -1072,7 +1101,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 ]
                 if new_metrics:
                     for m_row in new_metrics:
-                        data = json_mod.dumps(m_row, default=str)
+                        data = json_mod.dumps(_json_finite(m_row), default=str)
                         yield f"data: {data}\n\n"
                     last_step = max(
                         m.get("step", 0) for m in new_metrics
