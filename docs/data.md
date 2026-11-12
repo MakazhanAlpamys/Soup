@@ -679,6 +679,10 @@ Earlier stages retain warnings but cannot supply settings, and unused configs ar
 Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
 reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
+A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
+names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
+with a warning naming its keys, and the template is not carried over.
+
 A migrated config trains what the source trained, using the source tool's defaults
 where a key is absent (#1807):
 
