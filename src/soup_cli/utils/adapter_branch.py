@@ -295,14 +295,22 @@ def attach_branch_to_registry(name: str, registry_ref: str) -> int:
         resolved = store.resolve(registry_ref)
         if resolved is None:
             raise ValueError(f"registry entry not found: {registry_ref}")
-        rowid = store.add_artifact(
-            entry_id=resolved,
-            kind="branch_ref",
-            path=str(pointer),
-            enforce_cwd=False,
-        )
-    # Re-write the pointer with the resolved id so the edge is bidirectional.
-    _atomic_write_branch(branches_dir, replace(branch, registry_entry_id=resolved))
+        # Re-write the pointer with the resolved id first, so the edge is
+        # bidirectional AND the artifact row hashes the bytes that stay on
+        # disk. Hashing before the rewrite recorded a SHA-256 and size of a
+        # file that no longer existed (#2727).
+        _atomic_write_branch(branches_dir, replace(branch, registry_entry_id=resolved))
+        try:
+            rowid = store.add_artifact(
+                entry_id=resolved,
+                kind="branch_ref",
+                path=str(pointer),
+                enforce_cwd=False,
+            )
+        except Exception:
+            # Do not leave the pointer claiming a link the registry never recorded.
+            _atomic_write_branch(branches_dir, branch)
+            raise
     return rowid
 
 
