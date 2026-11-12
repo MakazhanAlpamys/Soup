@@ -805,6 +805,18 @@ def resolve_cache_root(cache_dir: Optional[str] = None) -> str:
     return _resolve_cache_root(cache_dir)
 
 
+def shard_dir_path(model: str, cache_dir: Optional[str] = None) -> str:
+    """The slot :func:`resolve_shard_dir` returns, without creating it."""
+    from soup_cli.utils.run_provenance import base_revision_kwargs
+
+    slug = model_slug(model)
+    revision = base_revision_kwargs(model).get("revision")
+    if revision:
+        # '@' cannot occur in model_slug, so no model id aliases this slot.
+        slug += "@" + revision
+    return os.path.join(_resolve_cache_root(cache_dir), slug)
+
+
 def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     """Per-model shard dir (explicit arg > env override > default).
 
@@ -814,15 +826,7 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     process and value (``utils/cache_roots.py``) names the variable, the rejected
     value, the reason and the folder used instead (mirrors spectrum_scan).
     """
-    from soup_cli.utils.run_provenance import base_revision_kwargs
-
-    slug = model_slug(model)
-    revision = base_revision_kwargs(model).get("revision")
-    if revision:
-        # '@' cannot occur in model_slug, so no model id aliases this slot.
-        slug += "@" + revision
-    root: str = _resolve_cache_root(cache_dir)
-    chosen = os.path.join(root, slug)
+    chosen = shard_dir_path(model, cache_dir)
     os.makedirs(chosen, exist_ok=True)
     return chosen
 

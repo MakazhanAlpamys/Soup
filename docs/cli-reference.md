@@ -101,6 +101,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup plugins`](#soup-plugins) | Discover, list, enable, and disable Soup plugins. |
 | [`soup probe`](#soup-probe) | Activation probes: sleeper-agent defection / honesty / misuse / pairwise interference / SAE feature diff / probe pack (v0.66.0, truth+harm v0.71.8). |
 | [`soup profile`](#soup-profile) | Estimate memory, speed, and GPU requirements BEFORE training. |
+| [`soup prune-layer-cache`](#soup-prune-layer-cache) | Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes. |
 | [`soup prune-prompt`](#soup-prune-prompt) | Detect + strip a shared system-prompt prefix across training data so the FT model internalises it (v0.63.0). |
 | [`soup push`](#soup-push) | Push a trained model to HuggingFace Hub (or alternate hub). |
 | [`soup quantize`](#soup-quantize) | Quantize a model - ergonomic alias for `soup export --format <to>`. |
@@ -1319,7 +1320,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -3052,6 +3053,18 @@ Usage: `soup profile [OPTIONS]`
 | `--lora-r` | integer, 1 to 4096 |  |  | With --model: LoRA rank (default 64) |
 | `--optimizer` | text |  |  | With --model: optimizer (default adamw_torch) |
 | `--gradient-checkpointing` | text |  |  | With --model: off (default), full, medium, selective or auto |
+
+## `soup prune-layer-cache`
+
+Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes.
+
+Usage: `soup prune-layer-cache [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup prune-prompt`
 

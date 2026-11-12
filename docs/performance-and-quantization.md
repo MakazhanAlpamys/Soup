@@ -1353,6 +1353,12 @@ snapshot still passes these checks: when its layout changes into a refused one a
 the next run stops with the same message and leaves the copy in place.
 
 
+**Stale cache slots (#2196).** The cache lives at `<cache root>/<slug>@<commit>` (bare `<slug>` for a legacy cache). A base update resolves to a new slot and leaves the old one on disk. The disk pre-flight panel now lists the other slots of the same base with sizes and exact paths, and names `soup prune-layer-cache --model <base> --yes`.
+
+- `soup prune-layer-cache --model <base>` is a dry run: it lists the stale slots with sizes and exact paths. Only `--yes` removes them. Training never deletes.
+- Kept, never removed: the slot the run resolves to; the newest complete slot of the base (the `index.json` with the latest mtime), so a base with one complete slot never loses it; a slot with `index.json.resharding`; a slot holding a `.soup.*.tmp` file (a write in progress); a slot with no readable `index.json`.
+- Stripe folders sit outside the cache root. They are listed with sizes and are never deleted: remove them by hand.
+
 ### Forward-only inference mode (API only, no CLI yet)
 
 The streaming runtime can also *run* a model that does not fit in VRAM, without training it.
