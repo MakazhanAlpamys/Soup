@@ -570,6 +570,51 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 soup ship --evidence evidence.json --output verdict.json
 ```
 
+### Per-row judge verdicts
+
+`--task-mode pairwise` with `--output verdict.json` also writes the verdicts behind the win rate to
+`verdict.judge-rows.jsonl` (the `--output` stem plus `.judge-rows.jsonl`), one line per judged
+prompt: the `--task-eval` prompts (`leg: task_eval`) and, under `--gate loop-v2`, the `--held-out`
+edits (`leg: held_out`, named by their `edit_id`). The verdict JSON itself is computed and written as
+before, with one extra field, `judge_rows`, holding the rows file's name as a path relative to the
+verdict file (`"judge_rows": "verdict.judge-rows.jsonl"`). The field is absent when no rows were
+written: no `--output`, another `--task-mode`, or a rows file that could not be written (that run
+exits 1). The noise-floor repeats are never recorded. The file holds your prompts and both models'
+answers in full; treat it like the inputs it came from.
+
+A row (schema 2, one per line; every line carries its own `schema_version`, there is no header):
+
+```json
+{"schema_version": 2, "leg": "task_eval", "index": 3, "id": "q-capital", "id_source": "id",
+ "prompt_hash": "2d97174483e3", "prompt": "Name the capital of Australia.",
+ "base_answer": "Canberra.", "tuned_answer": "The capital of Australia is Canberra.",
+ "base_truncated": false, "tuned_truncated": false, "judge_model": "llama3.1",
+ "base_first": "base", "tuned_first": "tuned", "result": "tie",
+ "tie_reason": "order_disagreement", "score": 0.5}
+```
+
+| Field | Meaning |
+|---|---|
+| `leg`, `index`, `id`, `id_source` | Which pass, the row's 0-based position in it, and its name: its `edit_id` or `id`, else the SHA-256 of its prompt (`prompt_sha256`). |
+| `prompt_hash` | The 12-hex key `sha256(strip().casefold())` of the row's last user message: the key the loop's holdout split hashes. It is not the 64-hex hash of a whole messages list that the paraphrase format's `prompt_hash` holds. |
+| `prompt`, `base_answer`, `tuned_answer` | The exact texts the judge saw. The answers are always base then tuned, whichever one the judge was shown first. |
+| `base_truncated`, `tuned_truncated` | The answer stopped because it used up the generation cap (256 new tokens on `task_eval`, 512 on `held_out`), as the generator reported it from the token ids, not from the text. `null` when a generator did not say (never from Soup's own live generator). |
+| `judge_model` | The judge's model name, the model part of `--judge-model` (`llama3.1` for `ollama://llama3.1`). The URL is not copied. |
+| `base_first`, `tuned_first` | Whom the judge picked with the base answer shown first, and with the tuned answer shown first: `base`, `tuned` or `none` (the judge said tie, or its reply could not be read). |
+| `result`, `score` | `tuned` when both orders pick tuned, `base` when both pick base, else `tie`; `score` is 1.0 / 0.0 / 0.5, so the mean of a leg's `score` is its win rate. |
+| `tie_reason` | `null` unless `result` is `tie`, then `unreadable_reply` (a judge reply could not be parsed in at least one order), `real_tie` (the judge answered tie in both orders) or `order_disagreement` (both replies were read and the two orders name different sides, as a judge biased towards one position does). The key is always there. |
+
+What a judge reply counts as: `{"winner": "A"}` / `{"winner": "B"}` (or a bare A / B) pick a side;
+`{"winner": "tie"}` or the bare word `tie` (also `tied`, `draw`, `equal`, `neither`, `both`, `none`)
+is a tie the judge gave; anything else is an unreadable reply. The judge is asked only for A or B,
+so a tie is something it volunteered. None of this changes the verdict: the judge sees the same
+prompt, in the same two orders, and a reply that is not A or B is a tie, as before.
+
+The schema is `soup_cli/schemas/ship/judge_row.schema.json` (Draft 2020-12) and one example row of
+every kind is `soup_cli/schemas/ship/examples/judge_row.jsonl`; from Python,
+`soup_cli.utils.ship_judge_rows.load_row_schema()` and `load_row_examples()` return them. Readers
+ignore unknown fields, and a reader that meets a `schema_version` it does not know skips the line.
+
 ### Opt-in progress
 
 Add `--progress jsonl` to follow a verdict without parsing console text:

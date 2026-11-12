@@ -8,12 +8,16 @@ parser and the real two-order combination all run). Four layers:
 * the row ids, the prompt hash, the JSONL text, the sidecar path and the write guards, as pure
   functions;
 * the CLI: the sidecar's rows (schema 2: the prompt and both answers, with the hash of the prompt),
-  both orders, the combined result, a tie and an unreadable reply, the held-out rows under
-  ``--gate loop-v2``, no file without ``--output``, no noise-floor rows;
-* the verdict JSON, byte for byte against what the command wrote before the rows existed.
+  both orders, the combined result, why a tie is a tie (``tie_reason``), whether an answer hit the
+  generation cap, the judge's model name, the held-out rows under ``--gate loop-v2``, no file
+  without ``--output``, no noise-floor rows;
+* the verdict JSON: byte for byte what the command wrote before the rows existed, plus the one
+  ``judge_rows`` pointer when the rows were written.
 
-The new names are imported inside the tests that use them, so the scenario helpers at the top can
-also be run against a tree that does not have them (that is how ``GOLDEN_VERDICT`` was captured).
+The schema and the example file are tested in ``test_ship_judge_row_schema.py``.
+
+The new names are imported inside the tests that use them (``GOLDEN_VERDICT`` was captured on a
+tree that did not have the rows).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from soup_cli.cli import app
 from soup_cli.eval.judge import JudgeEvaluator, JudgeUnavailableError
 from soup_cli.utils import live_eval
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_RUNTIME_ERROR
+from soup_cli.utils.live_eval import GeneratedText
 from tests.cli_runner import CliRunner
 from tests.conftest import strip_ansi
 
@@ -53,8 +58,8 @@ HELD_OUT = [
 ]
 
 # What the judge answers per question, for each order, in terms of the candidate it picks:
-# "base" / "tuned", or "garbage" (a reply that is not an answer). ``base_first`` is the order in
-# which the base answer is shown as A.
+# "base" / "tuned", "tie" (a reply that says so: ``{"winner": "tie"}``) or "garbage" (a reply that
+# is not an answer). ``base_first`` is the order in which the base answer is shown as A.
 SCRIPT: Dict[str, Dict[str, str]] = {
     "capital of France?": {"base_first": "tuned", "tuned_first": "tuned"},
     "2+2?": {"base_first": "base", "tuned_first": "base"},
@@ -64,7 +69,14 @@ SCRIPT: Dict[str, Dict[str, str]] = {
     "garbled judge": {"base_first": "tuned", "tuned_first": "garbage"},
     "held one": {"base_first": "tuned", "tuned_first": "tuned"},
     "held two": {"base_first": "base", "tuned_first": "base"},
-    "held three": {"base_first": "garbage", "tuned_first": "tuned"},
+    "held three": {"base_first": "tie", "tuned_first": "tie"},
+}
+# The answers (label, prompt) that stopped at the generation cap, as the generator reports it.
+CAPPED = {
+    ("base", "capital of France?"),
+    ("tuned", "unlabelled question"),
+    ("base", "held one"),
+    ("tuned", "held three"),
 }
 ANSWERED = {row["prompt"] for row in TASKS + HELD_OUT}
 
@@ -84,6 +96,8 @@ class ScriptedJudge(JudgeEvaluator):
         picked = SCRIPT[question][f"{first}_first"]
         if picked == "garbage":
             return "I cannot decide between them."
+        if picked == "tie":
+            return json.dumps({"winner": "tie"})
         return json.dumps({"winner": "A" if picked == first else "B"})
 
 
@@ -92,7 +106,8 @@ def fake_make_generator(model_id, **kwargs):
     label = loaded[0] if loaded is not None else model_id
 
     def generate(prompt: str) -> str:
-        return f"{label}: {prompt}" if prompt in ANSWERED else "B"
+        text = f"{label}: {prompt}" if prompt in ANSWERED else "B"
+        return GeneratedText(text, truncated=(label, prompt) in CAPPED)
 
     generate.loaded = (label, "tokenizer", "cpu")  # what the real generator exposes
     return generate
@@ -140,131 +155,153 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def expected_row(**fields):
+    """One row as it is written, with every field spelled out by the caller (nothing derived)."""
+    return {"schema_version": 2, "judge_model": "judge", **fields}
+
+
 EXPECTED_TASK_ROWS = [
-    {
-        "schema_version": 2,
-        "leg": "task_eval",
-        "index": 0,
-        "id": "q-fr",
-        "id_source": "id",
-        "prompt_hash": "7b9322536ee4",
-        "prompt": "capital of France?",
-        "base_answer": "base: capital of France?",
-        "tuned_answer": "tuned: capital of France?",
-        "base_first": "tuned",
-        "tuned_first": "tuned",
-        "result": "tuned",
-        "score": 1.0,
-    },
-    {
-        "schema_version": 2,
-        "leg": "task_eval",
-        "index": 1,
-        "id": "e-two",
-        "id_source": "edit_id",
-        "prompt_hash": "30ad205245cd",
-        "prompt": "2+2?",
-        "base_answer": "base: 2+2?",
-        "tuned_answer": "tuned: 2+2?",
-        "base_first": "base",
-        "tuned_first": "base",
-        "result": "base",
-        "score": 0.0,
-    },
-    {
-        "schema_version": 2,
-        "leg": "task_eval",
-        "index": 2,
-        "id": digest("unlabelled question"),
-        "id_source": "prompt_sha256",
-        "prompt_hash": "6f6c187f40b6",
-        "prompt": "unlabelled question",
-        "base_answer": "base: unlabelled question",
-        "tuned_answer": "tuned: unlabelled question",
-        "base_first": "tuned",
-        "tuned_first": "tuned",
-        "result": "tuned",
-        "score": 1.0,
-    },
+    expected_row(
+        leg="task_eval",
+        index=0,
+        id="q-fr",
+        id_source="id",
+        prompt_hash="7b9322536ee4",
+        prompt="capital of France?",
+        base_answer="base: capital of France?",
+        tuned_answer="tuned: capital of France?",
+        base_truncated=True,
+        tuned_truncated=False,
+        base_first="tuned",
+        tuned_first="tuned",
+        result="tuned",
+        tie_reason=None,
+        score=1.0,
+    ),
+    expected_row(
+        leg="task_eval",
+        index=1,
+        id="e-two",
+        id_source="edit_id",
+        prompt_hash="30ad205245cd",
+        prompt="2+2?",
+        base_answer="base: 2+2?",
+        tuned_answer="tuned: 2+2?",
+        base_truncated=False,
+        tuned_truncated=False,
+        base_first="base",
+        tuned_first="base",
+        result="base",
+        tie_reason=None,
+        score=0.0,
+    ),
+    expected_row(
+        leg="task_eval",
+        index=2,
+        id=digest("unlabelled question"),
+        id_source="prompt_sha256",
+        prompt_hash="6f6c187f40b6",
+        prompt="unlabelled question",
+        base_answer="base: unlabelled question",
+        tuned_answer="tuned: unlabelled question",
+        base_truncated=False,
+        tuned_truncated=True,
+        base_first="tuned",
+        tuned_first="tuned",
+        result="tuned",
+        tie_reason=None,
+        score=1.0,
+    ),
     # A judge that always says "the first one": the two orders disagree, so a tie.
-    {
-        "schema_version": 2,
-        "leg": "task_eval",
-        "index": 3,
-        "id": "q-order",
-        "id_source": "id",
-        "prompt_hash": "c34a5ace8ac9",
-        "prompt": "order sensitive",
-        "base_answer": "base: order sensitive",
-        "tuned_answer": "tuned: order sensitive",
-        "base_first": "base",
-        "tuned_first": "tuned",
-        "result": "tie",
-        "score": 0.5,
-    },
-    # A reply that is not an answer in one order: no pick there, so a tie.
-    {
-        "schema_version": 2,
-        "leg": "task_eval",
-        "index": 4,
-        "id": "q-garbled",
-        "id_source": "id",
-        "prompt_hash": "86d45f7aa214",
-        "prompt": "garbled judge",
-        "base_answer": "base: garbled judge",
-        "tuned_answer": "tuned: garbled judge",
-        "base_first": "tuned",
-        "tuned_first": "none",
-        "result": "tie",
-        "score": 0.5,
-    },
+    expected_row(
+        leg="task_eval",
+        index=3,
+        id="q-order",
+        id_source="id",
+        prompt_hash="c34a5ace8ac9",
+        prompt="order sensitive",
+        base_answer="base: order sensitive",
+        tuned_answer="tuned: order sensitive",
+        base_truncated=False,
+        tuned_truncated=False,
+        base_first="base",
+        tuned_first="tuned",
+        result="tie",
+        tie_reason="order_disagreement",
+        score=0.5,
+    ),
+    # A reply that is not an answer in one order: no pick there, so a tie nobody chose.
+    expected_row(
+        leg="task_eval",
+        index=4,
+        id="q-garbled",
+        id_source="id",
+        prompt_hash="86d45f7aa214",
+        prompt="garbled judge",
+        base_answer="base: garbled judge",
+        tuned_answer="tuned: garbled judge",
+        base_truncated=False,
+        tuned_truncated=False,
+        base_first="tuned",
+        tuned_first="none",
+        result="tie",
+        tie_reason="unreadable_reply",
+        score=0.5,
+    ),
 ]
 EXPECTED_HELD_OUT_ROWS = [
-    {
-        "schema_version": 2,
-        "leg": "held_out",
-        "index": 0,
-        "id": "h-1",
-        "id_source": "edit_id",
-        "prompt_hash": "be9c01a32835",
-        "prompt": "held one",
-        "base_answer": "base: held one",
-        "tuned_answer": "tuned: held one",
-        "base_first": "tuned",
-        "tuned_first": "tuned",
-        "result": "tuned",
-        "score": 1.0,
-    },
-    {
-        "schema_version": 2,
-        "leg": "held_out",
-        "index": 1,
-        "id": "h-2",
-        "id_source": "edit_id",
-        "prompt_hash": "149371b6e6fd",
-        "prompt": "held two",
-        "base_answer": "base: held two",
-        "tuned_answer": "tuned: held two",
-        "base_first": "base",
-        "tuned_first": "base",
-        "result": "base",
-        "score": 0.0,
-    },
-    {
-        "schema_version": 2,
-        "leg": "held_out",
-        "index": 2,
-        "id": "h-3",
-        "id_source": "edit_id",
-        "prompt_hash": "8eb462209977",
-        "prompt": "held three",
-        "base_answer": "base: held three",
-        "tuned_answer": "tuned: held three",
-        "base_first": "none",
-        "tuned_first": "tuned",
-        "result": "tie",
-        "score": 0.5,
-    },
+    expected_row(
+        leg="held_out",
+        index=0,
+        id="h-1",
+        id_source="edit_id",
+        prompt_hash="be9c01a32835",
+        prompt="held one",
+        base_answer="base: held one",
+        tuned_answer="tuned: held one",
+        base_truncated=True,
+        tuned_truncated=False,
+        base_first="tuned",
+        tuned_first="tuned",
+        result="tuned",
+        tie_reason=None,
+        score=1.0,
+    ),
+    expected_row(
+        leg="held_out",
+        index=1,
+        id="h-2",
+        id_source="edit_id",
+        prompt_hash="149371b6e6fd",
+        prompt="held two",
+        base_answer="base: held two",
+        tuned_answer="tuned: held two",
+        base_truncated=False,
+        tuned_truncated=False,
+        base_first="base",
+        tuned_first="base",
+        result="base",
+        tie_reason=None,
+        score=0.0,
+    ),
+    # The judge said "tie" in both orders: a tie it chose.
+    expected_row(
+        leg="held_out",
+        index=2,
+        id="h-3",
+        id_source="edit_id",
+        prompt_hash="8eb462209977",
+        prompt="held three",
+        base_answer="base: held three",
+        tuned_answer="tuned: held three",
+        base_truncated=False,
+        tuned_truncated=True,
+        base_first="none",
+        tuned_first="none",
+        result="tie",
+        tie_reason="real_tie",
+        score=0.5,
+    ),
 ]
 
 
@@ -376,6 +413,167 @@ def test_on_row_is_not_called_for_a_pair_the_judge_could_not_judge():
 
 
 # ---------------------------------------------------------------------------
+# Why a tie is a tie
+# ---------------------------------------------------------------------------
+
+# (verdict, shown A,B; verdict, shown B,A; the first reply was unreadable; the second was)
+# -> tie_reason. A verdict of -1 is "no pick"; "unreadable" is a reply the parser could not read.
+TIE_REASON_CASES = [
+    (0, 1, False, False, None),  # A in both orders: a winner, not a tie
+    (1, 0, False, False, None),  # B in both orders
+    (0, 0, False, False, "order_disagreement"),  # always the first one shown
+    (1, 1, False, False, "order_disagreement"),  # always the second one shown
+    (-1, -1, False, False, "real_tie"),  # no pick in either order, and both replies were read
+    (-1, 0, False, False, "order_disagreement"),  # tie, then a pick: the orders disagree
+    (0, -1, False, False, "order_disagreement"),
+    (-1, 1, False, False, "order_disagreement"),
+    (1, -1, False, False, "order_disagreement"),
+    (-1, -1, True, False, "unreadable_reply"),  # the first reply could not be read
+    (-1, -1, False, True, "unreadable_reply"),  # the second could not
+    (-1, -1, True, True, "unreadable_reply"),
+    (-1, 0, True, False, "unreadable_reply"),  # unreadable beats a disagreement
+    (0, -1, False, True, "unreadable_reply"),
+    (-1, 1, True, False, "unreadable_reply"),
+    (1, -1, False, True, "unreadable_reply"),
+]
+
+
+def _scripted(first, swapped, first_unreadable, swapped_unreadable):
+    from soup_cli.eval.judge import UnreadableReply
+
+    return ScriptedPairs(
+        {
+            ("p", "aa"): UnreadableReply() if first_unreadable else first,
+            ("p", "bb"): UnreadableReply() if swapped_unreadable else swapped,
+        }
+    )
+
+
+@pytest.mark.parametrize("first,swapped,first_bad,swapped_bad,reason", TIE_REASON_CASES)
+def test_an_outcome_says_why_it_is_a_tie(first, swapped, first_bad, swapped_bad, reason):
+    from soup_cli.eval.judge import pairwise_compare, pairwise_compare_detailed
+
+    outcome = pairwise_compare_detailed(
+        "p", "aa", "bb", _scripted(first, swapped, first_bad, swapped_bad)
+    )
+    assert outcome.tie_reason == reason
+    assert (outcome.first_unreadable, outcome.swapped_unreadable) == (first_bad, swapped_bad)
+    # what a reply could not be read as changes nothing about who wins
+    plain = ScriptedPairs({("p", "aa"): first, ("p", "bb"): swapped})
+    winner = pairwise_compare("p", "aa", "bb", _scripted(first, swapped, first_bad, swapped_bad))
+    assert winner == pairwise_compare("p", "aa", "bb", plain)
+    assert type(winner) is int  # a plain verdict, whatever the judge returned
+    assert (outcome.combined == -1) == (reason is not None)
+
+
+@pytest.mark.parametrize("unreadable,reason", [(False, "real_tie"), (True, "unreadable_reply")])
+def test_a_pair_judged_in_one_order_with_no_pick_is_a_tie_for_the_reason_of_its_reply(
+    unreadable, reason
+):
+    from soup_cli.eval.judge import UnreadableReply, pairwise_compare_detailed
+
+    judge = ScriptedPairs({("p", "aa"): UnreadableReply() if unreadable else -1})
+    outcome = pairwise_compare_detailed("p", "aa", "bb", judge, swap=False)
+    assert (outcome.combined, outcome.second, outcome.tie_reason) == (-1, None, reason)
+    assert type(outcome.first) is int
+    one_pick = ScriptedPairs({("p", "aa"): 1})
+    decided = pairwise_compare_detailed("p", "aa", "bb", one_pick, swap=False)
+    assert decided.tie_reason is None
+
+
+def test_an_unreadable_reply_is_a_minus_one_everywhere_a_verdict_is_compared():
+    from soup_cli.eval.judge import UnreadableReply
+
+    unreadable = UnreadableReply()
+    assert unreadable == -1 and isinstance(unreadable, int)
+    assert unreadable not in (0, 1) and unreadable in (-1,)
+    assert {0: "a", 1: "b"}.get(unreadable, "tie") == "tie"
+    assert json.dumps([unreadable]) == "[-1]"
+
+
+class ReplyJudge(JudgeEvaluator):
+    """The real evaluator and its reply parser, answering every call with one fixed reply."""
+
+    reply = ""
+
+    def _call_llm(self, prompt: str, max_tokens: int = 1024) -> str:
+        return self.reply
+
+
+def _read(reply: str):
+    from soup_cli.eval.judge import UnreadableReply
+
+    judge = ReplyJudge(provider="ollama", model="judge")
+    judge.reply = reply
+    verdict = judge.compare_pair("p", "aa", "bb")
+    return int(verdict), isinstance(verdict, UnreadableReply)
+
+
+@pytest.mark.parametrize(
+    "reply,verdict,unreadable",
+    [
+        ('{"winner": "A"}', 0, False),
+        ('{"winner": "B"}', 1, False),
+        ('the answer is {"winner": "b"}', 1, False),
+        ("A is clearly better", 0, False),
+        ("B wins here", 1, False),
+        # a judge that says it is a tie: read, and no pick
+        ('{"winner": "tie"}', -1, False),
+        ('{"winner": "Tie."}', -1, False),
+        ('{"winner": " NEITHER "}', -1, False),
+        ('{"winner": "equal"}', -1, False),
+        ('{"winner": "draw"}', -1, False),
+        ('{"winner": "tied"}', -1, False),
+        ('{"winner": "both"}', -1, False),
+        ('{"winner": "none"}', -1, False),
+        ("tie", -1, False),
+        (" Tie.\n", -1, False),
+        ('"draw"', -1, False),
+        # anything else that is not an answer: unreadable
+        ("I cannot decide between them.", -1, True),
+        ("It is a tie between the two.", -1, True),
+        ("", -1, True),
+        ("   ", -1, True),
+        ("{}", -1, True),
+        ('{"winner": ""}', -1, True),
+        ('{"winner": "C"}', -1, True),
+        ('{"winner": null}', -1, True),
+        ('{"winner": ["tie"]}', -1, True),
+        ('{"winner": 7}', -1, True),
+        ('{"verdict": "A"}', -1, True),
+        ('{"winner": "tie"', -1, True),  # cut off: no closing brace
+        ("[1, 2]", -1, True),
+    ],
+)
+def test_the_real_judge_tells_a_tie_it_was_given_from_a_reply_it_could_not_read(
+    reply, verdict, unreadable
+):
+    from soup_cli.eval.judge import _parse_pairwise
+
+    assert _read(reply) == (verdict, unreadable)
+    # and the verdict is the one the parser has always returned
+    assert _parse_pairwise(reply) == verdict
+
+
+def test_the_judge_is_asked_exactly_what_it_was_asked_before():
+    # nothing the judge sees moved: the same calls, in the same two orders, with the same prompt
+    from soup_cli.eval.judge import _PAIRWISE_INSTRUCTIONS, pairwise_compare_detailed
+
+    seen: list = []
+
+    class Recording(ReplyJudge):
+        def _call_llm(self, prompt: str, max_tokens: int = 1024) -> str:
+            seen.append((prompt, max_tokens))
+            return '{"winner": "A"}'
+
+    pairwise_compare_detailed("the prompt", "one", "two", Recording(provider="ollama", model="m"))
+    assert seen == [
+        (_PAIRWISE_INSTRUCTIONS.format(prompt="the prompt", resp_a="one", resp_b="two"), 1024),
+        (_PAIRWISE_INSTRUCTIONS.format(prompt="the prompt", resp_a="two", resp_b="one"), 1024),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Ids, the JSONL text, the path, the write guards
 # ---------------------------------------------------------------------------
 
@@ -427,7 +625,14 @@ def test_every_row_is_one_json_line_whatever_the_id_and_the_texts_hold():
     nasty = ["line\nbreak", "tab\there", "naïve ✓", "lone \ud800 surrogate", '"quoted"']
     for index, name in enumerate(nasty):
         # the same nasty text as the id, the prompt and both answers
-        recorder.add("task_eval", index, RowId(name, "id"), outcome, (name, name + "<", name + ">"))
+        recorder.add(
+            "task_eval",
+            index,
+            RowId(name, "id"),
+            outcome,
+            (name, name + "<", name + ">"),
+            judge_model=name,
+        )
     text = recorder.to_jsonl()
     lines = text.split("\n")
     assert lines[-1] == "" and len(lines) == len(nasty) + 1
@@ -436,6 +641,7 @@ def test_every_row_is_one_json_line_whatever_the_id_and_the_texts_hold():
     assert [row["prompt"] for row in parsed] == nasty
     assert [row["base_answer"] for row in parsed] == [name + "<" for name in nasty]
     assert [row["tuned_answer"] for row in parsed] == [name + ">" for name in nasty]
+    assert [row["judge_model"] for row in parsed] == nasty
     assert text.isascii()
 
 
@@ -451,6 +657,7 @@ def test_a_tuned_win_scores_one_a_tie_a_half_and_a_base_win_zero():
             RowId("r", "id"),
             PairwiseOutcome(first=combined, swapped=None, second=None, combined=combined),
             ("p", "b", "t"),
+            judge_model="judge",
         )
     assert [(row["result"], row["score"]) for row in recorder.rows] == [
         ("tuned", 1.0),
@@ -459,6 +666,71 @@ def test_a_tuned_win_scores_one_a_tie_a_half_and_a_base_win_zero():
     ]
     # judged in one order only: the second order is null, not "none"
     assert [row["tuned_first"] for row in recorder.rows] == [None, None, None]
+
+
+@pytest.mark.parametrize("first,swapped,first_bad,swapped_bad,reason", TIE_REASON_CASES)
+def test_a_tie_row_carries_its_reason_and_every_other_row_a_null(
+    first, swapped, first_bad, swapped_bad, reason
+):
+    from soup_cli.eval.judge import pairwise_compare_detailed
+    from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, RowId
+
+    outcome = pairwise_compare_detailed(
+        "p", "aa", "bb", _scripted(first, swapped, first_bad, swapped_bad)
+    )
+    recorder = JudgeRowRecorder()
+    recorder.add("task_eval", 0, RowId("r", "id"), outcome, ("p", "aa", "bb"), judge_model="judge")
+    (row,) = recorder.rows
+    assert "tie_reason" in row  # the key is always there: null on a row that is not a tie
+    assert row["tie_reason"] == reason
+    assert (row["result"] == "tie") == (reason is not None)
+
+
+def test_a_row_says_whether_each_answer_hit_the_generation_cap():
+    from soup_cli.eval.judge import PairwiseOutcome
+    from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, RowId
+
+    outcome = PairwiseOutcome(first=1, swapped=0, second=1, combined=1)
+    recorder = JudgeRowRecorder()
+    for base_capped, tuned_capped in [(True, False), (False, True), (True, True), (False, False)]:
+        pair = (
+            "p",
+            GeneratedText("short", truncated=base_capped),
+            GeneratedText("a much much longer answer than the other one", truncated=tuned_capped),
+        )
+        recorder.add("task_eval", 0, RowId("r", "id"), outcome, pair, judge_model="judge")
+    assert [(row["base_truncated"], row["tuned_truncated"]) for row in recorder.rows] == [
+        (True, False),
+        (False, True),
+        (True, True),
+        (False, False),
+    ]
+    # the flag is the generator's word, not a guess from the text
+    assert all(type(row["base_truncated"]) is bool for row in recorder.rows)
+
+
+def test_an_answer_from_a_generator_that_does_not_say_is_null_not_false():
+    from soup_cli.eval.judge import PairwiseOutcome
+    from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, RowId
+
+    recorder = JudgeRowRecorder()
+    outcome = PairwiseOutcome(first=1, swapped=0, second=1, combined=1)
+    pair = ("p", "a plain string", GeneratedText("capped", truncated=True))
+    recorder.add("task_eval", 0, RowId("r", "id"), outcome, pair, judge_model="judge")
+    (row,) = recorder.rows
+    assert (row["base_truncated"], row["tuned_truncated"]) == (None, True)
+
+
+def test_every_row_names_the_judge_model_it_was_given():
+    from soup_cli.eval.judge import PairwiseOutcome
+    from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, RowId, recording, row_sink
+
+    outcome = PairwiseOutcome(first=1, swapped=0, second=1, combined=1)
+    recorder = JudgeRowRecorder()
+    recorder.add("held_out", 0, RowId("r", "id"), outcome, ("p", "b", "t"), judge_model="m-1")
+    with recording(recorder, "task_eval"):
+        row_sink([("p", "b", "t")], judge_model="m-2")(0, outcome)
+    assert [row["judge_model"] for row in recorder.rows] == ["m-1", "m-2"]
 
 
 @pytest.mark.parametrize(
@@ -512,16 +784,16 @@ def test_there_is_no_sink_outside_a_recording_scope_and_none_is_left_behind():
     from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, recording, row_sink
 
     pairs = [("p", "a", "b")]
-    assert row_sink(pairs) is None
+    assert row_sink(pairs, judge_model="judge") is None
     with recording(JudgeRowRecorder(), "task_eval"):
-        assert row_sink(pairs) is not None
-    assert row_sink(pairs) is None
+        assert row_sink(pairs, judge_model="judge") is not None
+    assert row_sink(pairs, judge_model="judge") is None
     with pytest.raises(RuntimeError):
         with recording(JudgeRowRecorder(), "task_eval"):
             raise RuntimeError("boom")
-    assert row_sink(pairs) is None
+    assert row_sink(pairs, judge_model="judge") is None
     with recording(None, "task_eval"):
-        assert row_sink(pairs) is None
+        assert row_sink(pairs, judge_model="judge") is None
 
 
 def test_a_scope_names_its_rows_by_position_and_a_sink_records_into_its_recorder():
@@ -532,7 +804,7 @@ def test_a_scope_names_its_rows_by_position_and_a_sink_records_into_its_recorder
     ids = [RowId("first", "edit_id"), RowId("second", "edit_id")]
     pairs = [("p0", "a0", "b0"), ("p1", "a1", "b1"), ("p2", "a2", "b2")]
     with recording(recorder, "held_out", ids):
-        sink = row_sink(pairs)
+        sink = row_sink(pairs, judge_model="judge")
         for index in range(3):
             sink(index, PairwiseOutcome(first=1, swapped=0, second=1, combined=1))
     assert [(row["leg"], row["id"], row["id_source"]) for row in recorder.rows] == [
@@ -603,7 +875,7 @@ def test_a_sink_records_the_pair_as_base_then_tuned_for_every_outcome(
     recorder = JudgeRowRecorder()
     pairs = [("the prompt", "BASE TEXT", "TUNED TEXT")]
     with recording(recorder, "task_eval"):
-        row_sink(pairs)(
+        row_sink(pairs, judge_model="judge")(
             0, PairwiseOutcome(first=first, swapped=swapped, second=second, combined=combined)
         )
     (row,) = recorder.rows
@@ -743,6 +1015,32 @@ def test_the_gate_adds_the_held_out_rows_named_by_their_edit_id(tmp_path, monkey
     assert verdict["held_out"]["style"]["n"] == 3  # the note the rows stand behind
 
 
+def test_the_judge_model_of_a_row_is_the_model_name_of_the_judge_url_not_the_url(
+    tmp_path, monkeypatch
+):
+    result = run_ship(
+        tmp_path,
+        monkeypatch,
+        "--task-mode",
+        "pairwise",
+        "--judge-model",
+        "http://localhost:8000/Qwen2.5-7B",
+        "--gate",
+        "loop-v2",
+        "--held-out",
+        "held.jsonl",
+        "--output",
+        "out.json",
+    )
+    assert result.exit_code == EXIT_GATE_FAILED, (result.output, repr(result.exception))
+    path = tmp_path / "out.judge-rows.jsonl"
+    rows = read_rows(path)
+    assert {row["leg"] for row in rows} == {"task_eval", "held_out"}
+    assert {row["judge_model"] for row in rows} == {"Qwen2.5-7B"}
+    # a host (or a key someone put in the URL) is not copied into a file that is shared around
+    assert "localhost" not in path.read_text(encoding="utf-8")
+
+
 def test_an_output_outside_the_working_directory_is_refused_and_no_rows_are_written(
     tmp_path, monkeypatch
 ):
@@ -851,7 +1149,59 @@ GOLDEN_VERDICT = """\
 }"""
 
 
-def test_the_verdict_json_is_byte_for_byte_what_it_was_before_the_rows_existed(judged):
+def test_the_verdict_json_is_what_it_was_before_the_rows_existed_plus_one_pointer(judged):
     _result, root = judged
     written = (root / "out.json").read_text(encoding="utf-8")
-    assert written == GOLDEN_VERDICT.replace("@VERSION@", __version__)
+    pointer = ',\n  "judge_rows": "out.judge-rows.jsonl"\n}'
+    assert written.endswith(pointer)
+    # the decision, the scores and every other byte are the ones the command wrote before
+    assert written[: -len(pointer)] + "\n}" == GOLDEN_VERDICT.replace("@VERSION@", __version__)
+
+
+def test_the_verdict_points_at_the_rows_file_by_a_path_relative_to_itself(tmp_path, monkeypatch):
+    result = run_ship(tmp_path, monkeypatch, *PAIRWISE, "--output", "reports/run.v2.json")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    verdict_path = tmp_path / "reports" / "run.v2.json"
+    pointer = json.loads(verdict_path.read_text(encoding="utf-8"))["judge_rows"]
+    assert pointer == "run.v2.judge-rows.jsonl"  # no directory: it is next to the verdict
+    assert read_rows(verdict_path.parent / pointer) == EXPECTED_TASK_ROWS
+
+
+def test_the_pointer_is_there_under_the_gate_too(tmp_path, monkeypatch):
+    result = run_ship(
+        tmp_path,
+        monkeypatch,
+        *PAIRWISE,
+        "--gate",
+        "loop-v2",
+        "--held-out",
+        "held.jsonl",
+        "--output",
+        "out.json",
+    )
+    assert result.exit_code == EXIT_GATE_FAILED, (result.output, repr(result.exception))
+    verdict = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert verdict["judge_rows"] == "out.judge-rows.jsonl"
+    assert verdict["gate"] == "loop-v2"
+
+
+def test_no_pointer_when_no_rows_were_written(tmp_path, monkeypatch):
+    result = run_ship(tmp_path, monkeypatch, "--task-mode", "metric", "--output", "out.json")
+    assert result.exit_code in (0, EXIT_GATE_FAILED), (result.output, repr(result.exception))
+    verdict = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert "judge_rows" not in verdict
+    assert not (tmp_path / "out.judge-rows.jsonl").exists()
+
+
+@pytest.mark.requires_symlink
+def test_no_pointer_when_the_rows_could_not_be_written(tmp_path, monkeypatch):
+    target = tmp_path / "victim.txt"
+    target.write_text("keep me", encoding="utf-8")
+    os.symlink(target, tmp_path / "out.judge-rows.jsonl")
+    result = run_ship(tmp_path, monkeypatch, *PAIRWISE, "--output", "out.json")
+    assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
+    # the verdict is still written, and it does not point at a file that was never written
+    verdict = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert "judge_rows" not in verdict
+    assert verdict["decision"] == "SHIP"
+    assert target.read_text(encoding="utf-8") == "keep me"

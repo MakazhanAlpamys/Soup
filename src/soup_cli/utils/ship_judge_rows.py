@@ -5,12 +5,16 @@ it: one JSON object per line in ``<--output stem>.judge-rows.jsonl``, for the ta
 (``leg: task_eval``) and, under ``--gate loop-v2``, the held-out style note (``leg: held_out``).
 The verdict JSON itself is not touched, so every report that reads it still reads the same bytes.
 
-A row (schema 2)::
+A row (schema 2; the contract is ``soup_cli/schemas/ship/judge_row.schema.json``, with
+``examples/judge_row.jsonl``)::
 
     {"schema_version":2,"leg":"task_eval","index":2,"id":"q-17","id_source":"id",
      "prompt_hash":"61a3385003d9","prompt":"What is 2+2?","base_answer":"3","tuned_answer":"4",
-     "base_first":"base","tuned_first":"tuned","result":"tie","score":0.5}
+     "base_truncated":false,"tuned_truncated":false,"judge_model":"llama3.1",
+     "base_first":"base","tuned_first":"tuned","result":"tie","tie_reason":"order_disagreement",
+     "score":0.5}
 
+* ``schema_version``: on every row. The file is JSONL with no header, so a row must describe itself.
 * ``index``: the row's 0-based position in that leg's input.
 * ``id`` / ``id_source``: the row's ``edit_id`` or ``id`` when the input has one, else the SHA-256
   of its prompt (``prompt_sha256``).
@@ -18,15 +22,25 @@ A row (schema 2)::
   text). The two answers are always base then tuned, whichever one the judge was shown first.
   They are not shortened here: an answer is already bounded by the generation limit. This file
   therefore holds your prompts and both models' answers; treat it like the inputs it came from.
+* ``base_truncated`` / ``tuned_truncated``: the answer stopped because it used up the generation
+  token cap (256 new tokens on ``task_eval``, 512 on ``held_out``), as the generator reported it
+  (``live_eval.GeneratedText.truncated``, from the token ids, not the text). ``null`` when the
+  generator did not say (a plain ``str``; never from Soup's own live generator).
+* ``judge_model``: the judge's model name, the model part of ``--judge-model``'s URL
+  (``llama3.1`` for ``ollama://llama3.1``). Never the URL: a host, or a key someone put in it,
+  does not go into a file that is shared around.
 * ``prompt_hash``: the first 12 hex digits of ``sha256(prompt.strip().casefold())``, the same key
   the loop's holdout split hashes (``loop_holdout``) and Soup Zero's ``held_out_audit`` joins on.
   It differs from the ``prompt_sha256`` fallback id above, which is the full digest of the prompt
-  as it is written.
+  as it is written, and from the 64-hex hash of a whole messages list in the paraphrase format.
 * ``base_first``: whom the judge picked when the base answer was shown first (as A);
   ``tuned_first``: the same when the tuned answer was shown first. Each is ``base``, ``tuned`` or
-  ``none`` (a tie, or a reply that could not be read: the judge reports both as one "no pick").
+  ``none`` (the judge said tie, or its reply could not be read).
 * ``result``: what the two orders came to. A side wins only when BOTH orders pick it; a disagreement
   or a ``none`` is a ``tie``.
+* ``tie_reason``: ``null`` unless ``result`` is ``tie``, then one of ``unreadable_reply`` (a reply
+  could not be parsed), ``real_tie`` (the judge said tie in both orders) or ``order_disagreement``
+  (both replies read, the orders name different sides). The key is always there.
 * ``score``: the tuned side's share of the win rate (1.0 tuned, 0.5 tie, 0.0 base), so the mean of
   the ``score`` column of a leg is that leg's win rate.
 
@@ -47,7 +61,20 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from importlib import resources
+from importlib.resources.abc import Traversable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from soup_cli.utils.paths import atomic_write_text
 
@@ -64,6 +91,30 @@ ID_ROW = "id"
 ID_PROMPT_SHA256 = "prompt_sha256"
 # As the ids of ``--corrections`` / ``--held-out``; a longer one falls back to the prompt hash.
 MAX_ROW_ID_CHARS = 256
+_SCHEMA_PACKAGE = "soup_cli.schemas.ship"
+_SCHEMA_FILE = "judge_row.schema.json"
+_EXAMPLE_FILE = "judge_row.jsonl"
+
+
+def row_schema_resource() -> Traversable:
+    """The packaged JSON Schema file of one judge row."""
+    return resources.files(_SCHEMA_PACKAGE) / _SCHEMA_FILE
+
+
+def row_example_resource() -> Traversable:
+    """The packaged example file: one valid row per line."""
+    return resources.files(_SCHEMA_PACKAGE) / "examples" / _EXAMPLE_FILE
+
+
+def load_row_schema() -> Dict[str, Any]:
+    """Parse and return the JSON Schema of one judge row (Draft 2020-12)."""
+    return json.loads(row_schema_resource().read_text(encoding="utf-8"))
+
+
+def load_row_examples() -> List[Dict[str, Any]]:
+    """Parse and return the example rows, one per line."""
+    text = row_example_resource().read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 @dataclass(frozen=True)
@@ -118,6 +169,12 @@ def _picked(verdict: Optional[int]) -> Optional[str]:
     return {0: "base", 1: "tuned"}.get(verdict, "none")
 
 
+def _hit_cap(answer: object) -> Optional[bool]:
+    """Whether the generator reported ``answer`` as cut off by the token cap, or ``None``."""
+    flag = getattr(answer, "truncated", None)
+    return flag if isinstance(flag, bool) else None
+
+
 class JudgeRowRecorder:
     """The rows of one ``soup ship`` run, in the order they were judged."""
 
@@ -138,6 +195,8 @@ class JudgeRowRecorder:
         row_id: RowId,
         outcome: "PairwiseOutcome",
         pair: Tuple[str, str, str],
+        *,
+        judge_model: str,
     ) -> None:
         """Record one judged row; ``pair`` is the ``(prompt, base answer, tuned answer)`` judged."""
         prompt, base_answer, tuned_answer = pair
@@ -154,9 +213,13 @@ class JudgeRowRecorder:
                 "prompt": prompt,
                 "base_answer": base_answer,
                 "tuned_answer": tuned_answer,
+                "base_truncated": _hit_cap(base_answer),
+                "tuned_truncated": _hit_cap(tuned_answer),
+                "judge_model": judge_model,
                 "base_first": _picked(outcome.first),
                 "tuned_first": _picked(outcome.second),
                 "result": result,
+                "tie_reason": outcome.tie_reason,
                 "score": 1.0 if combined == 1 else 0.0 if combined == 0 else 0.5,
             }
         )
@@ -202,12 +265,14 @@ def recording(
 def row_sink(
     pairs: Sequence[Tuple[str, str, str]],
     rows: Optional[Sequence[object]] = None,
+    *,
+    judge_model: str,
 ) -> "Optional[Callable[[int, PairwiseOutcome], None]]":
     """The ``on_row`` callback for ``pairwise_winrate(pairs, ...)``, or ``None`` outside a scope.
 
     ``pairs`` are the ``(prompt, answer, answer)`` triples being judged; ``rows`` the input row
     behind each (an ``EvalTask``: its ``metadata`` may carry an ``edit_id`` / ``id``). A scope's
-    own ``ids`` win over both.
+    own ``ids`` win over both. ``judge_model`` is the judge's model name, written on every row.
     """
     scope = _active.get()
     if scope is None:
@@ -219,7 +284,9 @@ def row_sink(
         else:
             row = rows[index] if rows is not None and index < len(rows) else None
             row_id = row_id_of(pairs[index][0], getattr(row, "metadata", None))
-        scope.recorder.add(scope.leg, index, row_id, outcome, pairs[index])
+        scope.recorder.add(
+            scope.leg, index, row_id, outcome, pairs[index], judge_model=judge_model
+        )
 
     return sink
 

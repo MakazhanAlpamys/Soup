@@ -931,7 +931,7 @@ def _build_pairwise_scorer(
         pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
         # ``row_sink`` is None unless the caller opened a ``recording`` scope around this call
         # (``_leg1_pairwise`` does; the noise-floor repeats do not), so this adds nothing then.
-        on_row = row_sink(pairs, tasks)
+        on_row = row_sink(pairs, tasks, judge_model=model)
         return pairwise_winrate(pairs, evaluator, on_row=on_row)
 
     return _winrate
@@ -1284,7 +1284,7 @@ def _held_out_win_rate(judge_model: str, pairs: List[Tuple[str, str, str]]) -> f
     provider, model, api_base = _parse_judge_url(judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
     # None outside the ``recording`` scope ``_apply_loop_gate`` opens, which names the rows.
-    return pairwise_winrate(pairs, evaluator, on_row=row_sink(pairs))
+    return pairwise_winrate(pairs, evaluator, on_row=row_sink(pairs, judge_model=model))
 
 
 def _answer_generators(
@@ -1584,26 +1584,36 @@ def _emit_and_exit(
 ) -> None:
     console.print(render_ship_panel(verdict))
     if output:
+        # The rows go first so the verdict can point at them only when they exist; a failure to
+        # write them is reported after the verdict is written (and without a pointer).
+        rows_path: Optional[str] = None
+        rows_error: Optional[Exception] = None
+        if judge_rows is not None:
+            try:
+                rows_path = write_judge_rows(judge_rows, output)
+            except (OSError, ValueError, TypeError) as exc:
+                rows_error = exc
         try:
-            atomic_write_text(
-                json.dumps(verdict_to_dict(verdict), indent=2), output, field="output"
-            )
+            payload = verdict_to_dict(verdict)
+            if rows_path is not None:
+                # Next to the verdict by construction, so the basename is the relative path.
+                payload["judge_rows"] = os.path.basename(rows_path)
+            atomic_write_text(json.dumps(payload, indent=2), output, field="output")
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
-        if judge_rows is not None:
-            # The pairwise judge's per-row verdicts, beside the verdict (which is unchanged).
-            try:
-                rows_path = write_judge_rows(judge_rows, output)
-                console.print(
-                    f"[green]Wrote judge rows[/] {escape(for_terminal(rows_path))} "
-                    f"({len(judge_rows)} rows)"
-                )
-            except (OSError, ValueError, TypeError) as exc:
-                _fail(
-                    f"cannot write the judge rows next to --output: {type(exc).__name__}: {exc}",
-                    _EXIT_RUNTIME,
-                )
+        if rows_error is not None:
+            _fail(
+                "cannot write the judge rows next to --output: "
+                f"{type(rows_error).__name__}: {rows_error}",
+                _EXIT_RUNTIME,
+            )
+        if rows_path is not None and judge_rows is not None:
+            # The pairwise judge's per-row verdicts, beside the verdict.
+            console.print(
+                f"[green]Wrote judge rows[/] {escape(for_terminal(rows_path))} "
+                f"({len(judge_rows)} rows)"
+            )
     if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
         # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
