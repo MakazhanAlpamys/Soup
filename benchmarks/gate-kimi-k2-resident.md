@@ -211,3 +211,36 @@ for byte (git-verified clean after each round); all three mutants caught, each b
 
 After the mutations: `tests/test_kimi_k2_resident_parity.py` + the admission suite,
 191 passed in one process.
+
+## 7. Memory design (per-tensor FP8 dequant at load)
+
+The resident route never holds the FP8 checkpoint and the bf16 model at the same
+time: each safetensors tensor is read on its own, dequantised against its
+`_scale_inv` blocks into the pre-built meta skeleton (`assign=True`), and its FP8
+bytes are released before the next tensor is read. The peak extra memory during the
+load is therefore one tensor's working set — its FP8 bytes plus its dequantised
+copy — not a second whole model.
+
+Measured on this gate's own box (the audit venv above, torch 2.15.0+cpu, CPU only;
+`ru_maxrss` sampled around each phase of `load_resident_model` on the shared seeded
+tiny FP8 checkpoint — the gate's exact load path, `built["fp8"][0]`; measured
+2026-11-12, after the gate run):
+
+| phase | peak RSS |
+|---|---|
+| after `import torch` | 0.217 GB |
+| after building the tiny bf16+FP8 checkpoints | 0.350 GB |
+| after the FP8 load at fp32 (the gate's dtype) | 0.351 GB — load delta 0.94 MB (model is 0.75 MB at fp32) |
+| after the FP8 load at bf16 (the production route dtype) | 0.351 GB — load delta 0.13 MB (model is 0.38 MB at bf16) |
+
+The tiny model is 187,704 parameters, so these deltas confirm the design rather than
+probe it: the marginal RSS of the load is the model itself plus its per-tensor
+source working set, with no whole-model FP8+bf16 coexistence.
+
+At published K2 scale these figures are design bounds, not measurements: the FP8
+source totals 1,029,173,256,720 B (~1.03 TB, the admission gate's byte-exact index
+count), the resident bf16 footprint is ~2 TB, and the largest tensor
+(`embed_tokens`, 163840 x 7168, tied with `lm_head`) adds a transient of at most its
+FP8 bytes plus its bf16 copy (~1.17 GB + ~2.35 GB). Whether the route actually loads
+the real ~1 TB checkpoint inside a host's RAM is the infra-blocked follow-up; no run
+on this box has touched real K2 weights.
