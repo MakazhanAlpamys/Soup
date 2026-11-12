@@ -1,0 +1,121 @@
+{
+  "stage": "untimed-native-census",
+  "written_utc": "2026-10-26T12:19:26.168807+00:00",
+  "shape": [
+    1,
+    2048
+  ],
+  "cap_bytes": 8589934592,
+  "admission": {
+    "uuid": "GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4",
+    "free_bytes": 25769803776,
+    "temperature": 35,
+    "power_limit": 420.0
+  },
+  "allocator_cap_bytes": 8589934592,
+  "cap_binding": {
+    "verified": true,
+    "field": "training.stream_vram_override",
+    "bytes": 8589934592,
+    "native_message_names_override": true
+  },
+  "native": {
+    "measured": true,
+    "full_layer_bytes": 419972096,
+    "full_layer_charge": 482015738,
+    "peak_reserved": 2833252352,
+    "peak_allocated": 2468564480,
+    "cap_bytes": 8589934592,
+    "cap_bound": "override",
+    "budget_bytes": 5756682240,
+    "budget_inputs": {
+      "total_bytes": 25769279488,
+      "free_bytes": 21495808000,
+      "reserved_bytes": 2833252352,
+      "reserved_peak_bytes": 2833252352,
+      "override_bytes": 8589934592,
+      "headroom": 0.85
+    },
+    "k": 11,
+    "retained_indices": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ]
+  },
+  "projections": {
+    "retained_indices": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "recomputed_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "selected_indices": [
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "raw_bytes": 377487360,
+    "charged_bytes": 433254618,
+    "residual_bytes": 454509122,
+    "reason": "planned"
+  },
+  "messages": [
+    "[cyan]training.stream_recompute='auto':[/] the last 11 of 32 streamed layers keep their activations, the rest recompute (measured at batch 1 x seq 2048: one layer 420.0 MB retained, charged 482.0 MB at reserved/allocated 1.15; budget 5.76 GB = training.stream_vram_override 8.59 GB minus the reserved peak 2.83 GB)"
+  ],
+  "optimizer_updates": 0,
+  "attention_implementation": "sdpa",
+  "kernel_profiled": false,
+  "deterministic_algorithms": true,
+  "shard_index_sha256": "411bf629b831503d3cd43317fc7df78aba3a6df28594d18345cdc17a7252afc8",
+  "packages": {
+    "torch": "2.14.1+cu130",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2"
+  }
+}

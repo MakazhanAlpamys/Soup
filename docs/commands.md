@@ -168,6 +168,7 @@ soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
+soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
@@ -187,7 +188,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 176 ready-made recipes
+soup recipes list                             List all 177 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
@@ -235,7 +236,7 @@ soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-m
 soup ship ... --chat-template-kwargs '{"enable_thinking":false}'  Pass template variables equally to base/tuned live generation; JSON object, live-only (#1758)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
 soup push --model ./out --repo you/m --card <registry-id>  Upload that registry-driven card as the README (HF only) (v0.71.35)
-soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
+soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35; --python range is 3.11 to 3.13); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens

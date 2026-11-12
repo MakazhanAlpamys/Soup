@@ -667,11 +667,14 @@ def _render_stream_disk_preflight(
     shard_path: str,
     stripe_writes: Sequence[tuple[str, int]] = (),
     approximate: bool = False,
+    other_slots: Sequence = (),
+    base: str = "",
 ) -> None:
     """Print and enforce the complete on-disk cost before either cache writes.
 
     ``stripe_writes`` are the (folder, bytes) writes bound for each extra stripe drive (R4);
     each is charged to its own volume and refused by name when that drive cannot hold it.
+    ``other_slots`` are the base's other ``CacheSlot``s (#2196): listed, never counted.
     """
     writes = (
         ("materialized weight copy", materialized_path, materialize_bytes),
@@ -709,6 +712,30 @@ def _render_stream_disk_preflight(
         f"Projected total on disk: {projected_total / 1e9:.2f} GB",
         f"Additional writes before training: {additional / 1e9:.2f} GB",
     ]
+    stale_hint = ""
+    if other_slots:
+        from soup_cli.utils.terminal import for_terminal
+
+        total = sum(slot.bytes for slot in other_slots)
+        reclaim = sum(slot.bytes for slot in other_slots if not slot.referenced)
+        lines.append(f"Other cache slots of this base: {len(other_slots)} ({total / 1e9:.2f} GB)")
+        for slot in other_slots[:20]:
+            note = f" (kept: {slot.reason})" if slot.referenced else ""
+            lines.append(
+                f"  {for_terminal(slot.name)}: {slot.bytes / 1e9:.2f} GB, "
+                f"{for_terminal(slot.path)}{note}"
+            )
+            for stripe in slot.stripes:
+                lines.append(
+                    f"    stripe folder (manual): {for_terminal(stripe.path)}, "
+                    f"{stripe.bytes / 1e9:.2f} GB"
+                )
+        if len(other_slots) > 20:
+            lines.append(f"  +{len(other_slots) - 20} more")
+        lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
+        cmd = f"soup prune-layer-cache --model {for_terminal(base)} --yes"
+        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
         free = free_by_device[device]
@@ -730,7 +757,7 @@ def _render_stream_disk_preflight(
                 f"layer streaming needs {required / 1e9:.2f} GB of additional "
                 f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
                 f"Refusing before copying or sharding. Free disk space, point "
-                f"{remedy} volume, or choose a smaller base."
+                f"{remedy} volume, or choose a smaller base.{stale_hint}"
             )
     console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 
@@ -918,16 +945,23 @@ class StreamingSetupMixin:
         refuse_if_data_parallel(self.device)
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
-        from soup_cli.utils.fp8_block import check_source_quantization, quantization_config_of
+        from soup_cli.utils.fp8_block import (
+            check_source_quantization,
+            is_serialized_nf4_config,
+            quantization_config_of,
+        )
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
             QUANT_NONE,
+            SERIALIZED_QUANT_DEVICE,
+            check_serialized_nf4_request,
             checkpoint_source_components,
             estimate_oq_stream_cache_bytes,
             fingerprint_source_files,
             inspect_shard_cache,
             layer_paths,
+            remove_stale_nf4_staging,
             resolve_shard_dir,
             shard_cache_disk_bytes,
             shard_checkpoint,
@@ -1021,8 +1055,18 @@ class StreamingSetupMixin:
         # resolved or downloaded. The disk pre-flight sizes the cache from the same
         # config (the shards hold dequantised weights, the scales are not stored).
         # The top-level declaration, or a multimodal wrapper's text_config one.
+        # One exception: a pre-quantised double-quantised bitsandbytes NF4 base
+        # (unsloth/*-bnb-4bit) under quantization: 4bit is not sharded but imported byte
+        # for byte (utils/nf4_serialized.py); under any other quantization it is refused
+        # as every bitsandbytes source is.
         source_quantization = quantization_config_of(model_config)
-        fp8_block = check_source_quantization(source_quantization, arch=arch)
+        run_is_4bit = tcfg.quantization == "4bit"
+        fp8_block = check_source_quantization(
+            source_quantization, arch=arch, allow_serialized_nf4=run_is_4bit
+        )
+        serialized_nf4 = run_is_4bit and is_serialized_nf4_config(
+            source_quantization, arch=arch
+        )
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100
@@ -1058,6 +1102,20 @@ class StreamingSetupMixin:
                 path, tcfg.stream_disk_kind, notify=console.print
             ).kind,
         )
+        if serialized_nf4:
+            # Before the weights are resolved or downloaded: the store keeps the source's
+            # bfloat16 and double-quantised statistics in one cache folder.
+            check_serialized_nf4_request(
+                dtype=dtype, double_quant=double_quant, stripe_roots=stripe_roots
+            )
+            # A killed import's leftover staging folder holds up to the whole payload and
+            # counts as used space in the disk pre-flight below, which would refuse a run
+            # the sweep makes room for. A live sibling's folder is kept (it names its pid).
+            remove_stale_nf4_staging(shard_dir)
+            console.print(
+                "[dim]Pre-quantised bitsandbytes NF4 base: imported byte for byte, "
+                "not re-quantised[/]"
+            )
         if stripe_roots:
             console.print(
                 "[dim]Layer cache striped over "
@@ -1066,7 +1124,15 @@ class StreamingSetupMixin:
                 )
                 + "[/]"
             )
-        quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
+        # The device the cache index is looked up under. A cache Soup quantised depends on
+        # the device (CPU and CUDA disagree on some float32 statistics); a pre-quantised
+        # source's cache was quantised on none and its index says so.
+        if serialized_nf4:
+            quant_device_kind = SERIALIZED_QUANT_DEVICE
+        elif quant == QUANT_NF4:
+            quant_device_kind = str(self.device).split(":", 1)[0]
+        else:
+            quant_device_kind = ""
         # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
         # decoder layer; the sharder drops them against the config's count (and the
         # disk pre-flight does not charge them).
@@ -1195,7 +1261,20 @@ class StreamingSetupMixin:
             effective_shard_bytes = max(shard_estimate, sum(shares))
             # The flat-rate fallback is a guess and says so; a measured cache is exact.
             coarse = cache_estimate is None and oq_shard_estimate is None
+            try:
+                from soup_cli.utils.layer_cache_slots import list_base_slots
+
+                other_slots = [
+                    s for s in list_base_slots(
+                        cfg.base, os.path.dirname(shard_dir), shard_dir
+                    )
+                    if s.reason != "current slot"
+                ]
+            except Exception:  # noqa: BLE001 - a listing failure must never abort training
+                other_slots = []
             _render_stream_disk_preflight(
+                other_slots=other_slots,
+                base=cfg.base,
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
                 materialize_bytes=weights_plan.materialize_bytes,

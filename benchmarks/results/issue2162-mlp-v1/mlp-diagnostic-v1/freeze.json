@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-26T20:03:31.863435+00:00",
+  "archive_sha256": "1f36fd35f867b9f6eda1d0ceede39c8643b2979db2f5ac1484663b6575238b5e",
+  "controller_sha256": "e01d8f51ce78eab46cfb20c478f6cf170f6714022a85812a1e86318a3704b4c9",
+  "protocol_sha256": "6e4f5b256b8e60ca4cd99601efe52d1c2bf2cb1c2edef1484971e4b53bc44e65",
+  "sources_sha256": "a4cb8decf813185089d0b366c40e81ff67f7d40ad204dbafa3534278aa55d690",
+  "census_sha256": "aabf9f0e31844c8cfa5f5aaab947963c316b97ad8dfd2583b068b95fedb14608",
+  "reference_sha256": "bb452c9025fa24a09240809f85023f37494d3ef5c09635a91047fc6a54d5dcaa",
+  "roster": [
+    "native-normal",
+    "qkvo-normal",
+    "mixed-normal",
+    "native-profile",
+    "qkvo-profile",
+    "mixed-profile"
+  ],
+  "updates_per_process": 2,
+  "timing_pairs": 0
+}
