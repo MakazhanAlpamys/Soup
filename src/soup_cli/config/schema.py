@@ -5498,9 +5498,8 @@ def _unapplied_lora_patterns_message(
     ``how`` is the clause that says why the backend drops them ("the MLX trainer
     builds every adapter from"). The text names only the fields the config set; an
     empty ``{}`` sets nothing (``peft_wiring`` reads ``if rank_pattern:``), so it
-    is not named and does not refuse. One builder serves the MLX and unsloth
-    validators so the two messages cannot drift; each validator stays separate so
-    the day one backend honours the patterns only that validator is deleted.
+    is not named and does not refuse. The unsloth validator uses this builder;
+    MLX supports patterns for ordinary text SFT and has its own scope diagnostic.
     """
     set_fields = [
         f"training.lora.{name}"
@@ -8978,32 +8977,19 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_mlx_lora_patterns(self) -> "SoupConfig":
-        """#1996 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
-        ``backend: mlx``. Stop-gap: delete this validator (and
-        ``tests/test_mlx_lora_pattern_refusal.py``) when the MLX trainer honours them.
-
-        SFT, DPO, ORPO, SimPO, KTO and GRPO all build the adapter in
-        ``MLXSFTTrainerWrapper._apply_lora`` from one scalar ``lora.r`` and
-        ``lora.alpha``, so a config that set a pattern trained a uniform-rank adapter
-        without a word. Not part of
-        :meth:`_validate_peft_variant_backend_and_quantization`, which returns early
-        for plain LoRA; defined after :meth:`_validate_mlx_task_support` (and the
-        ``lora.r=0`` check) on purpose, so a task MLX cannot run, or a config with no
-        adapter at all, is refused for that reason first and "use backend:
-        transformers" below leads to a config that loads for the pattern. It is not
-        unconditional: an MLX-only setting such as ``training.optimizer: muon`` or
-        ``adamw_hf`` is refused on transformers for its own reason. MLX DoRA already
-        refuses both fields in its own words, earlier. An empty ``{}`` sets nothing
-        (``peft_wiring`` reads ``if rank_pattern:``) and still loads.
-        """
-        if self.backend != "mlx":
-            return self
-        message = _unapplied_lora_patterns_message(
-            self.training.lora, "mlx", "the MLX trainer builds every adapter from"
-        )
-        if message is not None:
-            raise ValueError(message)
+    def _validate_mlx_lora_pattern_scope(self) -> "SoupConfig":
+        """Per-module reconstruction is qualified for text SFT, not native preference/RL."""
+        if self.backend == "mlx" and self.task != "sft":
+            fields = [
+                f"training.lora.{name}"
+                for name in ("rank_pattern", "alpha_pattern")
+                if getattr(self.training.lora, name)
+            ]
+            if fields:
+                raise ValueError(
+                    f"{' and '.join(fields)}: MLX patterns support ordinary LoRA/rsLoRA "
+                    f"text SFT only; task={self.task!r} does not apply per-module patterns."
+                )
         return self
 
     @model_validator(mode="after")
@@ -9011,7 +8997,7 @@ class SoupConfig(BaseModel):
         """#2153 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
         ``backend: unsloth``. Stop-gap: delete this validator (and
         ``tests/test_unsloth_lora_pattern_refusal.py``) when the unsloth loader honours
-        them; it is independent of :meth:`_validate_mlx_lora_patterns`.
+        them; this backend does not apply the native MLX pattern path.
 
         Every ``_setup_unsloth`` goes through ``utils/unsloth.py:load_model_and_tokenizer``,
         which hands ``FastLanguageModel.get_peft_model`` one scalar ``r`` and
