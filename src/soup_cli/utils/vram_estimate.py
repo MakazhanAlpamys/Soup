@@ -16,7 +16,9 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   from the model's own dims and the configured target modules, in fp32.
 - ``gradients`` and ``optimizer``: per trainable parameter.
 - ``activations``: what the backward pass keeps per layer; with gradient
-  checkpointing, one boundary tensor per layer plus one layer recomputed.
+  checkpointing, one boundary tensor per layer plus one layer recomputed. Under 8-bit
+  loading a checkpointed layer also keeps its int8 linear layers' inputs, which
+  bitsandbytes holds outside checkpointing (``INT8_CHECKPOINT_KEPT``).
 - ``logits``: the output head's logits and the loss chain over them, at the streaming
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
   A PRM step builds the logits and no loss over them, so it is charged the logits
@@ -134,6 +136,20 @@ ACT_EXTRA: dict[str, tuple[float, float]] = {
 ACTIVATION_BYTES = 2.0
 #: Checkpointing keeps one hidden-sized tensor per layer, in bytes per element.
 BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
+#: What a checkpointed layer keeps on top of its boundary under 8-bit loading, per token
+#: in bf16 values, as (per hidden, per intermediate). bitsandbytes' int8 matmul
+#: (``MatMul8bitLt``) holds its input on ``ctx.tensors``, not through
+#: ``save_for_backward``, and checkpointing only drops what is saved through
+#: ``save_for_backward``. So every int8 linear layer's input stays on the card from the
+#: forward pass until that layer's backward: the q/k/v input and the gate/up input in fp32
+#: (k-bit preparation casts the norms to fp32), the o_proj input in bf16 and the down_proj
+#: input in fp32. That is 2 + 2 + 1 per hidden and 2 per intermediate. The down_proj input
+#: is bf16 instead when gate/up met an outlier column (bitsandbytes adds the outliers back
+#: with an ``addmm`` that autocast runs in bf16); fp32 is the upper bound. Measured on
+#: Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-360M
+#: (``benchmarks/gate-int8-checkpointing-vram.md``). 4-bit's matmul keeps only the weight,
+#: so nf4 has no such term.
+INT8_CHECKPOINT_KEPT = (5.0, 2.0)
 
 # --- logits ----------------------------------------------------------------------
 
@@ -348,6 +364,11 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
         + ACT_PER_ADAPTED_INPUT * adapted_inputs
     )
     boundary = tokens * shape.hidden_size * BOUNDARY_BYTES[mode]
+    if mode == "int8":
+        kept_hidden, kept_intermediate = INT8_CHECKPOINT_KEPT
+        boundary += tokens * ACTIVATION_BYTES * (
+            kept_hidden * shape.hidden_size + kept_intermediate * shape.intermediate_size
+        )
     layers = shape.num_layers
     if run.checkpointing == "full":
         total = layers * boundary + per_layer
