@@ -228,7 +228,7 @@ def export(
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
         output_path = _export_torchao_cli(
-            model_path, output, quant_config, trust_remote_code,
+            model_path, output, quant_config, trust_remote_code, base=base,
         )
         if output_path is not None:
             _maybe_attach_export(
@@ -1198,12 +1198,17 @@ def _export_torchao_cli(
     output: Optional[str],
     quant_config: Optional[str],
     trust_remote_code: bool,
+    base: Optional[str] = None,
 ) -> Optional[Path]:
     """Dispatch ``soup export --format torchao``.
 
     Per v0.53.0 ``validate_quant_config_path`` docstring contract:
     enforce cwd containment + ``os.lstat + S_ISLNK`` rejection at CLI
     dispatch time, not in the schema validator.
+
+    A LoRA adapter directory is merged into its base first, as every other format
+    does. Loaded as it is, transformers attaches the adapter to the base and
+    ``save_pretrained`` writes the adapter alone, so the "export" held no model.
     """
     if quant_config is None:
         console.print(
@@ -1243,31 +1248,54 @@ def _export_torchao_cli(
     else:
         output_path = Path(output)
 
-    console.print(Panel(
-        f"Model:  [bold]{model_path}[/]\n"
-        f"Scheme: [bold]{scheme}[/]\n"
-        f"Output: [bold]{output_path}[/]",
-        title="TorchAO PTQ Export",
-    ))
+    adapter_config_path = model_path / "adapter_config.json"
+    merge_dir = None
+    merge_dir_created = False
+    if adapter_config_path.exists():
+        console.print("[yellow]LoRA adapter detected — merging first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print("[red]Cannot detect base model. Pass --base.[/]")
+            raise typer.Exit(2)
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        export_torchao(
-            model_dir=str(model_path),
-            output_dir=str(output_path),
-            scheme=scheme,
-            quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
-            trust_remote_code=trust_remote_code,
-        )
-    except (ImportError, RuntimeError) as exc:
-        console.print(f"[red]TorchAO export failed: {exc}[/]")
-        console.print(
-            "Try: [bold]pip install torchao[/] "
-            f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
-        )
-        raise typer.Exit(1)
-    except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(2)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        console.print(Panel(
+            f"Model:  [bold]{source_model_dir}[/]\n"
+            f"Scheme: [bold]{scheme}[/]\n"
+            f"Output: [bold]{output_path}[/]",
+            title="TorchAO PTQ Export",
+        ))
+
+        try:
+            export_torchao(
+                model_dir=str(source_model_dir),
+                output_dir=str(output_path),
+                scheme=scheme,
+                quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
+                trust_remote_code=trust_remote_code,
+            )
+        except (ImportError, RuntimeError) as exc:
+            console.print(f"[red]TorchAO export failed: {exc}[/]")
+            console.print(
+                "Try: [bold]pip install torchao[/] "
+                f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
+            )
+            raise typer.Exit(1)
+        except (TypeError, ValueError, FileNotFoundError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+    finally:
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
