@@ -269,6 +269,10 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+`soup eval gate` refuses YAML booleans such as `false` and `true` before model
+construction; use numeric `0` when a zero cutoff is intended.
+
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
 handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
@@ -813,8 +817,13 @@ every PR instead of relying on a hand-edited JSON file.
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
   best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
-  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
-  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  `bfloat16` / `float16` / `float32`) — the actual load, not the training field.
+  Full-precision live eval uses native `bfloat16` on the requested CUDA card when
+  supported, `float16` on older CUDA cards such as T4/V100, and `float32` on CPU or
+  without an available CUDA runtime. Indexed devices such as `cuda:1` are checked
+  independently of the current card. Both model loaders, the console line and the
+  evidence use the same dtype. Unsupported quantization formats fall back to this
+  full-precision policy. With `--evidence` alone, `--config` GATES: it refuses
   (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
   *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
   warns rather than failing closed.
@@ -972,15 +981,25 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   earlier version prints a warning that names it.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
-the same helpers: bfloat16 on CUDA and float32 elsewhere; `--config soup.yaml` reuses
+the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
+and float32 elsewhere; `--config soup.yaml` reuses
 the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
 is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
 variables (a Qwen3 model scores differently with thinking on or off). Every recorded
 version carries these **numerics** (`dtype`, `device` family, `quantization`,
 `chat_template_kwargs`), and a run whose numerics differ from any recorded version is
 refused before the model loads (exit `3`), naming each differing key with this run's
-value and the recorded one. A CPU run (float32) and a GPU run (bfloat16) are therefore
-never mixed in one ledger; start a new ledger with `--ledger NEW.json` to change them.
+value and the recorded one. CPU runs (float32), native-BF16 CUDA runs (bfloat16), and
+pre-Ampere CUDA runs (float16) therefore use separate ledgers; start a new ledger with
+`--ledger NEW.json` to change those settings.
+
+**Existing pre-Ampere histories.** Before the device-aware precision change (#2409),
+full-precision runs on T4, V100 and RTX 20xx also recorded `dtype: bfloat16`. The same
+card now selects `float16`, so continuing that existing BF16 ledger is refused **before
+the model loads**, with exit `3` naming the old and new dtype. Start a separate ledger
+with `--ledger NEW.json`, register the control tasks again with `--add-task`, and record
+a new FP16 baseline. Historical scores retain their BF16 stamp and are not migrated
+into the FP16 series, since scores measured under different dtypes are not comparable.
 
 **Failed generations.** A generation that raises, or returns something that is not
 text, is a failure and not a wrong answer. If any sample of a control task fails (an
@@ -1212,6 +1231,13 @@ before JSON parsing, including gzip expansion. An oversized response is an
 unusable reply rather than a transient outage: it is not retried. The error names
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
+
+Rubric files supplied to `soup eval judge --rubric` and
+`training.grpo_judge_rubric` require unique criterion names after trimming
+surrounding whitespace and ignoring case. In v0.78.0, previously accepted
+duplicate names are refused when the file is loaded. Rename or remove the
+duplicate. The eval CLI exits `1` before sending a judge request, and GRPO
+ranking rejects the rubric at trainer setup.
 
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;

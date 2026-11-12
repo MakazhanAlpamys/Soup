@@ -100,11 +100,11 @@ DEFAULT_FORGETTING_THRESHOLD = 0.05
 # Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
 # format name; full-precision loads use the torch dtype that actually went to
 # ``from_pretrained``. The staleness gate compares *family* (``4bit`` / ``8bit``
-# / ``full``), so a CUDA-bf16 run and a CPU-fp32 run of the same recipe are not
-# stale relative to each other — the bug is NF4 vs bf16, not bf16 vs fp32.
-KNOWN_NUMERICS: Tuple[str, ...] = ("4bit", "8bit", "bfloat16", "float32")
+# / ``full``), so bf16, fp16 and fp32 runs of the same recipe are not stale
+# relative to each other — the gate distinguishes quantized vs full loads.
+KNOWN_NUMERICS: Tuple[str, ...] = ("4bit", "8bit", "bfloat16", "float16", "float32")
 _QUANTIZED_NUMERICS = frozenset({"4bit", "8bit"})
-_FULL_PRECISION_NUMERICS = frozenset({"bfloat16", "float32"})
+_FULL_PRECISION_NUMERICS = frozenset({"bfloat16", "float16", "float32"})
 NUMERICS_FAMILY_FULL = "full"
 
 # Float-noise tolerance so an exactly-at-threshold drop reads as OK (a -5.00%

@@ -765,8 +765,28 @@ training:
 
 **Row shapes by task:**
 - `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
-- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
-- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index). Add an optional `"query_id"` (a non-empty string or an integer) to group the candidates of one query for ranking metrics: `{"query_id": "q17", "text": "query doc", "label": 1}`. Use one type for every `query_id` in the training and validation rows, all strings or all integers; a dataset that mixes them is refused at load with the row that differs.
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`, with the same optional `"query_id"`.
+
+**Ranking metrics (`reranker`, `cross_encoder`, #2618).** When the validation rows carry
+`query_id`, each evaluation also reports `eval_mrr@10`, `eval_recall@1`, `eval_recall@5`,
+`eval_recall@10` and `eval_ndcg@10`, averaged over queries. They reach the Hugging Face log and
+`trainer_state.json`; the run's recorded validation number stays `val_loss`.
+
+- **Score.** With `num_labels: 2` (single-label), candidates are ranked by
+  `logit[1] - logit[0]`, so label index 1 (`label_names[1]` when names are set) is the relevant
+  class. With `num_labels: 1`, ranking needs `classifier_kind: multi_label` and uses the single
+  logit; a relevant row has label `[1]`. Any other head prints one line saying why ranking metrics
+  are skipped.
+- **Ranking.** Candidates are ordered by descending score, ties by row order. `recall@k` is the
+  share of a query's relevant candidates in its top `k`; nDCG uses binary gains.
+- **Skipped queries.** A query with no relevant candidate is skipped and counted in
+  `eval_ranking_queries_no_positive`. A query whose `query_id` also appears in the training rows
+  has an incomplete candidate list in validation (`data.val_split` cuts the file at a row index,
+  and a dataset's own validation split can do the same), so it is left out, counted in
+  `eval_ranking_queries_split` and reported in one line at setup. Keep all rows of a query on one side
+  of the split. Validation rows without `query_id` are left out; with none at all, ranking
+  metrics are skipped with one line. `eval_ranking_queries` counts the queries that were scored.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -1371,6 +1391,14 @@ and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextT
 model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
 Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
 `backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
+
+`soup recipes use minimax-m3-dpo` writes that configuration for `MiniMaxAI/MiniMax-M3`:
+`modality: vision`, `format: dpo` rows of text-only `prompt` / `chosen` / `rejected`, and the
+LoRA block of `minimax-m3-sft` (rank 32 / alpha 64, `target_modules: auto`, which resolves to
+the language tower's attention), with `lr: 5e-6` and `dpo_beta: 0.1` from the other MoE DPO
+recipes. Its processor is custom code, so run `soup train --trust-remote-code`. These are
+untuned starting values: the tests run one DPO step on a tiny LLaVA that has the wrapper's
+shape, not on the 428B weights, NF4 or a multi-GPU setup.
 
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
@@ -2513,3 +2541,11 @@ historical startup digest. Copied artifacts retain that digest without the
 original dataset. Existing runs stay unknown; no historical identity is inferred
 from today's files. Sweep and other training entry points do not gain capture in
 this change.
+
+Single-process Hugging Face Transformers `soup sweep` records a base revision per
+arm, independently of training-data hashing. Each arm resolves once before its
+first base load and keeps that commit across its base loads; arms can name
+different bases or record different commits if the Hub moves during the sweep.
+The arm's `runs` row identifies its commit, and its final `soup_run.json` preserves
+it for a copied artifact. Both the row and file leave `training_data_sha256`
+unknown: sweep does not capture a training-data hash.

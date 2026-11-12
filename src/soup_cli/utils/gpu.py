@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -571,8 +572,13 @@ def model_size_from_name(model_name: str) -> float:
     return 7.0  # default guess
 
 
-def cuda_supports_bf16() -> bool:
-    """Does the current CUDA device support bf16? Ampere (sm_80) and later.
+def cuda_supports_bf16(device: str | None = None) -> bool:
+    """Does the requested CUDA device support native bf16?
+
+    With no argument, probe the current device as before. An explicit device
+    is made current only for the probe, restoring the caller's device even
+    when the probe fails. This matters on machines mixing pre-Ampere and newer
+    cards: PyTorch's ``is_bf16_supported`` has no device argument.
 
     A T4 (sm_75, Colab's free tier), a P100 (Kaggle), a V100, a GTX 16xx or an
     RTX 20xx does not. Every trainer wrapper used to spell this as
@@ -598,20 +604,15 @@ def cuda_supports_bf16() -> bool:
 
         if not torch.cuda.is_available():
             return False
-        try:
-            # NOT the bare call. ``is_bf16_supported()`` defaults to
-            # ``including_emulation=True``, and its fast path (CUDA >= 11 AND
-            # compute capability >= 8) is only the FIRST branch: when that
-            # fails it falls through to merely constructing a bf16 tensor,
-            # which succeeds on a T4 through software emulation. So the default
-            # answers "can this device hold a bf16 value", while every caller
-            # here is asking "does this device have bf16 hardware".
-            return bool(torch.cuda.is_bf16_supported(including_emulation=False))
-        except TypeError:
-            # torch too old for the keyword, and its bare answer is the
-            # permissive one we are trying to avoid — ask the capability.
-            major, _ = torch.cuda.get_device_capability()
-            return major >= 8
+        with torch.cuda.device(device) if device is not None else nullcontext():
+            try:
+                # The bare call includes emulation and can return True on a T4.
+                return bool(torch.cuda.is_bf16_supported(including_emulation=False))
+            except TypeError:
+                # Older torch lacks the native-only keyword. Query the same
+                # selected device, rather than trusting its permissive probe.
+                major, _ = torch.cuda.get_device_capability()
+                return major >= 8
     except (ImportError, RuntimeError, AssertionError, OSError):
         # The same narrow set ``sft._resolve_mixed_precision`` already catches —
         # broad ``except Exception`` here would swallow a real CUDA error and
@@ -672,7 +673,9 @@ def bf16_fp16_flags(
             return (False, False)
     except (ImportError, RuntimeError, AssertionError, OSError):
         return (False, False)
-    supported = cuda_supports_bf16()
+    supported = (
+        cuda_supports_bf16() if device_name == "cuda" else cuda_supports_bf16(device_name)
+    )
     return (supported, not supported)
 
 

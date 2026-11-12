@@ -112,6 +112,14 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "ppo":
+        # trl's PPOTrainer.train() takes no checkpoint, so a resumed run would start
+        # over from step 0 on top of the old progress. Refused here, before the dataset
+        # is read, a model is loaded or the output directory is touched; `--resume auto`,
+        # `--resume <path>` and `--hf-resume` all pass through this function.
+        from soup_cli.trainer.ppo import RESUME_REFUSAL as PPO_RESUME_REFUSAL
+
+        return PPO_RESUME_REFUSAL.replace("--resume", flag)
     return None
 
 
