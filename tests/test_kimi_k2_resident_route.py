@@ -671,7 +671,8 @@ def test_resident_model_keeps_float_buffers_at_their_stored_dtype(resident_check
     assert logits.shape == (2, 12, 128)
 
 
-def test_resident_model_loads_a_tied_checkpoint(tmp_path):
+@pytest.mark.parametrize("head_in_shards", [False, True], ids=["head-dropped", "head-shipped"])
+def test_resident_model_loads_a_tied_checkpoint(tmp_path, head_in_shards):
     import torch
     from safetensors.torch import load_file, save_file
     from transformers import DeepseekV3ForCausalLM
@@ -687,9 +688,13 @@ def test_resident_model_loads_a_tied_checkpoint(tmp_path):
             parameter.data = parameter.data.to(torch.bfloat16)
     tied = tmp_path / "tied"
     model.save_pretrained(str(tied))
-    # The published layout: no separate lm_head tensor in the shards.
+    # A tied checkpoint may omit the head or still ship it: both are the same matrix, and
+    # a shipped one must not be treated as a tensor the native model has no parameter for.
     state = load_file(str(tied / "model.safetensors"))
-    state = {key: value for key, value in state.items() if key != "lm_head.weight"}
+    state.pop("lm_head.weight", None)
+    if head_in_shards:
+        # A copy, not the same storage: save_file refuses tensors that share memory.
+        state["lm_head.weight"] = state["model.embed_tokens.weight"].clone()
     save_file(state, str(tied / "model.safetensors"), metadata={"format": "pt"})
     (tied / "config.json").write_text(
         json.dumps(dict(_MINIMAL_K2, tie_word_embeddings=True)), encoding="utf-8"

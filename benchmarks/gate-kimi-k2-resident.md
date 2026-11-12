@@ -221,6 +221,12 @@ bytes are released before the next tensor is read. The peak extra memory during 
 load is therefore one tensor's working set — its FP8 bytes plus its dequantised
 copy — not a second whole model.
 
+The same holds for the move onto the target device: the loader's `state` dict is a
+second reference to every tensor the model now owns (`assign=True`), so it is dropped
+before `model.to(device)`; the move replaces one parameter at a time and never holds the
+whole CPU model beside the whole device copy. The tiny-checkpoint RSS table below is a
+CPU run, where the move copies nothing.
+
 Measured on this gate's own box (the audit venv above, torch 2.15.0+cpu, CPU only;
 `ru_maxrss` sampled around each phase of `load_resident_model` on the shared seeded
 tiny FP8 checkpoint — the gate's exact load path, `built["fp8"][0]`; measured
@@ -240,7 +246,9 @@ source working set, with no whole-model FP8+bf16 coexistence.
 At published K2 scale these figures are design bounds, not measurements: the FP8
 source totals 1,029,173,256,720 B (~1.03 TB, the admission gate's byte-exact index
 count), the resident bf16 footprint is ~2 TB, and the largest tensor
-(`embed_tokens`, 163840 x 7168, tied with `lm_head`) adds a transient of at most its
-FP8 bytes plus its bf16 copy (~1.17 GB + ~2.35 GB). Whether the route actually loads
+(`embed_tokens`, 163840 x 7168; K2 publishes it untied and its index ships
+`lm_head.weight`, a second matrix of the same shape) adds a transient of at most its
+FP8 bytes plus its bf16 copy (~1.17 GB + ~2.35 GB), and the head pays the same one when
+it is read. Whether the route actually loads
 the real ~1 TB checkpoint inside a host's RAM is the infra-blocked follow-up; no run
 on this box has touched real K2 weights.

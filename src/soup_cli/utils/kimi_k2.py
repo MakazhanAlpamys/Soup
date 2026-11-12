@@ -836,8 +836,12 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     model_state = model.state_dict()
     expected = set(model_state)
     if getattr(config, "tie_word_embeddings", False):
-        # K2 publishes tie_word_embeddings=true: no separate lm_head tensor in the shards.
+        # Not the published K2 layout — its config says ``tie_word_embeddings: false`` and
+        # the index ships ``lm_head.weight`` — but a re-saved tied copy may omit the head,
+        # and one that ships it anyway carries the same matrix (the re-point below owns
+        # the head), so a shipped tensor is accepted and dropped rather than refused.
         expected.discard("lm_head.weight")
+        state.pop("lm_head.weight", None)
     unexpected = sorted(set(state) - expected)
     if unexpected:
         raise ValueError(
@@ -877,6 +881,10 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
             f"[green]Kimi K2 resident load:[/] {len(state)} tensors{detail} "
             f"({dtype}, device {device})"
         )
+    # ``state`` is a second reference to every tensor the model now owns (``assign=True``),
+    # so drop it before the device move: otherwise a CUDA move keeps the whole CPU model
+    # alive while building the whole device copy, i.e. two models at the peak.
+    del state
     return model.to(device)
 
 
