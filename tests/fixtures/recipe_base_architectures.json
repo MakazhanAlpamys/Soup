@@ -203,6 +203,11 @@
   "parameters": 2274069824,
   "routed_experts": 0
  },
+ "Qwen/Qwen3.5-2B-Base": {
+  "model_type": "qwen3_5",
+  "parameters": 2274069824,
+  "routed_experts": 0
+ },
  "Qwen/Qwen3.5-35B-A3B": {
   "model_type": "qwen3_5_moe",
   "parameters": 35951822704,

@@ -534,12 +534,13 @@ class TestTheRatchet:
         #1145 removed the Mistral-Large-3 recipes, whose base was unreadable
         (not MoE-counted), so 112 bases; and MiniMax-M3 became flagless (its SFT
         recipe loads through the vision path without moe_lora, its DPO recipe was
-        removed), so 9 flagless."""
+        removed), so 9 flagless. #275 added the dense Qwen/Qwen3.5-2B-Base for
+        qwen3.5-2b-pretrain: 113 bases."""
         moe = _moe_bases()
         flagged = _flagged_bases()
         flagless = [b for b in moe if b not in flagged]
 
-        assert len(_record()) == 112
+        assert len(_record()) == 113
         assert len(moe) == 23
         assert len(flagless) == 9, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 13
