@@ -3,7 +3,7 @@
 Starlette renders JSON with ``allow_nan=False``. The tracker keeps an infinite
 grad_norm (an fp16 overflow step), loss or eval score as logged, so every route
 that returned such a row raised inside the response and answered 500; the run
-detail view of that run showed only "Error: Internal Server Error".
+detail view of that run showed only "Error: Internal Server Error" (#2750).
 """
 
 import json
@@ -112,9 +112,83 @@ def test_live_metrics_stream_sends_strict_json(db, monkeypatch):
     with _client().stream("GET", f"/api/train/metrics/live?run_id={RUN_ID}") as response:
         text = "".join(response.iter_text())
 
-    rows = [
+    # every event is parsed strictly, the closing ``event: done`` frame included
+    events = [
         _strict_json(line[len("data: "):])
         for line in text.splitlines()
-        if line.startswith("data: ") and line != "data: {}"
+        if line.startswith("data: ")
     ]
+    assert events[-1] == {}
+    rows = [event for event in events if "step" in event]
     assert [(r["step"], r["grad_norm"]) for r in rows] == [(10, 1.7), (20, None)]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (float("nan"), None),
+        (INF, None),
+        (-INF, None),
+        (1.5, 1.5),
+        (3, 3),
+        (True, True),
+        (None, None),
+        ("NaN", "NaN"),
+        ((INF, 2.0), [None, 2.0]),
+        ([{"a": [1.5, float("nan"), (-INF, "x")]}], [{"a": [1.5, None, [None, "x"]]}]),
+    ],
+    ids=["nan", "inf", "-inf", "finite", "int", "bool", "none", "string", "tuple", "nested"],
+)
+def test_finite_json_replaces_only_non_finite_floats(value, expected):
+    from soup_cli.utils.finite_json import finite_json
+
+    result = finite_json(value)
+    assert result == expected
+    assert type(result) is type(expected)
+
+
+def test_train_stream_frame_sends_non_finite_as_null():
+    from soup_cli.utils.sse_train_stream import TrainEvent, format_sse_frame
+
+    frame = format_sse_frame(
+        TrainEvent(
+            type="metric", step=20, loss=INF, grad_norm=float("nan"), val_loss=-INF, lr=2e-4
+        )
+    )
+
+    assert frame.startswith("data: ") and frame.endswith("\n\n")
+    body = _strict_json(frame[len("data: "):].strip())
+    assert (body["loss"], body["grad_norm"], body["val_loss"]) == (None, None, None)
+    assert (body["step"], body["lr"]) == (20, 2e-4)
+
+
+def _chat_send(tmp_path, monkeypatch, temperature: str):
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+    body = (
+        '{"messages": [{"role": "user", "content": "hi"}], '
+        f'"endpoint": "http://127.0.0.1:9", "temperature": {temperature}}}'
+    )
+    return _client().post(
+        "/api/chat/send", content=body, headers={"Content-Type": "application/json"}
+    )
+
+
+def test_validation_error_echoing_nan_answers_422_with_strict_json(tmp_path, monkeypatch):
+    # Python's JSON reader accepts NaN, and the 422 body echoes the input back.
+    response = _chat_send(tmp_path, monkeypatch, "NaN")
+
+    assert response.status_code == 422
+    detail = _strict_json(response.text)["detail"]
+    assert [(error["loc"], error["input"]) for error in detail] == [
+        (["body", "temperature"], None)
+    ]
+
+
+def test_validation_error_with_finite_input_keeps_fastapis_body(tmp_path, monkeypatch):
+    response = _chat_send(tmp_path, monkeypatch, '"hot"')
+
+    assert response.status_code == 422
+    (error,) = _strict_json(response.text)["detail"]
+    assert (error["type"], error["loc"], error["input"]) == (
+        "float_parsing", ["body", "temperature"], "hot"
+    )

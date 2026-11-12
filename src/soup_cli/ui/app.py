@@ -4,7 +4,6 @@ import contextlib
 import ipaddress
 import json as json_mod
 import logging
-import math
 import os
 import secrets
 import subprocess
@@ -20,6 +19,8 @@ from urllib.parse import urlencode
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
+
+from soup_cli.utils.finite_json import finite_json
 
 logger = logging.getLogger(__name__)
 
@@ -479,22 +480,6 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _json_finite(value):
-    """Return ``value`` with every non-finite float replaced by ``None``.
-
-    JSON has no Infinity or NaN, and the tracker keeps an infinite grad_norm,
-    loss or eval score exactly as it was logged (SQLite stores NaN as NULL but
-    keeps +/-inf). ``null`` is what the run charts already draw as a gap.
-    """
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, dict):
-        return {key: _json_finite(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_finite(item) for item in value]
-    return value
-
-
 def create_app(host: str = "127.0.0.1", port: int = 7860):
     """Create the Soup Web UI FastAPI application."""
     if not _is_loopback(host):
@@ -514,6 +499,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             )
 
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
@@ -527,7 +514,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         """
 
         def render(self, content) -> bytes:
-            return super().render(_json_finite(content))
+            return super().render(finite_json(content))
 
     # #731: FastAPI's interactive docs describe every route, parameter and
     # schema, and served none of it behind a token -- so a `soup ui --public`
@@ -552,6 +539,15 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         ),
         default_response_class=_FiniteJSONResponse,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        # FastAPI's own handler builds the same 422 body with a plain
+        # JSONResponse, so a request that sent `NaN` (Python's JSON reader
+        # accepts it) had the value echoed back as `input` and answered 500.
+        return _FiniteJSONResponse(
+            status_code=422, content={"detail": jsonable_encoder(exc.errors())}
+        )
 
     # Install before CORS so a 413 from the size cap still carries the same
     # CORS headers as a normal endpoint response.
@@ -1101,7 +1097,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 ]
                 if new_metrics:
                     for m_row in new_metrics:
-                        data = json_mod.dumps(_json_finite(m_row), default=str)
+                        data = json_mod.dumps(finite_json(m_row), default=str)
                         yield f"data: {data}\n\n"
                     last_step = max(
                         m.get("step", 0) for m in new_metrics
