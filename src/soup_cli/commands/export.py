@@ -1144,15 +1144,26 @@ def _maybe_attach_export(
       1. ``--registry-id`` (explicit override)
       2. Auto-match: the newest entry whose tracked run wrote ``source_model``
          (see ``lookup_entry_by_output_dir``)
-    Silent no-op if no match is found and no explicit id was given. Failures
-    are surfaced as warnings, never as a hard CLI exit (the export itself
-    succeeded).
+    Silent no-op if no match is found and no explicit id was given. Failures,
+    including a registry or tracker database that cannot be read during the
+    auto-match, are surfaced as warnings, never as a hard CLI exit (the export
+    itself succeeded).
     """
+    import sqlite3
+
     from soup_cli.registry.attach import attach_artifact, lookup_entry_by_output_dir
 
     entry_id = explicit_id
     if entry_id is None:
-        entry_id = lookup_entry_by_output_dir(source_model)
+        try:
+            entry_id = lookup_entry_by_output_dir(source_model)
+        except (sqlite3.Error, OSError) as exc:
+            console.print(
+                "[yellow]Could not look up a registry entry for this export:[/] "
+                f"{for_terminal(exc)}. Pass --registry-id to attach it.",
+                emoji=False,
+            )
+            return
     if entry_id is None:
         return
 

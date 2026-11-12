@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -80,7 +79,9 @@ def lookup_entry_by_output_dir(output_dir: str) -> Optional[str]:
     Entries are scanned newest first (``RegistryStore.list`` order), so when
     several match (one run registered twice, or several runs trained into the
     same directory) the most recently registered entry wins. Returns None if
-    nothing matches or the tracker cannot be read.
+    nothing matches. A registry or tracker database that cannot be read raises
+    ``sqlite3.Error`` or ``OSError``; ``soup export`` turns that into a warning,
+    since the export itself has already succeeded.
     """
     import warnings
 
@@ -105,10 +106,7 @@ def lookup_entry_by_output_dir(output_dir: str) -> Optional[str]:
 
     from soup_cli.experiment.tracker import ExperimentTracker
 
-    try:
-        tracker = ExperimentTracker()
-    except (sqlite3.Error, OSError):
-        return None
+    tracker = ExperimentTracker()
     try:
         run_dirs: dict[str, Optional[str]] = {}
         for entry in candidates:
@@ -124,10 +122,7 @@ def lookup_entry_by_output_dir(output_dir: str) -> Optional[str]:
 
 def _run_output_dir_real(tracker: ExperimentTracker, run_id: str) -> Optional[str]:
     """Normalised realpath of the directory the tracker says ``run_id`` wrote, or None."""
-    try:
-        run = tracker.get_run(run_id)
-    except (sqlite3.Error, OSError):
-        return None
+    run = tracker.get_run(run_id)
     stored = (run or {}).get("output_dir") or ""
     if not stored:
         return None
