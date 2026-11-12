@@ -26,13 +26,23 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Callable, List, Optional, Union
 
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.classifier import (
+    QUERY_ID_KEY,
+    RANKING_TASKS,
+    ranking_metrics,
+    ranking_query_groups,
+    ranking_relevance,
+    ranking_score_skip_reason,
+    ranking_scores,
+    validate_query_id,
+)
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import bf16_fp16_flags
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
@@ -198,6 +208,10 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
     label_names = (
         list(tcfg.label_names) if tcfg.label_names is not None else None
     )
+    # #2618: query_id must use one type across both splits. A column holding
+    # both an int and a str cannot be built by datasets (ArrowInvalid, naming
+    # no row), and an int id in train never matches a str id in val.
+    first_query_id: tuple[type, str, int] | None = None
 
     for split in ("train", "val"):
         if split not in dataset or not dataset[split]:
@@ -226,6 +240,99 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
                 _normalise_label(row["label"], label_names, num_labels, multi_label)
             except Exception as exc:
                 raise ValueError(f"{split} row {idx}: {exc}") from exc
+
+            # #2618: the optional query_id groups ranking candidates.
+            if cfg.task in RANKING_TASKS and row.get(QUERY_ID_KEY) is not None:
+                try:
+                    query_id = validate_query_id(row[QUERY_ID_KEY])
+                except TypeError as exc:
+                    raise TypeError(f"{split} row {idx}: {exc}") from exc
+                except ValueError as exc:
+                    raise ValueError(f"{split} row {idx}: {exc}") from exc
+                if first_query_id is None:
+                    first_query_id = (type(query_id), split, idx)
+                elif type(query_id) is not first_query_id[0]:
+                    kind, first_split, first_idx = first_query_id
+                    raise TypeError(
+                        f"{split} row {idx}: query_id type {type(query_id).__name__} "
+                        f"differs from type {kind.__name__} used at {first_split} row "
+                        f"{first_idx}; use one type (all str or all int) for query_id "
+                        "in the training and validation rows"
+                    )
+
+
+def build_ranking_compute_metrics(
+    cfg: SoupConfig, dataset: dict
+) -> Optional[Callable[[Any], dict[str, float]]]:
+    """``compute_metrics`` reporting ranking quality for reranker / cross_encoder (#2618).
+
+    Returns None, so Hugging Face keeps logging ``eval_loss`` only, when the
+    task is not a ranking task or there are no validation rows; and, with one
+    line saying why, when the head has no ranking score rule or no validation
+    query can be ranked. The metrics reach the Hugging Face log and
+    ``trainer_state.json`` as ``eval_mrr@10``, ``eval_recall@{1,5,10}`` and
+    ``eval_ndcg@10``; the recorded validation number stays ``eval_loss``.
+    """
+    if cfg.task not in RANKING_TASKS:
+        return None
+    val_rows = dataset.get("val") or []
+    if not val_rows:
+        return None
+    tcfg = cfg.training
+    if tcfg.num_labels is None:
+        return None
+    num_labels = int(tcfg.num_labels)
+    multi_label = (tcfg.classifier_kind == "multi_label")
+
+    reason = ranking_score_skip_reason(num_labels, multi_label)
+    if reason is not None:
+        console.print(f"[yellow]Ranking metrics skipped:[/] {reason}.")
+        return None
+
+    groups, counts = ranking_query_groups(dataset.get("train") or [], val_rows)
+    if counts["queries_split"]:
+        console.print(
+            f"[yellow]Ranking metrics:[/] {counts['queries_split']} "
+            f"{'query has' if counts['queries_split'] == 1 else 'queries have'} rows in "
+            "both training and validation, so their candidate lists are incomplete; "
+            "they are left out of the ranking metrics."
+        )
+    if all(group is None for group in groups):
+        if counts["rows_without_query_id"] == len(val_rows):
+            console.print(
+                f"[yellow]Ranking metrics skipped:[/] validation rows carry no "
+                f"'{QUERY_ID_KEY}', so candidates cannot be grouped by query."
+            )
+        else:
+            console.print(
+                "[yellow]Ranking metrics skipped:[/] no query has all of its rows in "
+                "the validation split."
+            )
+        return None
+    if counts["rows_without_query_id"]:
+        console.print(
+            f"[yellow]Ranking metrics:[/] {counts['rows_without_query_id']} validation "
+            f"rows have no '{QUERY_ID_KEY}' and are left out of the ranking metrics."
+        )
+
+    queries_split = float(counts["queries_split"])
+
+    def compute_metrics(eval_pred: Any) -> dict[str, float]:
+        logits = eval_pred.predictions
+        if isinstance(logits, (tuple, list)) and len(logits) and hasattr(logits[0], "shape"):
+            logits = logits[0]
+        scores = ranking_scores(logits, num_labels, multi_label)
+        relevance = ranking_relevance(eval_pred.label_ids, num_labels, multi_label)
+        if len(scores) != len(groups):
+            raise RuntimeError(
+                f"ranking metrics got {len(scores)} predictions for "
+                f"{len(groups)} validation rows"
+            )
+        metrics = ranking_metrics(scores, relevance, groups)
+        metrics["ranking_queries_split"] = queries_split
+        return metrics
+
+    return compute_metrics
 
 
 class ClassifierTrainerWrapper:
@@ -430,6 +537,13 @@ class ClassifierTrainerWrapper:
 
         from transformers import DataCollatorWithPadding
 
+        # #2618: ranking quality for reranker / cross_encoder. The query ids are
+        # read from the raw rows here, because the map above drops every source
+        # column; evaluation keeps row order, so predictions line up with them.
+        compute_metrics = (
+            build_ranking_compute_metrics(cfg, dataset) if eval_ds is not None else None
+        )
+
         self.trainer = Trainer(
             model=self.model,
             args=args,
@@ -437,6 +551,7 @@ class ClassifierTrainerWrapper:
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
+            compute_metrics=compute_metrics,
         )
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
