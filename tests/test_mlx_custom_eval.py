@@ -231,3 +231,67 @@ def test_native_custom_eval_resolves_run_before_loading(
         assert rows[0]['score'] == report['accuracy'] == 1
         assert details['results'] == report['results']
         assert details['complete'] is True and details['backend'] == 'mlx'
+
+
+def test_native_report_hash_identifies_the_evaluated_snapshot(workspace, monkeypatch):
+    import soup_cli.commands.eval as command
+    import soup_cli.eval.custom as custom
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    monkeypatch.setattr(command, '_save_custom_results', save_custom_results)
+    monkeypatch.setenv('SOUP_DB_PATH', str(workspace / 'tracker.db'))
+    stub_native(monkeypatch, ['yes'])
+    original = '{"prompt":"question été","expected":"yes"}\r\n\r\n'.encode()
+    replacement = b'{"prompt":"different question","expected":"no"}\n'
+    tasks = workspace / 'tasks.jsonl'
+    tasks.write_bytes(original)
+    parse = custom.parse_eval_task_lines
+
+    def replace_after_parsing(lines, source):
+        loaded = parse(lines, source)
+        tasks.write_bytes(replacement)
+        return loaded
+
+    monkeypatch.setattr(custom, 'parse_eval_task_lines', replace_after_parsing)
+    result = CliRunner().invoke(app, ['eval', 'custom', '--backend', 'mlx', '--model', 'model',
+                                     '--tasks', 'tasks.jsonl', '--output', 'report.json'])
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert tasks.read_bytes() == replacement
+    report = json.loads((workspace / 'report.json').read_text())
+    assert report['complete'] is True and report['total'] == report['correct'] == 1
+    assert report['results'][0]['prompt'] == 'question été'
+    assert report['results'][0]['expected'] == report['results'][0]['output'] == 'yes'
+    assert report['dataset_sha256'] == hashlib.sha256(original).hexdigest()
+    assert report['dataset_sha256'] != hashlib.sha256(replacement).hexdigest()
+    tracker = ExperimentTracker()
+    try:
+        rows = tracker.get_eval_results()
+    finally:
+        tracker.close()
+    assert len(rows) == 1
+    details = json.loads(rows[0]['details_json'])
+    assert details['dataset_sha256'] == report['dataset_sha256']
+    assert details['results'] == report['results'] and details['complete'] is True
+
+
+@pytest.mark.parametrize('filename, content, diagnostic', [
+    ('missing.jsonl', None, 'not found'),
+    ('tasks.txt', b'{"prompt":"x"}\n', 'Expected .jsonl'),
+    ('tasks.jsonl', b'\xff', 'utf-8'),
+])
+def test_native_snapshot_loading_preserves_input_refusals(
+    workspace, monkeypatch, filename, content, diagnostic,
+):
+    import soup_cli.utils.mlx_generation as native
+
+    def refuse_load(*args, **kwargs):
+        pytest.fail('Invalid tasks reached native model loading')
+
+    monkeypatch.setattr(native, 'load_native_model', refuse_load)
+    if content is not None:
+        (workspace / filename).write_bytes(content)
+    result = CliRunner().invoke(app, ['eval', 'custom', '--backend', 'mlx', '--model', 'model',
+                                     '--tasks', filename, '--output', 'report.json'])
+    assert result.exit_code == 1, (result.output, result.exception)
+    assert diagnostic in strip_ansi(result.output)
+    assert not (workspace / 'report.json').exists()

@@ -489,12 +489,27 @@ def _create_default_generator(model_path: str, trust_remote_code: bool = False):
     return generate
 
 
+def load_native_eval_tasks(path: Path) -> tuple[list[EvalTask], str]:
+    """Parse and hash the same snapshot, including original UTF-8/newline bytes."""
+    import hashlib
+    import io
+
+    if not path.exists():
+        raise FileNotFoundError(f"Eval tasks file not found: {path}")
+    if path.suffix.lower() != ".jsonl":
+        raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8") as stream:
+        tasks = parse_eval_task_lines(stream, path)
+    return tasks, digest
+
+
 def native_eval_identity(
-    model_path: Path, tasks_path: Path, max_tokens: int, temperature: float,
+    model_path: Path, dataset_sha256: str, max_tokens: int, temperature: float,
     trust_remote_code: bool,
 ) -> dict:
     """Record the actual corpus and bounded native generation contract."""
-    import hashlib
     import importlib.metadata
     import platform
 
@@ -511,7 +526,7 @@ def native_eval_identity(
         "backend": "mlx", "base": metadata["model"] if metadata else str(model_path),
         "adapter": str(model_path) if metadata else None,
         "adapter_metadata": metadata,
-        "dataset_sha256": hashlib.sha256(tasks_path.read_bytes()).hexdigest(),
+        "dataset_sha256": dataset_sha256,
         "runtime": {"python": platform.python_version(), "platform": platform.platform(),
                     "packages": versions},
         "generation": {"max_tokens": max_tokens, "temperature": temperature,

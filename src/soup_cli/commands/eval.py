@@ -454,7 +454,12 @@ def custom(
 
     # Load and validate tasks
     try:
-        eval_tasks = load_eval_tasks(tasks_path)
+        if backend == "mlx":
+            from soup_cli.eval.custom import load_native_eval_tasks
+
+            eval_tasks, dataset_sha256 = load_native_eval_tasks(tasks_path)
+        else:
+            eval_tasks = load_eval_tasks(tasks_path)
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
@@ -492,7 +497,7 @@ def custom(
             from soup_cli.utils.mlx_generation import generate_native, load_native_model
 
             native_details = native_eval_identity(
-                model_path, tasks_path, max_tokens, temperature, trust_remote_code,
+                model_path, dataset_sha256, max_tokens, temperature, trust_remote_code,
             )
             native_model, tokenizer = load_native_model(
                 str(model_path), trust_remote_code=trust_remote_code,

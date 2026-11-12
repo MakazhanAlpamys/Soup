@@ -1285,6 +1285,8 @@ metadata, SHA-256 of the corpus bytes, runtime package versions and generation
 settings, plus every prompt, expected answer, completion, score, category and native
 token count in input order. The same native evidence is retained in the experiment
 tracker when no JSON output is requested. Save reports for both base and adapter to compare them.
+The native reader parses and hashes one byte snapshot, so replacing the task file
+during evaluation cannot associate results with a different corpus hash.
 Local paths identify local artifacts; keep their weights and metadata with the reports.
 A corpus score is a measurement of those generated strings, not a quality guarantee.
 Training-time `eval_gate` and `soup eval benchmark` are separate workflows.
