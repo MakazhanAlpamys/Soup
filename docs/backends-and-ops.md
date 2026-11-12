@@ -87,12 +87,13 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
-It can also be installed with `[train]` when the same environment needs the
-PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
-streaming dataset still needs `datasets` because that data source owns the
-dependency; the local file path below does not.
+`[mlx]` is the standalone extra for all MLX tasks listed in the [optional extras
+table](models.md#optional-extras). For local data, it is sufficient on its own;
+MLX training does not require `[train]`. Add `[train]` only when the same
+environment also needs the PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or streaming
+dataset still needs `datasets` because that data source owns the dependency; the
+local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -189,7 +190,7 @@ training:
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
 - **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
-- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows), `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), DoRA, `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
 - **Not applied on MLX:** per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
 
 #### ORPO on MLX
@@ -255,7 +256,7 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `modality`, DoRA, LoRA+ and `data.chat_template`. `task: preference` with
   `training.preference_loss: orpo` uses this same native trainer and these
   same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -313,7 +314,7 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `modality`, DoRA, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
