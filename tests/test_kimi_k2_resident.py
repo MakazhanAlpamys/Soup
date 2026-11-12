@@ -57,7 +57,12 @@ def test_resident_k2_refuses_with_a_specific_remedy(base, task):
 @pytest.mark.parametrize("task", K2_TASKS)
 def test_resident_k2_admits_base_and_instruct_on_sft_and_grpo(base, task):
     # Mutation check (a): re-adding Base/Instruct to the refused set fails this test.
-    cfg = load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
+    # Review round 2: the admission holds at training.quantization: none only — the
+    # resident route loads bf16 only (test_resident_k2_refuses_non_none_quantization_*).
+    cfg = load_config_from_string(
+        f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n"
+        "training: {quantization: none}\n"
+    )
     assert cfg.base == base
     assert cfg.task == task
 
@@ -71,13 +76,90 @@ def test_resident_k2_refuses_base_and_instruct_for_other_tasks(base):
 
 
 def test_schema_admission_depends_on_the_task():
-    # Same base, two tasks: dpo is refused naming the base, sft loads (config only, no
-    # model download happens at config validation).
+    # Same base, two tasks: dpo is refused naming the base, sft loads at
+    # quantization: none (config only, no model download happens at config validation).
     yaml_base = "base: moonshotai/Kimi-K2-Base\ndata: {train: data.jsonl}\n"
     with pytest.raises(ValueError, match="moonshotai/Kimi-K2-Base"):
         load_config_from_string(yaml_base + "task: dpo\n")
-    cfg = load_config_from_string(yaml_base + "task: sft\n")
+    cfg = load_config_from_string(yaml_base + "task: sft\ntraining: {quantization: none}\n")
     assert cfg.base == "moonshotai/Kimi-K2-Base"
+
+
+# ---------------------------------------------------------------------------
+# #2104 review round 2, ask 1: a non-none training.quantization is refused at
+# config validation, not inside load_resident_model. The resident route loads
+# bf16 only; the refusal names training.stream_layers: true as the 4-bit path.
+# ---------------------------------------------------------------------------
+
+QUANT_REFUSAL = (
+    "resident Kimi K2 route: training.quantization '4bit' is refused — the resident "
+    "route loads bf16 only; set training.quantization: none for this route, or train "
+    "4-bit through training.stream_layers: true."
+)
+
+
+def _assert_quant_refusal(exc, base="moonshotai/Kimi-K2-Base", value="'4bit'"):
+    message = str(exc)
+    assert f"training.quantization {value}" in message
+    assert "bf16 only" in message
+    assert "training.quantization: none" in message
+    assert "training.stream_layers: true" in message
+    assert base in message or "resident Kimi K2 route" in message
+
+
+def test_resident_k2_refuses_the_default_quantization_at_config_validation():
+    """Mutation check: deleting the quantization clause in
+    resident_kimi_k2_refusal makes this test fail — today the default
+    (training.quantization unset -> '4bit') sails past config validation and
+    only dies inside load_resident_model, after the tokenizer is fetched."""
+    with pytest.raises(ValueError) as caught:
+        load_config_from_string(
+            "base: moonshotai/Kimi-K2-Base\ntask: sft\ndata: {train: data.jsonl}\n"
+        )
+    _assert_quant_refusal(caught.value)
+
+
+def test_resident_k2_admits_an_explicit_quantization_none():
+    cfg = load_config_from_string(
+        "base: moonshotai/Kimi-K2-Base\ntask: sft\ndata: {train: data.jsonl}\n"
+        "training: {quantization: none}\n"
+    )
+    assert cfg.training.quantization == "none"
+
+
+@pytest.mark.parametrize("base", ADMITTED_BASES)
+@pytest.mark.parametrize("task", K2_TASKS)
+@pytest.mark.parametrize("value", ["4bit", "8bit"])
+def test_resident_k2_refuses_non_none_quantization_at_config_validation(base, task, value):
+    with pytest.raises(ValueError) as caught:
+        load_config_from_string(
+            f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n"
+            f"training: {{quantization: {value}}}\n"
+        )
+    _assert_quant_refusal(caught.value, base=base, value=repr(value))
+
+
+@pytest.mark.parametrize("base", REFUSED_BASES)
+@pytest.mark.parametrize("quant", ["4bit", "none"])
+def test_resident_k2_quantization_clause_does_not_mask_the_thinking_refusal(base, quant):
+    """Thinking/0905 stay refused for every task: the route refusal fires before the
+    quantization clause, so the message is the no-supported-route one, not quantization."""
+    with pytest.raises(ValueError, match=REASON) as caught:
+        load_config_from_string(
+            f"base: {base}\ntask: sft\ndata: {{train: data.jsonl}}\n"
+            f"training: {{quantization: {quant}}}\n"
+        )
+    assert "no supported route yet" in str(caught.value).lower()
+    assert "training.quantization" not in str(caught.value)
+
+
+@pytest.mark.parametrize("base", ["deepseek-ai/DeepSeek-V3", "other/Kimi-K2-Base"])
+def test_resident_k2_quantization_clause_does_not_touch_other_bases(base):
+    cfg = load_config_from_string(
+        f"base: {base}\ntask: sft\ndata: {{train: data.jsonl}}\n"
+        "training: {quantization: 4bit}\n"
+    )
+    assert cfg.base == base
 
 
 @pytest.mark.parametrize("base", ["moonshotai/Kimi-K2.5", "moonshotai/Kimi-K2.6",
@@ -105,7 +187,8 @@ def test_hub_id_case_does_not_bypass_the_guard(base):
 @pytest.mark.parametrize("task", K2_TASKS)
 def test_hub_id_case_does_not_block_the_admission(base, task):
     cfg = load_config_from_string(f"base: {base.upper()}\ntask: {task}\n"
-                                  f"data: {{train: data.jsonl}}\n")
+                                  f"data: {{train: data.jsonl}}\n"
+                                  "training: {quantization: none}\n")
     assert cfg.base == base.upper()
 
 
@@ -150,7 +233,9 @@ def test_train_cli_admits_base_sft_past_config_validation(tmp_path, monkeypatch,
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "soup.yaml").write_text(
-        f"base: {BASES[0]}\ndata: {{train: data.jsonl, val_split: 0}}\n", encoding="utf-8",
+        f"base: {BASES[0]}\ndata: {{train: data.jsonl, val_split: 0}}\n"
+        "training: {quantization: none}\n",
+        encoding="utf-8",
     )
     (tmp_path / "data.jsonl").write_text(
         '{"instruction":"Q", "output":"A"}\n', encoding="utf-8",

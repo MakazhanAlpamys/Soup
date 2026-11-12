@@ -16,6 +16,26 @@ KIMI_K2_GUARDED_STREAM_REASON = (
     "CPU-only parity on a tiny K2-like checkpoint; full K2/GPU training is unverified."
 )
 KIMI_K2_NO_SUPPORTED_ROUTE_REASON = KIMI_K2_RESIDENT_REASON + ". No supported route yet."
+
+
+def resident_kimi_k2_quantization_refusal(quantization: str) -> str:
+    """The config-level refusal for a non-none ``training.quantization`` on the resident
+    Kimi K2 route (#2104, review round 2): the route loads bf16 only, so the refusal must
+    fire at config validation — not halfway through a run, inside ``load_resident_model``."""
+    return (
+        f"resident Kimi K2 route: training.quantization {quantization!r} is refused — the "
+        "resident route loads bf16 only; set training.quantization: none for this route, "
+        "or train 4-bit through training.stream_layers: true."
+    )
+
+
+class _ResidentKimiK2QuantizationRefusal(str):
+    """Marks :func:`resident_kimi_k2_quantization_refusal` results.
+
+    The config schema appends its remote-code context ("Its remote code uses removed
+    APIs … Choose a compatible base.") to the route refusals only; that advice would
+    contradict a quantization refusal, which instead names the two ways forward.
+    """
 KIMI_K2_RESIDENT_REASONS = {
     "moonshotai/kimi-k2-base": KIMI_K2_GUARDED_STREAM_REASON,
     "moonshotai/kimi-k2-instruct": KIMI_K2_GUARDED_STREAM_REASON,
@@ -41,12 +61,19 @@ def is_resident_kimi_k2_base(base: str) -> bool:
 
 def resident_kimi_k2_refusal(
     base: str, *, backend: str, hub: str, stream_layers: bool, task: str | None = None,
+    quantization: str | None = None,
 ) -> str | None:
     """Only qualify known HF IDs on the resident Transformers path.
 
     Base/Instruct are admitted (``None``) on sft/grpo and refused with the streamed-route
     remedy for any other task; Thinking/0905 are refused for every task. ``task=None``
-    refuses Base/Instruct too: callers that cannot name a task get the safe answer.
+    refuses Base/Instruct too: callers that cannot name a task get the safe answer. The
+    admission reaches sft/grpo on Base/Instruct only with ``quantization`` ``None`` or
+    ``"none"``: the resident route loads bf16 only, so any other quantization is refused
+    here, at config validation, instead of failing inside ``load_resident_model``
+    (#2104, review round 2). The returned refusal is a
+    :class:`_ResidentKimiK2QuantizationRefusal` instance in that case, so the schema can
+    skip the remote-code suffix that belongs to the route refusals.
     """
     if backend == "transformers" and hub == "hf" and not stream_layers:
         folded = base.casefold()
@@ -59,4 +86,8 @@ def resident_kimi_k2_refusal(
             return reason
         if task not in KIMI_K2_RESIDENT_ADMITTED_TASKS:
             return reason
+        if quantization not in (None, "none"):
+            return _ResidentKimiK2QuantizationRefusal(
+                resident_kimi_k2_quantization_refusal(quantization)
+            )
     return None
