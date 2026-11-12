@@ -33,7 +33,11 @@ load of the FP8 tiny checkpoint against these fixtures; the FP8 quantize->dequan
 trip itself is gated by ``tests/test_fp8_block_streaming.py``.
 
 ``--check`` verifies the committed fixtures against the manifest (fixtures sha256, pinned
-modeling sha256, manifest/npz input-id agreement); it needs no venv and no network.
+modeling sha256, manifest/npz input-id agreement) and the published-name patterns table
+(``tests/fixtures/kimi_k2/published_tensor_name_patterns.json``: the expanded list's count
+and sha256, review round 2 ask 5); it needs no venv and no network.
+``--rebuild-name-patterns`` regenerates that table from the pinned hub index (a one-time
+fetch, sha-pinned like the code download below) when the index ever changes.
 
 Run from the repo root: ``python benchmarks/harness/kimi_k2_resident_parity_record.py``.
 """
@@ -49,6 +53,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -64,6 +69,13 @@ K2_REPO_ID = "moonshotai/Kimi-K2-Base"
 #: Full sha256 of modeling_deepseek.py at K2_REVISION, pinned by
 #: benchmarks/gate-kimi-k2-admission.md's table; the recorder refuses to run on any other file.
 MODELING_SHA256 = "ce753fc9076ce13ce9557e680e2f5bd68ae8929a8225772968a9a22a1d17b7d4"
+#: Full sha256 of model.safetensors.index.json at K2_REVISION, pinned by the committed
+#: published-name patterns table's source header; the rebuild mode refuses any other index.
+INDEX_SHA256 = "c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc"
+#: The compact published-name patterns table (review round 2, ask 5): generated from the
+#: pinned index by ``--rebuild-name-patterns``, expanded to the full 139,644-name list by
+#: the tests at run time.
+NAME_PATTERNS = FIXTURES_DIR / "published_tensor_name_patterns.json"
 
 #: transformers pins tried in order until one imports the pinned modeling file: the stack
 #: recorded in benchmarks/README.md's history first, then the 4.x line walked downward
@@ -461,6 +473,134 @@ def _check() -> None:
         f"fixtures OK: {FIXTURES_NPZ.name} sha256 matches the manifest; "
         f"{len(manifest['inputs']['ids'])} recorded inputs agree"
     )
+    _check_name_patterns()
+
+
+def _derive_name_patterns(names):
+    """Group sorted index names into layer/expert-ranged patterns (review round 2, ask 5).
+
+    Every numeric field collapses to one ``{layer}``/``{expert}`` placeholder; each
+    placeholder's values must form a single contiguous range and the entry's expansion
+    must reproduce its group exactly (a cross-product count check), so the table is a
+    loss-free stand-in for the full list.
+    """
+    import re
+
+    groups = {}
+    for name in names:
+        groups.setdefault(re.sub(r"\d+", "#", name), []).append(name)
+
+    patterns = []
+    for skeleton, group in sorted(groups.items()):
+        parts = skeleton.split("#")
+        values = [set() for _ in range(len(parts) - 1)]
+        for name in group:
+            pos = 0
+            for index, part in enumerate(parts[:-1]):
+                pos += len(part)
+                match = re.match(r"\d+", name[pos:])
+                assert match, (name, pos)
+                values[index].add(int(match.group()))
+                pos += match.end()
+        total = 1
+        ranges = []
+        for each in values:
+            first, last = min(each), max(each)
+            assert each == set(range(first, last + 1)), (
+                f"{skeleton}: placeholder values must form one contiguous range"
+            )
+            total *= len(each)
+            ranges.append([first, last])
+        assert total == len(group), (
+            f"{skeleton}: the cross-product expands to {total} names, "
+            f"the group has {len(group)}"
+        )
+        entry = {"pattern": skeleton}
+        if len(values) == 1:
+            entry["pattern"] = skeleton.replace("#", "{layer}", 1)
+            entry["layers"] = ranges[0]
+        elif len(values) == 2:
+            entry["pattern"] = skeleton.replace("#", "{layer}", 1).replace(
+                "#", "{expert}", 1
+            )
+            entry["layers"] = ranges[0]
+            entry["experts"] = ranges[1]
+        patterns.append(entry)
+    return patterns
+
+
+def _full_list_sha256(names):
+    return hashlib.sha256(
+        "".join(name + "\n" for name in names).encode("utf-8")
+    ).hexdigest()
+
+
+def _rebuild_name_patterns() -> None:
+    """Regenerate the published-name patterns table from the pinned hub index.
+
+    One-time, offline-by-default like the pinned code download above: fetches
+    model.safetensors.index.json at K2_REVISION, refuses a different index (the pinned
+    sha256), derives the pattern table, and verifies the shared expander reproduces the
+    downloaded list exactly before the table replaces the committed one.
+    """
+    helper = _load_helper()
+    url = (
+        f"https://huggingface.co/{K2_REPO_ID}/resolve/{K2_REVISION}/"
+        "model.safetensors.index.json"
+    )
+    print(f"downloading {url}")
+    with urllib.request.urlopen(url, timeout=120) as response:
+        raw = response.read()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != INDEX_SHA256:
+        raise SystemExit(
+            f"model.safetensors.index.json at {K2_REVISION} has sha256 {digest}, not the "
+            f"pinned {INDEX_SHA256}; refusing to regenerate the patterns table from a "
+            "different index"
+        )
+    names = sorted(set(json.loads(raw)["weight_map"]))
+    document = {
+        "source": {
+            "repo_id": K2_REPO_ID,
+            "revision": K2_REVISION,
+            "url": url,
+            "index_sha256": INDEX_SHA256,
+            "fetched": date.today().isoformat(),
+            "note": "weight_map keys of model.safetensors.index.json, sorted and deduplicated",
+        },
+        "name_count": len(names),
+        "full_list_sha256": _full_list_sha256(names),
+        "patterns": _derive_name_patterns(names),
+    }
+    temporary = NAME_PATTERNS.with_name(NAME_PATTERNS.name + ".tmp")
+    temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    expanded = helper.expand_published_name_patterns(temporary)
+    if expanded != names:
+        temporary.unlink()
+        raise SystemExit("the derived patterns table does not expand to the downloaded list")
+    helper.verify_published_name_expansion(expanded, document)
+    temporary.replace(NAME_PATTERNS)
+    print(
+        f"wrote {NAME_PATTERNS}: {len(names)} names from "
+        f"{len(document['patterns'])} patterns"
+    )
+
+
+def _check_name_patterns() -> None:
+    """Verify the committed patterns table expands to its pinned count and sha256."""
+    helper = _load_helper()
+    if not NAME_PATTERNS.exists():
+        raise SystemExit(
+            f"missing {NAME_PATTERNS.name}; rebuild with: python "
+            "benchmarks/harness/kimi_k2_resident_parity_record.py --rebuild-name-patterns"
+        )
+    table = json.loads(NAME_PATTERNS.read_text(encoding="utf-8"))
+    expanded = helper.expand_published_name_patterns(NAME_PATTERNS)
+    helper.verify_published_name_expansion(expanded, table)
+    print(
+        f"patterns OK: {NAME_PATTERNS.name} expands to {table['name_count']} names "
+        f"matching full_list_sha256 ({len(table['patterns'])} patterns)"
+    )
 
 
 def main() -> None:
@@ -470,9 +610,17 @@ def main() -> None:
         action="store_true",
         help="verify the committed fixtures against the manifest (no venv, no network)",
     )
+    parser.add_argument(
+        "--rebuild-name-patterns",
+        action="store_true",
+        help="regenerate the published-name patterns table from the pinned hub index "
+        "(one-time fetch, sha-pinned; no venv)",
+    )
     args = parser.parse_args()
     if args.check:
         _check()
+    elif args.rebuild_name_patterns:
+        _rebuild_name_patterns()
     else:
         _record()
 

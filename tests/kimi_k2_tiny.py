@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import sys
+from pathlib import Path
 
 #: moonshotai/Kimi-K2-Base ``config.json`` at revision ce72df012259dcc55d945e890f815fe7ef69159c
 #: (sha256 8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439), verbatim. The
@@ -244,3 +245,57 @@ def build_tiny_k2_checkpoints(root):
     shutil.copyfile(os.path.join(native, "config.json"), os.path.join(ref, "config.json"))
     assert not any(name.endswith(".py") for folder in (k2, fp8) for name in os.listdir(folder))
     return {"bf16": (k2, native), "fp8": (fp8, ref)}
+
+
+#: The committed published-name patterns table (review round 2, ask 5): a compact
+#: stand-in for the full 139,644-name list, generated from the pinned hub index by
+#: ``benchmarks/harness/kimi_k2_resident_parity_record.py --rebuild-name-patterns``.
+PUBLISHED_NAME_PATTERNS = (
+    Path(__file__).resolve().parent / "fixtures" / "kimi_k2"
+    / "published_tensor_name_patterns.json"
+)
+
+
+def expand_published_name_patterns(path=None):
+    """Expand the committed patterns table into the full sorted published-name list.
+
+    Each table entry is a name pattern with at most two numeric placeholders —
+    ``{layer}`` (``layers`` is an inclusive ``[first, last]`` range) and, for routed
+    expert tensors, ``{expert}`` (same spelling for ``experts``) — or a plain name with
+    no placeholders. The table's ``name_count`` and ``full_list_sha256`` (the sha256 of
+    the newline-joined sorted list) pin the expansion to the published index; the tests
+    assert both after expanding.
+    """
+    table = json.loads((path or PUBLISHED_NAME_PATTERNS).read_text(encoding="utf-8"))
+    names = set()
+    for entry in table["patterns"]:
+        pattern = entry["pattern"]
+        if "layers" not in entry:
+            names.add(pattern)
+            continue
+        layer_first, layer_last = entry["layers"]
+        if "experts" not in entry:
+            names.update(
+                pattern.format(layer=layer) for layer in range(layer_first, layer_last + 1)
+            )
+            continue
+        expert_first, expert_last = entry["experts"]
+        names.update(
+            pattern.format(layer=layer, expert=expert)
+            for layer in range(layer_first, layer_last + 1)
+            for expert in range(expert_first, expert_last + 1)
+        )
+    return sorted(names)
+
+
+def verify_published_name_expansion(names, table):
+    """Assert an expanded list matches the table's pinned count and sha256."""
+    import hashlib
+
+    if len(names) != table["name_count"]:
+        raise ValueError(
+            f"expanded {len(names)} published names, table pins {table['name_count']}"
+        )
+    digest = hashlib.sha256("".join(name + "\n" for name in names).encode("utf-8"))
+    if digest.hexdigest() != table["full_list_sha256"]:
+        raise ValueError("expanded published names do not match the table's full_list_sha256")

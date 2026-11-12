@@ -884,36 +884,64 @@ def test_sft_tokenizer_failure_off_kimi_k2_bases_stays_quiet(tmp_path, monkeypat
 
 
 # ==========================================================================
-# Maintainer follow-up 2026-11-12, item (a): the committed published tensor
-# names cover what the resident loader writes (#2104)
+# Maintainer follow-up 2026-11-12, item (a); review round 2, ask 5: the
+# committed published tensor names cover what the resident loader writes
+# (#2104)
 # =========================================================================
 #
 # The maintainer: "Do not fetch model.safetensors.index.json inside a test:
-# commit the list of names or a header map." The list lives at
-# tests/fixtures/kimi_k2/published_tensor_names.txt: the weight_map keys of
-# moonshotai/Kimi-K2-Base's model.safetensors.index.json at the admission
-# gate's pinned revision; the file's header comment records the revision, the
-# index's own sha256, the fetch date and the name count. These tests are the
-# only consumers and read the committed file, never the network. The
-# documented mutation path is editing that file: renaming a published name
+# commit the list of names or a header map" — and, review round 2, compact the
+# committed 7.4 MB list into a generated one: the names live at
+# tests/fixtures/kimi_k2/published_tensor_name_patterns.json, 38 patterns with
+# layer and expert ranges that expand to the full sorted list at test time.
+# The table's source header records the pinned revision, the index's own
+# sha256 and the fetch date; its name_count and full_list_sha256 pin the
+# expansion to the published index. These tests are the only consumers and
+# expand the committed table, never the network; the recorder's
+# --rebuild-name-patterns regenerates the table from the pinned index. The
+# documented mutation path is editing the table: renaming a published name
 # must make the coverage check fail.
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "kimi_k2"
-_PUBLISHED_NAMES_TXT = _FIXTURES_DIR / "published_tensor_names.txt"
-#: Recorded in the fixture's header: the pinned index's name count.
+_PUBLISHED_NAME_PATTERNS = _FIXTURES_DIR / "published_tensor_name_patterns.json"
+#: Recorded in the table: the pinned index's name count.
 _PUBLISHED_NAME_COUNT = 139_644
+#: Recorded in the table: the sha256 of the newline-joined sorted full list.
+_PUBLISHED_LIST_SHA256 = (
+    "52ae0793dc4ab8484b98f197b36b658e4d65b6ddc0068791924fe35ba513a554"
+)
 
 
 def _published_names():
-    """The committed published tensor names (header comments stripped)."""
-    lines = _PUBLISHED_NAMES_TXT.read_text(encoding="utf-8").splitlines()
-    return [line for line in lines if line and not line.startswith("#")]
+    """The committed published tensor names: the expanded patterns table."""
+    from tests.kimi_k2_tiny import (
+        expand_published_name_patterns,
+        verify_published_name_expansion,
+    )
+
+    table = json.loads(_PUBLISHED_NAME_PATTERNS.read_text(encoding="utf-8"))
+    names = expand_published_name_patterns(_PUBLISHED_NAME_PATTERNS)
+    verify_published_name_expansion(names, table)
+    return names
 
 
 def test_the_committed_published_names_match_the_pinned_index():
+    assert _PUBLISHED_NAME_PATTERNS.exists(), (
+        "published tensor name patterns missing; rebuild them with: python "
+        "benchmarks/harness/kimi_k2_resident_parity_record.py --rebuild-name-patterns"
+    )
     names = _published_names()
     assert len(names) == _PUBLISHED_NAME_COUNT
     assert names == sorted(set(names))
+    table = json.loads(_PUBLISHED_NAME_PATTERNS.read_text(encoding="utf-8"))
+    # The table's own pins: the same index the fixture header always recorded.
+    assert table["source"]["revision"] == (
+        "ce72df012259dcc55d945e890f815fe7ef69159c"
+    )
+    assert table["source"]["index_sha256"] == (
+        "c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc"
+    )
+    assert table["full_list_sha256"] == _PUBLISHED_LIST_SHA256
     # Structural sanity probes. Two correct the first-guess reading (both are recorded in
     # the fixture's header): layer 0 is dense — the first routed-expert layer is layer 1 —
     # and K2-Base publishes lm_head.weight untied, so it IS in the list.
