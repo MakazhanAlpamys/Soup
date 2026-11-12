@@ -641,6 +641,44 @@ def _resident_device_target(device_map: Any, torch: Any):
     )
 
 
+def _resident_torch_dtype(key: str, raw_dtype: str, torch: Any):
+    """The torch dtype a checkpoint tensor is read as, from its safetensors spelling.
+
+    Every spelling the header reader admits resolves here; anything else is refused by name
+    — a raw ``KeyError`` would name neither the tensor nor the route, and a future reader
+    spelling must not crash the load with a bare traceback. An FP8 spelling is refused too
+    when no block plan claimed the tensor: FP8 bytes have no meaning without their scales,
+    so casting them to a float dtype would be silently wrong rather than merely unsupported.
+    """
+    table = {
+        "F8_E4M3": torch.float8_e4m3fn,
+        "BF16": torch.bfloat16,
+        "F16": torch.float16,
+        "F32": torch.float32,
+        "F64": torch.float64,
+        "I64": torch.int64,
+        "I32": torch.int32,
+        "I16": torch.int16,
+        "I8": torch.int8,
+        "U8": torch.uint8,
+        "BOOL": torch.bool,
+    }
+    stored = table.get(raw_dtype)
+    if stored is not None:
+        return stored
+    if raw_dtype.startswith("F8_"):
+        raise ValueError(
+            f"checkpoint tensor {key} is stored as FP8 ({raw_dtype}) but no FP8 block plan "
+            "covers it, and FP8 bytes have no meaning without their block scales — refusing "
+            "rather than casting them as numbers. The checkpoint is not the FP8 block layout "
+            "this route dequantises."
+        )
+    raise ValueError(
+        f"checkpoint tensor {key} is stored as {raw_dtype}, a dtype this route cannot read "
+        f"(supported: {', '.join(sorted(table))})."
+    )
+
+
 def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     """The RESIDENT (non-streamed) route's model loader (#2104): a guarded Kimi K2
     checkpoint loaded natively into ``DeepseekV3ForCausalLM``, FP8-block weights
@@ -760,20 +798,6 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
             message = message[: -len(SUPPORTED_FP8_FORMAT)] + _FP8_RESIDENT_SUPPORT
         raise ValueError(message) from exc
 
-    _torch_dtypes = {
-        "F8_E4M3": torch.float8_e4m3fn,
-        "BF16": torch.bfloat16,
-        "F16": torch.float16,
-        "F32": torch.float32,
-        "F64": torch.float64,
-        "I64": torch.int64,
-        "I32": torch.int32,
-        "I16": torch.int16,
-        "I8": torch.int8,
-        "U8": torch.uint8,
-        "BOOL": torch.bool,
-    }
-
     # Every tensor's (file, byte range), canonical key, so an FP8 weight's scale is found
     # whether or not it sits in the same shard.
     entries = {}
@@ -818,7 +842,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
             elif key.endswith(_RESIDENT_IGNORED_SUFFIXES):
                 continue  # stale per-layer rotary buffer; the native class has none
             else:
-                stored_dtype = _torch_dtypes[raw_dtype]
+                stored_dtype = _resident_torch_dtype(key, raw_dtype, torch)
                 tensor = torch.empty(shape, dtype=stored_dtype)
                 read_into(_shard_handle(handles, path), entry, tensor)
                 if key in buffer_keys:

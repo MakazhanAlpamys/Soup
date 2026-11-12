@@ -1029,3 +1029,76 @@ def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_
     got, want = _resident_fp8_vs_reference(str(mutated), deq_dir)
     with pytest.raises(AssertionError):
         _assert_state_bit_identical(got, want)
+
+
+def test_resident_model_refuses_fp8_bytes_without_an_fp8_config(tmp_path, resident_checkpoints):
+    """A tensor stored as FP8 under a config that declares no FP8 format is refused before
+    any weight is read: FP8 bytes have no meaning without their block scales, and casting
+    them as numbers is the silent-garbage path (#2104 review, C3)."""
+    import torch
+    from safetensors.torch import load_file, save_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    dst = tmp_path / "stray-fp8"
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    victim = "model.layers.0.input_layernorm.weight"
+    state[victim] = state[victim].to(torch.float8_e5m2)
+    save_file(state, str(dst / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(str(dst), model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert victim in message
+    assert "holds FP8 tensors or block scales" in message
+
+
+def test_a_dtype_the_route_cannot_read_is_refused_by_name():
+    """The dtype table's fallback: a spelling the header reader gains later must be a named
+    refusal naming the tensor, never a bare ``KeyError`` (#2104 review, C3)."""
+    import torch
+
+    from soup_cli.utils.kimi_k2 import _resident_torch_dtype
+
+    with pytest.raises(ValueError) as caught:
+        _resident_torch_dtype("model.norm.weight", "U16", torch)
+    message = str(caught.value)
+    assert "model.norm.weight" in message
+    assert "stored as U16" in message
+    assert "cannot read" in message
+
+    with pytest.raises(ValueError) as fp8:
+        _resident_torch_dtype("model.layers.1.mlp.experts.0.down_proj.weight", "F8_E5M2", torch)
+    assert "no FP8 block plan" in str(fp8.value)
+
+
+def test_resident_model_refuses_a_tensor_spelled_twice(tmp_path, resident_checkpoints):
+    """Two shards declaring the same tensor is refused where the route reads its headers,
+    not resolved by shard order (#2104 review, C3)."""
+    import torch
+    from safetensors.torch import load_file, save_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    dst = tmp_path / "spelled-twice"
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    first, second = {}, {}
+    for index, key in enumerate(sorted(state)):
+        (first if index % 2 else second)[key] = state[key]
+    shared = "model.norm.weight"
+    first[shared] = state[shared]
+    second[shared] = state[shared]
+    save_file(first, str(dst / "model-00001-of-00002.safetensors"), metadata={"format": "pt"})
+    save_file(second, str(dst / "model-00002-of-00002.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(str(dst), model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert "spells one streamed tensor twice" in message
+    assert shared in message
