@@ -93,6 +93,34 @@ def test_missing_run_keeps_run_not_found(argv):
     assert MISSING_LINE in _lines(result)
 
 
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("run_baseline_v1", "run_candidate_v1"),
+        ("run_baseline", "run_candidate_v1"),
+        ("run_baseline_v1", "run_candidate"),
+        ("run_baseline", "run_candidate"),
+    ],
+)
+def test_eval_compare_loads_scores_for_resolved_runs(db: Path, left: str, right: str) -> None:
+    tracker = ExperimentTracker(db_path=db)
+    try:
+        for run_id, score in (("run_baseline_v1", 0.9), ("run_candidate_v1", 0.7)):
+            tracker.start_run({}, "cpu", "CPU", {}, run_id=run_id)
+            tracker.save_eval_result("model", "synthetic", score, {}, run_id=run_id)
+    finally:
+        tracker.close()
+
+    result = runner.invoke(app, ["eval", "compare", left, right])
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert f"Eval Comparison: {left} vs {right}" in output
+    assert "0.9000" in output
+    assert "0.7000" in output
+    assert "-0.2000" in output
+
+
 @pytest.mark.parametrize("run_id", [AMBIGUOUS, MISSING])
 def test_runs_show_keeps_its_hint_line(run_id):
     result = runner.invoke(app, ["runs", "show", run_id])
