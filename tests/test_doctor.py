@@ -348,12 +348,11 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
         "soup_cli.utils.advanced_precision.is_blackwell_gpu",
         lambda: True,
     )
-    fake_torchao = types.ModuleType("torchao")
-    fake_quantization = types.ModuleType("torchao.quantization")
-    fake_quantization.quantize_ = lambda *args, **kwargs: None
-    fake_torchao.quantization = fake_quantization
-    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
-    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+    # Every module the resolver can reach, so a real torchao cached by an
+    # earlier test cannot answer past the fakes (#2664).
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {}, with_nvfp4=False)
 
     from soup_cli.commands.doctor import _get_precision_capabilities
 
