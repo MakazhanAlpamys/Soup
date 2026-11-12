@@ -94,6 +94,16 @@ training:
   brings its own validation split: an HF-hub dataset's `validation` split, or a
   pre-tokenized cache's `val` / `validation` split.
 
+The live training panel estimates remaining time from the remaining optimizer
+steps and the speed in iterations per second, and shows an estimated finish in
+the machine's local time. When the trainer reports no usable speed, the panel
+measures steps and elapsed time from its first update. On resume, the steps
+loaded from the checkpoint are excluded from this measurement. The row stays
+hidden until the total and a usable speed are known. Evaluation, checkpoint
+saves and changes in step speed can shift the finish time.
+The Speed row uses the panel's measurement when the trainer reports no usable
+speed, and progress stays between 0% and 100%.
+
 **Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
 generating completions, which costs about as much per row as training on it. So
 they do not evaluate by default, and they do not withhold rows either:
@@ -904,7 +914,7 @@ pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains
 With the default optimizer (AdamW), budget about 16 bytes per parameter before
 activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
 VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
-default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+default `batch_size: auto` the pre-flight does not run, and says the fit is not checked). The saved checkpoint is fp32, and
 without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
 each rank loads the base in fp32 on the host before the engine exists (4 bytes per
 parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
@@ -1361,6 +1371,14 @@ and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextT
 model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
 Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
 `backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
+
+`soup recipes use minimax-m3-dpo` writes that configuration for `MiniMaxAI/MiniMax-M3`:
+`modality: vision`, `format: dpo` rows of text-only `prompt` / `chosen` / `rejected`, and the
+LoRA block of `minimax-m3-sft` (rank 32 / alpha 64, `target_modules: auto`, which resolves to
+the language tower's attention), with `lr: 5e-6` and `dpo_beta: 0.1` from the other MoE DPO
+recipes. Its processor is custom code, so run `soup train --trust-remote-code`. These are
+untuned starting values: the tests run one DPO step on a tiny LLaVA that has the wrapper's
+shape, not on the 428B weights, NF4 or a multi-GPU setup.
 
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
