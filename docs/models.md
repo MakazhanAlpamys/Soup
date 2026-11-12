@@ -69,13 +69,15 @@ modelling code on a tiny K2-shaped checkpoint
 ([gate](../benchmarks/gate-kimi-k2-resident.md)); routing at real scale is
 unverified.
 
-`kimi-k2-sft` targets the resident route again, with `quantization: none` (the
-4-bit menu stays on the streamed route); whether the recipe ships enabled is
-decided at review. `kimi-k2-thinking-grpo` remains discoverable with an
-unsupported resident-route description: `soup recipes show` preserves its YAML for
-inspection and `soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe
+`kimi-k2-sft` stays unavailable this round: the guarded native resident route for
+sft/grpo exists (train it with `quantization: none`; the 4-bit menu stays on the
+streamed route), but whether the recipe becomes available again on
+tiny-checkpoint evidence, and in which release, is reserved for review.
+`kimi-k2-thinking-grpo` remains discoverable with an unsupported resident-route
+description: `soup recipes show` preserves its YAML for inspection and
+`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe
 unavailability reason, writing no config.
-Catalog snapshots record the restored recipe and this refusal respectively.
+Catalog snapshots record both unavailability reasons.
 Full K2-weight validation remains separate work.
 
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
