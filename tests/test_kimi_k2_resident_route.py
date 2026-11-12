@@ -16,8 +16,8 @@ pytest.importorskip("transformers")
 
 #: A minimal K2-shaped config: every published required key present (tiny dimensions), an
 #: auto_map (optional; the rewrite drops it), no quantization_config (optional). Spelled out
-#: inline on purpose: the shared tiny builder lives in tests/test_kimi_k2_streaming.py and its
-#: extraction is Task 4.
+#: inline so this file does not depend on the shared builder's evolving shape (that builder
+#: lives in tests/kimi_k2_tiny.py and carries the parity fixtures' checkpoints).
 _MINIMAL_K2 = {
     "architectures": ["DeepseekV3ForCausalLM"],
     "attention_bias": False,
@@ -737,7 +737,11 @@ def test_rope_override_is_refused_on_the_resident_route(resident_checkpoints):
     reason = resident_kimi_k2_rope_refusal("moonshotai/Kimi-K2-Base", "yarn")
     assert reason is not None
     assert "rope_scaling_type 'yarn'" in reason
-    assert "stream_layers" in reason
+    assert "cannot be applied here" in reason
+    # The remedy must not name the streamed route as one that applies it: K2 refuses the
+    # field there too (#1697), so the message points at removing it instead.
+    assert "#1697" in reason
+    assert "which applies it" not in reason
 
     # A local K2 checkpoint takes the same route, so it takes the same refusal.
     local = resident_kimi_k2_rope_refusal(resident_checkpoints["k2-bf16"], "yarn")
@@ -1102,3 +1106,277 @@ def test_resident_model_refuses_a_tensor_spelled_twice(tmp_path, resident_checkp
     message = str(caught.value)
     assert "spells one streamed tensor twice" in message
     assert shared in message
+
+
+# ==========================================================================
+# Cold-review follow-ups (2026-11-12, adversarial pass): the paths the suite
+# never exercised, and the checks it never pinned
+# ==========================================================================
+
+
+def _k2_variant(tmp_path, src, *, drop=(), add=None, name="variant"):
+    """A copy of a K2 folder with tensors removed/added, config unchanged."""
+    from safetensors.torch import load_file, save_file
+
+    dst = tmp_path / name
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    for key in drop:
+        state.pop(key, None)
+    if add:
+        state.update(add)
+    save_file(state, str(dst / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+    return str(dst)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing-projection", "missing-expert", "extra-expert"]
+)
+def test_resident_model_refuses_an_incomplete_expert_set(
+    tmp_path, resident_checkpoints, mutation
+):
+    """The per-expert completeness check is production code: removing it let a partial
+    checkpoint reach the fuse (missing projection -> bare KeyError, extra expert -> silently
+    dropped). Each of the three shapes must be refused by name."""
+    import torch
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    prefix = "model.layers.1.mlp.experts"
+    projections = ("gate_proj", "up_proj", "down_proj")
+    drop, add = [], None
+    if mutation == "missing-projection":
+        drop = [f"{prefix}.3.up_proj.weight"]
+    elif mutation == "missing-expert":
+        drop = [f"{prefix}.5.{projection}.weight" for projection in projections]
+    else:
+        state = load_file(os.path.join(src, "model.safetensors"))
+        add = {
+            f"{prefix}.8.{projection}.weight": state[
+                f"{prefix}.0.{projection}.weight"
+            ].clone()
+            for projection in projections
+        }
+
+    path = _k2_variant(tmp_path, src, drop=drop, add=add)
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(path, model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert "not every index 0.." in message
+    assert "The checkpoint is damaged or not a complete Kimi K2 copy." in message
+
+
+def test_resident_model_refuses_a_truncated_up_proj(tmp_path, resident_checkpoints):
+    """A shorter up_proj broadcasts into its slice of the fused gate_up tensor and silently
+    duplicates rows: the per-expert shapes must be checked against each other, not only
+    expert-to-expert."""
+    import torch
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    prefix = "model.layers.1.mlp.experts"
+    state = load_file(os.path.join(src, "model.safetensors"))
+    drop, add = [], {}
+    for index in range(_TINY["n_routed_experts"]):
+        key = f"{prefix}.{index}.up_proj.weight"
+        drop.append(key)
+        add[key] = state[key][:1].clone()
+
+    path = _k2_variant(tmp_path, src, drop=drop, add=add)
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(path, model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert "pairs gate_proj" in message
+    assert "up_proj" in message
+
+
+def test_resident_model_refuses_a_fused_and_per_expert_spelling_together(
+    tmp_path, resident_checkpoints
+):
+    """Both spellings in one layer would fight over the same parameters: refuse instead of
+    letting the fuse overwrite whatever the checkpoint also shipped fused."""
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    routed = _TINY["n_routed_experts"]
+    moe = _TINY["moe_intermediate_size"]
+    hidden = _TINY["hidden_size"]
+    add = {
+        "model.layers.1.mlp.experts.gate_up_proj": torch.zeros(
+            (routed, 2 * moe, hidden), dtype=torch.bfloat16
+        ),
+        "model.layers.1.mlp.experts.down_proj": torch.zeros(
+            (routed, hidden, moe), dtype=torch.bfloat16
+        ),
+    }
+    path = _k2_variant(tmp_path, resident_checkpoints["k2-bf16"], add=add)
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(path, model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert "carries both per-expert tensors and a fused" in message
+
+
+def test_resident_model_refuses_a_tied_checkpoint_whose_head_differs(tmp_path):
+    """A checkpoint that declares tied embeddings but ships a different head is
+    mislabelled; dropping the tensor silently would train on the embedding."""
+    import torch
+    from safetensors.torch import load_file, save_file
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    torch.manual_seed(11)
+    config = _native_tiny_config()
+    config.tie_word_embeddings = True
+    model = DeepseekV3ForCausalLM(config).to(torch.float32).eval()
+    tied = tmp_path / "tied-mismatch"
+    model.save_pretrained(str(tied))
+    state = load_file(str(tied / "model.safetensors"))
+    state["lm_head.weight"] = torch.zeros_like(state["model.embed_tokens.weight"])
+    save_file(state, str(tied / "model.safetensors"), metadata={"format": "pt"})
+    (tied / "config.json").write_text(
+        json.dumps(dict(_MINIMAL_K2, tie_word_embeddings=True)), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(str(tied), model_kwargs={"dtype": torch.float32})
+    assert "differs from model.embed_tokens.weight" in str(caught.value)
+
+
+def test_the_config_loader_never_runs_repository_config_code(monkeypatch, resident_checkpoints):
+    """transformers prompts on an ``auto_map`` config unless told otherwise, and a "y" would
+    execute the repository's configuration module — bypassing the guard. The loader must
+    pass ``trust_remote_code=False`` itself."""
+    import transformers
+    from transformers import DeepseekV3Config
+
+    from soup_cli.utils import kimi_k2
+
+    seen = {}
+    real = transformers.AutoConfig.from_pretrained
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", spy)
+    config = kimi_k2.load_resident_model_config(resident_checkpoints["k2-bf16"])
+    assert isinstance(config, DeepseekV3Config)
+    assert seen["trust_remote_code"] is False
+
+    with pytest.raises(ValueError) as caught:
+        kimi_k2.load_resident_model_config(
+            resident_checkpoints["k2-bf16"], trust_remote_code=True
+        )
+    assert "trust_remote_code is not honoured here" in str(caught.value)
+
+
+def test_resident_model_applies_attn_implementation(resident_checkpoints):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    model = load_resident_model(
+        resident_checkpoints["k2-bf16"],
+        model_kwargs={"dtype": torch.float32, "attn_implementation": "eager"},
+    )
+    assert model.config._attn_implementation == "eager"
+
+
+def test_resident_model_honours_a_plain_device_string(resident_checkpoints, monkeypatch):
+    import torch
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    recorded = _record_model_to(monkeypatch)
+    load_resident_model(
+        resident_checkpoints["k2-bf16"],
+        model_kwargs={"dtype": torch.float32, "device_map": "cpu"},
+    )
+    assert recorded == [torch.device("cpu")]
+
+
+def test_resident_model_forwards_the_revision_on_the_hub_path(
+    monkeypatch, resident_checkpoints
+):
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    seen = {}
+    real_config_loader = kimi_k2.load_resident_model_config
+
+    def fake_snapshot(*, repo_id, revision=None, allow_patterns=None):
+        seen["snapshot"] = (repo_id, revision, tuple(allow_patterns or ()))
+        return resident_checkpoints["k2-bf16"]
+
+    def fake_config_loader(model_id, *, revision=None, **kwargs):
+        seen["config"] = (model_id, revision)
+        return real_config_loader(resident_checkpoints["k2-bf16"])
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
+    monkeypatch.setattr(kimi_k2, "load_resident_model_config", fake_config_loader)
+    kimi_k2.load_resident_model(
+        "moonshotai/Kimi-K2-Base",
+        model_kwargs={"dtype": torch.float32, "revision": "0123456789abcdef"},
+    )
+    assert seen["snapshot"][0] == "moonshotai/Kimi-K2-Base"
+    assert seen["snapshot"][1] == "0123456789abcdef"
+    assert "*.safetensors" in seen["snapshot"][2]
+    assert seen["config"] == ("moonshotai/Kimi-K2-Base", "0123456789abcdef")
+
+
+def test_resident_model_finds_a_scale_in_another_shard(tmp_path, resident_checkpoints):
+    """Weights and their ``_scale_inv`` need not live in the same file; splitting them must
+    give the same model, bit for bit."""
+    import torch
+    from safetensors.torch import load_file, save_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-fp8"]
+    dst = tmp_path / "split-fp8"
+    dst.mkdir()
+    state = load_file(os.path.join(src, "model.safetensors"))
+    scales = {key: value for key, value in state.items() if key.endswith("_scale_inv")}
+    weights = {key: value for key, value in state.items() if not key.endswith("_scale_inv")}
+    save_file(weights, str(dst / "model-00001-of-00002.safetensors"), metadata={"format": "pt"})
+    save_file(scales, str(dst / "model-00002-of-00002.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(src, "config.json"), dst / "config.json")
+
+    split = load_resident_model(str(dst), model_kwargs={"dtype": torch.float32})
+    whole = load_resident_model(src, model_kwargs={"dtype": torch.float32})
+    split_state, whole_state = split.state_dict(), whole.state_dict()
+    assert set(split_state) == set(whole_state)
+    for name in sorted(whole_state):
+        assert torch.equal(split_state[name], whole_state[name]), name
+
+
+def test_the_manifest_pins_the_recording_it_claims():
+    """The manifest is evidence only if its pins are asserted, not merely written down."""
+    manifest = json.loads(
+        (_FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["transformers_pin"] == "4.53.3"
+    assert manifest["recording_env"]["transformers"] == "4.53.3"
+    assert manifest["recording_env"]["torch"] == "2.15.0+cpu"
+    assert manifest["modeling_deepseek.py"]["sha256"] == (
+        "ce753fc9076ce13ce9557e680e2f5bd68ae8929a8225772968a9a22a1d17b7d4"
+    )
+    assert manifest["modeling_deepseek.py"]["revision"] == (
+        "ce72df012259dcc55d945e890f815fe7ef69159c"
+    )
+    assert manifest["configuration_deepseek.py"]["sha256"] == (
+        "54f29dd0d56e9a13f639c703e524daa71794e360050012aea3788ad7cfc38b17"
+    )
+    assert manifest["inputs"]["seed"] == 977
+    assert manifest["inputs"]["lengths"] == [8, 16, 33]
+    assert len(manifest["inputs"]["ids"]) == 3
+    assert manifest["recording_command"].endswith("kimi_k2_resident_parity_record.py")

@@ -33,7 +33,10 @@ validated versions. The gate test then loads the FP8 tiny checkpoint through
 
 ### Fixtures provenance
 
-Every hash in this chain is asserted, not assumed:
+Every hash in this chain is recorded in the manifest, and the committed test
+(`test_the_manifest_pins_the_recording_it_claims`) asserts the recorded pins rather than
+trusting them; the recorder refuses to run on any other `modeling_deepseek.py`, and
+`--check` re-verifies the npz against the manifest.
 
 | item | pin |
 |---|---|
@@ -85,6 +88,13 @@ The FP8 cell references the second recording:
   fixtures.
 - **perturbed router bias**: adding 1.0 to every `e_score_correction_bias` after the load
   must land OUTSIDE the gate tolerance against the fixtures.
+
+> **Deviation, recorded after the run (not retro-fitted into the rule above).** The `+1.0`
+> bias control does not move the logits on this checkpoint — sigmoid saturation leaves the
+> top-k and the gate weights unchanged — so it cannot serve as a control. The run therefore
+> used **zeroing** the bias, which is the admission gate's control too, and the committed
+> test pins that one. The pre-registration above is left as written; this note is the
+> deviation record.
 
 ### Mutation checks
 
@@ -165,11 +175,13 @@ fixtures (`logits_i`) at the same pinned tolerance: max abs diff 8.9e-08 / 8.9e-
 6.0e-08, loss exact (inputs 0/1/2). This cell commits the pristine fixtures to a test —
 they are no longer evidenced only by the integrity difference check.
 
-**Pristine-reference evidence.** transformers' own native `DeepseekV3ForCausalLM` on the
-current stack (5.22.2), fp32 on the pristine bf16 tiny checkpoint, reproduces the
-bf16-source fixtures (`logits_i`) to max abs diff 8.9e-08 / 5.9e-08 across the three
-inputs: K2's own code and the native class compute identically at this gate's tolerance,
-which is exactly what the resident route relies on.
+**Pristine-reference evidence (recorded, not a test cell).** transformers' own native
+`DeepseekV3ForCausalLM` on the current stack (5.22.2), fp32 on the pristine bf16 tiny
+checkpoint, was run against the bf16-source fixtures (`logits_i`) during this gate and
+reproduced them to max abs diff 8.9e-08 / 5.9e-08 / 6.0e-08 across the three inputs: K2's
+own code and the native class compute identically at this gate's tolerance, which is what
+the resident route relies on. The committed test cells load through `load_resident_model`;
+this native-class comparison is evidence from the gate run, not an assertion in the suite.
 
 **Why the FP8 cell references the round-trip fixtures.** The e4m3 quantise→dequant round
 trip (block 16 x 32, the admission gate's block) moves the final logits well outside any
@@ -198,9 +210,8 @@ pass would pin autograd, not the conversion.
 - **default rope** (`rope_scaling: null`, admitted by the guard): max abs diff against the
   FP8 fixtures 1.5e-03 / 1.1e-03 / 1.6e-03 (inputs 0/1/2) — outside the gate tolerance.
 - **zeroed router bias** (`e_score_correction_bias.zero_()`): max abs diff 1.3e-01 /
-  7.7e-02 / 1.0e-01 — outside the gate tolerance. (A mere +1.0 constant shift was tried
-  first and does NOT move the logits: sigmoid saturation leaves the top-k and weights
-  unchanged; the gate pins the zeroing control, matching the admission gate's.)
+  7.7e-02 / 1.0e-01 — outside the gate tolerance. The `+1.0` shift this rule replaced is the
+  deviation recorded in §2: it does not move the logits.
 
 ### Fixtures integrity: PASS
 
@@ -227,16 +238,17 @@ After the mutations: `tests/test_kimi_k2_resident_parity.py` + the admission sui
 
 The resident route never holds the FP8 checkpoint and the bf16 model at the same
 time: each safetensors tensor is read on its own, dequantised against its
-`_scale_inv` blocks into the pre-built meta skeleton (`assign=True`), and its FP8
-bytes are released before the next tensor is read. The peak extra memory during the
-load is therefore one tensor's working set — its FP8 bytes plus its dequantised
-copy — not a second whole model.
+`_scale_inv` blocks, and its FP8 bytes are released before the next tensor is read
+(the state dict is assembled in RAM and assigned onto the meta skeleton afterwards).
 
-The same holds for the move onto the target device: the loader's `state` dict is a
-second reference to every tensor the model now owns (`assign=True`), so it is dropped
-before `model.to(device)`; the move replaces one parameter at a time and never holds the
-whole CPU model beside the whole device copy. The tiny-checkpoint RSS table below is a
-CPU run, where the move copies nothing.
+The **fuse step is the largest transient, and it is one layer, not one tensor**:
+`_fuse_per_expert_state` runs once the whole state dict exists, and for each MoE layer it
+allocates that layer's fused `gate_up_proj`/`down_proj` while the layer's per-expert
+tensors are still alive. At published K2 scale that is the repo's own figure for fused
+routed experts — **≈33.8 GB per layer** (`benchmarks/README.md`, the K2 layer note) — not a
+single tensor's working set. What the design does guarantee is that the load never holds a
+second **whole model**: the FP8 source is streamed tensor by tensor and the `state` dict is
+dropped before `model.to(device)`, so the device move replaces one parameter at a time.
 
 Measured on this gate's own box (the audit venv above, torch 2.15.0+cpu, CPU only;
 `ru_maxrss` sampled around each phase of `load_resident_model` on the shared seeded
@@ -250,16 +262,16 @@ tiny FP8 checkpoint — the gate's exact load path, `built["fp8"][0]`; measured
 | after the FP8 load at fp32 (the gate's dtype) | 0.351 GB — load delta 0.94 MB (model is 0.75 MB at fp32) |
 | after the FP8 load at bf16 (the production route dtype) | 0.351 GB — load delta 0.13 MB (model is 0.38 MB at bf16) |
 
-The tiny model is 187,704 parameters, so these deltas confirm the design rather than
-probe it: the marginal RSS of the load is the model itself plus its per-tensor
-source working set, with no whole-model FP8+bf16 coexistence.
+The tiny model is 187,704 parameters, so these deltas sit at allocator-noise level — the
+bf16 delta is smaller than the model itself. They show only that the load does not double
+the model; they cannot resolve the per-tensor or one-layer claims, which are design
+arguments here.
 
 At published K2 scale these figures are design bounds, not measurements: the FP8
 source totals 1,029,173,256,720 B (~1.03 TB, the admission gate's byte-exact index
-count), the resident bf16 footprint is ~2 TB, and the largest tensor
-(`embed_tokens`, 163840 x 7168; K2 publishes it untied and its index ships
-`lm_head.weight`, a second matrix of the same shape) adds a transient of at most its
-FP8 bytes plus its bf16 copy (~1.17 GB + ~2.35 GB), and the head pays the same one when
-it is read. Whether the route actually loads
-the real ~1 TB checkpoint inside a host's RAM is the infra-blocked follow-up; no run
-on this box has touched real K2 weights.
+count), the resident bf16 footprint is ~2 TB, and one layer's fused routed experts add
+≈33.8 GB at the fuse. `embed_tokens` and `lm_head` (163840 x 7168 each; K2 publishes them
+untied) are **bf16 in the source** — the committed name list has no `_scale_inv` beside
+either — so each is copied at bf16, a transient of ~2.35 GB, not an FP8 read plus a bf16
+copy. Whether the route actually loads the real ~1 TB checkpoint inside a host's RAM is
+the infra-blocked follow-up; no run on this box has touched real K2 weights.

@@ -1,5 +1,7 @@
-"""Kimi K2 on layer streaming: its ``config.json`` loaded into transformers' own
-``DeepseekV3Config``, behind a guard.
+"""Kimi K2 through transformers' own class: layer streaming and the resident route.
+
+Both routes read the checkpoint's ``config.json`` as data into transformers' own
+``DeepseekV3Config`` behind a guard, so the repository's modelling code never runs.
 
 Kimi-K2-Base and -Instruct (moonshotai) declare ``model_type: "kimi_k2"`` and an ``auto_map``
 onto their repository's own ``configuration_deepseek`` / ``modeling_deepseek``. The decoder is
@@ -516,8 +518,19 @@ def load_resident_model_config(
     """
     from transformers import AutoConfig
 
+    if kwargs.pop("trust_remote_code", None):
+        raise ValueError(
+            "resident Kimi K2 route: trust_remote_code is not honoured here — the guarded "
+            "rewrite reads config.json as data and never runs a repository's config code. "
+            "Remove the flag; the checkpoint needs none."
+        )
+    # Explicit False, not the default: transformers prompts and, on a "y", imports the
+    # repository's configuration module, which is exactly the code this route promises
+    # never to run (and the class it returns would bypass the guard).
     try:
-        return AutoConfig.from_pretrained(model_id, revision=revision, **kwargs)
+        return AutoConfig.from_pretrained(
+            model_id, revision=revision, trust_remote_code=False, **kwargs
+        )
     except ValueError:
         read = _raw_config_dict(model_id, dict(kwargs, revision=revision))
         if read is None or read[0].get("model_type") != KIMI_K2_MODEL_TYPE:
@@ -533,8 +546,9 @@ def load_resident_model_config(
 
 
 #: Tensor key suffixes the resident load ignores entirely: the published K2 checkpoint
-#: carries 61 stale per-layer rotary buffers (BF16, shape [7]) that neither K2's own code
-#: (a non-persistent buffer) nor the native class (no per-layer rotary module) reads.
+#: carries one stale per-layer rotary buffer per layer that neither K2's own code (a
+#: non-persistent buffer) nor the native class (no per-layer rotary module) reads. The
+#: published shape is not asserted here on purpose — the suffix is what identifies it.
 _RESIDENT_IGNORED_SUFFIXES = (".rotary_emb.inv_freq",)
 
 
@@ -572,11 +586,11 @@ def resident_kimi_k2_rope_refusal(
     if stream_layers or not rope_scaling_type or not uses_resident_kimi_k2_route(base):
         return None
     return (
-        f"resident Kimi K2 route: rope_scaling_type {rope_scaling_type!r} is not "
-        "supported on this route yet — it rewrites the checkpoint config in memory and "
-        "never runs the repository's config code, so a per-run rope override has nowhere "
-        "to land. Train without rope scaling, or use the guarded streamed route "
-        "(training.stream_layers: true), which applies it."
+        f"resident Kimi K2 route: rope_scaling_type {rope_scaling_type!r} cannot be applied "
+        "here — the route rewrites the checkpoint config in memory and never runs the "
+        "repository's config code, so a per-run rope override has nowhere to land. K2 "
+        "refuses the field on the streamed route too (training.stream_layers: true, #1697), "
+        "so remove it: this route trains at K2's published rope."
     )
 
 
@@ -862,10 +876,21 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     if getattr(config, "tie_word_embeddings", False):
         # Not the published K2 layout — its config says ``tie_word_embeddings: false`` and
         # the index ships ``lm_head.weight`` — but a re-saved tied copy may omit the head,
-        # and one that ships it anyway carries the same matrix (the re-point below owns
-        # the head), so a shipped tensor is accepted and dropped rather than refused.
+        # and one that ships it must ship the same matrix (the re-point below owns the
+        # head). A differing head means the checkpoint is mislabelled: refusing beats
+        # training on the embedding while the config claims the head is shared.
         expected.discard("lm_head.weight")
-        state.pop("lm_head.weight", None)
+        shipped_head = state.pop("lm_head.weight", None)
+        if shipped_head is not None:
+            embedding = state.get("model.embed_tokens.weight")
+            if embedding is None or not torch.equal(
+                shipped_head.to(embedding.dtype), embedding
+            ):
+                raise ValueError(
+                    "checkpoint declares tie_word_embeddings but ships an lm_head.weight "
+                    "that differs from model.embed_tokens.weight; the two cannot both be "
+                    "right. The checkpoint is damaged or mislabelled."
+                )
     unexpected = sorted(set(state) - expected)
     if unexpected:
         raise ValueError(
@@ -949,6 +974,16 @@ def _fuse_per_expert_state(state: dict, config: Any) -> None:
         return
     n_routed = int(config.n_routed_experts)
     for prefix, experts in sorted(grouped.items()):
+        fused_keys = (
+            prefix + ".mlp.experts.gate_up_proj",
+            prefix + ".mlp.experts.down_proj",
+        )
+        if any(key in state for key in fused_keys):
+            raise ValueError(
+                f"checkpoint layer {prefix} carries both per-expert tensors and a fused "
+                f"{fused_keys[0]}; the two spellings would fight over the same parameters. "
+                "The checkpoint is damaged or two exports were mixed."
+            )
         indices = sorted(experts)
         incomplete = [
             index
@@ -973,6 +1008,24 @@ def _fuse_per_expert_state(state: dict, config: Any) -> None:
                         f"{prefix}.mlp.experts.{index}.{projection}.weight has "
                         f"{list(shape)}. The checkpoint is damaged."
                     )
+        gate_shape = tuple(int(dim) for dim in experts[0]["gate_proj"].shape)
+        up_shape = tuple(int(dim) for dim in experts[0]["up_proj"].shape)
+        if up_shape != gate_shape:
+            # The fused parameter is half gate, half up, so the two row blocks must match:
+            # a shorter up would broadcast into the slice and duplicate rows silently.
+            raise ValueError(
+                f"checkpoint layer {prefix} pairs gate_proj {list(gate_shape)} with "
+                f"up_proj {list(up_shape)}; the fused gate_up_proj needs both blocks the "
+                "same shape. The checkpoint is damaged."
+            )
+        down_shape = tuple(int(dim) for dim in experts[0]["down_proj"].shape)
+        expected_down = (int(config.hidden_size), gate_shape[0])
+        if down_shape != expected_down:
+            raise ValueError(
+                f"checkpoint layer {prefix} holds a down_proj of {list(down_shape)}, but "
+                f"the native fused expert needs [hidden_size, intermediate] = "
+                f"{list(expected_down)}. The checkpoint is damaged."
+            )
         gate_shape = experts[0]["gate_proj"].shape
         down_shape = experts[0]["down_proj"].shape
         gate_up = torch.empty(
@@ -1009,9 +1062,8 @@ def kimi_k2_tokenizer_hint(model_id: str, **kwargs: Any) -> Optional[str]:
         return None
     hint = (
         "Kimi K2's tokenizer exists only as code in its repository (tokenization_kimi.py), so "
-        "it needs --trust-remote-code. Under layer streaming that flag reaches the tokenizer "
-        "only: the config and the model are still transformers' own DeepseekV3 classes, never "
-        "the repository's code."
+        "it needs --trust-remote-code. That flag reaches the tokenizer only: the config and "
+        "the model are transformers' own DeepseekV3 classes, never the repository's code."
     )
     if not _tiktoken_available():
         hint += (

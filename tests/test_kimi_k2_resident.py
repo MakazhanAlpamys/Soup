@@ -1,8 +1,9 @@
-"""Resident K2 fails at configuration, before remote-code/model construction.
+"""Resident K2 is refused at configuration, before remote-code/model construction.
 
 #2104 task 2: the refusal lifts for Kimi-K2-Base and Kimi-K2-Instruct on sft/grpo
-(the resident native route); Kimi-K2-Thinking and Kimi-K2-Instruct-0905 stay refused
-for every task, and Base/Instruct stay refused for the other tasks (streamed remedy).
+(the resident native route); those two IDs are therefore admitted there and still
+refused for the other tasks and the other loading routes. Kimi-K2-Thinking and
+Kimi-K2-Instruct-0905 stay refused for every task (streamed remedy).
 """
 
 from dataclasses import replace

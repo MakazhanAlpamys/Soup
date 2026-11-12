@@ -45,13 +45,16 @@ resident load still fails and `trust_remote_code` does not repair that. For
 `task: sft` and `task: grpo` only, Soup instead passes the checkpoint's
 `config.json` through the field-by-field guard of
 [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107) into transformers' own
-`DeepseekV3Config` (rewritten in memory; no repository code is executed) and loads
+`DeepseekV3Config` (rewritten in memory; the config read passes
+`trust_remote_code=False`, so no repository code is executed) and loads
 the safetensors natively, dequantising each FP8 block weight to bf16 per tensor at
-load, so the peak extra memory during the load is one tensor's working set. A
+load. The load never holds a second whole model; its largest transient is one
+layer's fused routed experts at the fuse step (about 33.8 GB per layer at published
+K2 scale), not a single tensor's working set. A
 `quantization_config` menu entry (the 4-bit path) is refused on this route: 4-bit
-K2 stays streamed-only. The other trainers still refuse K2 bases at config
-validation, as do the Instruct-0905 and Thinking IDs for every task: they have no
-supported route yet. This refusal does not
+K2 stays streamed-only. The other trainers still refuse K2 bases on the resident
+path at config validation, as do the Instruct-0905 and Thinking IDs for every task:
+they have no supported route yet. This refusal does not
 qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
 native `kimi_k25` registration and are outside this boundary.
 
