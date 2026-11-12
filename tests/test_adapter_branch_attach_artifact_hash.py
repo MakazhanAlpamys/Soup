@@ -48,6 +48,21 @@ def test_the_cli_records_the_hash_and_size_of_the_linked_pointer(entry, tmp_path
     assert row["size_bytes"] == pointer.stat().st_size
 
 
+def test_attach_branch_to_registry_records_the_pointer_it_leaves_on_disk(entry, tmp_path):
+    from soup_cli.utils import adapter_branch
+
+    assert runner.invoke(app, ["adapters", "branch", "v20", "-c", "soup.yaml",
+                               "--base", "org/base"]).exit_code == 0
+    pointer = tmp_path / "branches" / "v20.json"
+
+    adapter_branch.attach_branch_to_registry("v20", "model:v1")
+
+    assert json.loads(pointer.read_text(encoding="utf-8"))["registry_entry_id"] == entry
+    row = _branch_ref(entry)
+    assert row["sha256"] == hash_file(str(pointer))
+    assert row["size_bytes"] == pointer.stat().st_size
+
+
 def test_a_failed_artifact_write_leaves_the_pointer_unlinked(entry, tmp_path, monkeypatch):
     from soup_cli.utils import adapter_branch
 
