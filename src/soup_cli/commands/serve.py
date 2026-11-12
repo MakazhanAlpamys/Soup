@@ -701,6 +701,20 @@ def serve(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
 
+    # #2729 — named --adapters are served on top of a plain model: a request that
+    # selects none runs the base with every adapter disabled. With a LoRA adapter
+    # as --model, that silently answered with the bare base instead of the
+    # adapter being served, and PEFT's "default" adapter could not be selected.
+    if adapter_map and is_adapter:
+        console.print(
+            "[red]--adapters needs a full model as --model[/], but "
+            f"{for_terminal(str(model_path))} is a LoRA adapter. Pass its base as "
+            "--model and list this adapter in --adapters too, or merge it first "
+            "(soup merge).",
+            emoji=False,
+        )
+        raise typer.Exit(2)
+
     # Resolve base model
     if is_adapter and not base_model:
         base_model = _detect_base_model(adapter_config_path)

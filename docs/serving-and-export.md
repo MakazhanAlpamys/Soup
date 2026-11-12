@@ -737,6 +737,11 @@ Switch the active adapter at runtime without restarting the server:
 soup serve --model base-model --adapters chat=./chat-adapter --adapters code=./code-adapter
 ```
 
+`--model` must be a full model here. A request that selects no adapter runs that
+base with every adapter disabled, so a LoRA adapter as `--model` together with
+`--adapters` is refused at startup: pass its base as `--model` and list the adapter
+in `--adapters`, or merge it first (#2729).
+
 ```bash
 # Activate an adapter
 curl -X POST http://localhost:8000/v1/adapters/activate/chat
