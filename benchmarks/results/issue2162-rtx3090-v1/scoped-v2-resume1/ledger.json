@@ -1,0 +1,218 @@
+[
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "normal",
+    "tag": "gate-native-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "repeat",
+    "tag": "gate-native-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "profile",
+    "tag": "gate-native-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "legacy",
+    "variant": "normal",
+    "tag": "gate-legacy-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "legacy",
+    "variant": "repeat",
+    "tag": "gate-legacy-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "legacy",
+    "variant": "profile",
+    "tag": "gate-legacy-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "scoped",
+    "variant": "normal",
+    "tag": "gate-scoped-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "scoped",
+    "variant": "repeat",
+    "tag": "gate-scoped-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "scoped",
+    "variant": "profile",
+    "tag": "gate-scoped-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 1,
+    "tag": "block1-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 1,
+    "tag": "block1-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 1,
+    "tag": "block1-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 2,
+    "tag": "block2-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 2,
+    "tag": "block2-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 2,
+    "tag": "block2-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 3,
+    "tag": "block3-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 3,
+    "tag": "block3-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 3,
+    "tag": "block3-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 4,
+    "tag": "block4-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 4,
+    "tag": "block4-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 4,
+    "tag": "block4-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 5,
+    "tag": "block5-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 5,
+    "tag": "block5-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 5,
+    "tag": "block5-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "scoped",
+    "block": 6,
+    "tag": "block6-scoped",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "legacy",
+    "block": 6,
+    "tag": "block6-legacy",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 6,
+    "tag": "block6-native",
+    "returncode": 0,
+    "guard_failure": null
+  }
+]

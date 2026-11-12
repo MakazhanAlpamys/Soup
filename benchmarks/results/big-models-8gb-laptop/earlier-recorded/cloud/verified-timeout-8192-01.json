@@ -1,0 +1,24 @@
+{
+  "schema": "root-context74-first-deadline-v1",
+  "run_id": "l40s-strict-full88-sft8192-20261105-01",
+  "app_id": "ap-<redacted>",
+  "app_state": "stopped",
+  "active_tasks": 0,
+  "classification": "worker_deadline",
+  "worker_elapsed_seconds": 1800.5330600339998,
+  "verified_forward_layers": 88,
+  "last_recorded_reverse_group": 80,
+  "checkpoint_accepted": false,
+  "fresh_restore_executed": false,
+  "sha256": {
+    "summary.json": "78b51dd0b33a11e8c2d608a36465de57814535203320f712aa66a8f0702e3606",
+    "source.log": "77ea69b8c9ff40b2fbcbebd03b8b2a8c748da4bf6e879eb00fa3f1d4c4241706",
+    "worker.log": "55d1d25ff3be16958677b011db932c68625828f6cb66d089c2be804511eae794",
+    "result.json": "3679744f8a5bf12e900a5dcdbad9acc9c1c10dcd3891e1c27172e82f8c309eea",
+    "progress.jsonl": "60ea2d8ca9c58c521df9e26bbef1c393001af8c30dc4e89f1c155baae341ead1"
+  },
+  "next_wrapper": {
+    "path": "modal_decoder74_v3.py",
+    "sha256": "1ff8010d4dbf68e8d990a644bd4b667e8cd094413172c299ee810c7697c0f388"
+  }
+}
