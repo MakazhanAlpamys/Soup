@@ -1273,6 +1273,8 @@ the matching full run ID. Existing evaluation rows keep their stored run IDs.
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;
 they do not fall back to an older finite score (#2466).
+If two finite scores produce an unrepresentable delta, `soup eval compare`
+names the runs and benchmark and exits `1` before displaying the table.
 
 ### Aider Polyglot
 
