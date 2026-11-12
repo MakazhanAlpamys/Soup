@@ -12,10 +12,12 @@ from soup_cli.migrate.common import (
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 # LLaMA-Factory's own LoRA defaults (src/llamafactory/hparams/finetuning_args.py:
-# ``lora_rank`` 8, ``lora_alpha = lora_alpha or lora_rank * 2``). A migrated config
-# without the keys must train what LLaMA-Factory trained, not Soup's r 64 / alpha 16,
-# which is an 8x larger adapter at an 8x smaller alpha / r (#1807).
+# ``lora_rank`` 8, ``lora_alpha = lora_alpha or lora_rank * 2``, ``lora_dropout`` 0.0).
+# A migrated config without the keys must train what LLaMA-Factory trained, not Soup's
+# r 64 / alpha 16 (an 8x larger adapter at an 8x smaller alpha / r, #1807) or Soup's
+# dropout of 0.05.
 _LF_DEFAULT_LORA_RANK = 8
+_LF_DEFAULT_LORA_DROPOUT = 0.0
 
 # Every top-level key this migrator reads, mapped or warned about by name. Any
 # other key in the source is listed in one "not migrated" warning (#1807).
@@ -171,8 +173,7 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
             alpha = 2 * rank
         if alpha is not None:
             lora_section["alpha"] = alpha
-        if "lora_dropout" in raw:
-            lora_section["dropout"] = raw["lora_dropout"]
+        lora_section["dropout"] = raw.get("lora_dropout", _LF_DEFAULT_LORA_DROPOUT)
         # lora_target: "all" (and LLaMA-Factory's default when the key is absent)
         # means every linear layer; peft's spelling of that is ``all-linear``.
         # ``auto`` would resolve to q_proj / v_proj on Llama, two of seven (#1807).

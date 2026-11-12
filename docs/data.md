@@ -687,9 +687,9 @@ where a key is absent (#1807):
   default) rather than leaving Soup's default of 0.1 in force. A value `data.val_split`
   cannot express (an absolute row count, or a fraction above 0.5) is named in a warning
   and not written.
-- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8 and a missing `lora_alpha` is
-  `2 * rank`, as LLaMA-Factory has them; a quoted rank (`lora_rank: "32"`) counts as the
-  integer. A comma-separated `lora_target` becomes a list,
+- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8, a missing `lora_alpha` is
+  `2 * rank` and a missing `lora_dropout` is 0, as LLaMA-Factory has them; a quoted
+  rank (`lora_rank: "32"`) counts as the integer. A comma-separated `lora_target` becomes a list,
   and `lora_target: all` (also the default when the key is absent) becomes `all-linear`,
   every linear layer; so does axolotl `lora_target_linear: true`. `auto` would have
   resolved to `q_proj` / `v_proj` only on Llama.
