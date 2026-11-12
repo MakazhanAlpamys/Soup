@@ -97,6 +97,22 @@ def load_adapter(adapter_dir: Path) -> Tuple[Dict[str, Any], Dict[str, Tuple[Any
             raise LowMemoryMergeError(
                 f"adapter_config.json sets {field!r}, which the low-memory merge does not support"
             )
+    # PiSSA, OLoRA, CorDA and similar initializations rewrite the base weight at
+    # init (W_res = W - scaling * B0 @ A0). An adapter saved without converting it
+    # back is only correct on that rewritten base: peft's regular merge re-runs the
+    # init when it loads, but adding scaling * B @ A to the original W here would
+    # silently write neither the base nor the trained model. Only the default
+    # initializations are merged; everything else takes the regular merge (#2722).
+    init = config.get("init_lora_weights", True)
+    if not (
+        init is None
+        or isinstance(init, bool)
+        or (isinstance(init, str) and init.lower() == "gaussian")
+    ):
+        raise LowMemoryMergeError(
+            f"adapter_config.json sets init_lora_weights={init!r}, which can rewrite the "
+            "base weights at initialization; the low-memory merge does not support it"
+        )
 
     lora_scaling(config)
     _flag(config, "fan_in_fan_out")

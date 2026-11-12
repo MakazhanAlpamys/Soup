@@ -407,6 +407,41 @@ class TestAdapterCoverage:
             merge_low_memory(base, adapter, output, "float16")
         assert not output.exists()
 
+    @pytest.mark.parametrize("init", ["pissa", "olora"])
+    def test_an_init_that_rewrites_the_base_is_refused(self, tmp_path, init):
+        """PiSSA / OLoRA (``lora.init_strategy``) subtract ``scaling * B0 @ A0`` from
+        the base at init (#2722). Adding the trained ``B @ A`` to the original base wrote
+        weights ~46% off the trained model with exit 0; refuse instead."""
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", init_lora_weights=init)
+        output = tmp_path / "merged"
+        with pytest.raises(LowMemoryMergeError, match="init_lora_weights"):
+            merge_low_memory(base, adapter, output, "float32")
+        assert not output.exists()
+
+    @pytest.mark.parametrize("init", ["corda", "loftq", "pissa_niter_4", "lora_ga"])
+    def test_other_weight_rewriting_inits_are_refused(self, checkpoints, init):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base, adapter, output = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=init)
+        with pytest.raises(LowMemoryMergeError, match="init_lora_weights"):
+            merge_low_memory(base, adapter, output, "float16")
+        assert not output.exists()
+
+    @pytest.mark.parametrize("init", [False, "gaussian"])
+    def test_a_default_init_still_matches_the_regular_merge(self, tmp_path, init):
+        from soup_cli.utils.lowmem_merge import merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", init_lora_weights=init)
+        merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+        expected = _regular_merge(base, adapter, torch.float32)
+        actual = _read_all(tmp_path / "merged")
+        assert all(torch.equal(value, expected[key]) for key, value in actual.items())
+
     @pytest.mark.parametrize("changes", [{"peft_type": "IA3"}, {"bias": "all"}])
     def test_other_adapter_types_are_refused(self, checkpoints, changes):
         from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
