@@ -893,6 +893,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
+        # Curriculum: the length sort above reaches the model only if the
+        # sampler keeps it. The Trainer's default sampler is random, which
+        # dealt the sorted rows out in a seeded random order, so a
+        # `curriculum: true` run saw no easier-to-harder progression at all.
+        # A pre-tokenised dataset is not the list that was sorted, so it keeps
+        # the default rather than being read in file order.
+        if tcfg.curriculum and pretok is None:
+            training_kwargs["train_sampling_strategy"] = "sequential"
+
         # FSDP2 — alternative to DeepSpeed. The helper also enables
         # torch.compile when tcfg.use_fsdp2_compile is True.
         from soup_cli.utils.fsdp import apply_fsdp_training_kwargs

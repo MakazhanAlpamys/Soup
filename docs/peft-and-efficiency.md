@@ -598,6 +598,10 @@ training:
   curriculum_buckets: 4        # Number of difficulty stages
 ```
 
+The SFT trainer reads the sorted rows in that order instead of shuffling them, so each
+epoch runs from the shortest row to the longest. A pre-tokenised dataset (`soup data
+preprocess`) is not sorted and keeps the usual shuffled order.
+
 
 ## Freeze Training
 
