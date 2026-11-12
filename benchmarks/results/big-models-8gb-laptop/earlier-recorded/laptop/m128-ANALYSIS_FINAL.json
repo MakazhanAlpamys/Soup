@@ -1,0 +1,60 @@
+{
+  "status": "complete",
+  "model": "unsloth/Mistral-Large-Instruct-2407-bnb-4bit",
+  "revision": "a76e109f4b66807d88fa92b5d7e0dead1a354494",
+  "params": 122610069504,
+  "layers": 88,
+  "steps": 3,
+  "rank": 8,
+  "seq_len": 128,
+  "adapter_params": 26673152,
+  "adapter_tensors": 352,
+  "step_seconds": [
+    67.81542230000196,
+    62.49067449998984,
+    60.60230080000474
+  ],
+  "median_step_seconds": 62.49067449998984,
+  "heldout_before_losses": [
+    3.7749664783477783,
+    3.84488582611084
+  ],
+  "heldout_after_losses": [
+    3.651911735534668,
+    3.692650079727173
+  ],
+  "device_peak_mib": 4598.0,
+  "torch_peak_allocated_bytes": 3757965824,
+  "torch_peak_reserved_bytes": 4638900224,
+  "worker_peak_private_bytes": 10245419008,
+  "worker_peak_rss_bytes": 4578516992,
+  "host_min_available_bytes": 5919789056,
+  "system_min_commit_headroom_bytes": 4078985216,
+  "system_commit_limit_bytes": 54471286784,
+  "guard_elapsed_seconds": 804.5620000000054,
+  "worker_elapsed_seconds": 673.7240501000051,
+  "before_hash_seconds": 145.6879842000053,
+  "after_hash_seconds": 141.83086070000718,
+  "protected_files_unchanged": 138,
+  "source_backing_bytes": 2324713472,
+  "source_pinned_bytes": 0,
+  "source_direct_io": true,
+  "all_initial_heldout_exact_against_v1": true,
+  "adapter_sha256": "6547809035c6d509644e70245c94587a8737bd6273c39ebe9c311d56a975f1f0",
+  "scope": "Three short q/v LoRA updates; not full-weight finetuning or demonstrated general quality; diagnostics included in timings.",
+  "created": "2026-11-03T17:46:22.408188+05:00",
+  "fresh_reload": {
+    "pid": 32524,
+    "train_pid": 20560,
+    "full_logits_exact": true,
+    "guard_elapsed_seconds": 539.0310000000027,
+    "worker_elapsed_seconds": 394.405064999999,
+    "torch_peak_allocated_bytes": 2418830336,
+    "torch_peak_reserved_bytes": 2464153600,
+    "protected_before_after_equal": 138,
+    "guard_completed": true
+  },
+  "final_input_hashes_verified": 1746,
+  "final_artifact_audit": "passed",
+  "snapshot_path": "<SNAPSHOTS>\\stage-34-full123b-lora-cold-reload-complete-20261103-175944.zip"
+}
