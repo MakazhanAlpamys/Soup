@@ -253,6 +253,15 @@ def write_baseline_file(path: str, scores: Mapping[str, float]) -> str:
     )
 
 
+def _unique_baseline_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    obj: dict[str, object] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"invalid JSON in baseline file: duplicate JSON object key {key!r}")
+        obj[key] = value
+    return obj
+
+
 def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str, float]:
     out: dict[str, float] = {}
     for key, value in raw.items():
@@ -420,7 +429,10 @@ def resolve_baseline(
     if not baseline_path.exists():
         raise FileNotFoundError(f"baseline file not found: {spec}")
     try:
-        data = json.loads(baseline_path.read_text(encoding="utf-8"))
+        data = json.loads(
+            baseline_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_baseline_object,
+        )
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON in baseline file: {exc}") from exc
     if not isinstance(data, dict):
