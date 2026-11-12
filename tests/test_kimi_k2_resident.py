@@ -284,26 +284,45 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     assert not (tmp_path / "soup.yaml").exists()
 
 
-def test_catalog_admits_the_sft_recipe_and_writes_soup_yaml(tmp_path, monkeypatch):
+def test_catalog_keeps_the_sft_recipe_unavailable_this_round(tmp_path, monkeypatch):
+    """Review round 2, ask 6: the recipe restore is not part of this round. The row stays
+    unavailable: its reason is the config-validation refusal the reverted yaml
+    (quantization: 4bit) meets, plus the sentence naming what landed and reserving
+    enablement for review."""
     from soup_cli.cli import app
+    from soup_cli.recipes.catalog import KIMI_K2_SFT_RECIPE_RESERVED_REASON
 
     recipe = RECIPES["kimi-k2-sft"]
-    assert recipe.unavailable_reason is None
+    assert recipe.unavailable_reason == KIMI_K2_SFT_RECIPE_RESERVED_REASON
+    assert "bf16 only" in recipe.unavailable_reason
+    assert "training.stream_layers: true" in recipe.unavailable_reason
+    assert "guarded native resident route" in recipe.unavailable_reason
+    assert "reserved for review" in recipe.unavailable_reason
     assert len(recipe.description) <= 100
-    assert "unsupported" not in recipe.description.lower()
-    assert "resident" in recipe.description.lower()
+    assert "unsupported" in recipe.description.lower()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "1000")
     runner = CliRunner()
+    shown = runner.invoke(app, ["recipes", "show", "kimi-k2-sft"])
+    assert shown.exit_code == 0
+    assert "reserved for review" in strip_ansi(shown.output)
+    listed = runner.invoke(app, ["recipes", "list"])
+    assert listed.exit_code == 0
+    assert "unsupported" in strip_ansi(listed.output).lower()
     used = runner.invoke(app, ["recipes", "use", "kimi-k2-sft", "--yes"])
-    assert used.exit_code == 0, strip_ansi(used.output)
-    written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
-    assert "base: moonshotai/Kimi-K2-Base" in written
-    assert "quantization: none" in written
+    assert used.exit_code == EXIT_USAGE_ERROR == 3
+    output = " ".join(strip_ansi(used.output).split())
+    assert recipe.unavailable_reason in output
+    assert not (tmp_path / "soup.yaml").exists()
 
 
-def test_catalog_unavailability_is_limited_to_the_thinking_grpo_recipe():
-    assert {name for name, recipe in RECIPES.items() if recipe.unavailable_reason} == set(BLOCKED)
+def test_catalog_unavailability_is_limited_to_the_kimi_k2_rows():
+    # Both K2 rows stay unavailable this round: Thinking/0905 (no supported route yet)
+    # and the sft recipe (the guarded native route exists; enablement is reserved for
+    # review).
+    assert {name for name, recipe in RECIPES.items() if recipe.unavailable_reason} == (
+        set(BLOCKED) | {"kimi-k2-sft"}
+    )
 
 
 def test_snapshot_records_each_recipes_own_route_reason():
@@ -313,10 +332,12 @@ def test_snapshot_records_each_recipes_own_route_reason():
     grpo = snapshot["recipes"]["kimi-k2-thinking-grpo"]
     assert grpo == {"$unavailable": RECIPES["kimi-k2-thinking-grpo"].unavailable_reason}
     _assert_route_text(grpo["$unavailable"], RECIPES["kimi-k2-thinking-grpo"].model)
+    # The sft row is unavailable again this round (ask 6): the recorded reason is the
+    # reservation wording, and it starts from the refusal the reverted yaml meets.
     sft = snapshot["recipes"]["kimi-k2-sft"]
-    assert "$unavailable" not in sft
-    assert sft["base"] == "moonshotai/Kimi-K2-Base"
-    assert sft["training.quantization"] == "none"
+    assert sft == {"$unavailable": RECIPES["kimi-k2-sft"].unavailable_reason}
+    assert "reserved for review" in sft["$unavailable"]
+    assert "bf16 only" in sft["$unavailable"]
 
 
 def test_snapshot_does_not_hide_an_unrelated_config_error(monkeypatch):

@@ -3,7 +3,21 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import (
+    KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
+    resident_kimi_k2_quantization_refusal,
+)
+
+#: Review round 2, ask 6: the kimi-k2-sft restore is not part of this round. The reason
+#: starts from the refusal the reverted yaml (quantization: 4bit) meets at config
+#: validation — the resident route is bf16-only — and states what landed and that
+#: enabling the recipe on tiny-checkpoint evidence is reserved for review.
+KIMI_K2_SFT_RECIPE_RESERVED_REASON = (
+    resident_kimi_k2_quantization_refusal("4bit")
+    + " The guarded native resident route for Kimi-K2-Base/Instruct on sft/grpo exists "
+    "as of this PR (#2104); enabling this recipe on tiny-checkpoint evidence is reserved "
+    "for review."
+)
 
 
 @dataclass(frozen=True)
@@ -2813,9 +2827,9 @@ output: ./output
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description=(
-            "Kimi K2 SFT: native resident route on transformers 5.x (sft/grpo); "
-            "Thinking: no route yet."
+            "Kimi K2 SFT: resident unsupported this round; enablement reserved for review."
         ),
+        unavailable_reason=KIMI_K2_SFT_RECIPE_RESERVED_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -2834,7 +2848,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
-  quantization: none  # resident v1 is bf16-only; 4-bit stays on the streamed route (#2104)
+  quantization: 4bit
   moe_lora: true
 
 output: ./output

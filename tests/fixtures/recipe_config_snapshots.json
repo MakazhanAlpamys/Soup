@@ -810,17 +810,7 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Base",
-      "data.format": "auto",
-      "data.max_length": 8192,
-      "data.train": "./data/train.jsonl",
-      "training.epochs": 2,
-      "training.lora.alpha": 32,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.moe_lora": true,
-      "training.quantization": "none"
+      "$unavailable": "resident Kimi K2 route: training.quantization '4bit' is refused \u2014 the resident route loads bf16 only; set training.quantization: none for this route, or train 4-bit through training.stream_layers: true. The guarded native resident route for Kimi-K2-Base/Instruct on sft/grpo exists as of this PR (#2104); enabling this recipe on tiny-checkpoint evidence is reserved for review."
     },
     "kimi-k2-thinking-grpo": {
       "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."
