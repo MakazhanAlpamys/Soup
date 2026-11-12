@@ -48,6 +48,25 @@ def test_runs_show_still_resolves_an_exact_id_and_a_unique_prefix(run_id):
     assert reg.call_tool("runs_show", {"run_id": run_id})["run_id"] == "run_solo_1"
 
 
+def test_runs_show_closes_its_tracker(monkeypatch):
+    opened = []
+    real_init = ExperimentTracker.__init__
+
+    def recording_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        opened.append(self)
+
+    monkeypatch.setattr(ExperimentTracker, "__init__", recording_init)
+
+    reg.call_tool("runs_show", {"run_id": "run_solo"})
+    for run_id in ("run_dup_", "run_gone"):
+        with pytest.raises(reg.McpToolError):
+            reg.call_tool("runs_show", {"run_id": run_id})
+
+    assert len(opened) == 3
+    assert [tracker._conn for tracker in opened] == [None, None, None]
+
+
 def test_runs_show_over_an_mcp_session_names_the_ambiguous_prefix():
     pytest.importorskip("mcp")
     from soup_cli.mcp_server.server import build_server
