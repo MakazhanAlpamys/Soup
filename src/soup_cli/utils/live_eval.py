@@ -34,6 +34,52 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 GeneratorFn = Callable[[str], str]
 MultiGen = Callable[[str, int], "list[str]"]
 
+
+class GeneratedText(str):
+    """An answer a live generator returned, which also says whether it hit the new-token cap.
+
+    It is a ``str`` in every other respect (equality, hashing, formatting, JSON), so every caller
+    that takes the generator's text keeps working. ``truncated`` is True when decoding stopped
+    because it used up ``max_new_tokens`` rather than because the model emitted a stop token. It
+    comes from the token ids the model returned, never from the length of the text, and it is lost
+    by any string operation (``text + "x"`` is a plain ``str``): read it from the generator's own
+    return value.
+    """
+
+    truncated: bool
+
+    def __new__(cls, text: str, *, truncated: bool) -> "GeneratedText":
+        instance = super().__new__(cls, text)
+        instance.truncated = bool(truncated)
+        return instance
+
+    def __getnewargs_ex__(self) -> Tuple[Tuple[str], Dict[str, bool]]:
+        # copy / pickle rebuild through ``__new__``, which needs the keyword
+        return (str(self),), {"truncated": self.truncated}
+
+
+def _stop_token_ids(model: Any, tokenizer: Any, pad_id: Optional[int]) -> frozenset:
+    """The ids that end a generation.
+
+    The model's ``eos_token_id`` (an int or a list), the tokenizer's, and the padding id (a batch
+    pads a finished row with it).
+    """
+    found = {pad_id, getattr(tokenizer, "eos_token_id", None)}
+    configured = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    found.update(configured if isinstance(configured, (list, tuple)) else [configured])
+    return frozenset(item for item in found if isinstance(item, int))
+
+
+def _hit_new_token_cap(new_ids: Any, max_new_tokens: int, stop_ids: frozenset) -> bool:
+    """Whether ``new_ids`` (the tokens a generation added) used the whole budget without stopping.
+
+    A generation that returned fewer than ``max_new_tokens`` ids stopped on its own, and one whose
+    last id is a stop token finished exactly at the cap; anything else was cut off.
+    """
+    count = int(new_ids.shape[0])
+    return count >= max_new_tokens and int(new_ids[-1]) not in stop_ids
+
+
 # Bounds — keep the live paths from running away on a 4 GB box.
 MAX_PROMPT_TOKENS = 1024
 _MAX_PROMPT_TOKENS = MAX_PROMPT_TOKENS  # compatibility for existing private consumers
@@ -329,6 +375,7 @@ def make_generator(
         if tokenizer.pad_token_id is not None
         else tokenizer.eos_token_id
     )
+    stop_ids = _stop_token_ids(model, tokenizer, pad_id)
 
     def _gen(prompt: str) -> str:
         if not isinstance(prompt, str):
@@ -343,7 +390,10 @@ def make_generator(
                 pad_token_id=pad_id,
             )
         gen_ids = out[0][prompt_len:]
-        return tokenizer.decode(gen_ids, skip_special_tokens=True)
+        return GeneratedText(
+            tokenizer.decode(gen_ids, skip_special_tokens=True),
+            truncated=_hit_new_token_cap(gen_ids, max_new_tokens, stop_ids),
+        )
 
     def _batch(prompts: list[str]) -> list[str]:
         if not isinstance(prompts, list) or any(not isinstance(p, str) for p in prompts):
@@ -375,7 +425,11 @@ def make_generator(
                     do_sample=False, num_return_sequences=1, pad_token_id=pad_id,
                 )
             outputs.extend(
-                tokenizer.decode(row[width:], skip_special_tokens=True) for row in generated
+                GeneratedText(
+                    tokenizer.decode(row[width:], skip_special_tokens=True),
+                    truncated=_hit_new_token_cap(row[width:], max_new_tokens, stop_ids),
+                )
+                for row in generated
             )
         return outputs
 

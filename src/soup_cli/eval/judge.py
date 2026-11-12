@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -460,6 +460,9 @@ class JudgeEvaluator:
     def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int:
         """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / unparseable reply).
 
+        An unparseable reply comes back as an :class:`UnreadableReply`, which is ``-1`` in every
+        comparison; a reply that says tie (``{"winner": "tie"}``) is a plain ``-1``.
+
         A judge that cannot be reached raises :class:`JudgeUnavailableError`
         (#1447). A failed call is not a tie: scoring it as one turned a dead
         judge into a measured 0.5 win-rate and a DON'T SHIP verdict.
@@ -467,7 +470,11 @@ class JudgeEvaluator:
         judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
             prompt=prompt, resp_a=resp_a, resp_b=resp_b
         )
-        return _parse_pairwise(self._call_llm(judge_prompt))
+        reply = self._call_llm(judge_prompt)
+        verdict = _parse_pairwise(reply)
+        if verdict == -1 and not _says_tie(reply):
+            return UnreadableReply()  # still -1 wherever a verdict is compared
+        return verdict
 
     def _call_llm(self, prompt: str, max_tokens: int = 1024) -> str:
         """Call the judge LLM. Uses OpenAI-compatible API for all providers.
@@ -636,6 +643,47 @@ def _parse_pairwise(text: str) -> int:
     return -1
 
 
+# What a reply may say instead of A or B to mean "neither": as the whole reply, or as the value of
+# ``winner``. The judge is never offered a tie, so this is only for telling a judge that gave one
+# from a reply that is noise; ``_parse_pairwise`` reads both as -1 and nothing here changes that.
+_TIE_ANSWERS = frozenset({"tie", "tied", "draw", "equal", "neither", "both", "none"})
+_TIE_PUNCTUATION = ".!\"'"
+
+
+def _bare(value: str) -> str:
+    """``value`` without outer whitespace, quotes and sentence punctuation, case-folded."""
+    return value.strip().strip(_TIE_PUNCTUATION).strip().casefold()
+
+
+def _says_tie(text: str) -> bool:
+    """Whether a reply that picked neither response said so (a tie), rather than being noise."""
+    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+        except (json.JSONDecodeError, TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            winner = data.get("winner")
+            return isinstance(winner, str) and _bare(winner) in _TIE_ANSWERS
+    return _bare(text or "") in _TIE_ANSWERS
+
+
+class UnreadableReply(int):
+    """A judge reply that could not be parsed: the verdict ``-1`` that also says it was noise.
+
+    ``compare_pair`` returns this instead of a plain ``-1`` for a reply that is neither A, B nor a
+    tie. It is equal to ``-1`` and an ``int`` in every other respect, so every caller that compares
+    a verdict (``== -1``, ``in (0, 1)``, a dict lookup) behaves as it did; only
+    :func:`pairwise_compare_detailed` looks at the type, to record why a tie is a tie.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls) -> "UnreadableReply":
+        return super().__new__(cls, -1)
+
+
 def pairwise_compare(
     prompt: str,
     resp_a: str,
@@ -654,10 +702,76 @@ def pairwise_compare(
     doubles the judge calls per pair vs a one-shot random-flip; the stronger
     guarantee is intentional.
     """
+    return pairwise_compare_detailed(prompt, resp_a, resp_b, evaluator, swap=swap).combined
+
+
+TIE_REAL = "real_tie"
+TIE_ORDER_DISAGREEMENT = "order_disagreement"
+TIE_UNREADABLE_REPLY = "unreadable_reply"
+
+
+@dataclass(frozen=True)
+class PairwiseOutcome:
+    """What the judge said about one pair, in both presentation orders, and what came of it.
+
+    Every verdict uses the judge's own coding: 0 = the response shown first, 1 = the one shown
+    second, -1 = no pick (a tie the judge gave, or a reply that could not be read).
+
+    ``first``: the pair shown as (A, B). ``swapped``: the pair shown as (B, A), as the judge
+    returned it, so 0 there means B. ``second``: ``swapped`` translated back into A/B space
+    (0 = A, 1 = B). ``combined``: the winner when both orders name the same one, else -1.
+    ``swapped`` and ``second`` are ``None`` when the pair was judged in one order only.
+    ``first_unreadable`` / ``swapped_unreadable``: that order's reply could not be parsed (the
+    judge returned an :class:`UnreadableReply`), as opposed to saying tie.
+    """
+
+    first: int
+    swapped: Optional[int]
+    second: Optional[int]
+    combined: int
+    first_unreadable: bool = False
+    swapped_unreadable: bool = False
+
+    @property
+    def tie_reason(self) -> Optional[str]:
+        """Why ``combined`` is a tie, or ``None`` when it is not one.
+
+        ``unreadable_reply``: a reply could not be parsed in at least one order (checked first,
+        because a verdict that was never read says nothing about the two orders). ``real_tie``: no
+        pick in either order, both replies read. ``order_disagreement``: both replies were read and
+        the orders do not name the same side (a pick against a tie, or opposite picks).
+        """
+        if self.combined != -1:
+            return None
+        if self.first_unreadable or self.swapped_unreadable:
+            return TIE_UNREADABLE_REPLY
+        if self.first == -1 and self.second in (None, -1):
+            return TIE_REAL
+        return TIE_ORDER_DISAGREEMENT
+
+
+def pairwise_compare_detailed(
+    prompt: str,
+    resp_a: str,
+    resp_b: str,
+    evaluator: "PairwiseJudge",
+    *,
+    swap: bool = True,
+) -> PairwiseOutcome:
+    """:func:`pairwise_compare` with both presentation orders kept: same calls, same verdict."""
     first = evaluator.compare_pair(prompt, resp_a, resp_b)
+    first_unreadable = isinstance(first, UnreadableReply)
+    if first_unreadable:
+        first = -1  # the verdict as a plain number; the outcome keeps the reason separately
     if not swap:
-        return first
+        return PairwiseOutcome(
+            first=first, swapped=None, second=None, combined=first,
+            first_unreadable=first_unreadable,
+        )
     swapped = evaluator.compare_pair(prompt, resp_b, resp_a)
+    swapped_unreadable = isinstance(swapped, UnreadableReply)
+    if swapped_unreadable:
+        swapped = -1
     # Translate the swapped verdict back into A/B space: 0 -> B(1), 1 -> A(0).
     if swapped == 0:
         second = 1
@@ -666,18 +780,26 @@ def pairwise_compare(
     else:
         second = -1
     # Winner only when BOTH orders agree on a definite (0/1) verdict.
-    if first in (0, 1) and first == second:
-        return first
-    return -1
+    combined = first if first in (0, 1) and first == second else -1
+    return PairwiseOutcome(
+        first=first, swapped=swapped, second=second, combined=combined,
+        first_unreadable=first_unreadable, swapped_unreadable=swapped_unreadable,
+    )
 
 
 def pairwise_winrate(
-    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+    pairs: "list[tuple[str, str, str]]",
+    evaluator: "PairwiseJudge",
+    *,
+    on_row: "Optional[Callable[[int, PairwiseOutcome], None]]" = None,
 ) -> float:
     """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
 
     Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
     (-1) scores 0.5, a loss (0) scores 0.0. Empty input -> 0.5 (no evidence).
+
+    ``on_row``, when given, is called as ``on_row(index, outcome)`` once per pair, right after
+    the pair is judged, with both presentation orders. It does not change the result.
     """
     if not pairs:
         return 0.5
@@ -686,9 +808,14 @@ def pairwise_winrate(
 
     for index, (prompt, base_resp, tuned_resp) in enumerate(track(pairs, len(pairs))):
         try:
-            verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+            outcome = pairwise_compare_detailed(
+                prompt, base_resp, tuned_resp, evaluator, swap=True
+            )
         except JudgeUnavailableError as exc:
             raise exc.for_rows(len(pairs) - index, len(pairs), "pairs") from exc
+        verdict = outcome.combined
+        if on_row is not None:
+            on_row(index, outcome)
         if verdict == 1:
             total += 1.0
         elif verdict == -1:

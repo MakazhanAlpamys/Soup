@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:ship:judge-row:2",
+  "title": "Soup ship judge row",
+  "description": "One pairwise judge verdict of `soup ship --task-mode pairwise --output FILE`, written to <FILE stem>.judge-rows.jsonl, one line per judged prompt: the task-eval prompts (leg task_eval) and, under --gate loop-v2, the held-out edits (leg held_out). The verdict JSON points at the file with its `judge_rows` field (a path relative to the verdict file). The judge saw each pair in both presentation orders; a side wins only when both orders pick it. The file holds your prompts and both models' answers in full: treat it like the inputs it came from. Rows are JSONL, so every line carries its own `schema_version` and there is no header line: a reader that meets a higher version it does not know skips the line, and a line is complete without the lines around it. The noise-floor repeats (the base judged against itself) are never recorded. Readers ignore unknown fields.",
+  "type": "object",
+  "required": [
+    "schema_version", "leg", "index", "id", "id_source", "prompt_hash", "prompt",
+    "base_answer", "tuned_answer", "base_truncated", "tuned_truncated", "judge_model",
+    "base_first", "tuned_first", "result", "tie_reason", "score"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2,
+      "description": "Version of this row format. Present on every line."
+    },
+    "leg": {
+      "enum": ["task_eval", "held_out"],
+      "description": "Which judge pass the row belongs to. task_eval: the --task-eval prompts (leg 1 of the verdict). held_out: the --held-out edits of --gate loop-v2 (the style note, which is information only and never decides)."
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The row's 0-based position in that leg's input."
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "The row's name: its edit_id or id when the input has one, else the full SHA-256 of its prompt as written (see id_source)."
+    },
+    "id_source": {
+      "enum": ["edit_id", "id", "prompt_sha256"],
+      "description": "Where `id` came from. prompt_sha256: the input had no usable id, so `id` is the lowercase 64-hex SHA-256 of the prompt as written (not trimmed or case-folded)."
+    },
+    "prompt_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{12}$",
+      "description": "`prompt_hash` is the 12-hex key sha256(strip().casefold()) of the row's last user message, and is not the 64-hex hash of a whole messages list used elsewhere (the paraphrase format's `prompt_hash` is that one; do not compare the two). Precisely: the first 12 lowercase hex digits of the SHA-256 of `prompt` after strip() and casefold(), UTF-8 encoded. It is the key the loop's holdout split hashes, so it joins a row to the edit it judged."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "The prompt the judge was shown, exactly."
+    },
+    "base_answer": {
+      "type": "string",
+      "description": "The old version's answer, exactly as the judge saw it (the base model, plus --base-adapter when given). Always the base side, whichever order the judge saw it in."
+    },
+    "tuned_answer": {
+      "type": "string",
+      "description": "The new version's answer, exactly as the judge saw it. Always the tuned side."
+    },
+    "base_truncated": {
+      "oneOf": [{"type": "boolean"}, {"type": "null"}],
+      "description": "True when the base answer stopped because it used up the generation token cap (256 new tokens on leg task_eval, 512 on leg held_out) rather than because the model finished. Taken from the generation result, never guessed from the length of the text. null: the generator did not report it (never from Soup's own live generator)."
+    },
+    "tuned_truncated": {
+      "oneOf": [{"type": "boolean"}, {"type": "null"}],
+      "description": "The same for the tuned answer."
+    },
+    "judge_model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The model name of the judge as --judge-model / eval.ship.judge_model configures it: the model part of the URL (llama3.1 for ollama://llama3.1, gpt-4o-mini for https://api.openai.com/gpt-4o-mini). The host and anything else in the URL are not copied."
+    },
+    "base_first": {
+      "enum": ["base", "tuned", "none"],
+      "description": "Whom the judge picked when the base answer was shown first (as A). none: no pick, because the judge said tie or its reply could not be read."
+    },
+    "tuned_first": {
+      "oneOf": [{"enum": ["base", "tuned", "none"]}, {"type": "null"}],
+      "description": "Whom the judge picked when the tuned answer was shown first. none: as for base_first. null: the pair was judged in one order only (soup ship always judges both)."
+    },
+    "result": {
+      "enum": ["base", "tuned", "tie"],
+      "description": "What the two orders came to. A side wins only when BOTH orders pick it; a disagreement, a tie or an unreadable reply is a tie."
+    },
+    "tie_reason": {
+      "oneOf": [{"enum": ["real_tie", "order_disagreement", "unreadable_reply"]}, {"type": "null"}],
+      "description": "Why a tie is a tie. null on a row that is not a tie; one of the three values on a tie. unreadable_reply: a judge reply could not be parsed in at least one order (checked first). real_tie: the judge answered tie in both orders. order_disagreement: both replies were read and the two orders do not name the same side (a pick in one and a tie in the other, or opposite picks, which is what a judge biased towards one position does)."
+    },
+    "score": {
+      "enum": [0, 0.5, 1],
+      "description": "The tuned side's share of the win rate: 1.0 tuned, 0.5 tie, 0.0 base. The mean of `score` over one leg is that leg's win rate."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"result": {"const": "tie"}}, "required": ["result"]},
+      "then": {
+        "properties": {
+          "tie_reason": {"enum": ["real_tie", "order_disagreement", "unreadable_reply"]},
+          "score": {"const": 0.5}
+        }
+      },
+      "else": {"properties": {"tie_reason": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"result": {"const": "tuned"}}, "required": ["result"]},
+      "then": {"properties": {"score": {"const": 1}}}
+    },
+    {
+      "if": {"properties": {"result": {"const": "base"}}, "required": ["result"]},
+      "then": {"properties": {"score": {"const": 0}}}
+    }
+  ],
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  }
+}
