@@ -663,9 +663,30 @@ class GRPOTrainerWrapper:
         from transformers import AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
+        # Same alignment as the streamed route (stream_setup.py): on the resident K2
+        # route the tokenizer is resolved against the guarded native config, so
+        # AutoTokenizer does not read config.json again under the user's
+        # trust_remote_code and, for a repository with an auto_map (Kimi K2), import
+        # and run its configuration module. Off the K2 route the call is unchanged.
+        from soup_cli.utils.kimi_k2 import (
+            load_resident_model_config,
+            uses_resident_kimi_k2_route,
+        )
+
+        resident_tokenizer_config = (
+            load_resident_model_config(cfg.base, **base_revision_kwargs(cfg.base))
+            if uses_resident_kimi_k2_route(cfg.base)
+            else None
+        )
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code,
+                cfg.base,
+                **(
+                    {"config": resident_tokenizer_config}
+                    if resident_tokenizer_config is not None
+                    else {}
+                ),
+                trust_remote_code=self._trust_remote_code,
                 **base_revision_kwargs(cfg.base),
             )
         except Exception:

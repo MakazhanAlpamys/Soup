@@ -770,7 +770,7 @@ def test_sft_refuses_a_rope_override_before_fetching_a_tokenizer_or_config(monke
 
     cfg = load_config_from_string(
         "base: moonshotai/Kimi-K2-Base\ntask: sft\ndata: {train: data.jsonl}\n"
-        "training: {rope_scaling_type: yarn}\n"
+        "training: {rope_scaling_type: yarn, quantization: none}\n"
     )
     wrapper = SFTTrainerWrapper(cfg, device="cpu")
     with pytest.raises(ValueError) as caught:
@@ -881,6 +881,107 @@ def test_sft_tokenizer_failure_off_kimi_k2_bases_stays_quiet(tmp_path, monkeypat
         wrapper._setup_transformers(cfg, cfg.training)
 
     assert all("--trust-remote-code" not in line for line in printed)
+
+
+# ---------------------------------------------------------------------------
+# #2104 review round 2, ask 3: the resident sft/grpo tokenizer load mirrors the
+# streamed route (stream_setup.py): the guarded native config, the user's
+# trust_remote_code, and the bound revision reach AutoTokenizer in the same
+# call shape; the K2 hint still prints when the load fails.
+# ---------------------------------------------------------------------------
+
+
+def _spy_tokenizer_load(monkeypatch):
+    """Record AutoTokenizer.from_pretrained's exact arguments, then fail the load."""
+    import transformers
+
+    seen = {}
+
+    def _spy(model_id, **kwargs):
+        seen["model_id"] = model_id
+        seen.update(kwargs)
+        raise RuntimeError("tokenizer load failed")
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", _spy)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "wrapper_module, wrapper_name",
+    [
+        ("soup_cli.trainer.sft", "SFTTrainerWrapper"),
+        ("soup_cli.trainer.grpo", "GRPOTrainerWrapper"),
+    ],
+    ids=["sft", "grpo"],
+)
+def test_resident_tokenizer_load_mirrors_the_streamed_route(
+    tmp_path, monkeypatch, wrapper_module, wrapper_name
+):
+    """On a K2 base the tokenizer is resolved against the guarded native config: the spy
+    sees exactly ``config`` (the object load_resident_model_config returned), the
+    wrapper's own trust_remote_code, and nothing else — the streamed route's call shape —
+    and the failure still prints the K2 hint."""
+    import importlib
+
+    import soup_cli.utils.kimi_k2 as kimi_k2
+    from soup_cli.config.loader import load_config_from_string
+
+    module = importlib.import_module(wrapper_module)
+    wrapper_cls = getattr(module, wrapper_name)
+    task = "grpo" if "grpo" in wrapper_module else "sft"
+
+    raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
+    base = Path(_write_config(tmp_path, raw)).as_posix()
+    sentinel = object()
+    monkeypatch.setattr(kimi_k2, "load_resident_model_config", lambda *a, **k: sentinel)
+    seen = _spy_tokenizer_load(monkeypatch)
+    printed = _record_console_prints(monkeypatch, module)
+
+    cfg = load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
+    wrapper = wrapper_cls(cfg, device="cpu")
+    with pytest.raises(RuntimeError, match="tokenizer load failed"):
+        wrapper._setup_transformers(cfg, cfg.training)
+
+    assert seen["model_id"] == base
+    assert seen["config"] is sentinel
+    assert seen["trust_remote_code"] == wrapper._trust_remote_code
+    assert set(seen) == {"model_id", "config", "trust_remote_code"}
+    output = "\n".join(printed)
+    assert "--trust-remote-code" in output
+    assert "tiktoken" in output
+
+
+def test_resident_tokenizer_load_off_k2_bases_passes_no_config(tmp_path, monkeypatch):
+    """Off the K2 route the call is unchanged: no config kwarg, trust_remote_code only."""
+    import soup_cli.utils.kimi_k2 as kimi_k2
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    llama = {
+        "model_type": "llama",
+        "hidden_size": 8,
+        "num_attention_heads": 2,
+        "num_key_value_heads": 2,
+        "intermediate_size": 16,
+        "vocab_size": 32,
+        "num_hidden_layers": 1,
+    }
+    base = Path(_write_config(tmp_path, llama)).as_posix()
+    # Guard the routing predicate too: a non-K2 base must not reach the resident config
+    # loader on this path.
+    monkeypatch.setattr(
+        kimi_k2, "load_resident_model_config",
+        lambda *a, **k: pytest.fail("a non-K2 base fetched a resident config"),
+    )
+    seen = _spy_tokenizer_load(monkeypatch)
+
+    cfg = load_config_from_string(f"base: {base}\ntask: sft\ndata: {{train: data.jsonl}}\n")
+    wrapper = SFTTrainerWrapper(cfg, device="cpu")
+    with pytest.raises(RuntimeError, match="tokenizer load failed"):
+        wrapper._setup_transformers(cfg, cfg.training)
+
+    assert "config" not in seen
+    assert seen["trust_remote_code"] == wrapper._trust_remote_code
 
 
 # ==========================================================================
