@@ -811,6 +811,8 @@ training:
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
 
+When it picks `fp16` on a card that has bf16, a LoRA run on an unquantized base loads the base in fp16, as it does on a card without bf16. A bf16 checkpoint kept in bf16 under fp16 compute holds an fp16 copy of every frozen weight through the step: one Qwen2.5-1.5B LoRA step peaked at 7.81 GiB that way, against 4.94 GiB. A 4-bit or 8-bit base is loaded as before.
+
 Only `task: sft` reads the field (and `task: tts`, which trains through the SFT trainer); since #1618, setting it on any other task is refused at config load, because those trainers pick bf16/fp16 on their own and would train at their default precision regardless of this key.
 
 The experimental QuEST route (`quantization_aware: quest`) refuses this flag at

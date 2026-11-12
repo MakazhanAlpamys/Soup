@@ -1430,26 +1430,39 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # enabling the option undo the validated MPS policy above.
             return bf16_fp16_flags(self.device, allow_mps_bf16=True)
 
-        try:
-            import torch
-
-            major, minor = torch.cuda.get_device_capability()
-            cc = float(f"{major}.{minor}")
-        except (ImportError, RuntimeError, AssertionError, OSError):
+        picked = self._auto_mixed_precision_pick(base_model)
+        if picked is None:
             return (self.device == "cuda", False)
-
-        from soup_cli.utils.mixed_precision import pick_mixed_precision
-
-        try:
-            mode = pick_mixed_precision(base_model, cc)
-        except ValueError:
-            return (self.device == "cuda", False)
+        mode, cc = picked
 
         console.print(
             f"[green]Auto mixed-precision picked:[/] {mode} "
             f"(model={base_model}, cc={cc})"
         )
         return (mode == "bf16", mode == "fp16")
+
+    @staticmethod
+    def _auto_mixed_precision_pick(base_model: str) -> Optional[tuple[str, float]]:
+        """``(mode, compute capability)`` that ``pick_mixed_precision`` gives the CUDA card.
+
+        ``None`` when the card or the model name cannot be read; the callers then keep
+        their defaults. Shared by ``_resolve_mixed_precision`` and ``_resolve_load_dtype``
+        so the compute dtype and the load dtype come from the same answer.
+        """
+        try:
+            import torch
+
+            major, minor = torch.cuda.get_device_capability()
+            cc = float(f"{major}.{minor}")
+        except (ImportError, RuntimeError, AssertionError, OSError):
+            return None
+
+        from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+        try:
+            return pick_mixed_precision(base_model, cc), cc
+        except ValueError:
+            return None
 
     def _resolve_load_dtype(self, tcfg):
         """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
@@ -1481,14 +1494,37 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           fourteen other places. One resolver instead of two duplicated
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
+        - ``auto_mixed_precision`` picking fp16 on a card that has bf16 (the
+          Qwen2 / Qwen2.5 / Phi-3 entries of ``KNOWN_PRECISION_QUIRKS``): the
+          same split from the other side, so an unquantized frozen base loads
+          ``torch.float16``, as it does on a pre-Ampere card. Left at ``"auto"``,
+          a bf16 checkpoint under fp16 autocast has each frozen weight cast to
+          an fp16 copy that the backward pass keeps, and its bf16 + fp16
+          residual adds promote the hidden states to fp32: one LoRA step of
+          Qwen2.5-1.5B at 4 x 128 peaked at 7.81 GiB against 4.94 GiB with the
+          storage matching the compute (RTX PRO 5000, sm_120). A 4/8-bit base is
+          left alone: k-bit preparation casts its unquantized weights to fp32.
 
         The loader uses ``dtype`` consistently with the declared Transformers
         5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
         This changes the argument name, not the precision decision above.
         """
-        return resolve_base_load_dtype(
+        dtype = resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
         )
+        if (
+            isinstance(dtype, str)
+            and dtype == "auto"
+            and self.device == "cuda"
+            and getattr(tcfg, "auto_mixed_precision", False)
+            and getattr(tcfg, "quantization", "none") == "none"
+        ):
+            picked = self._auto_mixed_precision_pick(self.config.base)
+            if picked is not None and picked[0] == "fp16":
+                import torch
+
+                return torch.float16
+        return dtype
 
     @staticmethod
     def _as_sft_config(training_args, max_length, packing=False):
