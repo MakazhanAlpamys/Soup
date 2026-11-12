@@ -670,8 +670,11 @@ notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
 `OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
 to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
 its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
-be read statically, stops the migration naming the value. `SFTConfig` and the
-other TRL `*Config` classes are read for hyperparameters.
+be read statically, stops the migration naming the value. A `DPOTrainer` whose
+`DPOConfig` sets `loss_type="ipo"` migrates to `task: ipo`; any DPO loss other than
+`sigmoid` and `ipo` (`hinge`, `robust`, a list of several) stops the migration
+naming the value. `SFTConfig` and the other TRL `*Config` classes are read for
+hyperparameters.
 The final trainer determines the task; its inline or named config, passed as `args=`
 or positionally, supplies output and hyperparameters using the latest module-level
 binding before that trainer (including annotated assignments).
@@ -701,7 +704,11 @@ where a key is absent (#1807):
   training model wins over the reload. `gradient_accumulation_steps`, `warmup_ratio`,
   `weight_decay` and `seed` are read from the final trainer's `TrainingArguments` or
   TRL `*Config`; `warmup_steps` has no Soup field (warmup comes from
-  `training.warmup_ratio`) and is named in a warning.
+  `training.warmup_ratio`) and is named in a warning. The config's `beta` maps to the
+  field the task's trainer passes to TRL as `beta`: `dpo_beta` (also for online DPO),
+  `ipo_tau`, `kto_beta`, `orpo_beta`, `bco_beta` or `grpo_beta`. A `CPOConfig` `beta`
+  has no Soup field, and is named in the warning below, as is a `loss_type` on any
+  config but `DPOConfig` and `CPOConfig`.
 - **Nothing is dropped in silence.** Every source key, `TrainingArguments` keyword or
   `get_peft_model` keyword the migrator does not map is listed in one
   "not migrated" warning.
