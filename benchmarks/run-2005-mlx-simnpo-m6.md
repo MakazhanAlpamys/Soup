@@ -99,6 +99,13 @@ is. Of the same modules, the merge changed two: `config/backend_support.py`, in
 the rows for SFT (#2128), and `trainer/mlx_sft.py`, in `_check_unsupported()`
 and `train()` (#2128), both of which the MLX DPO wrapper, and so the SimNPO
 one, overrides. The run was not repeated then either.
+`main` `26ffea17` was merged in after that, again leaving `a7929b24` as it is.
+Of the same modules, it changed four: `config/loader.py`, where
+`load_config_from_string()` now hands its checks to a new
+`config_from_mapping()` (#2444); `utils/model_shape.py`, in two new message
+constants (#2444); and `trainer/mlx_dpo.py` and `trainer/mlx_orpo.py`, in
+`build_preference_example` and `build_orpo_example` (#2659), neither of which
+the SimNPO trainer calls. The run was not repeated.
 LoRA went on `self_attn.q_proj` and `self_attn.v_proj`, the modules MLX resolves
 `target_modules: auto` to here.
 
