@@ -1945,6 +1945,18 @@
       "training.lora.r": 16,
       "training.lr": 1e-05
     },
+    "qwen3.5-9b-pretrain": {
+      "base": "Qwen/Qwen3.5-9B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 0.0001
+    },
     "qwen3.5-9b-sft": {
       "base": "Qwen/Qwen3.5-9B",
       "data.format": "auto",
