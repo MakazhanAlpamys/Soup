@@ -57,10 +57,11 @@ file; a single-file model is memory-mapped as a whole, so it saves little). The
 tensor values are the same as the regular merge, but the output keeps the base's
 shard layout instead of a single `model.safetensors`. It needs the default
 `fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`, rank or
-alpha patterns, adapters on embeddings or `lm_head`, a non-default
-`init_lora_weights` (PiSSA and OLoRA from `lora.init_strategy` rewrite the base
-weights at initialization), and base weights stored in a quantized dtype are
-refused with a message to run the regular merge. The merge is
+alpha patterns, adapters on embeddings or `lm_head`, an `init_lora_weights`
+other than `true`, `false` or `"gaussian"` (PiSSA and OLoRA from
+`lora.init_strategy` rewrite the base weights at initialization), and base
+weights stored in a quantized dtype are refused with a message to run the
+regular merge. The merge is
 written to a staging directory next to `--output` and moved into place only when
 complete; an existing non-empty `--output` is not overwritten, and base-model
 files that are symlinks pointing outside the model directory (other than a

@@ -442,6 +442,12 @@ class TestAdapterCoverage:
         actual = _read_all(tmp_path / "merged")
         assert all(torch.equal(value, expected[key]) for key, value in actual.items())
 
+    def test_init_allowlist_is_shared_with_streamed_inference(self):
+        """One allowlist for both adapter loaders, so they cannot drift (#2722)."""
+        from soup_cli.utils import lowmem_merge, stream_inference
+
+        assert lowmem_merge._PLAIN_LORA_INITS is stream_inference._PLAIN_LORA_INITS
+
     @pytest.mark.parametrize("changes", [{"peft_type": "IA3"}, {"bias": "all"}])
     def test_other_adapter_types_are_refused(self, checkpoints, changes):
         from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
