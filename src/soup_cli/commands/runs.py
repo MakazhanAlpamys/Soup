@@ -25,10 +25,7 @@ app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
 def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
     """Return only runs whose output_dir is under ``cwd``.
 
-    Runs with no ``output_dir`` are dropped, and so are runs recorded before
-    #2725 with a relative one: it is relative to the directory the run trained
-    in, which was not stored, and resolving it against ``cwd`` would place
-    every such run under every directory. Comparisons use
+    Runs with no ``output_dir`` are dropped. Comparisons use
     ``os.path.realpath + commonpath`` for Windows 8.3 short-name safety
     (project-wide path-containment convention).
     """
@@ -36,7 +33,7 @@ def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
     kept: list[dict] = []
     for run in runs:
         out = run.get("output_dir")
-        if not out or not os.path.isabs(out):
+        if not out:
             continue
         try:
             cand = os.path.realpath(out)
@@ -451,18 +448,6 @@ def clean(
         out_dir_str = run.get("output_dir")
         if not out_dir_str:
             continue
-        if not os.path.isabs(out_dir_str):
-            # Recorded before #2725, relative to the directory the run trained
-            # in, which was not stored. Resolved against cwd it names this
-            # directory's checkpoints, possibly another project's.
-            console.print(
-                f"[yellow]{for_terminal(run['run_id'])}: skipped; its output dir "
-                f"{for_terminal(out_dir_str)} was recorded as a relative path, so the "
-                "directory it trained in is unknown. Prune its checkpoints by hand "
-                "there.[/]",
-                emoji=False,
-            )
-            continue
         # Cross-platform containment: project convention requires
         # os.path.realpath + commonpath because Path.resolve() + relative_to()
         # silently mismatches on Windows 8.3 short names.
@@ -691,15 +676,6 @@ def curriculum_curve(
         if "\x00" in out_dir:
             console.print("[red]run output_dir contains null bytes[/]")
             raise typer.Exit(2)
-        if run.get("output_dir") and not os.path.isabs(out_dir):
-            # Recorded before #2725, relative to the directory the run trained
-            # in; resolved against cwd it can name another run's history.
-            console.print(
-                f"[yellow]run output_dir {for_terminal(out_dir)} was recorded as a "
-                "relative path;[/] pass --history with its curriculum_history.jsonl",
-                emoji=False,
-            )
-            raise typer.Exit(1)
         candidate = os.path.join(out_dir, "curriculum_history.jsonl")
     else:
         candidate = history_path

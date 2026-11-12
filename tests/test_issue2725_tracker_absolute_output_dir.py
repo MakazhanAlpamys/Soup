@@ -12,8 +12,11 @@ trained in:
 * ``soup runs curriculum-curve`` read the current directory's history.
 
 ``finish_run`` now stores ``os.path.abspath(output_dir)``. A row recorded
-before the fix still holds the relative value; the readers skip it rather
-than guess, and ``clean`` says so.
+before the fix still holds the relative value, and every reader (``--cwd-only``,
+``clean``, ``curriculum-curve``, ``soup rewind``) resolves it against the
+current directory exactly as before: nothing that works today is skipped or
+refused, so ``soup runs clean <id>`` from the directory the run trained in keeps
+working.
 """
 
 import json
@@ -27,6 +30,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.commands.rewind import _log_candidates
 from soup_cli.commands.runs import _filter_runs_by_cwd
 from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -35,7 +39,6 @@ runner = CliRunner()
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _CKPT_FILES = ("model.safetensors", "optimizer.pt", "scheduler.pt")
 _NO_RUNS = "No runs found."
-_LEGACY = "was recorded as a relative path"
 
 
 def _plain(text: str) -> str:
@@ -169,39 +172,49 @@ class TestReadersDoNotResolveAgainstTheirOwnDirectory:
         assert _NO_RUNS in _invoke("--cwd-only")
 
 
-class TestALegacyRelativeRowIsSkipped:
-    def test_clean_skips_it_with_one_notice_and_leaves_cwd_untouched(
+class TestALegacyRelativeRowResolvesAsBefore:
+    """A row recorded before #2725 holds ``output``; it is neither skipped nor
+    refused, and resolves against the current directory as it always did."""
+
+    def test_clean_from_its_training_directory_prunes_it(
         self, db, tmp_path, monkeypatch
     ) -> None:
-        project_y = _project(tmp_path, "projY")
+        project_x = _project(tmp_path, "projX")
         run_id = _legacy_run(db, "output")
-        monkeypatch.chdir(project_y)
+        monkeypatch.chdir(project_x)
 
         output = _invoke("clean", run_id, "--no-keep-weights", "--force")
 
-        assert _untouched(project_y)
-        assert f"{run_id}: skipped; its output dir output {_LEGACY}" in output
-        assert output.count(_LEGACY) == 1
-        assert "Delete" not in output
+        assert not (project_x / "output" / "checkpoint-1").exists()
+        assert all(
+            (project_x / "output" / "checkpoint-2" / name).exists() for name in _CKPT_FILES
+        )
+        assert "skipped" not in output
 
-    def test_dry_run_lists_nothing_from_cwd(self, db, tmp_path, monkeypatch) -> None:
-        project_y = _project(tmp_path, "projY")
+    def test_clean_dry_run_lists_its_checkpoint(self, db, tmp_path, monkeypatch) -> None:
+        project_x = _project(tmp_path, "projX")
         run_id = _legacy_run(db, "output")
-        monkeypatch.chdir(project_y)
+        monkeypatch.chdir(project_x)
 
         output = _invoke("clean", run_id, "--no-keep-weights", "--dry-run")
 
-        assert "Delete dir:" not in output
-        assert _LEGACY in output
+        assert "Delete dir:" in output
+        assert "checkpoint-1" in output
+        assert _untouched(project_x)
 
-    def test_cwd_only_does_not_claim_it(self, db, tmp_path, monkeypatch) -> None:
-        project_y = _project(tmp_path, "projY")
+    def test_cwd_only_lists_it_from_its_training_directory(
+        self, db, tmp_path, monkeypatch
+    ) -> None:
+        project_x = _project(tmp_path, "projX")
         _legacy_run(db, "output")
-        monkeypatch.chdir(project_y)
+        monkeypatch.chdir(project_x)
 
-        assert _NO_RUNS in _invoke("--cwd-only")
+        output = _invoke("--cwd-only")
 
-    def test_filter_runs_by_cwd_drops_it(self, tmp_path, monkeypatch) -> None:
+        assert _NO_RUNS not in output
+        assert "Training Runs" in output
+
+    def test_filter_runs_by_cwd_resolves_it_against_cwd(self, tmp_path, monkeypatch) -> None:
         project_x = _project(tmp_path, "projX")
         project_y = _project(tmp_path, "projY")
         monkeypatch.chdir(project_y)
@@ -213,25 +226,44 @@ class TestALegacyRelativeRowIsSkipped:
 
         kept = _filter_runs_by_cwd(runs, os.getcwd())
 
-        assert [run["run_id"] for run in kept] == ["here"]
+        assert [run["run_id"] for run in kept] == ["legacy", "here"]
 
-    def test_curriculum_curve_does_not_read_cwd_history(
+    def test_curriculum_curve_reads_its_history_from_its_training_directory(
         self, db, tmp_path, monkeypatch
     ) -> None:
-        project_y = tmp_path / "projY"
-        (project_y / "output").mkdir(parents=True)
-        (project_y / "output" / "curriculum_history.jsonl").write_text(
+        project_x = tmp_path / "projX"
+        (project_x / "output").mkdir(parents=True)
+        (project_x / "output" / "curriculum_history.jsonl").write_text(
             json.dumps({"step": 100, "weights": [0.5, 0.5]}) + "\n", encoding="utf-8"
         )
         run_id = _legacy_run(db, "output")
-        monkeypatch.chdir(project_y)
+        monkeypatch.chdir(project_x)
 
-        result = runner.invoke(app, ["runs", "curriculum-curve", run_id])
+        output = _invoke("curriculum-curve", run_id)
 
-        assert result.exit_code == 1, result.output
-        output = _plain(result.output)
-        assert _LEGACY in output
-        assert "--history" in output
+        assert "B0" in output and "B1" in output
+
+    def test_rewind_looks_for_its_log_relative_to_cwd(self) -> None:
+        candidates = _log_candidates({"output_dir": "output"}, "rewind.jsonl")
+        assert candidates[0] == Path("output") / "rewind.jsonl"
+
+
+class TestRewindFindsAFinishedRunFromAnyDirectory:
+    def test_the_recorded_directory_is_absolute(self, db, tmp_path, monkeypatch) -> None:
+        project_x = tmp_path / "projX"
+        project_x.mkdir()
+        monkeypatch.chdir(project_x)
+        run_id = _finished_run(db, "output")
+
+        monkeypatch.chdir(tmp_path)
+        tracker = ExperimentTracker(db_path=db)
+        try:
+            target = tracker.get_run(run_id)
+        finally:
+            tracker.close()
+        candidates = _log_candidates(target, "rewind.jsonl")
+
+        assert candidates[0] == Path(os.path.abspath(project_x / "output")) / "rewind.jsonl"
 
 
 class TestAnAbsoluteOutputDirUnderCwdStillWorks:
@@ -250,13 +282,12 @@ class TestAnAbsoluteOutputDirUnderCwdStillWorks:
         monkeypatch.chdir(project_x)
         run_id = _finished_run(db, "output")
 
-        output = _invoke("clean", run_id, "--no-keep-weights", "--force")
+        _invoke("clean", run_id, "--no-keep-weights", "--force")
 
         assert not (project_x / "output" / "checkpoint-1").exists()
         assert all(
             (project_x / "output" / "checkpoint-2" / name).exists() for name in _CKPT_FILES
         )
-        assert _LEGACY not in output
 
     def test_curriculum_curve_reads_its_history(self, db, tmp_path, monkeypatch) -> None:
         project_x = tmp_path / "projX"

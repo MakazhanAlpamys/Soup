@@ -466,7 +466,9 @@ class ExperimentTracker:
         directory the run trained in (#2725). The default ``output: ./output``
         arrives here as ``"output"``, and ``soup runs --cwd-only`` and
         ``soup runs clean`` used to resolve that against whatever directory
-        they were run from. An empty or missing value is stored as given.
+        they were run from. An empty or missing value is stored as given. A
+        row recorded before this change keeps its relative value, and the
+        readers still resolve it against the current directory, as before.
         """
         if output_dir:
             output_dir = os.path.abspath(output_dir)

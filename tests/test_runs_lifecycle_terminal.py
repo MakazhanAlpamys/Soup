@@ -102,8 +102,7 @@ def test_clean_names_the_run_in_its_fallback_note_as_typed(db, value):
     out = Path("out")
     (out / "checkpoint-1").mkdir(parents=True)
     (out / "checkpoint-2").mkdir()
-    # absolute, as finish_run records it; clean skips a relative one (#2725)
-    _start(db, value, output_dir=str(out.absolute()))
+    _start(db, value, output_dir=str(out))
 
     result = runner.invoke(app, ["runs", "clean", value, "--dry-run"])
 
