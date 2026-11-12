@@ -163,7 +163,9 @@ class TestMerge:
             tmp_path,
         )
         assert res.exit_code == 0, res.output
-        cfg = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+        cfg = json.loads(
+            (tmp_path / "out" / "adapter_config.json").read_text(encoding="utf-8")
+        )
         assert cfg["alpha_pattern"] == {"q_proj": 4}
         got = _effective_delta(tmp_path / "out", 4 / 2)
         np.testing.assert_allclose(got, _diag(0.0, 1.0), atol=1e-6)
