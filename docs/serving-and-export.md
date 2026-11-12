@@ -997,7 +997,7 @@ Path-containment validated, hard rotation cap (default 100 MB, one backup retain
 With the default Transformers backend every answer to `/v1/chat/completions` and `/v1/messages` gets a fresh UUID4 in canonical lowercase form. It comes back as the body field `response_id` and as the response header `X-Response-Id`; the `id` field (`chatcmpl-…`) is unchanged, so OpenAI clients see nothing new.
 
 - A streamed `/v1/chat/completions` answer carries the header and a `response_id` field in every `data:` chunk.
-- `/v1/messages` carries the header and a `response_id` field in the reply (a stream: in `message.response_id` of the `message_start` event). It takes neither `conversation_id` nor `X-Conversation-Id`, so its trace records have `conversation_id: null`.
+- `/v1/messages` carries the header and a `response_id` field in the reply (a stream: in `message.response_id` of the `message_start` event). It reads the `X-Conversation-Id` header as `/v1/chat/completions` does but has no `conversation_id` body field, so a request without the header has `conversation_id: null` in its trace record.
 - A page served from `localhost` can read the header: `X-Response-Id` is in the CORS exposed headers.
 - A failed generation (500) returns no id and writes no record.
 - The id is what `--trace-log` writes as `id`, so a feedback record points at the answer through `response_id`. The ids exist whether or not `--trace-log` is set.

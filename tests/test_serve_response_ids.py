@@ -370,17 +370,24 @@ class TestAnthropicMessagesRoute:
         (record,) = _trace(cwd)
         assert record["id"] == resp.headers[RESPONSE_ID_HEADER]
         assert record["messages"] == [{"role": "user", "content": "hi"}]
-        # /v1/messages takes no conversation key, so none is recorded.
+        # No X-Conversation-Id header and /v1/messages has no body field for one.
         assert record["conversation_id"] is None
 
-    def test_the_conversation_header_is_not_read_here(self, cwd, monkeypatch):
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_the_conversation_header_is_read_as_on_chat_completions(
+        self, cwd, monkeypatch, stream
+    ):
+        # #2630 made /v1/messages forward X-Conversation-Id (and X-User-Id), so the answer
+        # is logged under the conversation the client named, as on /v1/chat/completions.
         client = _client(cwd, monkeypatch)
 
         client.post(
-            "/v1/messages", json=self.BODY, headers={"X-Conversation-Id": "ignored-here"}
+            "/v1/messages",
+            json={**self.BODY, "stream": stream},
+            headers={"X-Conversation-Id": "conv-header"},
         )
 
-        assert _trace(cwd)[0]["conversation_id"] is None
+        assert _trace(cwd)[0]["conversation_id"] == "conv-header"
 
     def test_a_streamed_reply_has_the_header_and_the_id_in_message_start(self, cwd, monkeypatch):
         client = _client(cwd, monkeypatch)

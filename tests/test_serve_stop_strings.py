@@ -218,8 +218,10 @@ def test_streamed_deltas_equal_the_plain_reply(name):
     assert reason == plain_reason
     if expected != "".join(pieces).strip():
         assert plain_reason == "stop"
-    # The request log carries the cut reply, for the plain call and the streamed one.
-    assert [call.kwargs["response"] for call in writer.record.call_args_list] == [expected] * 2
+    # The request log carries the cut reply, for the plain call and the streamed one (one
+    # conversation record each, as the loop's trace log writes them).
+    records = writer.record_conversation.call_args_list
+    assert [call.kwargs["response"] for call in records] == [expected] * 2
     for stop_string in [stop] if isinstance(stop, str) else stop:
         assert stop_string not in text
 
@@ -596,8 +598,10 @@ def test_messages_plain_reply_always_carries_stop_sequence():
 
     assert body["stop_sequence"] is None
     assert body["stop_reason"] == "end_turn"
+    # ``response_id`` is the id of the answer (the trace log and POST /v1/feedback use it).
     assert set(body) == {
         "id", "type", "role", "model", "content", "stop_reason", "stop_sequence", "usage",
+        "response_id",
     }
 
 

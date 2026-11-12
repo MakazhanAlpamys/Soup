@@ -3840,4 +3840,8 @@ def _stream_response(
         logger.debug("streamed text differs from the final decode; nothing more is sent")
 
     # Final chunk(s): the finish reason, and for Anthropic the token count too.
-    yield from frames.end(finish_reason, int(completion_tokens_for_log), matched_stop)
+    # An engine that did not report the completion count leaves it None: the Anthropic
+    # ``message_delta`` still needs a number, and the conversation record above kept the None.
+    yield from frames.end(
+        finish_reason, int(completion_tokens_for_log or 0), matched_stop
+    )
