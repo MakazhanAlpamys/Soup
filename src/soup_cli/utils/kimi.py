@@ -25,7 +25,8 @@ def resident_kimi_k2_quantization_refusal(quantization: str) -> str:
     return (
         f"resident Kimi K2 route: training.quantization {quantization!r} is refused — the "
         "resident route loads bf16 only; set training.quantization: none for this route, "
-        "or train 4-bit through training.stream_layers: true."
+        "or train 4-bit through training.stream_layers: true (--trust-remote-code for the "
+        "tokenizer and pip install tiktoken; see docs/performance-and-quantization.md, Kimi K2)."
     )
 
 
@@ -61,17 +62,20 @@ def is_resident_kimi_k2_base(base: str) -> bool:
 
 def resident_kimi_k2_refusal(
     base: str, *, backend: str, hub: str, stream_layers: bool, task: str | None = None,
-    quantization: str | None = None,
+    modality: str = "text", quantization: str | None = None,
 ) -> str | None:
     """Only qualify known HF IDs on the resident Transformers path.
 
     Base/Instruct are admitted (``None``) on sft/grpo and refused with the streamed-route
     remedy for any other task; Thinking/0905 are refused for every task. ``task=None``
     refuses Base/Instruct too: callers that cannot name a task get the safe answer. The
-    admission reaches sft/grpo on Base/Instruct only with ``quantization`` ``None`` or
-    ``"none"``: the resident route loads bf16 only, so any other quantization is refused
-    here, at config validation, instead of failing inside ``load_resident_model``
-    (#2104, review round 2). The returned refusal is a
+    admission covers ``modality: text`` only: sft's vision/audio setup calls
+    ``from_pretrained`` directly, bypassing the resident loader, so any other modality is
+    refused with the route reason (#2104, review round 3). The admission reaches
+    sft/grpo on Base/Instruct only with ``quantization`` ``None`` or ``"none"``: the
+    resident route loads bf16 only, so any other quantization is refused here, at config
+    validation, instead of failing inside ``load_resident_model`` (#2104, review round
+    2). The returned refusal is a
     :class:`_ResidentKimiK2QuantizationRefusal` instance in that case, so the schema can
     skip the remote-code suffix that belongs to the route refusals.
     """
@@ -84,7 +88,7 @@ def resident_kimi_k2_refusal(
             return None
         if folded in KIMI_K2_RESIDENT_ALWAYS_REFUSED:
             return reason
-        if task not in KIMI_K2_RESIDENT_ADMITTED_TASKS:
+        if task not in KIMI_K2_RESIDENT_ADMITTED_TASKS or modality != "text":
             return reason
         if quantization not in (None, "none"):
             return _ResidentKimiK2QuantizationRefusal(

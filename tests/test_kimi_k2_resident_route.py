@@ -729,6 +729,20 @@ def test_resident_model_refuses_mismatched_expert_shapes(tmp_path, resident_chec
     assert "[32, 64]" in message
 
 
+def test_resident_model_refuses_unsupported_model_kwargs(resident_checkpoints):
+    """#2104 review round 3, ask 4b: kwargs the resident loader does not consume (here
+    ``low_cpu_mem_usage``) are refused by name before any weight is read, not silently
+    dropped or passed into the guarded load."""
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    with pytest.raises(ValueError, match="unsupported model_kwargs") as caught:
+        load_resident_model(
+            resident_checkpoints["k2-bf16"],
+            model_kwargs={"low_cpu_mem_usage": True},
+        )
+    assert "low_cpu_mem_usage" in str(caught.value)
+
+
 def test_rope_override_is_refused_on_the_resident_route(resident_checkpoints):
     from soup_cli.utils.kimi_k2 import resident_kimi_k2_rope_refusal
 
@@ -776,6 +790,50 @@ def test_sft_refuses_a_rope_override_before_fetching_a_tokenizer_or_config(monke
     with pytest.raises(ValueError) as caught:
         wrapper._setup_transformers(cfg, cfg.training)
     assert "rope_scaling_type 'yarn'" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# #2104 review round 3, ask 2: a local directory whose config.json declares
+# model_type: kimi_k2 goes through the guard in _setup_transformers (sft and
+# grpo alike) with no from_pretrained fallback: it loads natively or the guard
+# refuses naming every failing field.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "wrapper_module, wrapper_name, task",
+    [
+        ("soup_cli.trainer.sft", "SFTTrainerWrapper", "sft"),
+        ("soup_cli.trainer.grpo", "GRPOTrainerWrapper", "grpo"),
+    ],
+    ids=["sft", "grpo"],
+)
+def test_a_local_k2_directory_failing_the_guard_is_refused_by_field_name(
+    tmp_path, wrapper_module, wrapper_name, task
+):
+    import importlib
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.utils.kimi_k2 import UnsupportedKimiK2Error
+
+    module = importlib.import_module(wrapper_module)
+    wrapper_cls = getattr(module, wrapper_name)
+
+    # A local K2-shaped directory the guard rejects: an unexpected config field. The
+    # refusal must come from _setup_transformers itself — the resident config read
+    # happens there before the tokenizer load — naming the failing field.
+    raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
+    raw["ep_size"] = 1
+    base = Path(_write_config(tmp_path, raw)).as_posix()
+
+    cfg = load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
+    wrapper = wrapper_cls(cfg, device="cpu")
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        wrapper._setup_transformers(cfg, cfg.training)
+    message = str(caught.value)
+    assert "'ep_size'" in message
+    assert "runs resident through transformers' own DeepseekV3 class" in message
+    assert "from_pretrained" not in message
 
 
 def _record_console_prints(monkeypatch, module):
@@ -1399,6 +1457,37 @@ def test_resident_model_refuses_an_incomplete_expert_set(
     message = str(caught.value)
     assert "not every index 0.." in message
     assert "The checkpoint is damaged or not a complete Kimi K2 copy." in message
+
+
+def test_resident_model_refuses_experts_whose_down_proj_grows(
+    tmp_path, resident_checkpoints
+):
+    """#2104 review round 3, ask 4c: give every layer-1 expert's down_proj one extra row
+    and every per-expert shape still agrees with its siblings — only the fused-shape
+    check (kimi_k2.py:1022-1027) can refuse, naming ``native fused expert needs``."""
+    import torch
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    src = resident_checkpoints["k2-bf16"]
+    state = load_file(os.path.join(src, "model.safetensors"))
+    prefix = "model.layers.1.mlp.experts"
+    keys = [f"{prefix}.{i}.down_proj.weight" for i in range(8)]
+    drop = list(keys)
+    add = {}
+    for key in keys:
+        tensor = state[key]
+        add[key] = torch.cat([tensor, tensor[:1]], dim=0)
+
+    path = _k2_variant(tmp_path, src, drop=drop, add=add)
+    with pytest.raises(ValueError) as caught:
+        load_resident_model(path, model_kwargs={"dtype": torch.float32})
+    message = str(caught.value)
+    assert "native fused expert needs" in message
+    assert "[65, 32]" in message
+    assert "[64, 32]" in message
+    assert "The checkpoint is damaged." in message
 
 
 def test_resident_model_refuses_a_truncated_up_proj(tmp_path, resident_checkpoints):

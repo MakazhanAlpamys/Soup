@@ -48,7 +48,15 @@ resident load still fails and `trust_remote_code` does not repair that. For
 `DeepseekV3Config` (rewritten in memory; the config read passes
 `trust_remote_code=False`, so no repository code is executed) and loads
 the safetensors natively, dequantising each FP8 block weight to bf16 per tensor at
-load. The load never holds a second whole model; its largest transient is one
+load. The route requires `training.quantization: none` — any other value is refused
+at config validation — and the tokenizer is still repository code on this route: it
+needs `--trust-remote-code` and `pip install tiktoken` to load. Migration: for
+`task: sft` and `task: grpo` with `modality: text` on the transformers backend, a
+local directory whose `config.json` declares `model_type: kimi_k2` no longer loads
+through `from_pretrained`; it loads through the guarded native route or is refused
+naming every failing field, and `training.rope_scaling_type` on it is refused; other
+tasks, other model types and `training.stream_layers: true` are unchanged. The load
+never holds a second whole model; its largest transient is one
 layer's fused routed experts at the fuse step (about 33.8 GB per layer at published
 K2 scale), not a single tensor's working set. A
 `quantization_config` menu entry (the 4-bit path) is refused on this route: 4-bit
@@ -69,10 +77,11 @@ modelling code on a tiny K2-shaped checkpoint
 ([gate](../benchmarks/gate-kimi-k2-resident.md)); routing at real scale is
 unverified.
 
-`kimi-k2-sft` stays unavailable this round: the guarded native resident route for
-sft/grpo exists (train it with `quantization: none`; the 4-bit menu stays on the
-streamed route), but whether the recipe becomes available again on
-tiny-checkpoint evidence, and in which release, is reserved for review.
+`kimi-k2-sft` stays unavailable: its YAML carries `quantization: 4bit`, which
+this route refuses at config validation (the refusal names the remedy —
+`training.quantization: none` for the resident route, or 4-bit through
+`training.stream_layers: true`, where the tokenizer still needs
+`--trust-remote-code` and `pip install tiktoken`).
 `kimi-k2-thinking-grpo` remains discoverable with an unsupported resident-route
 description: `soup recipes show` preserves its YAML for inspection and
 `soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe

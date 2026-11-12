@@ -98,12 +98,8 @@ def build_snapshot() -> dict[str, dict]:
             if not recipe.unavailable_reason:
                 raise
             message = str(exc)
-            # Route refusals: the reason appears verbatim in the message. A review-gated
-            # row (kimi-k2-sft, #2104 review round 2) appends its own reservation
-            # sentence to the refusal text, so there the refusal — pydantic's
-            # "Value error, " wrapper stripped — must appear verbatim inside the reason.
-            detail = message.split("Value error, ", 1)[-1]
-            if recipe.unavailable_reason not in message and detail not in recipe.unavailable_reason:
+            # Route refusals: the reason appears verbatim in the message.
+            if recipe.unavailable_reason not in message:
                 raise
             recipes[name] = {"$unavailable": recipe.unavailable_reason}
         else:

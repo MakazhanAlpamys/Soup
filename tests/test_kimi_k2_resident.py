@@ -75,6 +75,24 @@ def test_resident_k2_refuses_base_and_instruct_for_other_tasks(base):
     _assert_route_text(str(error.value), base)
 
 
+@pytest.mark.parametrize("base", ADMITTED_BASES)
+@pytest.mark.parametrize("modality", ["vision", "audio"])
+def test_resident_k2_refuses_multimodal_sft_on_the_base(base, modality):
+    """#2104 review round 3, ask 1: the admission covers modality: text only. sft's
+    vision/audio setup sends the run to _setup_vision_transformers /
+    _setup_audio_transformers, which call from_pretrained directly — not
+    load_resident_model — so a multimodal sft on a K2 base is refused with the route
+    reason even at quantization: none."""
+    with pytest.raises(ValueError, match=REASON) as error:
+        load_config_from_string(
+            f"base: {base}\ntask: sft\nmodality: {modality}\n"
+            "data: {train: data.jsonl}\n"
+            "training: {quantization: none}\n"
+        )
+    assert base in str(error.value)
+    _assert_route_text(str(error.value), base)
+
+
 def test_schema_admission_depends_on_the_task():
     # Same base, two tasks: dpo is refused naming the base, sft loads at
     # quantization: none (config only, no model download happens at config validation).
@@ -91,12 +109,6 @@ def test_schema_admission_depends_on_the_task():
 # bf16 only; the refusal names training.stream_layers: true as the 4-bit path.
 # ---------------------------------------------------------------------------
 
-QUANT_REFUSAL = (
-    "resident Kimi K2 route: training.quantization '4bit' is refused — the resident "
-    "route loads bf16 only; set training.quantization: none for this route, or train "
-    "4-bit through training.stream_layers: true."
-)
-
 
 def _assert_quant_refusal(exc, base="moonshotai/Kimi-K2-Base", value="'4bit'"):
     message = str(exc)
@@ -104,6 +116,12 @@ def _assert_quant_refusal(exc, base="moonshotai/Kimi-K2-Base", value="'4bit'"):
     assert "bf16 only" in message
     assert "training.quantization: none" in message
     assert "training.stream_layers: true" in message
+    assert "--trust-remote-code" in message and "tiktoken" in message
+    # The quantization refusal carries the two ways forward; the remote-code
+    # suffix ("removed APIs … Choose a compatible base.") belongs to the route
+    # refusals only and would contradict the remedy (review round 3, ask 4a).
+    assert "Choose a compatible base" not in message
+    assert "removed APIs" not in message
     assert base in message or "resident Kimi K2 route" in message
 
 
@@ -285,27 +303,33 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
 
 
 def test_catalog_keeps_the_sft_recipe_unavailable_this_round(tmp_path, monkeypatch):
-    """Review round 2, ask 6: the recipe restore is not part of this round. The row stays
-    unavailable: its reason is the config-validation refusal the reverted yaml
-    (quantization: 4bit) meets, plus the sentence naming what landed and reserving
-    enablement for review."""
+    """#2104 review round 3, ask 3: the row stays close to main. Its yaml carries
+    ``quantization: 4bit``, which the resident route refuses at config validation, so the
+    reason is that refusal verbatim — including the streamed-route remedy (the tokenizer
+    still needs ``--trust-remote-code`` and ``pip install tiktoken`` there)."""
     from soup_cli.cli import app
-    from soup_cli.recipes.catalog import KIMI_K2_SFT_RECIPE_RESERVED_REASON
+    from soup_cli.utils.kimi import resident_kimi_k2_quantization_refusal
 
     recipe = RECIPES["kimi-k2-sft"]
-    assert recipe.unavailable_reason == KIMI_K2_SFT_RECIPE_RESERVED_REASON
+    assert recipe.unavailable_reason == resident_kimi_k2_quantization_refusal("4bit")
     assert "bf16 only" in recipe.unavailable_reason
+    assert "training.quantization: none" in recipe.unavailable_reason
     assert "training.stream_layers: true" in recipe.unavailable_reason
-    assert "guarded native resident route" in recipe.unavailable_reason
-    assert "reserved for review" in recipe.unavailable_reason
-    assert len(recipe.description) <= 100
+    assert "--trust-remote-code" in recipe.unavailable_reason
+    assert "pip install tiktoken" in recipe.unavailable_reason
+    assert "docs/performance-and-quantization.md" in recipe.unavailable_reason
+    assert "reserved for review" not in recipe.unavailable_reason
+    assert "as of this PR" not in recipe.unavailable_reason
     assert "unsupported" in recipe.description.lower()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "1000")
     runner = CliRunner()
     shown = runner.invoke(app, ["recipes", "show", "kimi-k2-sft"])
     assert shown.exit_code == 0
-    assert "reserved for review" in strip_ansi(shown.output)
+    shown_output = " ".join(strip_ansi(shown.output).split())
+    # `recipes show` prints the YAML and the description (not the reason).
+    assert "guarded streaming only" in shown_output
+    assert "unsupported" in shown_output.lower()
     listed = runner.invoke(app, ["recipes", "list"])
     assert listed.exit_code == 0
     assert "unsupported" in strip_ansi(listed.output).lower()
@@ -332,11 +356,11 @@ def test_snapshot_records_each_recipes_own_route_reason():
     grpo = snapshot["recipes"]["kimi-k2-thinking-grpo"]
     assert grpo == {"$unavailable": RECIPES["kimi-k2-thinking-grpo"].unavailable_reason}
     _assert_route_text(grpo["$unavailable"], RECIPES["kimi-k2-thinking-grpo"].model)
-    # The sft row is unavailable again this round (ask 6): the recorded reason is the
-    # reservation wording, and it starts from the refusal the reverted yaml meets.
+    # The sft row stays unavailable: the recorded reason is the quantization refusal
+    # its yaml (quantization: 4bit) meets at config validation (review round 3, ask 3).
     sft = snapshot["recipes"]["kimi-k2-sft"]
     assert sft == {"$unavailable": RECIPES["kimi-k2-sft"].unavailable_reason}
-    assert "reserved for review" in sft["$unavailable"]
+    assert "training.quantization '4bit'" in sft["$unavailable"]
     assert "bf16 only" in sft["$unavailable"]
 
 

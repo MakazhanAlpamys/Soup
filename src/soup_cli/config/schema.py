@@ -9602,7 +9602,7 @@ class SoupConfig(BaseModel):
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
             stream_layers=self.training.stream_layers, task=self.task,
-            quantization=self.training.quantization,
+            modality=self.modality, quantization=self.training.quantization,
         )
         if reason is not None:
             if isinstance(reason, _ResidentKimiK2QuantizationRefusal):

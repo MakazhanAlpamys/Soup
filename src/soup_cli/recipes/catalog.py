@@ -8,17 +8,6 @@ from soup_cli.utils.kimi import (
     resident_kimi_k2_quantization_refusal,
 )
 
-#: Review round 2, ask 6: the kimi-k2-sft restore is not part of this round. The reason
-#: starts from the refusal the reverted yaml (quantization: 4bit) meets at config
-#: validation — the resident route is bf16-only — and states what landed and that
-#: enabling the recipe on tiny-checkpoint evidence is reserved for review.
-KIMI_K2_SFT_RECIPE_RESERVED_REASON = (
-    resident_kimi_k2_quantization_refusal("4bit")
-    + " The guarded native resident route for Kimi-K2-Base/Instruct on sft/grpo exists "
-    "as of this PR (#2104); enabling this recipe on tiny-checkpoint evidence is reserved "
-    "for review."
-)
-
 
 @dataclass(frozen=True)
 class RecipeMeta:
@@ -2826,10 +2815,8 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description=(
-            "Kimi K2 SFT: resident unsupported this round; enablement reserved for review."
-        ),
-        unavailable_reason=KIMI_K2_SFT_RECIPE_RESERVED_REASON,
+        description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
+        unavailable_reason=resident_kimi_k2_quantization_refusal("4bit"),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
