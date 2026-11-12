@@ -46,6 +46,22 @@ def test_none_is_the_word_only_where_the_field_refuses_null(param, expected):
     assert _parse_sweep_params([param]) == expected
 
 
+def test_an_unknown_key_set_to_none_is_still_refused_by_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "500")
+    config = tmp_path / "soup.yaml"
+    config.write_text(_CONFIG, encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["sweep", "--config", str(config), "--dry-run", "--param", "no_such_field=none"],
+    )
+
+    plain = " ".join(strip_ansi(result.output).split())
+    assert result.exit_code == 1, plain
+    assert "sweep parameter does not match any config field" in plain, plain
+    assert "no_such_field" in plain, plain
+
+
 @pytest.fixture
 def quant_seen(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Run real `_run_single` arms against a stub trainer; record each arm's quantization."""
