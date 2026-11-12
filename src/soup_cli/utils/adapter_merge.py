@@ -10,6 +10,10 @@ Four strategies wrap mergekit-style math in pure numpy:
 All strategies operate on the intersection of layer names; shape-mismatched
 tensors are silently skipped (rank changed between adapters). Live canary
 verdict via v0.55 eval gate is deferred to v0.57.1; stub returns ``None``.
+
+The merged adapter keeps the first input's ``adapter_config.json``, so every
+input's ``lora_B`` is first rescaled to decode at that adapter's LoRA scaling
+(:func:`fold_lora_scaling`).
 """
 
 from __future__ import annotations
@@ -26,6 +30,9 @@ from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequenc
 from soup_cli.utils.adapter_diff import (
     WRITE_ADAPTER_DEPS,
     WRITE_ADAPTER_DEPS_MSG,
+    lora_module_scaling,
+    peft_module_name,
+    read_adapter_config_or_none,
     require_adapter_dependencies,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
@@ -266,6 +273,60 @@ def merge_svd(
     return out, skipped
 
 
+def fold_lora_scaling(
+    weights_list: Sequence[Mapping[str, Any]],
+    adapter_dirs: Sequence[str],
+) -> list[Mapping[str, Any]]:
+    """Rescale every adapter's ``lora_B`` to decode at the first adapter's scaling.
+
+    The merge strategies combine raw ``lora_A`` / ``lora_B`` tensors, and the merged
+    adapter is written with the FIRST adapter's ``adapter_config.json``, so PEFT
+    decodes every merged module at that adapter's scaling. An input trained with a
+    different ``lora_alpha``, ``use_rslora`` or per-module ``alpha_pattern`` /
+    ``rank_pattern`` would otherwise contribute at the wrong strength (a
+    ``lora_alpha=32`` adapter merged under a ``lora_alpha=16`` template counts for
+    half). Each ``lora_B`` / ``lora_embedding_B`` is multiplied by its own module
+    scaling over the template's, so every ``B @ A`` keeps its effective delta.
+
+    Inputs whose scaling already matches the template are passed through
+    unchanged, as is any module whose scaling cannot be read from either config.
+    """
+    import numpy as np
+
+    from soup_cli.utils.adapter_arithmetic import _lora_role
+
+    if len(weights_list) != len(adapter_dirs):
+        raise ValueError(
+            f"weights_list ({len(weights_list)}) and adapter_dirs "
+            f"({len(adapter_dirs)}) length mismatch"
+        )
+    if not weights_list:
+        return []
+    template = read_adapter_config_or_none(adapter_dirs[0])
+    if template is None:
+        return list(weights_list)
+
+    folded: list[Mapping[str, Any]] = [weights_list[0]]
+    for weights, adapter_dir in zip(weights_list[1:], adapter_dirs[1:]):
+        config = read_adapter_config_or_none(adapter_dir)
+        rescaled: Optional[dict[str, Any]] = None
+        if config is not None:
+            for name, tensor in weights.items():
+                role = _lora_role(name)
+                if role is None or role[1] != "B":
+                    continue
+                module = peft_module_name(role[0])
+                target = lora_module_scaling(template, module)
+                own = lora_module_scaling(config, module)
+                if target is None or own is None or target == 0.0 or own == target:
+                    continue
+                if rescaled is None:
+                    rescaled = dict(weights)
+                rescaled[name] = np.asarray(tensor, dtype=np.float64) * (own / target)
+        folded.append(weights if rescaled is None else rescaled)
+    return folded
+
+
 def merge_adapters(
     adapter_paths: Sequence[str],
     output_dir: str,
@@ -305,7 +366,9 @@ def merge_adapters(
         [("adapter", path) for path in adapter_paths], [("output_dir", output_dir)]
     )
 
-    weights_list = [load_adapter_weights(p) for p in adapter_paths]
+    weights_list = fold_lora_scaling(
+        [load_adapter_weights(p) for p in adapter_paths], adapter_paths
+    )
 
     if weights is None:
         eq = 1.0 / len(adapter_paths)

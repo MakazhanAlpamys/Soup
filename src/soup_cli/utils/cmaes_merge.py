@@ -669,9 +669,17 @@ def build_cmaes_eval_fn(
     resolved = _resolve_cmaes_scorer(scorer)
 
     from soup_cli.utils.adapter_diff import load_adapter_weights
-    from soup_cli.utils.adapter_merge import merge_linear, write_merged_adapter
+    from soup_cli.utils.adapter_merge import (
+        fold_lora_scaling,
+        merge_linear,
+        write_merged_adapter,
+    )
 
-    weights_list = [load_adapter_weights(p) for p in plan.adapters]
+    # Score candidates exactly as merge_adapters will write the winner: every
+    # input rescaled to the template's (first adapter's) LoRA scaling.
+    weights_list = fold_lora_scaling(
+        [load_adapter_weights(p) for p in plan.adapters], plan.adapters
+    )
     template_source = plan.adapters[0]
 
     def _eval_fn(weights: Tuple[float, ...]) -> float:

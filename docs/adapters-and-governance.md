@@ -403,6 +403,7 @@ soup adapters branches
 
 **Defaults & safety:**
 
+- The merged adapter keeps the first input's `adapter_config.json`. Every other input's `lora_B` is rescaled to that adapter's LoRA scaling first (`lora_alpha / r`, or `lora_alpha / sqrt(r)` with `use_rslora`, per-module `rank_pattern` / `alpha_pattern` applied), so inputs trained with a different `lora_alpha` keep their strength. This covers every `adapters merge` strategy, `cmaes` candidates included, and the same-rank path of `adapters arithmetic`.
 - Output paths are containment-checked under cwd and reject pre-placed symlinks (TOCTOU defence).
 - Safetensors writes are atomic via `tempfile.mkstemp` + `os.replace` — a crash mid-write never leaves a partial adapter at the target path.
 - `.bin` (PyTorch pickle) adapter format is rejected with an explicit "re-save as safetensors" message.
