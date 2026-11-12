@@ -38,7 +38,6 @@ def test_mlx_eval_steps_is_refused_for_each_non_sft_task(task: str) -> None:
         )
 
 
-
 def test_mlx_sft_honors_eval_steps() -> None:
     cfg = SoupConfig(
         base="test/model",
@@ -60,6 +59,7 @@ def test_mlx_eval_steps_docs_cover_supported_tasks() -> None:
     )
     assert preference_passage is not None, "Missing MLX eval_steps preference-task passage"
     documented_preferences = set(re.findall(r"`([a-z_]+)`", preference_passage.group(1)))
+    # GRPO also refuses eval_steps but is documented in its own section below; SFT honors it.
     expected_preferences = MLX_TASKS - {"sft", "grpo"}
     assert documented_preferences == expected_preferences
     grpo_section = _mlx_section(backends, "grpo")
@@ -77,7 +77,6 @@ def test_mlx_dora_is_refused_for_each_non_sft_task(task: str) -> None:
             data={"train": "train.jsonl", "format": "chatml"},
             training={"quantization": "none", "lora": {"use_dora": True}},
         )
-
 
 
 def test_mlx_dora_refusal_is_listed_in_each_non_sft_task_section() -> None:
