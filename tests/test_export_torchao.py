@@ -39,6 +39,8 @@ def adapter(tmp_path, monkeypatch):
     from transformers import AutoModelForCausalLM
 
     monkeypatch.chdir(tmp_path)
+    # A finished export looks up the registry; keep its DB out of the real home.
+    monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     torch.manual_seed(0)
     tok = build_tokenizer()
     base_dir = tmp_path / "base"
