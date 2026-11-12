@@ -154,13 +154,20 @@ def fork_can(
     for mod in modifications:
         _apply_modification(config, mod)
 
+    # Validated before anything is written, as pack_entry does: a raw dict let a
+    # control character or an over-long author or name through, and every reader
+    # (verify / inspect / run) then refused the fork that had reported success (#2728).
+    new_manifest = Manifest(**{
+        **manifest.model_dump(),
+        "author": author,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "name": f"{manifest.name}-fork",
+    })
+
     with tarfile.open(out, mode="w:gz") as tar:
-        _add_text(tar, "manifest.yaml", yaml.safe_dump({
-            **manifest.model_dump(),
-            "author": author,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "name": f"{manifest.name}-fork",
-        }, sort_keys=False))
+        _add_text(tar, "manifest.yaml", yaml.safe_dump(
+            new_manifest.model_dump(), sort_keys=False,
+        ))
         _add_text(tar, "config.yaml", yaml.safe_dump(config, sort_keys=False))
         _add_text(tar, "data_ref.yaml", yaml.safe_dump(
             {"kind": "local", "note": "forked"},
