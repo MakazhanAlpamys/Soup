@@ -16,6 +16,7 @@ import errno
 import ntpath
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -207,6 +208,73 @@ def _same_file(first: str, second: str) -> bool:
         return os.path.samefile(first, second)
     except (OSError, ValueError):
         # A path that does not exist yet cannot be a hard link to anything.
+        return False
+
+
+def _macos_link_id(path: str) -> Optional[int]:
+    """Read the directory-entry ID when the macOS filesystem supplies one."""
+    if sys.platform != "darwin":
+        return None
+
+    import ctypes
+    import struct
+
+    try:
+        getattrlist = ctypes.CDLL(None).getattrlist
+    except (AttributeError, OSError):
+        return None
+    getattrlist.argtypes = (
+        ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong,
+    )
+    getattrlist.restype = ctypes.c_int
+    # sys/attr.h: ATTR_CMNEXT_LINKID in the extended common bitmap.
+    attributes = ctypes.create_string_buffer(struct.pack("=HHIIIII", 5, 0, 0, 0, 0, 0, 0x10))
+    payload = ctypes.create_string_buffer(12)
+    if getattrlist(os.fsencode(path), attributes, payload, len(payload), 0x20):
+        return None
+    length, link_id = struct.unpack("=IQ", payload.raw)
+    return link_id if length == len(payload) and link_id else None
+
+
+def same_directory_entry(first: str, second: str) -> bool:
+    """Recognize aliases of an input without treating separate hard links as aliases."""
+    first, second = os.path.realpath(first), os.path.realpath(second)
+    if os.path.normcase(first) == os.path.normcase(second):
+        return True
+    try:
+        first_stat = os.stat(first)
+        if not os.path.samestat(first_stat, os.stat(second)):
+            return False
+    except (OSError, ValueError):
+        return False
+    if first_stat.st_nlink == 1:
+        return True
+
+    first_parent, first_name = os.path.split(first)
+    second_parent, second_name = os.path.split(second)
+    if not _same_file(first_parent, second_parent):
+        return False
+    if first_name == second_name:
+        return True
+    first_id, second_id = _macos_link_id(first), _macos_link_id(second)
+    if first_id is not None and second_id is not None:
+        return first_id == second_id
+
+    from unicodedata import normalize
+
+    folded = normalize("NFC", first_name).casefold()
+    if folded != normalize("NFC", second_name).casefold():
+        return False
+    try:
+        # With no entry IDs, require one actual name. Two folded matches can
+        # be separate hard links on a case-sensitive volume.
+        names = [
+            name for name in os.listdir(first_parent) if normalize("NFC", name).casefold() == folded
+        ]
+        return len(names) == 1 and os.path.samestat(
+            first_stat, os.stat(os.path.join(first_parent, names[0])),
+        )
+    except OSError:
         return False
 
 
