@@ -1642,6 +1642,8 @@ def test_resident_model_forwards_the_revision_on_the_hub_path(
         seen["config"] = (model_id, revision)
         return real_config_loader(resident_checkpoints["k2-bf16"])
 
+    _stub_hub_file_list(monkeypatch, {"config.json": 10_000, "model.safetensors": 1_000})
+    _stub_cache_free_bytes(monkeypatch, 10_000_000_000_000)
     monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
     monkeypatch.setattr(kimi_k2, "load_resident_model_config", fake_config_loader)
     kimi_k2.load_resident_model(
@@ -1652,6 +1654,135 @@ def test_resident_model_forwards_the_revision_on_the_hub_path(
     assert seen["snapshot"][1] == "0123456789abcdef"
     assert "*.safetensors" in seen["snapshot"][2]
     assert seen["config"] == ("moonshotai/Kimi-K2-Base", "0123456789abcdef")
+
+
+def _stub_hub_file_list(monkeypatch, files):
+    """``huggingface_hub.model_info`` stub: ``files`` maps repo filenames to byte sizes."""
+    import huggingface_hub
+
+    class _Sibling:
+        def __init__(self, name, size):
+            self.rfilename = name
+            self.size = size
+
+    def fake_model_info(repo_id, *, revision=None, files_metadata=False):
+        return type(
+            "_Info",
+            (),
+            {"siblings": [_Sibling(name, size) for name, size in files.items()]},
+        )()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", fake_model_info)
+
+
+def _stub_cache_free_bytes(monkeypatch, free_bytes):
+    """``shutil.disk_usage`` stub reporting ``free_bytes`` free on any volume."""
+    import shutil
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(total=free_bytes * 2, used=free_bytes, free=free_bytes),
+    )
+
+
+def test_resident_model_proceeds_when_the_hub_files_fit_the_cache(
+    monkeypatch, resident_checkpoints
+):
+    """Ask A (a): the pinned revision's safetensors/json fit the cache volume, so the
+    snapshot download proceeds."""
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    _stub_hub_file_list(
+        monkeypatch,
+        {
+            "config.json": 10_000,
+            "model-00001-of-00002.safetensors": 3_000_000_000,
+            "model-00002-of-00002.safetensors": 2_000_000_000,
+            "README.md": 5_000,  # outside the allow-patterns: not counted
+            "tokenizer.model": 1_000,  # outside the allow-patterns: not counted
+        },
+    )
+    _stub_cache_free_bytes(monkeypatch, 10_000_000_000_000)
+
+    seen = {}
+    real_config_loader = kimi_k2.load_resident_model_config
+
+    def fake_snapshot(*, repo_id, revision=None, allow_patterns=None):
+        seen["snapshot"] = (repo_id, revision, tuple(allow_patterns or ()))
+        return resident_checkpoints["k2-bf16"]
+
+    def fake_config_loader(model_id, *, revision=None, **kwargs):
+        return real_config_loader(resident_checkpoints["k2-bf16"])
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
+    monkeypatch.setattr(kimi_k2, "load_resident_model_config", fake_config_loader)
+    model = kimi_k2.load_resident_model(
+        "moonshotai/Kimi-K2-Base",
+        model_kwargs={"dtype": torch.float32, "revision": "0123456789abcdef"},
+    )
+    assert model.config.model_type == "deepseek_v3"
+    assert seen["snapshot"][0] == "moonshotai/Kimi-K2-Base"
+
+
+def test_resident_model_refuses_when_the_hub_files_exceed_the_cache(monkeypatch):
+    """Ask A (b): the pinned revision's files outsize the cache volume, so the route
+    refuses before the first byte, naming the required bytes, the free bytes, and the
+    cache directory."""
+    import huggingface_hub
+    from huggingface_hub.constants import HF_HUB_CACHE
+
+    from soup_cli.utils import kimi_k2
+
+    required = 5_000_000_000_000
+    _stub_hub_file_list(
+        monkeypatch,
+        {
+            "config.json": 10_000,
+            "model-00001-of-00001.safetensors": required,
+        },
+    )
+    _stub_cache_free_bytes(monkeypatch, required - 1)
+
+    def _forbidden(**_kwargs):
+        raise AssertionError("snapshot_download ran despite the refusal")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _forbidden)
+    monkeypatch.setattr(
+        kimi_k2, "load_resident_model_config", lambda *args, **kwargs: object()
+    )
+    with pytest.raises(OSError) as caught:
+        kimi_k2.load_resident_model(
+            "moonshotai/Kimi-K2-Base", model_kwargs={"revision": "0123456789abcdef"}
+        )
+    message = str(caught.value)
+    assert str(required + 10_000) in message  # the json is part of the fetch too
+    assert str(required - 1) in message
+    assert str(HF_HUB_CACHE) in message
+    assert "moonshotai/Kimi-K2-Base" in message
+
+
+def test_resident_model_says_trust_remote_code_is_ignored_on_a_local_dir(
+    resident_checkpoints, capsys
+):
+    """Ask B: on a local directory the flag is accepted but the model load never runs the
+    directory's own code — one line says so, so nobody assumes it did (the tokenizer load
+    still honours the flag)."""
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    load_resident_model(
+        resident_checkpoints["k2-bf16"], model_kwargs={"trust_remote_code": True}
+    )
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if "trust_remote_code" in line
+    ]
+    assert len(lines) == 1
+    assert "tokenizer" in lines[0]
+    assert "resident" in lines[0]
 
 
 def test_resident_model_finds_a_scale_in_another_shard(tmp_path, resident_checkpoints):

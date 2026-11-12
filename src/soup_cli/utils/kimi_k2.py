@@ -42,6 +42,8 @@ import copy
 import importlib.util
 import os
 import re
+import shutil
+from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Tuple
 
 KIMI_K2_MODEL_TYPE = "kimi_k2"
@@ -693,6 +695,48 @@ def _resident_torch_dtype(key: str, raw_dtype: str, torch: Any):
     )
 
 
+def _check_resident_hub_cache_space(repo_id: str, revision: str | None) -> None:
+    """Refuse before the first downloaded byte when the pinned revision's files do not fit
+    the HF cache volume (#2104).
+
+    ``snapshot_download`` would start fetching and fail only when the disk actually fills,
+    hours into a multi-TB K2 repository. This reads the repository's file metadata at the
+    pinned revision (no weights are transferred) and compares the total size of the files
+    the ``*.safetensors``/``*.json`` allow-pattern would fetch with the free space of the
+    cache volume, resolved exactly the way ``snapshot_download`` resolves its default
+    cache dir (``HF_HUB_CACHE``, expanded and resolved). The cache dir may not exist yet,
+    so the free space is read at its nearest existing ancestor, the same anchor
+    ``trainer/stream_setup.py`` uses for a prospective write.
+    """
+    from fnmatch import fnmatch
+
+    from huggingface_hub import model_info
+    from huggingface_hub.constants import HF_HUB_CACHE
+
+    info = model_info(repo_id, revision=revision, files_metadata=True)
+    required = 0
+    for sibling in info.siblings:
+        name = sibling.rfilename
+        if fnmatch(name, "*.safetensors") or fnmatch(name, "*.json"):
+            required += sibling.size or 0  # non-LFS entries may carry no size
+    cache_dir = str(Path(HF_HUB_CACHE).expanduser().resolve())
+    anchor = cache_dir
+    while not os.path.exists(anchor):
+        parent = os.path.dirname(anchor)
+        if parent == anchor:
+            break  # filesystem root: disk_usage still answers for it
+        anchor = parent
+    free = int(shutil.disk_usage(anchor).free)
+    if required > free:
+        raise OSError(
+            f"resident Kimi K2 route: the pinned revision of {repo_id!r} needs {required} "
+            f"bytes of cache space for its safetensors/json files, but only {free} bytes "
+            f"are free on the volume holding the Hugging Face cache ({cache_dir}); "
+            "refusing before the first byte. Free space on that volume or point "
+            "HF_HOME / HF_HUB_CACHE at a larger one."
+        )
+
+
 def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     """The RESIDENT (non-streamed) route's model loader (#2104): a guarded Kimi K2
     checkpoint loaded natively into ``DeepseekV3ForCausalLM``, FP8-block weights
@@ -713,16 +757,18 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
 
     Honoured ``model_kwargs``: ``dtype`` (default ``torch.bfloat16``), ``revision``, and
     ``attn_implementation`` (set on the config). ``trust_remote_code`` is accepted and
-    ignored: this route never runs a repository's code. ``quantization_config`` is
-    refused — the resident route loads bf16 only; train on a dequantised copy or use the
-    streamed route for 4-bit. A caller-supplied ``config`` (e.g. the long-context rope
-    override) is refused too: per-config rope overrides are not supported on the resident
-    K2 route yet (follow-up), and a foreign config would bypass the guard — drop the
-    kwarg or use the streamed route. ``device_map``: v1 loads on CPU and then moves to
-    one device — ``"auto"`` resolves to the current CUDA device when one is available,
-    else CPU; a plain device string (``"cpu"``, ``"cuda:0"``, ...) or accelerate's
-    whole-model entry (a single-entry dict like ``{"": 0}``) names it directly; any
-    multi-device accelerate map is refused rather than guessed.
+    ignored: this route never runs a repository's code. When it is set on a local
+    directory, the loader prints one line saying the model load ignores it (the tokenizer
+    load still honours it), so nobody assumes the directory's own model code ran.
+    ``quantization_config`` is refused — the resident route loads bf16 only; train on a
+    dequantised copy or use the streamed route for 4-bit. A caller-supplied ``config``
+    (e.g. the long-context rope override) is refused too: per-config rope overrides are
+    not supported on the resident K2 route yet (follow-up), and a foreign config would
+    bypass the guard — drop the kwarg or use the streamed route. ``device_map``: v1 loads
+    on CPU and then moves to one device — ``"auto"`` resolves to the current CUDA device
+    when one is available, else CPU; a plain device string (``"cpu"``, ``"cuda:0"``, ...)
+    or accelerate's whole-model entry (a single-entry dict like ``{"": 0}``) names it
+    directly; any multi-device accelerate map is refused rather than guessed.
 
     Parameters load at ``dtype``; float buffers keep their stored dtype (the checkpoint
     and ``from_pretrained`` keep ``e_score_correction_bias`` float32), and integer
@@ -731,7 +777,10 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     A hub id's weights resolve through ``huggingface_hub.snapshot_download`` with the
     safetensors/json allow-pattern — normal cache behaviour, same as transformers would
     use; on first real use that is the user's explicit request to train K2 and may fetch
-    the full multi-TB repository.
+    the full multi-TB repository. Before the first byte, the total size of the files that
+    call would fetch at the pinned revision is compared with the free space of the cache
+    volume (resolved as ``snapshot_download`` resolves its default cache dir) and the load
+    refuses, naming both figures, when they do not fit.
 
     The model is returned on the requested device in the requested dtype; train/eval mode
     is the caller's to set. No layer streaming is involved on this route: nothing here
@@ -754,7 +803,16 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
         )
     dtype = model_kwargs.pop("dtype", torch.bfloat16)
     device_map = model_kwargs.pop("device_map", None)
-    model_kwargs.pop("trust_remote_code", None)  # never used: no remote code runs here
+    trust_remote_code = model_kwargs.pop("trust_remote_code", None)
+    if trust_remote_code and os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        # The flag is honoured by the tokenizer load on this route, but the model load
+        # never runs a repository's code — on a local directory, whose own modeling files
+        # make the wrong assumption likeliest, say so in one line (#2104).
+        print(
+            "resident Kimi K2 route: trust_remote_code is set, but this route's model "
+            "load ignores it — the guarded native loader never runs the directory's own "
+            "model code (the tokenizer load still honours the flag)."
+        )
     attn_implementation = model_kwargs.pop("attn_implementation", None)
     if model_kwargs.pop("config", None) is not None:
         # Ruling D17: a caller-supplied config would bypass the guard, and with
@@ -782,6 +840,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     else:
         from huggingface_hub import snapshot_download
 
+        _check_resident_hub_cache_space(base, revision)
         weights_dir = snapshot_download(
             repo_id=base, revision=revision, allow_patterns=["*.safetensors", "*.json"],
         )
