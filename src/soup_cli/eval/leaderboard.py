@@ -56,6 +56,9 @@ class Leaderboard:
                 sort_score = (
                     sum(scores.values()) / len(scores) if scores else 0.0
                 )
+                if not math.isfinite(sort_score):
+                    sort_score = sum(value / len(scores) for value in scores.values())
+                    sort_score = max(min(scores.values()), min(max(scores.values()), sort_score))
             result.append((model, scores, sort_score))
 
         result.sort(key=lambda item: item[2], reverse=True)

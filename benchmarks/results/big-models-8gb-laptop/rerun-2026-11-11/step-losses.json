@@ -1,0 +1,83 @@
+{
+  "qwen3-32b": {
+    "source": "checkpoint-3/trainer_state.json, log_history",
+    "global_step": 3,
+    "log_history": [
+      {
+        "step": 1,
+        "epoch": 0.3333333333333333,
+        "loss": 3.6200623512268066,
+        "grad_norm": 0.412109375,
+        "num_tokens": 128.0
+      },
+      {
+        "step": 2,
+        "epoch": 0.6666666666666666,
+        "loss": 4.209296703338623,
+        "grad_norm": 0.47265625,
+        "num_tokens": 256.0
+      },
+      {
+        "step": 3,
+        "epoch": 1.0,
+        "loss": 3.682640552520752,
+        "grad_norm": 0.671875,
+        "num_tokens": 384.0
+      }
+    ]
+  },
+  "mistral123-128": {
+    "source": "checkpoint-3/trainer_state.json, log_history",
+    "global_step": 3,
+    "log_history": [
+      {
+        "step": 1,
+        "epoch": 0.3333333333333333,
+        "loss": 3.204108953475952,
+        "grad_norm": 4.28125,
+        "num_tokens": 128.0
+      },
+      {
+        "step": 2,
+        "epoch": 0.6666666666666666,
+        "loss": 3.5063159465789795,
+        "grad_norm": 4.5,
+        "num_tokens": 256.0
+      },
+      {
+        "step": 3,
+        "epoch": 1.0,
+        "loss": 2.904374599456787,
+        "grad_norm": 5.0625,
+        "num_tokens": 384.0
+      }
+    ]
+  },
+  "mistral123-512": {
+    "source": "checkpoint-3/trainer_state.json, log_history",
+    "global_step": 3,
+    "log_history": [
+      {
+        "step": 1,
+        "epoch": 0.3333333333333333,
+        "loss": 1.4975941181182861,
+        "grad_norm": 1.4453125,
+        "num_tokens": 512.0
+      },
+      {
+        "step": 2,
+        "epoch": 0.6666666666666666,
+        "loss": 1.4210911989212036,
+        "grad_norm": 1.3203125,
+        "num_tokens": 1024.0
+      },
+      {
+        "step": 3,
+        "epoch": 1.0,
+        "loss": 1.4317288398742676,
+        "grad_norm": 1.5078125,
+        "num_tokens": 1536.0
+      }
+    ]
+  }
+}
