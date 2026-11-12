@@ -817,6 +817,11 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+`--write-baseline` refuses an output resolving to the suite, custom-task file,
+or judge-prompts file before model construction (exit 3), preserving those inputs.
+Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
+
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
