@@ -533,10 +533,13 @@ class RegistryStore:
         Returns ``None`` on miss. Raises :class:`AmbiguousRefError` when a
         prefix or a ``name:tag`` matches more than one entry.
         """
+        if ref and ref.startswith("registry://"):
+            ref = ref[len("registry://"):]
+        # Checked after the scheme is stripped: a bare ``registry://`` would
+        # otherwise reach the prefix lookup as "" and match every entry, so
+        # ``soup registry delete registry:// --yes`` deleted a lone entry (#2723).
         if not ref:
             return None
-        if ref.startswith("registry://"):
-            ref = ref[len("registry://"):]
 
         conn = self._get_conn()
 
