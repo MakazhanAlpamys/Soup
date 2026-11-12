@@ -727,6 +727,7 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parq
 Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
 including Excel's CSV UTF-8 exports. The signature is removed before parsing;
 U+FEFF characters inside field values or document text are preserved.
+Quoted CSV fields also preserve their original LF, CRLF or CR line endings.
 
 The same leading-BOM handling applies to tokenizer corpora, inference benchmark
 prompts, Agent Forge predictions, draft JSONL inputs, edit covariance corpora,

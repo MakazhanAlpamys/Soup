@@ -1,0 +1,92 @@
+[
+  {
+    "seq": 2048,
+    "arm": "auto",
+    "tag": "auto",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 2048,
+    "arm": "auto",
+    "tag": "auto-repeat",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 2048,
+    "arm": "qkvo",
+    "tag": "qkvo",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 2048,
+    "arm": "auto",
+    "tag": "auto-profile",
+    "profile": true,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 2048,
+    "arm": "qkvo",
+    "tag": "qkvo-profile",
+    "profile": true,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 4096,
+    "arm": "auto",
+    "tag": "auto",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 4096,
+    "arm": "auto",
+    "tag": "auto-repeat",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 4096,
+    "arm": "qkvo",
+    "tag": "qkvo",
+    "profile": false,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 4096,
+    "arm": "auto",
+    "tag": "auto-profile",
+    "profile": true,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  },
+  {
+    "seq": 4096,
+    "arm": "qkvo",
+    "tag": "qkvo-profile",
+    "profile": true,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true
+  }
+]
