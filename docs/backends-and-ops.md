@@ -1024,6 +1024,8 @@ from step 0 regardless of how far the checkpoint got.
 
 `task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
+`task: ppo` refuses `--resume` / `--hf-resume` too, before it reads the dataset or loads a model: trl's PPO trainer cannot continue from a checkpoint, so a resumed run would start again from step 0 and write over the files already in `output`. `--hf-resume` is refused even when the Hub has no checkpoint branch, where it would have trained fresh. Remove the flag to start a new run, or point `output` at a new directory to keep the old one.
+
 
 ## Run Management & Cleanup
 

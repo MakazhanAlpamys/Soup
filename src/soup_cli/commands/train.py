@@ -111,6 +111,14 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "ppo":
+        # trl's PPOTrainer.train() takes no checkpoint, so a resumed run would start
+        # over from step 0 on top of the old progress. Refused here, before the dataset
+        # is read, a model is loaded or the output directory is touched; `--resume auto`,
+        # `--resume <path>` and `--hf-resume` all pass through this function.
+        from soup_cli.trainer.ppo import RESUME_REFUSAL as PPO_RESUME_REFUSAL
+
+        return PPO_RESUME_REFUSAL.replace("--resume", flag)
     return None
 
 
@@ -1464,11 +1472,12 @@ def train(
             raise typer.Exit(1)
 
     # --- DeepSpeed setup ---
+    # A bad name or path fails here, before any hardware work. The config itself
+    # is written after detect_device below, once the trainer's precision can be
+    # read without creating the CUDA context early (#2149, #2266).
     ds_config_path = None
     if deepspeed:
-        ds_config_path = _resolve_deepspeed(deepspeed)
-        if ds_config_path:
-            console.print(f"[green]DeepSpeed enabled:[/] {deepspeed}")
+        _check_deepspeed_arg(deepspeed)
 
     # --- FSDP2 setup ---
     fsdp_kwargs = None
@@ -1698,6 +1707,14 @@ def train(
     gpu_info = get_gpu_info(backend=cfg.backend)
 
     configure_mps_async_load(device)
+
+    if deepspeed:
+        from soup_cli.utils.deepspeed import trainer_precision
+
+        ds_config_path = _resolve_deepspeed(
+            deepspeed, precision=trainer_precision(cfg, device)
+        )
+        console.print(f"[green]DeepSpeed enabled:[/] {deepspeed}")
 
     # Quantization guard: explicit decision per #423, shared with `soup sweep`.  See the
     # docstring of `resolve_quantization` (utils/gpu.py) for the full rationale — MLX 4-bit
@@ -2725,27 +2742,42 @@ def _run_diagnose_gate_or_exit(
         raise typer.Exit(1) from exc
 
 
-def _resolve_deepspeed(deepspeed: str) -> str:
-    """Resolve DeepSpeed config: named preset or path to JSON file."""
+def _check_deepspeed_arg(deepspeed: str) -> None:
+    """Exit 1 unless ``deepspeed`` is a preset name or an existing ``.json`` path."""
     import soup_cli.utils.deepspeed as ds
 
-    # Named preset
     if deepspeed in ds.CONFIGS:
-        return ds.write_deepspeed_config(deepspeed)
-
-    # Path to config file. Resolved the same way a preset is (#359): a config
-    # that needs no run-dependent rewrite comes back by this very path, and one
-    # that copied the ZeRO++ placeholders is repaired into a temp copy with the
-    # change printed. The user's file is never modified.
+        return
     ds_path = Path(deepspeed)
     if ds_path.exists() and ds_path.suffix == ".json":
-        return ds.resolve_user_deepspeed_file(str(ds_path))
-
+        return
     console.print(
         f"[red]Invalid DeepSpeed config: {deepspeed}[/]\n"
         f"Options: {', '.join(ds.CONFIGS.keys())} or path to JSON file."
     )
     raise typer.Exit(1)
+
+
+def _resolve_deepspeed(deepspeed: str, *, precision: str | None = None) -> str:
+    """Resolve DeepSpeed config: named preset or path to JSON file.
+
+    ``precision`` is the trainer's (``utils.deepspeed.trainer_precision``); the
+    file's ``bf16`` / ``fp16`` are made to agree with it (#2266).
+    """
+    import soup_cli.utils.deepspeed as ds
+
+    _check_deepspeed_arg(deepspeed)
+
+    # Named preset
+    if deepspeed in ds.CONFIGS:
+        return ds.write_deepspeed_config(deepspeed, precision=precision)
+
+    # Path to config file. Resolved the same way a preset is (#359): a config
+    # that needs no run-dependent rewrite comes back by this very path, and one
+    # that copied the ZeRO++ placeholders or contradicts the trainer's precision
+    # is repaired into a temp copy with the change printed. The user's file is
+    # never modified.
+    return ds.resolve_user_deepspeed_file(str(Path(deepspeed)), precision=precision)
 
 
 _MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")

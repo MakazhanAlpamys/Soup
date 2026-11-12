@@ -1,0 +1,8 @@
+ids equal: True
+live  : (1, 128, 32768) torch.float32
+reload: (1, 128, 32768) torch.bfloat16
+live elements exactly representable in bf16: 4194304 of 4194304 (100.0000%)
+live.to(bf16) == reload (bit for bit): False | elements differing: 3043686
+max_abs_diff live_fp32 vs reload_bf16: 0.625000   mean_abs_diff: 0.014650
+top1 positions equal: 127 of 128
+max |logit| live: 29.0000  reload: 29.0000

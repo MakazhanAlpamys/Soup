@@ -1,0 +1,42 @@
+{
+  "schema": "root-context80-controls-interruption-v1",
+  "recorded_at": "2026-11-06T22:07:33.992120+05:00",
+  "reason": "local client disconnected after Windows manual button or lid sleep",
+  "sleep_time": "2026-11-06T21:41:30+05:00",
+  "wake_time": "2026-11-06T22:02:24+05:00",
+  "app": {
+    "app_id": "ap-<redacted>",
+    "description": "soup-stage80-blind-controls",
+    "state": "stopped",
+    "tasks": "0",
+    "created_at": "2026-11-06 20:59:45+05:00",
+    "stopped_at": "2026-11-06 21:44:30+05:00"
+  },
+  "retrieval_sha256": "dd0f7026bc7cf09f0cb638d644827cca8ef080dc264e862eb8f8a8ea7018b98b",
+  "archived_sha256": {
+    "launch.log": "0fcbe24c713e3b324d1a0e0f4c8837e3ea9d797278d36f473473e98d7b9fa548",
+    "app-stopped.json": "c4126ccffee7f949320bae11eb43c7d18353cbbaa5c5ca1ef33aa0dc323c48d2",
+    "evidence/summary.json": "a5e09ab9a8b9e21998b1608f03c524e743c3a2e88ea01a1927c541756dda3b71",
+    "evidence/launch-plan.json": "e008f40ef3739cbcbb975a75c69da1c68e361c985059c3486575666b729f985e",
+    "evidence/branch-lock.json": "5c18a1880ec5233cf42afefbd173315c8c52a19cef53caa18d4822ffe3069442",
+    "evidence/source.log": "0177d47b38fef76524a4368ae2db13e2d22e8e94ef3eec522fd5cc979d8afea1",
+    "evidence/a2/worker.log": "8210af3654e63307ae9d8c99589c4f3fae539ebc78a9a938d6ea01b1f77ef0e9",
+    "evidence/a2/progress.jsonl": "b9ba15eb949bb8e38fd471701aeee2b06941ca8d39bf1683810539ff9ee5a57d",
+    "evidence/a2/result.json": "46969ceab2a6347bf00b2271b26a2d9a3f24e4354f4e7f40b1d79c94e0379970"
+  },
+  "a2": {
+    "pid": 493,
+    "exit_code": 0,
+    "seconds": 1896.4988401769997,
+    "checkpoint": {
+      "completed_steps": 2,
+      "result_sha256": "1b58e6439d2d29ddb16c33c52a6301d370b49f065e1411ea6238c84497bd8092",
+      "manifest_sha256": "0ae8a31e829d229c8faadce79cb3fd1d0c43a91cb7ffd8a9cdc360b17a4f7bb6",
+      "state_sha256": "7959c32d235dfb5459ff319d15f1ff82ae480f8b9c373d6fea816099dc26e220",
+      "state_bytes": 320486997
+    },
+    "result_sha256": "46969ceab2a6347bf00b2271b26a2d9a3f24e4354f4e7f40b1d79c94e0379970"
+  },
+  "a6_committed": false,
+  "recovery_scope": "Fresh A6-only evaluation with original B6 lock and carried A2 scores."
+}
