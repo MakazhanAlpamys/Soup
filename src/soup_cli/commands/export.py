@@ -1260,6 +1260,10 @@ def _export_torchao_cli(
         merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
+    # An export error is reported after the cleanup: while the exception is live, its
+    # traceback keeps the loaded model, which maps the merged weights file, and Windows
+    # does not delete a mapped file.
+    failure: Optional[tuple[int, str]] = None
     try:
         if merge_dir is not None:
             _merge_adapter(
@@ -1285,17 +1289,21 @@ def _export_torchao_cli(
                 trust_remote_code=trust_remote_code,
             )
         except (ImportError, RuntimeError) as exc:
-            console.print(f"[red]TorchAO export failed: {exc}[/]")
+            failure = (1, f"TorchAO export failed: {exc}")
+        except (TypeError, ValueError, FileNotFoundError) as exc:
+            failure = (2, str(exc))
+    finally:
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
+
+    if failure is not None:
+        code, message = failure
+        console.print(f"[red]{message}[/]")
+        if code == 1:
             console.print(
                 "Try: [bold]pip install torchao[/] "
                 f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
             )
-            raise typer.Exit(1)
-        except (TypeError, ValueError, FileNotFoundError) as exc:
-            console.print(f"[red]{exc}[/]")
-            raise typer.Exit(2)
-    finally:
-        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
+        raise typer.Exit(code)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
