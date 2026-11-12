@@ -388,7 +388,10 @@ class TestDiffCLI:
             ])
         plain = _plain(result.output)
         assert result.exit_code == 1
-        assert plain.startswith("Cannot read prompts file bad.jsonl:")
+        assert plain == (
+            "Cannot read prompts file bad.jsonl: "
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        )
         assert "Diff Plan" not in plain
 
     def test_prompts_file_unreadable_os_error(self, tmp_path, monkeypatch):
@@ -457,3 +460,34 @@ class TestDiffCLI:
         assert "Prompts: 1" in plain
         assert "Hello BOM prompt" in plain
         assert '"prompt"' not in plain
+
+    def test_prompts_file_combined_with_prompt_option_cli(self, tmp_path, monkeypatch):
+        """Both --prompts file rows and inline --prompt values reach Diff Plan and output."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "prompts.txt").write_text("From file prompt\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("soup_cli.commands.diff._load_model", return_value=(None, None)),
+            patch("soup_cli.commands.diff._generate", return_value="stub reply"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "prompts.txt",
+                "--prompt", "From inline prompt",
+                "--device", "cpu",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 0, plain
+        assert "Prompts: 2" in plain
+        assert "From file prompt" in plain
+        assert "From inline prompt" in plain
