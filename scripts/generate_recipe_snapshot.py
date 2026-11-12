@@ -95,11 +95,7 @@ def build_snapshot() -> dict[str, dict]:
         try:
             config = load_config_from_string(recipe.yaml_str)
         except ValueError as exc:
-            if not recipe.unavailable_reason:
-                raise
-            message = str(exc)
-            # Route refusals: the reason appears verbatim in the message.
-            if recipe.unavailable_reason not in message:
+            if not recipe.unavailable_reason or recipe.unavailable_reason not in str(exc):
                 raise
             recipes[name] = {"$unavailable": recipe.unavailable_reason}
         else:
