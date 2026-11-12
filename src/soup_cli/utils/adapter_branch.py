@@ -280,11 +280,13 @@ def branch_pointer_path(name: str) -> Path:
 def attach_branch_to_registry(name: str, registry_ref: str) -> int:
     """Attach a branch pointer to a v0.26 Registry entry as ``branch_ref``.
 
-    Resolves ``registry_ref`` (id / prefix / name:tag), attaches the branch
-    JSON file as a ``branch_ref`` artifact (``enforce_cwd=False`` since the
-    pointer lives in ``~/.soup/branches`` outside cwd — a library-produced
-    path), then re-writes the pointer with ``registry_entry_id`` set so the
-    edge is recorded on both sides. Returns the artifact rowid.
+    Resolves ``registry_ref`` (id / prefix / name:tag), re-writes the pointer
+    with ``registry_entry_id`` set so the edge is recorded on both sides, then
+    attaches that JSON file as a ``branch_ref`` artifact (``enforce_cwd=False``
+    since the pointer lives in ``~/.soup/branches`` outside cwd — a
+    library-produced path), so the recorded SHA-256 and size are those of the
+    file on disk. If recording the artifact fails, the previous pointer is
+    written back. Returns the artifact rowid.
     """
     from soup_cli.registry.store import RegistryStore
 
