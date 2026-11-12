@@ -51,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (176 recipes)
+# Recipe catalog (177 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4024,6 +4024,36 @@ training:
     target_modules: auto
   quantization: 4bit
   dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "qwen3.5-9b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-9B-Base",
+        task="pretrain",
+        size="9B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 9B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
 
 output: ./output
 """,
