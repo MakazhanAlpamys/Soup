@@ -178,6 +178,56 @@ OPTIMIZER_BYTES_PER_PARAM = 16
 #: and a 0.5B model alike, so it is charged as a constant rather than scaled.
 STREAM_FIXED_SLACK_BYTES = 13_500_000
 
+# A streamed forward and its autograd backward use separate cuBLAS handles.
+# Each handle/stream pair retains its workspace in PyTorch's caching allocator.
+STREAM_CUBLAS_HANDLE_STREAM_PAIRS = 2
+
+
+def cublas_workspace_bytes(
+    *, compute_capability: Optional[tuple[int, int]], workspace_config: Optional[str] = None
+) -> int:
+    """Return the allocator-visible cuBLAS workspace charge for a streamed step.
+
+    PyTorch's default is 8,320 KiB per handle below compute capability 9.0 and
+    32 MiB per handle on 9.0–12.x. ``CUBLAS_WORKSPACE_CONFIG`` is a sequence of
+    ``SIZE:COUNT`` pairs in KiB; sum each pair and charge the two handle/stream
+    pairs used by a streamed forward and backward. ``None`` means the variable
+    is unset and selects the device default. ``:0:0`` explicitly disables it.
+    """
+    if compute_capability is None:
+        return 0
+    if (
+        not isinstance(compute_capability, tuple)
+        or len(compute_capability) != 2
+        or any(isinstance(part, bool) or not isinstance(part, int) or part < 0
+               for part in compute_capability)
+    ):
+        raise ValueError(f"invalid compute capability: {compute_capability!r}")
+
+    if workspace_config is None or not workspace_config.strip():
+        major, _minor = compute_capability
+        # Keep the known-safe newer-device size for future major versions too;
+        # PyTorch may grow this default before Soup updates its capability table.
+        workspace_kib = 32 * 1024 if major >= 9 else 8_320
+    else:
+        parts = workspace_config.split(":")
+        if parts[0] != "" or len(parts) < 3 or (len(parts) - 1) % 2:
+            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+        try:
+            values = [int(part) for part in parts[1:]]
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}"
+            ) from exc
+        pairs = list(zip(values[::2], values[1::2]))
+        if any(size < 0 or count < 0 for size, count in pairs):
+            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+        if any((size == 0) != (count == 0) for size, count in pairs):
+            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+        workspace_kib = sum(size * count for size, count in pairs)
+
+    return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
+
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed
 #: training actually reached on the dev box: 68% (Llama-3.1-8B NF4, 5.26 of
 #: 7.74 TFLOPS) up to ~100% (small models, fully pinned store). A forecast
@@ -1463,15 +1513,18 @@ def estimate_stream_peak_vram(
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
     persistent_bytes: int = 0,
+    cublas_workspace_bytes: int = 0,
     loss_chunk: Optional[int] = None,
     recompute_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
-    Assembles the GATE 2 terms. Validated against 10 real runs across two models
-    (a 3.1x vocab contrast), batch 1..8 and two sequence lengths: **worst
-    absolute error 0.85%, and it never under-predicts** — the only safe direction
-    for a number that is allowed to refuse a run. An independent check against
+    Assembles the GATE 2 terms. The RTX 3050 grid covers 10 real runs across two
+    models (a 3.1x vocab contrast), batch 1..8 and sequence lengths 256 and 512.
+    Its previous 0.85% fit did not identify the two cuBLAS workspaces; with the
+    explicit workspace charge, predictions are 1.04–6.57% above those peaks.
+    This grid is not a general guarantee at other sequence lengths or devices.
+    An independent check against
     the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
     quantisation, different session, nothing fitted to it) brackets it at +7.5%.
 
@@ -1494,6 +1547,10 @@ def estimate_stream_peak_vram(
     ``persistent_bytes`` is device memory the runtime holds for the whole run on
     top of the pool, such as :func:`nf4_scale_cache_bytes`.
 
+    ``cublas_workspace_bytes`` is the workspace memory held by the forward and
+    autograd CUDA threads. CUDA callers must resolve it from the active device
+    and ``CUBLAS_WORKSPACE_CONFIG``; CPU callers leave it at zero.
+
     ``loss_chunk`` is ``training.stream_loss_chunk`` (#1693): the logits term is
     charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
     element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
@@ -1512,6 +1569,15 @@ def estimate_stream_peak_vram(
         logits_tokens = min(seq_len, loss_chunk)
         chunk_bytes = estimate_loss_chunk_bytes(
             hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
+        )
+    if (
+        isinstance(cublas_workspace_bytes, bool)
+        or not isinstance(cublas_workspace_bytes, int)
+        or cublas_workspace_bytes < 0
+    ):
+        raise ValueError(
+            "cublas_workspace_bytes must be a non-negative integer, "
+            f"got {cublas_workspace_bytes!r}"
         )
     activations = estimate_activation_bytes(
         hidden_size=hidden_size,
@@ -1537,6 +1603,7 @@ def estimate_stream_peak_vram(
         layer_bytes * buffers
         + large_layer_bytes
         + persistent_bytes
+        + cublas_workspace_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES

@@ -1,0 +1,103 @@
+"""#1407 — budget cuBLAS workspaces retained by streamed training steps."""
+
+import pytest
+
+from soup_cli.utils.layer_stream import cublas_workspace_bytes, estimate_stream_peak_vram
+
+
+@pytest.mark.parametrize(
+    ("capability", "config", "expected"),
+    [
+        ((8, 6), None, 2 * 8_320 * 1024),
+        ((9, 0), None, 2 * 32 * 1024 * 1024),
+        ((12, 0), None, 2 * 32 * 1024 * 1024),
+        ((8, 6), ":4096:8", 2 * 4096 * 8 * 1024),
+        ((8, 6), ":4096:2:16:8", 2 * 8320 * 1024),
+        ((8, 6), ":4096:1", 2 * 4096 * 1024),
+        ((8, 6), ":0:0", 0),
+        (None, None, 0),
+    ],
+)
+def test_workspace_charge_tracks_config_and_device_defaults(capability, config, expected):
+    assert cublas_workspace_bytes(
+        compute_capability=capability, workspace_config=config
+    ) == expected
+
+
+@pytest.mark.parametrize("config", ["4096:8", ":4096", ":4096:x", ":4096:0", ":0:8"])
+def test_malformed_or_unsupported_workspace_config_is_refused(config):
+    with pytest.raises(ValueError, match="CUBLAS_WORKSPACE_CONFIG"):
+        cublas_workspace_bytes(compute_capability=(8, 6), workspace_config=config)
+
+
+def test_estimator_adds_workspace_bytes_without_changing_other_terms():
+    shape = dict(
+        layer_bytes=1_000_000,
+        buffers=2,
+        extras_bytes=500_000,
+        adapter_params=100,
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        n_layers=2,
+        seq_len=16,
+    )
+    base = estimate_stream_peak_vram(**shape)
+    charge = cublas_workspace_bytes(
+        compute_capability=(8, 6), workspace_config=":4096:1"
+    )
+    assert estimate_stream_peak_vram(**shape, cublas_workspace_bytes=charge) == base + charge
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5])
+def test_estimator_rejects_invalid_workspace_bytes(value):
+    with pytest.raises(ValueError, match="cublas_workspace_bytes"):
+        estimate_stream_peak_vram(
+            layer_bytes=1,
+            buffers=1,
+            extras_bytes=0,
+            adapter_params=0,
+            vocab_size=1,
+            hidden_size=1,
+            intermediate_size=1,
+            n_layers=1,
+            seq_len=1,
+            cublas_workspace_bytes=value,
+        )
+
+
+@pytest.mark.gpu(reason="the streamed-step peak comparison needs CUDA")
+def test_real_streamed_step_peak_does_not_exceed_preflight(tmp_path, monkeypatch):
+    import os
+
+    import torch
+
+    import test_v07204
+    from soup_cli.utils import layer_stream
+
+    estimates = []
+    estimate = layer_stream.estimate_stream_peak_vram
+
+    def record_estimate(**kwargs):
+        result = estimate(**kwargs)
+        estimates.append((result, kwargs.get("cublas_workspace_bytes", 0)))
+        return result
+
+    monkeypatch.setattr(layer_stream, "estimate_stream_peak_vram", record_estimate)
+    wrapper, _, _ = test_v07204._build_streamed_wrapper(
+        tmp_path, monkeypatch, task="sft", batch_size=1
+    )
+    assert estimates and estimates[0][1] == cublas_workspace_bytes(
+        compute_capability=torch.cuda.get_device_capability(),
+        workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+    )
+
+    wrapper.trainer.args.max_steps = 1
+    wrapper.trainer.train()  # Warm up both the forward and autograd workspaces.
+    torch.cuda.synchronize()
+    predicted = max(value for value, _workspace in estimates)
+    torch.cuda.reset_peak_memory_stats()
+    wrapper.trainer.train()
+    torch.cuda.synchronize()
+    measured = int(torch.cuda.max_memory_allocated())
+    assert predicted >= measured, f"preflight={predicted} measured_peak={measured}"

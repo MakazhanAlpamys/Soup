@@ -38,10 +38,9 @@ console = Console()
 
 
 #: How far over the predicted budget `training.stream_vram_probe` may still
-#: defer to a measurement. The formula's worst measured error is 0.787x (21%
-#: under, seq 6144), so anything beyond a small multiple is not the formula
-#: being wrong — it is the config being too big, and that is refusable by
-#: arithmetic without touching the GPU.
+#: defer to a measurement. The 0.787x result at seq 6144 comes from the earlier
+#: RTX 3050 sequence study; #1407 adds the separately measured cuBLAS workspace
+#: charge. Neither study makes a global guarantee for unmeasured shapes/devices.
 _PROBE_DEFERRAL_CEILING = 4.0
 
 
@@ -1945,6 +1944,7 @@ class StreamingSetupMixin:
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
+            cublas_workspace_bytes as estimate_cublas_workspace_bytes,
             decide_packed_backward,
             decide_stream_fit,
             dense_weight_charge_elements,
@@ -1958,6 +1958,17 @@ class StreamingSetupMixin:
             resolve_available_vram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
+
+        cublas_bytes = 0
+        if on_cuda:
+            # Keep torch lazy at module scope: this mixin is imported by all five
+            # trainer wrappers, including CPU-only CLI startup paths.
+            import torch
+
+            cublas_bytes = estimate_cublas_workspace_bytes(
+                compute_capability=torch.cuda.get_device_capability(self.device),
+                workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+            )
 
         # Charged whole even though it fills lazily: the cache is complete after
         # the first step and stays resident for the run.
@@ -1990,9 +2001,8 @@ class StreamingSetupMixin:
         batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
         # v0.72.4 — a paired loss concatenates chosen and rejected into ONE
         # tensor, so twice the rows reach the model per configured batch. The
-        # estimator's contract is that it never under-predicts; budgeting a
-        # paired loss at 1x rows would halve the logits term, which is the
-        # dominant one (measured 146x the buffer pool at batch 8).
+        # budgeting a paired loss at 1x rows would halve the logits term, which
+        # is the dominant one (measured 146x the buffer pool at batch 8).
         rows = batch * self._STREAM_ROWS_PER_EXAMPLE
         if not (vocab and hidden and inter):
             # Never silently: skipping the budget also skips the refusal that
@@ -2063,6 +2073,7 @@ class StreamingSetupMixin:
                 logits_bytes_per_element=calibrated,
                 large_layer_bytes=large_layer_bytes,
                 persistent_bytes=scale_cache_bytes + expert_bytes,
+                cublas_workspace_bytes=cublas_bytes,
                 loss_chunk=loss_chunk,
                 recompute_bytes=recompute_bytes,
             )
@@ -2086,6 +2097,10 @@ class StreamingSetupMixin:
             )
 
         lines = [peak_line(predicted)]
+        if cublas_bytes:
+            lines.append(
+                f"  cuBLAS       {cublas_bytes / (1024 * 1024):.1f} MiB workspace, included above"
+            )
         if scale_cache_bytes:
             lines.append(
                 f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "
