@@ -73,6 +73,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
+| [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
 | [`soup doctor`](#soup-doctor) | Check system dependencies, GPU, and compatibility. |
 | [`soup draft`](#soup-draft) | Train + measure a speculative-decoding draft model: distil your tuned model into a tiny draft, then serve it with --auto-spec (v0.71.33). |
 | [`soup drift-alarm`](#soup-drift-alarm) | Rolling-KL drift alarm on output-token distribution with optional Slack/Discord webhook (v0.63.0). |
@@ -1794,6 +1795,28 @@ Usage: `soup distill-prompt [OPTIONS]`
 | `--max-rows` | integer |  |  | Cap the number of distilled rows. |
 | `--output`, `-o` | text | `distilled.jsonl` |  | Output JSONL path |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live preparation). |
+
+## `soup docs`
+
+Documentation search &amp; offline reference guides.
+
+Usage: `soup docs <command> [ARGS]...`
+
+Subcommands:
+
+- [`search`](#soup-docs-search)
+
+### `soup docs search`
+
+Search Soup documentation for flags, configs, training tasks, and guides.
+
+Usage: `soup docs search [OPTIONS] QUERY`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `QUERY` | text |  | yes | Search query (e.g. 'safetensors export') |
+| `--top-k`, `-k` | integer | `5` |  | Number of results to return |
+| `--format`, `-f` | text | `table` |  | Output format: 'table' (default) or 'json' |
 
 ## `soup doctor`
 
