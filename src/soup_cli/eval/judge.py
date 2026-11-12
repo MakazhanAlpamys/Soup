@@ -9,7 +9,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
+from statistics import mean
 from typing import TYPE_CHECKING, Optional, Protocol
 from urllib.parse import urlparse
 
@@ -133,6 +135,7 @@ class JudgeScore:
 
 
 def _finite_mean(values: list[float]) -> float:
+    """Return a finite mean, raising ValueError for an unrepresentable result."""
     try:
         result = sum(values) / len(values)
     except OverflowError:
@@ -140,11 +143,9 @@ def _finite_mean(values: list[float]) -> float:
     if math.isfinite(result):
         return result
 
-    from statistics import mean
-
     try:
         result = float(mean(values))
-    except (OverflowError, ValueError):
+    except OverflowError:
         raise ValueError("Judge average must be finite") from None
     if not math.isfinite(result):
         raise ValueError("Judge average must be finite")
@@ -166,13 +167,13 @@ class JudgeResults:
             return
 
         # Overall average
-        self.overall_score = _finite_mean([s.weighted_score for s in self.scores])
+        overall_score = _finite_mean([s.weighted_score for s in self.scores])
 
         # Per-category averages
         cats: dict[str, list[float]] = {}
         for score in self.scores:
             cats.setdefault(score.category, []).append(score.weighted_score)
-        self.category_scores = {
+        category_scores = {
             cat: _finite_mean(vals) for cat, vals in sorted(cats.items())
         }
 
@@ -181,10 +182,13 @@ class JudgeResults:
         for score in self.scores:
             for crit, val in score.scores.items():
                 all_criteria.setdefault(crit, []).append(val)
-        self.criteria_averages = {
+        criteria_averages = {
             crit: _finite_mean(vals)
             for crit, vals in sorted(all_criteria.items())
         }
+        self.overall_score = overall_score
+        self.category_scores = category_scores
+        self.criteria_averages = criteria_averages
 
 
 def load_rubric(path: Path) -> dict:
@@ -382,6 +386,7 @@ def _parse_judge_response(
 
 
 def _require_finite_weights(rubric: dict) -> None:
+    """Reject invalid weights before the weighted evaluator sends a request."""
     for index, criterion in enumerate(rubric["criteria"]):
         weight = criterion.get("weight", 1.0)
         # Integers stay finite even when conversion to a float would overflow.
@@ -392,7 +397,10 @@ def _require_finite_weights(rubric: dict) -> None:
         except (TypeError, ValueError, OverflowError):
             finite = False
         if not finite:
-            raise ValueError(f"Criterion {index} weight must be a finite number")
+            raise ValueError(
+                f"Criterion {index} ({criterion.get('name')!r}) weight {weight!r} "
+                "is not a finite number. Use a number such as 1.0."
+            )
 
 
 def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
@@ -419,8 +427,6 @@ def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
         return result
 
     # Preserve ordinary rounding; exact arithmetic is only the overflow fallback.
-    from fractions import Fraction
-
     try:
         weights = [Fraction(weight) for _, weight in inputs]
         exact_total = sum(weights)
@@ -430,7 +436,7 @@ def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
             Fraction(val) * weight for (val, _), weight in zip(inputs, weights)
         )
         return float(exact_sum / exact_total)
-    except (OverflowError, ValueError, ZeroDivisionError):
+    except OverflowError:
         raise ValueError("Weighted judge score must be finite") from None
 
 

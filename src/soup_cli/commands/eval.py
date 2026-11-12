@@ -587,7 +587,8 @@ def judge(
             api_base=api_base,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        message = f"Cannot use rubric {rubric!r}: {exc}" if rubric else str(exc)
+        console.print(f"[red]{for_terminal(message)}[/]")
         raise typer.Exit(1)
 
     from rich.progress import (

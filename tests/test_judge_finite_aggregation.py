@@ -48,6 +48,7 @@ def score_map(values: list[float]) -> dict[str, float]:
     ([sys.float_info.max] * 2, [sys.float_info.max] * 2, sys.float_info.max),
     ([1e308, 1e308], [-1e308, -1e308], -1e308),
     ([1e308, -1e308, 1.0], [5.0, 5.0, 5.0], 5.0),
+    ([1e308, 1.0, -1e308], [5.0, 5.0, 5.0], 5.0),
     ([1e308, 1e308, -1e308, -1e308], [1.0] * 4, 0.0),
 ])
 def test_representable_weighted_mean_survives_intermediate_overflow(
@@ -80,13 +81,13 @@ def test_missing_weight_still_defaults_to_one() -> None:
 
 @pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])
 def test_evaluator_rejects_nonfinite_weight_at_construction(weight: float) -> None:
-    with pytest.raises(ValueError, match="Criterion 0 weight must be a finite number"):
+    with pytest.raises(ValueError, match="Criterion 0 .* weight .* is not a finite number"):
         JudgeEvaluator(rubric=rubric([weight]), provider="ollama")
 
 
 @pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])
 def test_private_weighted_helper_refuses_nonfinite_weights(weight: float) -> None:
-    with pytest.raises(ValueError, match="Criterion 0 weight must be a finite number"):
+    with pytest.raises(ValueError, match="Criterion 0 .* weight .* is not a finite number"):
         _compute_weighted_score({"0": 5.0}, rubric([weight]))
 
 
@@ -123,7 +124,7 @@ def test_changed_weight_is_rechecked_before_a_judge_request(
         lambda prompt: calls.append(prompt) or json.dumps({"scores": {"0": 5.0}}),
     )
     evaluator.rubric["criteria"][0]["weight"] = float("nan")
-    with pytest.raises(ValueError, match="Criterion 0 weight must be a finite number"):
+    with pytest.raises(ValueError, match="Criterion 0 .* weight .* is not a finite number"):
         evaluator.evaluate("synthetic", "synthetic")
     assert calls == []
 
@@ -131,7 +132,8 @@ def test_changed_weight_is_rechecked_before_a_judge_request(
 @pytest.mark.parametrize(("weights", "values"), [
     ([1e308, -1e308, 1.0], [5.0, 1.0, 0.0]),
     ([1.0], [10 ** 400]),
-], ids=["signed-mean-overflow", "unrepresentable-integer-score"])
+    ([1.0, -0.9999999999999999], [1e308, 0.0]),
+], ids=["signed-mean-overflow", "unrepresentable-integer-score", "finite-division-overflow"])
 def test_unrepresentable_weighted_score_fails_explicitly(
     weights: list[object], values: list[float],
 ) -> None:
@@ -166,6 +168,24 @@ def test_nonfinite_sdk_aggregate_is_not_returned_as_a_score(value: float) -> Non
     result = JudgeResults(scores=[JudgeScore(prompt="q", response="a", weighted_score=value)])
     with pytest.raises(ValueError, match="Judge average must be finite"):
         result.compute()
+
+
+def test_failed_criterion_average_preserves_previous_aggregates() -> None:
+    result = JudgeResults(
+        scores=[
+            JudgeScore(prompt="q", response="a", scores={"quality": math.nan}, weighted_score=4.0)
+        ],
+        overall_score=2.0,
+        category_scores={"previous": 2.0},
+        criteria_averages={"quality": 2.0},
+    )
+
+    with pytest.raises(ValueError, match="Judge average must be finite"):
+        result.compute()
+
+    assert result.overall_score == 2.0
+    assert result.category_scores == {"previous": 2.0}
+    assert result.criteria_averages == {"quality": 2.0}
 
 
 @pytest.mark.parametrize(("weights", "values", "rows", "expected"), [
@@ -223,7 +243,9 @@ def test_cli_rejects_invalid_weight_before_any_request(
     target = tmp_path / "responses.jsonl"
     target.write_text('{"prompt":"q","response":"synthetic"}\n', encoding="utf-8")
     rubric_path = tmp_path / "rubric.yaml"
-    rubric_path.write_text(yaml.safe_dump(rubric([weight])), encoding="utf-8")
+    bad_rubric = rubric([weight])
+    bad_rubric["criteria"][0]["name"] = "quality [red]"
+    rubric_path.write_text(yaml.safe_dump(bad_rubric), encoding="utf-8")
     calls: list[str] = []
     monkeypatch.setattr(
         JudgeEvaluator, "_call_llm",
@@ -236,7 +258,8 @@ def test_cli_rejects_invalid_weight_before_any_request(
     ])
     output = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 1, output
-    assert "Criterion 0 weight must be a finite number" in output
+    assert "rubric.yaml" in output
+    assert f"Criterion 0 ('quality [red]') weight {weight!r} is not a finite number." in output
     assert calls == []
 
 
