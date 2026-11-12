@@ -958,14 +958,14 @@ def test_published_names_coverage_fails_when_the_file_is_mutated():
 # Streamed precedent: test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly
 # (tests/test_fp8_block_streaming.py) pins the streamed build's logits/loss/grads against
 # a resident model holding the dequantised weights. This cell is the resident-route
-# counterpart: load_resident_model on the FP8 checkpoint must materialise, BIT FOR BIT,
-# the same parameters a plain native from_pretrained produces on the dequantised folder
-# the fixtures' builder writes (built["fp8"] = (FP8 K2 folder, dequantised folder)).
+# counterpart, to the same scope: load_resident_model on the FP8 checkpoint must
+# materialise, BIT FOR BIT, the same state dict a plain native from_pretrained produces on
+# the dequantised folder the fixtures' builder writes (built["fp8"] = (FP8 K2 folder,
+# dequantised folder)), and the two models must then compute the same logits and loss.
 #
-# Comparison scope: parameters only (named_parameters). Buffers are excluded by design:
-# e_score_correction_bias is a float32 buffer in both loads (the loader keeps stored
-# buffer dtypes per the D-fix F3), so the bit-for-bit claim covers parameters, where both
-# models hold bfloat16.
+# Buffers are included: e_score_correction_bias is float32 in both loads (the loader keeps
+# stored buffer dtypes), so the bit-for-bit claim covers the whole state dict. Parameters
+# are bfloat16 in both, which is why the comparison also checks dtypes.
 
 
 def _resident_fp8_vs_reference(fp8_dir, deq_dir):
@@ -979,14 +979,14 @@ def _resident_fp8_vs_reference(fp8_dir, deq_dir):
     return got, want
 
 
-def _assert_parameters_bit_identical(got, want):
+def _assert_state_bit_identical(got, want):
     import torch
 
-    got_parameters = dict(got.named_parameters())
-    want_parameters = dict(want.named_parameters())
-    assert set(got_parameters) == set(want_parameters)
-    for name in sorted(got_parameters):
-        left, right = got_parameters[name], want_parameters[name]
+    got_state = got.state_dict()
+    want_state = want.state_dict()
+    assert set(got_state) == set(want_state)
+    for name in sorted(got_state):
+        left, right = got_state[name], want_state[name]
         assert left.dtype == right.dtype, (name, left.dtype, right.dtype)
         assert torch.equal(left, right), name
 
@@ -994,9 +994,21 @@ def _assert_parameters_bit_identical(got, want):
 def test_resident_fp8_load_is_bit_for_bit_the_dequantised_materialisation(tiny_k2_built):
     """Maintainer item c: the FP8 resident load equals, bit for bit, a resident native
     model holding the same dequantised weights (streamed-side pin:
-    test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly)."""
+    test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly) — weights, then
+    the forward pass that consumes them."""
+    import torch
+
     got, want = _resident_fp8_vs_reference(*tiny_k2_built["fp8"])
-    _assert_parameters_bit_identical(got, want)
+    _assert_state_bit_identical(got, want)
+
+    ids = _ids(torch)
+    for model in (got, want):
+        model.eval()
+    with torch.no_grad():
+        got_out = got(input_ids=ids, labels=ids)
+        want_out = want(input_ids=ids, labels=ids)
+    assert torch.equal(got_out.logits, want_out.logits)
+    assert torch.equal(got_out.loss, want_out.loss)
 
 
 def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_k2_built):
@@ -1016,4 +1028,4 @@ def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_
 
     got, want = _resident_fp8_vs_reference(str(mutated), deq_dir)
     with pytest.raises(AssertionError):
-        _assert_parameters_bit_identical(got, want)
+        _assert_state_bit_identical(got, want)

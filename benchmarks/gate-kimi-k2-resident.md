@@ -182,6 +182,17 @@ measuring the resident route against K2's own computation on the weights it actu
 materialises. The pristine fixtures are committed alongside and checked for integrity
 (the two references must differ).
 
+**The load path itself, bit for bit.** The fixtures compare *computation*; they do not, by
+themselves, pin the converter. So the route's own load is pinned the way the streamed side
+pins it (`test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly`):
+`load_resident_model` on the tiny FP8 checkpoint against a plain native `from_pretrained` of
+the independently dequantised folder the builder writes. `torch.equal` holds over the whole
+state dict — parameters **and** buffers, dtype-checked (`e_score_correction_bias` stays
+float32 on both sides) — and then over the same forward's logits and loss. The mutation that
+matters here is a flipped FP8 block scale in the checkpoint, and the cell fails on it as
+required. Gradients are out of scope for this cell: it carries no adapter, so a backward
+pass would pin autograd, not the conversion.
+
 ### Controls: PASS
 
 - **default rope** (`rope_scaling: null`, admitted by the guard): max abs diff against the
