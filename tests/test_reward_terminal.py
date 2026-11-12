@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -12,16 +11,13 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.utils.paths import quote_path
 from soup_cli.utils.reward_synth import CalibrationReport
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows, and "n:" there is a drive.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
@@ -35,7 +31,7 @@ _VALUES = [
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
-    pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}",
 ]
 

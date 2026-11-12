@@ -26,16 +26,17 @@ from soup_cli.data.loader import (
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 from soup_cli.utils.gpu import (
+    apply_quantization_guard,
     configure_cuda_alloc_hint,
     configure_mps_async_load,
     detect_device,
     get_gpu_info,
-    resolve_quantization,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
+    from soup_cli.utils.hardware_fit import FitUnavailable, HardwareFitInput
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -110,6 +111,14 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "ppo":
+        # trl's PPOTrainer.train() takes no checkpoint, so a resumed run would start
+        # over from step 0 on top of the old progress. Refused here, before the dataset
+        # is read, a model is loaded or the output directory is touched; `--resume auto`,
+        # `--resume <path>` and `--hf-resume` all pass through this function.
+        from soup_cli.trainer.ppo import RESUME_REFUSAL as PPO_RESUME_REFUSAL
+
+        return PPO_RESUME_REFUSAL.replace("--resume", flag)
     return None
 
 
@@ -388,15 +397,25 @@ def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
-    ``hardware_fit_input_from_config``, as ``soup profile``'s input is (#2049).
+    ``hardware_fit_input_or_reason``, as ``soup profile``'s input is (#2049).
     ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
     printed before the model's details are read from the Hub, without the offline
     hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
     """
-    from soup_cli.utils.hardware_fit import hardware_fit_input_from_config
+    from soup_cli.utils.hardware_fit import FitUnavailable
+
+    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb)
+    return None if isinstance(result, FitUnavailable) else result
+
+
+def _hardware_fit_input_or_reason(
+    cfg: SoupConfig, gpu_memory_gb: float | None = None
+) -> HardwareFitInput | FitUnavailable:
+    """Build the train fit input or its reason, announcing any Hub lookup once."""
+    from soup_cli.utils.hardware_fit import hardware_fit_input_or_reason
     from soup_cli.utils.model_shape import HUB_REQUEST_LINE_BEFORE_DOWNLOAD
 
-    return hardware_fit_input_from_config(
+    return hardware_fit_input_or_reason(
         cfg,
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
@@ -471,10 +490,10 @@ def _hardware_fit_preflight(
 ) -> None:
     """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
 
-    Skips silently on CPU / when VRAM is unknown / when the run isn't
-    statically predictable, so CI and small runs are unaffected. A quantization
-    the predictor has no figure for is skipped with one line (#1652). Honors
-    the documented ``--allow-oom-attempt`` opt-out.
+    Skips silently for layer streaming, MLX, or unknown CUDA VRAM. Otherwise,
+    an input the estimate cannot price is named in one line, informational for
+    auto batch because it is chosen after the model loads. Quantization keeps
+    its existing skip line (#1652). Honors the ``--allow-oom-attempt`` opt-out.
 
     ``sharding`` and ``num_processes`` come from ``_preflight_sharding`` (#2300). A run
     sharded across more than one process is checked against its floor per card; its
@@ -503,11 +522,11 @@ def _hardware_fit_preflight(
         return
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
-    from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT
+    from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
-    inp = _build_hardware_fit_input(cfg, gpu_memory_gb=total_bytes / 1024**3)
-    if inp is None:
+    inp = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=total_bytes / 1024**3)
+    if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
             # #1652: silence here read as "fits".
@@ -515,6 +534,13 @@ def _hardware_fit_preflight(
                 "[yellow]Pre-flight skipped:[/] no memory model for "
                 f"quantization: {quantization}"
             )
+        elif not isinstance(cfg.training.batch_size, int):
+            console.print(
+                "[dim]Pre-flight: the fit is not checked before training: "
+                f"{markup_escape(inp.reason)}.[/]"
+            )
+        else:
+            console.print(f"[yellow]Pre-flight skipped:[/] {markup_escape(inp.reason)}.")
         return
     from soup_cli.utils.hardware_fit import (
         CALIBRATED_RANGE,
@@ -1251,7 +1277,44 @@ def train(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
+        # #1430: --push-as and --gate are handled after this branch, so they
+        # would be dropped with no message. Refuse rather than run without them.
+        dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
+        if dropped:
+            one = len(dropped) == 1
+            console.print(
+                f"[red]{markup_escape(', '.join(dropped))} {'is' if one else 'are'} "
+                f"not supported with --cloud:[/] {'it runs' if one else 'they run'} "
+                "locally, against local files and a local HF repo, and a cloud run "
+                f"would silently ignore {'it' if one else 'them'}. Run without "
+                f"--cloud, or drop {'the flag' if one else 'the flags'}."
+            )
+            raise typer.Exit(2)
         try:
+            # #1430: the stub carries the *effective* config — the loaded object
+            # with every override above already applied — because embedding the
+            # file's text loses them. Refuse inputs the stub cannot carry while
+            # this is still free: a paid boot cannot fix a missing data file.
+            import yaml
+
+            from soup_cli.cloud._shipped import refuse_unshipped_inputs
+            from soup_cli.config.loader import load_config_from_string
+
+            refuse_unshipped_inputs(cfg)
+            effective_yaml = yaml.safe_dump(
+                cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
+            )
+            # The overrides above are assigned after the load and the models do not
+            # validate on assignment, so no validator has seen this config. The
+            # remote `soup train` loads the text through all of them: do it here,
+            # before a stub exists, rather than after the paid boot.
+            try:
+                load_config_from_string(effective_yaml)
+            except ValueError as exc:
+                raise ValueError(
+                    "the effective config (the file with the command-line overrides "
+                    f"applied) would be refused on the remote machine: {exc}"
+                ) from exc
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
@@ -1261,6 +1324,7 @@ def train(
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
+                config_yaml=effective_yaml,
             )
             stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
@@ -1414,11 +1478,12 @@ def train(
             raise typer.Exit(1)
 
     # --- DeepSpeed setup ---
+    # A bad name or path fails here, before any hardware work. The config itself
+    # is written after detect_device below, once the trainer's precision can be
+    # read without creating the CUDA context early (#2149, #2266).
     ds_config_path = None
     if deepspeed:
-        ds_config_path = _resolve_deepspeed(deepspeed)
-        if ds_config_path:
-            console.print(f"[green]DeepSpeed enabled:[/] {deepspeed}")
+        _check_deepspeed_arg(deepspeed)
 
     # --- FSDP2 setup ---
     fsdp_kwargs = None
@@ -1649,22 +1714,25 @@ def train(
 
     configure_mps_async_load(device)
 
-    # Quantization guard: explicit decision per #423.  See resolve_quantization()
-    # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
-    # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
-    resolved_quant, quant_warning = resolve_quantization(
-        device=device,
-        backend=cfg.backend,
-        quantization=cfg.training.quantization,
-    )
-    if quant_warning:
-        console.print(f"[yellow]{quant_warning}[/]")
-    cfg.training.quantization = resolved_quant
+    if deepspeed:
+        from soup_cli.utils.deepspeed import trainer_precision
+
+        ds_config_path = _resolve_deepspeed(
+            deepspeed, precision=trainer_precision(cfg, device)
+        )
+        console.print(f"[green]DeepSpeed enabled:[/] {deepspeed}")
+
+    # Quantization guard: explicit decision per #423, shared with `soup sweep`.  See the
+    # docstring of `resolve_quantization` (utils/gpu.py) for the full rationale — MLX 4-bit
+    # uses pre-quantized mlx-community weights (not bitsandbytes NF4), CPU cannot run
+    # bitsandbytes at all.
+    apply_quantization_guard(cfg, device, console)
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
-    # analytical VRAM predictor says the run won't fit. Skips silently on CPU
-    # or when the config isn't statically predictable (e.g. batch_size='auto');
-    # says so when the quantization has no memory model (hqq:*).
+    # analytical VRAM predictor says the run won't fit. Skips silently on CPU;
+    # when the estimate cannot price the config (batch_size='auto', an input
+    # outside its range, or a quantization with no memory model such as hqq:*)
+    # it says the fit is not checked and why.
     sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
     _hardware_fit_preflight(
         cfg,
@@ -2683,27 +2751,42 @@ def _run_diagnose_gate_or_exit(
         raise typer.Exit(1) from exc
 
 
-def _resolve_deepspeed(deepspeed: str) -> str:
-    """Resolve DeepSpeed config: named preset or path to JSON file."""
+def _check_deepspeed_arg(deepspeed: str) -> None:
+    """Exit 1 unless ``deepspeed`` is a preset name or an existing ``.json`` path."""
     import soup_cli.utils.deepspeed as ds
 
-    # Named preset
     if deepspeed in ds.CONFIGS:
-        return ds.write_deepspeed_config(deepspeed)
-
-    # Path to config file. Resolved the same way a preset is (#359): a config
-    # that needs no run-dependent rewrite comes back by this very path, and one
-    # that copied the ZeRO++ placeholders is repaired into a temp copy with the
-    # change printed. The user's file is never modified.
+        return
     ds_path = Path(deepspeed)
     if ds_path.exists() and ds_path.suffix == ".json":
-        return ds.resolve_user_deepspeed_file(str(ds_path))
-
+        return
     console.print(
         f"[red]Invalid DeepSpeed config: {deepspeed}[/]\n"
         f"Options: {', '.join(ds.CONFIGS.keys())} or path to JSON file."
     )
     raise typer.Exit(1)
+
+
+def _resolve_deepspeed(deepspeed: str, *, precision: str | None = None) -> str:
+    """Resolve DeepSpeed config: named preset or path to JSON file.
+
+    ``precision`` is the trainer's (``utils.deepspeed.trainer_precision``); the
+    file's ``bf16`` / ``fp16`` are made to agree with it (#2266).
+    """
+    import soup_cli.utils.deepspeed as ds
+
+    _check_deepspeed_arg(deepspeed)
+
+    # Named preset
+    if deepspeed in ds.CONFIGS:
+        return ds.write_deepspeed_config(deepspeed, precision=precision)
+
+    # Path to config file. Resolved the same way a preset is (#359): a config
+    # that needs no run-dependent rewrite comes back by this very path, and one
+    # that copied the ZeRO++ placeholders or contradicts the trainer's precision
+    # is repaired into a temp copy with the change printed. The user's file is
+    # never modified.
+    return ds.resolve_user_deepspeed_file(str(Path(deepspeed)), precision=precision)
 
 
 _MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")

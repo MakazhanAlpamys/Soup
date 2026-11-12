@@ -725,8 +725,13 @@ every PR instead of relying on a hand-edited JSON file.
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
   best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
-  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
-  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  `bfloat16` / `float16` / `float32`) — the actual load, not the training field.
+  Full-precision live eval uses native `bfloat16` on the requested CUDA card when
+  supported, `float16` on older CUDA cards such as T4/V100, and `float32` on CPU or
+  without an available CUDA runtime. Indexed devices such as `cuda:1` are checked
+  independently of the current card. Both model loaders, the console line and the
+  evidence use the same dtype. Unsupported quantization formats fall back to this
+  full-precision policy. With `--evidence` alone, `--config` GATES: it refuses
   (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
   *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
   warns rather than failing closed.
@@ -817,6 +822,11 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+`--write-baseline` refuses an output resolving to the suite, custom-task file,
+or judge-prompts file before model construction (exit 3), preserving those inputs.
+Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
+
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
@@ -879,15 +889,25 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   earlier version prints a warning that names it.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
-the same helpers: bfloat16 on CUDA and float32 elsewhere; `--config soup.yaml` reuses
+the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
+and float32 elsewhere; `--config soup.yaml` reuses
 the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
 is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
 variables (a Qwen3 model scores differently with thinking on or off). Every recorded
 version carries these **numerics** (`dtype`, `device` family, `quantization`,
 `chat_template_kwargs`), and a run whose numerics differ from any recorded version is
 refused before the model loads (exit `3`), naming each differing key with this run's
-value and the recorded one. A CPU run (float32) and a GPU run (bfloat16) are therefore
-never mixed in one ledger; start a new ledger with `--ledger NEW.json` to change them.
+value and the recorded one. CPU runs (float32), native-BF16 CUDA runs (bfloat16), and
+pre-Ampere CUDA runs (float16) therefore use separate ledgers; start a new ledger with
+`--ledger NEW.json` to change those settings.
+
+**Existing pre-Ampere histories.** Before the device-aware precision change (#2409),
+full-precision runs on T4, V100 and RTX 20xx also recorded `dtype: bfloat16`. The same
+card now selects `float16`, so continuing that existing BF16 ledger is refused **before
+the model loads**, with exit `3` naming the old and new dtype. Start a separate ledger
+with `--ledger NEW.json`, register the control tasks again with `--add-task`, and record
+a new FP16 baseline. Historical scores retain their BF16 stamp and are not migrated
+into the FP16 series, since scores measured under different dtypes are not comparable.
 
 **Failed generations.** A generation that raises, or returns something that is not
 text, is a failure and not a wrong answer. If any sample of a control task fails (an
@@ -1129,6 +1149,10 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
+
+`soup eval compare` reads results for the full run IDs resolved from its arguments.
+When `soup eval aider --run-id` accepts a unique prefix, it saves the result under
+the matching full run ID. Existing evaluation rows keep their stored run IDs.
 
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;

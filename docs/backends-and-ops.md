@@ -752,8 +752,18 @@ training:
 ## Cloud GPU Training
 
 No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
-from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
-the environment only when a live submission starts.
+from your `soup.yaml`. The **effective** config — the loaded object with every CLI override
+already applied — is base64-embedded as **data**; credentials are read from the environment only
+when a live submission starts.
+
+`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
+local HF repo, so a cloud run would silently ignore them.
+
+A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
+id (every built-in template sets one, so users hit this first). The same applies to local model
+paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
+time rather than silently shipped. Uploading local input files is tracked in
+[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -1014,6 +1024,8 @@ from step 0 regardless of how far the checkpoint got.
 
 `task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
+`task: ppo` refuses `--resume` / `--hf-resume` too, before it reads the dataset or loads a model: trl's PPO trainer cannot continue from a checkpoint, so a resumed run would start again from step 0 and write over the files already in `output`. `--hf-resume` is refused even when the Hub has no checkpoint branch, where it would have trained fresh. Remove the flag to start a new run, or point `output` at a new directory to keep the old one.
+
 
 ## Run Management & Cleanup
 
@@ -1035,6 +1047,18 @@ soup runs clean --all --dry-run
 ```
 
 By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+
+`soup runs compare` keeps the side-by-side run summary and lists all differences
+in the stored config, including nested settings such as `training.lora.dropout`
+and `training.seed`. Lists are compared as whole values. `<not stored>` means a key
+is absent; `null` is a recorded JSON null. Missing or invalid historical configs
+are reported as unavailable rather than identical. The summary also shows the
+recorded training-data SHA-256, or `unknown` when no hash was captured.
+Evaluation comparison uses the latest stored score for each benchmark and run,
+with the signed difference **right minus left**; `-` means that side has no score.
+This reads local experiment records without a registry push, rerunning evaluation
+or hashing the current dataset. It does not establish that two evaluation runs
+used the same scorer or data, and it adds no code-revision provenance.
 
 
 ## Alternative Model Hubs
