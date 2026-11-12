@@ -1353,6 +1353,12 @@ snapshot still passes these checks: when its layout changes into a refused one a
 the next run stops with the same message and leaves the copy in place.
 
 
+**Stale cache slots (#2196).** The cache lives at `<cache root>/<slug>@<commit>` (bare `<slug>` for a legacy cache). A base update resolves to a new slot and leaves the old one on disk. The disk pre-flight panel now lists the other slots of the same base with sizes and exact paths, and names `soup prune-layer-cache --model <base> --yes`.
+
+- `soup prune-layer-cache --model <base>` is a dry run: it lists the stale slots with sizes and exact paths. Only `--yes` removes them. Training never deletes.
+- Kept, never removed: the slot the run resolves to; the newest complete slot of the base (the `index.json` with the latest mtime), so a base with one complete slot never loses it; a slot with `index.json.resharding`; a slot holding a `.soup.*.tmp` file (a write in progress); a slot with no readable `index.json`.
+- Stripe folders sit outside the cache root. They are listed with sizes and are never deleted: remove them by hand.
+
 ### Forward-only inference mode (API only, no CLI yet)
 
 The streaming runtime can also *run* a model that does not fit in VRAM, without training it.
@@ -1538,21 +1544,24 @@ soup train --config soup.yaml --fsdp full_offload
 
 `zero3_offload` keeps `offload_optimizer: none`: offloading the optimizer makes DeepSpeed JIT-build its `cpu_adam` op, which requires a matching CUDA toolkit (`nvcc`) on the box. Copy the emitted JSON and flip it if you have one — or start from the bundled `soup fetch deepspeed_configs zero3-cpu-offload`, which is the optimizer-offloading variant and therefore needs that toolkit. Measured on one H100 with Llama-3.1-8B (bf16, LoRA r=8, 256 steps): 21.65 tok/s at a 38,135 MiB peak — see [benchmarks/gate-h100-validation.md](../benchmarks/gate-h100-validation.md), STEP 3, which also compares it against layer streaming on the same box, data and model.
 
+Before the config is written, its `bf16` / `fp16` are matched to the precision the trainer will use: bf16 on an Ampere or newer card, fp16 on a card without bf16 hardware (a T4 or V100) and under `grpo_fp16`, and `"auto"`, filled in by the trainer, under `auto_mixed_precision`. A change is printed. Every preset declares `bf16`, and until this was matched a trainer running fp16 stopped before its first step with "`--mixed_precision` arg cannot be set to `fp16` when `bf16` is set in the DeepSpeed config file" (#2266).
+
 ### `--deepspeed <file>` — your own JSON
 
 `--deepspeed` also takes a path to a JSON config instead of a preset name. That
 file is yours: it reaches DeepSpeed **byte-identical, by the same path**, unless
 it carries a key that is invalid for the run it is about to start.
 
-Two keys are rewritten, and both are errors rather than preferences (#359):
+These keys are rewritten, and all are errors rather than preferences (#359, #2266):
 
 | key | why it is repaired |
 |---|---|
+| `bf16` / `fp16` | accelerate refuses a config that enables the dtype the trainer is not using, so a `bf16: true` file stops an fp16 run (a T4, `grpo_fp16`) before its first step. A value that already agrees, `"auto"` included, is left alone (#2266) |
 | `zero_hpz_partition_size` | DeepSpeed refuses a value the world size is not divisible by, so the ZeRO++ preset's placeholder `8` is invalid on any box that is not a multiple of 8 |
-| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against the `bf16` the same file enables makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype` |
+| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against a bf16 run makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype`. They are turned off when the run is bf16 or `"auto"`, and kept for an fp16 run |
 
 The documented way to customise ZeRO++ is to copy the preset JSON — which copies
-both defects — so an unresolved user file would inherit a crash the presets are
+these defects — so an unresolved user file would inherit a crash the presets are
 already protected from. When a rewrite happens it is **printed**, the repaired
 config goes to a temp copy, and **your file on disk is never modified**. A
 config that uses none of those keys is not touched at all.
@@ -1791,7 +1800,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 | `mixtral` | **no — attention-only** | yes |
 | `kimi_k2` | **not measured** (no stand-in builds here) | not measured |
 
-`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
+`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo`, removed in #1145 and restored once DPO could build the `minimax_m3_vl` wrapper (#1393), sets none either and trains the same attention-only LoRA. The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
 
 **A string `target_modules` keeps its meaning under `moe_lora`.** A list target is extended with the MoE names (above). A string is not a list to extend, and it used to be replaced by the MoE list. peft reads a string in one of two ways, and each is now kept:
 

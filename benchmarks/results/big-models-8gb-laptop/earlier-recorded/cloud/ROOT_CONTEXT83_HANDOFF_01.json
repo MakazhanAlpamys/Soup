@@ -1,0 +1,42 @@
+{
+  "schema": "root-context83-handoff-v1",
+  "status": "passed",
+  "run_id": "l40s-strict-full88-sft16384-20261106-01",
+  "app_id": "ap-<redacted>",
+  "app_state": "stopped",
+  "active_tasks": 0,
+  "scope": "One complete 16384-token causal LoRA AdamW update through all 88 original decoder layers of dense Mistral Large 123B NF4 on Modal L40S. Real tokenized 16384 positions, 124 supervised targets, zero padding.",
+  "trainable_parameters": 26673152,
+  "loss": 0.8498985171318054,
+  "forward_layers": 88,
+  "reverse_layers": 88,
+  "per_layer_residual_release_bytes": 402653184,
+  "activation_tape_bytes": 35433480192,
+  "peak_pytorch_reserved_bytes": 6295650304,
+  "allocator_cap_bytes": 6710886400,
+  "whole_gpu_sample_peak_mib": 6597,
+  "whole_gpu_samples": 14381,
+  "whole_gpu_sample_interval_ms": 250,
+  "measurement_scope": "The sampled physical card was an L40S, with 46068 MiB reported total capacity and a separate PyTorch allocator limit. A separate laptop 16K reproduction is needed.",
+  "worker_seconds": 3618.44269536,
+  "source_seconds": 260.601962283,
+  "fresh_restore_seconds": 7.006722007000008,
+  "checkpoint": {
+    "completed_steps": 1,
+    "state_sha256": "a79fa51a04907851dd69b54b1861583aa427350102559defc1087e94d1dd2ddf",
+    "state_bytes": 320486997,
+    "adapters_exact": 352,
+    "adamw_moments_exact": 704,
+    "adamw_step_counters_exact": 352,
+    "rng_exact": ["cpu", "cuda"]
+  },
+  "verification": {
+    "path": "results/modal-l40s-strict-full88-sft-16384-01/verification.json",
+    "sha256": "751b751b2182a95ff63b5ea4bc9ce28ace292ffc4c00796e4b408d8b12f83e37"
+  },
+  "stage84_resume_worker": {
+    "path": "decoder_context84.py",
+    "sha256": "044168f58191c0372a7623b644f51f24bae8f91584bc7361f37d94ddaa1ff270",
+    "scope": "Prepare a new 16K step from the saved Step 1. CPU-only tests at this handoff. GPU step and a new checkpoint are separate deliverables."
+  }
+}
