@@ -122,6 +122,17 @@ def test_a_simpo_beta_has_no_soup_field_and_is_named(tmp_path: Path) -> None:
     assert "loss_type" not in unmapped
 
 
+@pytest.mark.parametrize("trainer,config", [
+    ("SFTTrainer", "SFTConfig"),
+    ("RewardTrainer", "RewardConfig"),
+])
+def test_a_beta_on_a_task_with_no_beta_field_is_named(
+    tmp_path: Path, trainer: str, config: str
+) -> None:
+    result, _ = _migrate(tmp_path, _trainer(trainer, config, "beta=0.1, "))
+    assert "beta" in _unmapped(result)
+
+
 @pytest.mark.parametrize("trainer,config,loss", [
     ("GRPOTrainer", "GRPOConfig", "dr_grpo"),
     ("KTOTrainer", "KTOConfig", "apo_zero_unpaired"),
