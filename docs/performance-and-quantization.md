@@ -400,6 +400,10 @@ large vocabulary costs more than a flat 0.5 or 1.0 suggests. Without the model's
 `config.json` the flat figures (0.5 and 1.0) are used. `hqq:*` has no figure yet, so the run starts and the pre-flight prints
 `Pre-flight skipped: no memory model for quantization: hqq:4bit` (with the
 format you set). No refusal there does not mean the run fits.
+With `batch_size: auto` (the default), the pre-flight says the fit is not checked
+before training because the batch is chosen after the model loads; no refusal
+there does not mean the run fits.
+Any other input the estimate cannot price is named in a `Pre-flight skipped:` line.
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
 startup. HQQ / EETQ / AQLM hard-fail with FSDP and ZeRO-3 (sourced from
