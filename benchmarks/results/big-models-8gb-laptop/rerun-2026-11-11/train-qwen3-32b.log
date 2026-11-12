@@ -1,0 +1,115 @@
+W1111 19:12:45.730000 13148 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+Loading config from d6-kit\qwen3-32b.soup.yaml...
++------------------------------ Training Setup -------------------------------+
+| Device:  NVIDIA GeForce RTX 5070 Laptop GPU                                 |
+| Memory:  7.9 GB                                                             |
+| Model:                                                                      |
+| <ASSETS>/qwen3-32b-nf4-7f721e74        |
+| Task:    sft                                                                |
+| Backend: transformers                                                       |
+| LoRA:    r=8, alpha=16                                                      |
+| Quant:   4bit                                                               |
+| Seed:    1234                                                               |
++-----------------------------------------------------------------------------+
+Loading dataset...
+Loaded: 3 train samples
+Run ID: run_20261111_191247_200d2913
+Setting up model + trainer...
+Loading tokenizer:
+<ASSETS>/qwen3-32b-nf4-7f721e74
+Pre-quantised bitsandbytes NF4 base: imported byte for byte, not re-quantised
++---------------------- Layer streaming disk pre-flight ----------------------+
+| HF/local source: 19.21 GB                                                   |
+| Soup materialized copy: 0.00 GB (no write required)                         |
+| Layer-shard cache: 19.21 GB (reusable)                                      |
+| Projected total on disk: 38.42 GB                                           |
+| Additional writes before training: 0.00 GB                                  |
++-----------------------------------------------------------------------------+
+Preparing layer shards ->
+<CACHE>\<ASSETS>__qwen3
+-32b-nf4-7f721e74
++-------------------------- training.stream_layers ---------------------------+
+| Layer streaming BETA - arch qwen3, tier disk                                |
+|   base         streamed from disk across 64 layers, staged by an async      |
+| reader (no resident copy)                                                   |
+|   host staging read_ahead 1 -> 3363 MB (page-locked when the box allows)    |
+|   VRAM buffers 2 x 252 MB + 1 x 1556 MB large-layer slot = 2059 MB          |
+|   resident     0 MB extras + adapters                                       |
+|   peak VRAM    ~3.35 GB at batch 1 x seq 128 (logits 0.27 GB)               |
+|   free VRAM    7.32 GB                                                      |
+|   forecast     157-231 tok/s - a compute-bound bound, not a promise         |
+|                (from 45.46 TFLOPS measured on this card now using bfloat16  |
+| @ 2115 MHz)                                                                 |
+|   ! base does not fit in RAM - streaming from the NVMe disk tier instead.   |
+| An async reader stages training.stream_read_ahead layers in host RAM        |
+| (page-locked where the box allows) rather than holding the base resident.   |
+| It is slower than the RAM tier - measured 1.9-2.3x its step time with the   |
+| store fully cached, on one box (benchmarks/gate-971-async-nvme-source.md);  |
+| a store larger than RAM has no RAM-tier comparison, which is what makes     |
+| this a fallback. Set stream_source='ram' to refuse rather than fall back.   |
++-----------------------------------------------------------------------------+
+Layer streaming is BETA: slower than resident training, but this model may not
+run resident on this card at all.
+expandable_segments allocator hint not enabled: Windows ignores it - torch
+warns and carries on
+Layer streaming ready: 64 layers, streamed from DISK (19.21 GB on an NVMe
+volume) by an async reader, read_ahead=1, 3363 MB pinned host staging (4.29 GB
+page-locked), 2 x 252 MB decoder buffers + 1 x 1556 MB large-layer slot
+LoRA applied: 9,961,472 trainable / 32,762,123,264 total (0.03%)
+
+Map:   0%|          | 0/3 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+
+Map: 100%|##########| 3/3 [00:00<00:00, 42.75 examples/s]
+
+Map:   0%|          | 0/3 [00:00<?, ? examples/s]
+Map: 100%|##########| 3/3 [00:00<00:00, 744.99 examples/s]
+
+Truncating train dataset:   0%|          | 0/3 [00:00<?, ? examples/s]
+Truncating train dataset: 100%|##########| 3/3 [00:00<00:00, 745.39 examples/s]
+Rewind log: <OUT>\qwen3-32b\rewind.jsonl
+Base revision: unknown (existing loading behavior preserved)
+Training started!
+
+
+  0%|          | 0/3 [00:00<?, ?it/s]
+ 33%|####      | 1/3 [00:18<00:36, 18.20s/it]
+
+
+ 33%|####      | 1/3 [00:18<00:36, 18.20s/it]
+ 67%|#######   | 2/3 [00:27<00:13, 13.05s/it]
+
+
+ 67%|#######   | 2/3 [00:27<00:13, 13.05s/it]
+100%|##########| 3/3 [00:37<00:00, 11.44s/it]
+
+
+100%|##########| 3/3 [00:37<00:00, 11.44s/it]
+
+
+100%|##########| 3/3 [00:37<00:00, 11.44s/it]
+100%|##########| 3/3 [00:37<00:00, 12.60s/it]
+{'loss': '3.62', 'grad_norm': '0.4121', 'learning_rate': '0.0002', 'entropy': '2.389', 'num_tokens': '128', 'mean_token_accuracy': '0.4299', 'epoch': '0.3333'}
+{'loss': '4.209', 'grad_norm': '0.4727', 'learning_rate': '0.0002', 'entropy': '2.404', 'num_tokens': '256', 'mean_token_accuracy': '0.367', 'epoch': '0.6667'}
+{'loss': '3.683', 'grad_norm': '0.6719', 'learning_rate': '0.0002', 'entropy': '2.177', 'num_tokens': '384', 'mean_token_accuracy': '0.419', 'epoch': '1'}
+{'train_runtime': '37.82', 'train_samples_per_second': '0.079', 'train_steps_per_second': '0.079', 'train_loss': '3.837', 'epoch': '1'}
+[train_dump] capture start 2026/11/11 19:13:52
+[train_dump] capture end 2026/11/11 19:13:57: live logits (1, 128, 151936) torch.float32 -> <OUT>\qwen3-32b.live.safetensors (5.3 s, sha256 6f13e93219c3f763...)
++------------------------- Soup Training: qwen3-32b --------------------------+
+| Epoch 1.0/1   100%                                                          |
+| Step:  3/3                                                                  |
+| Loss:  3.6826    LR: 2.00e-04                                               |
+| Speed: 0.08 it/s                                                            |
+| GPU peak: 2.5/7.9 GB                                                        |
+| Grad:  0.6719                                                               |
++-------------------- NVIDIA GeForce RTX 5070 Laptop GPU ---------------------++---------------------------- Training Complete! -----------------------------+
+| Loss: 3.6201 -> 3.6826                                                      |
+| Duration: 0m                                                                |
+| Output: <OUT>\qwen3-32b                                                    |
+| Run ID: run_20261111_191247_200d2913                                        |
+|                                                                             |
+| Quick test:  soup chat --model <OUT>\qwen3-32b                             |
+| Push to HF:  soup push --model <OUT>\qwen3-32b                             |
+| Merge LoRA:  soup merge --adapter <OUT>\qwen3-32b                          |
+| Export GGUF: soup export --model <OUT>\qwen3-32b                           |
+| Run details: soup runs show run_20261111_191247_200d2913                    |
++-----------------------------------------------------------------------------+
