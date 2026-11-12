@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+#: ``--max-tokens`` and a request's ``max_tokens`` share one range (#2730).
+_MAX_TOKENS_MIN = 1
+_MAX_TOKENS_MAX = 16384
+
 
 
 def _validate_adapter_name(name: str) -> bool:
@@ -554,6 +558,18 @@ def serve(
                 "[yellow]Warning:[/] --max-model-len applies to "
                 f"--backend vllm only; ignored for the {backend} backend."
             )
+
+    # #2730 — --max-tokens is the default for every request that omits
+    # ``max_tokens``, on every backend. Unchecked, 0 or a negative value let the
+    # server start and then failed each such request with a 500, and a value
+    # above the per-request cap (``ChatRequest.max_tokens``, le=16384) bypassed
+    # it. Same range as ``soup infer --max-tokens``.
+    if not _MAX_TOKENS_MIN <= max_tokens_default <= _MAX_TOKENS_MAX:
+        console.print(
+            f"[red]--max-tokens:[/] must be in [{_MAX_TOKENS_MIN}, {_MAX_TOKENS_MAX}], "
+            f"got {max_tokens_default}."
+        )
+        raise typer.Exit(2)
 
     # DeepSpeed-MII v0.27.0: dependency check only — live pipeline wiring
     # ships in v0.27.1 once we stabilize the OpenAI-compat shim. We exit
@@ -2014,7 +2030,9 @@ def _create_app(
         messages: list[ChatMessage]
         temperature: float = Field(default=0.7, ge=0.0, le=2.0)
         top_p: float = Field(default=0.9, ge=0.0, le=1.0)
-        max_tokens: Optional[int] = Field(default=None, ge=1, le=16384)
+        max_tokens: Optional[int] = Field(
+            default=None, ge=_MAX_TOKENS_MIN, le=_MAX_TOKENS_MAX,
+        )
         stream: bool = False
         adapter: Optional[str] = Field(
             default=None,
