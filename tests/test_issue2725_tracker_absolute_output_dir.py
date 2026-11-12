@@ -198,8 +198,10 @@ class TestALegacyRelativeRowResolvesAsBefore:
 
         output = _invoke("clean", run_id, "--no-keep-weights", "--dry-run")
 
-        assert "Delete dir:" in output
-        assert "checkpoint-1" in output
+        # checkpoint-1 is the one to delete (checkpoint-2 has the lower loss);
+        # Rich may wrap the long path, so count it rather than match its name.
+        assert "from 0 files and 1 directories" in output
+        assert output.count("Delete dir:") == 1
         assert _untouched(project_x)
 
     def test_cwd_only_lists_it_from_its_training_directory(
