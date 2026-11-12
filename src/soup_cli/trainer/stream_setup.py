@@ -918,16 +918,23 @@ class StreamingSetupMixin:
         refuse_if_data_parallel(self.device)
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
-        from soup_cli.utils.fp8_block import check_source_quantization, quantization_config_of
+        from soup_cli.utils.fp8_block import (
+            check_source_quantization,
+            is_serialized_nf4_config,
+            quantization_config_of,
+        )
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
             QUANT_NONE,
+            SERIALIZED_QUANT_DEVICE,
+            check_serialized_nf4_request,
             checkpoint_source_components,
             estimate_oq_stream_cache_bytes,
             fingerprint_source_files,
             inspect_shard_cache,
             layer_paths,
+            remove_stale_nf4_staging,
             resolve_shard_dir,
             shard_cache_disk_bytes,
             shard_checkpoint,
@@ -1021,8 +1028,18 @@ class StreamingSetupMixin:
         # resolved or downloaded. The disk pre-flight sizes the cache from the same
         # config (the shards hold dequantised weights, the scales are not stored).
         # The top-level declaration, or a multimodal wrapper's text_config one.
+        # One exception: a pre-quantised double-quantised bitsandbytes NF4 base
+        # (unsloth/*-bnb-4bit) under quantization: 4bit is not sharded but imported byte
+        # for byte (utils/nf4_serialized.py); under any other quantization it is refused
+        # as every bitsandbytes source is.
         source_quantization = quantization_config_of(model_config)
-        fp8_block = check_source_quantization(source_quantization, arch=arch)
+        run_is_4bit = tcfg.quantization == "4bit"
+        fp8_block = check_source_quantization(
+            source_quantization, arch=arch, allow_serialized_nf4=run_is_4bit
+        )
+        serialized_nf4 = run_is_4bit and is_serialized_nf4_config(
+            source_quantization, arch=arch
+        )
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100
@@ -1058,6 +1075,20 @@ class StreamingSetupMixin:
                 path, tcfg.stream_disk_kind, notify=console.print
             ).kind,
         )
+        if serialized_nf4:
+            # Before the weights are resolved or downloaded: the store keeps the source's
+            # bfloat16 and double-quantised statistics in one cache folder.
+            check_serialized_nf4_request(
+                dtype=dtype, double_quant=double_quant, stripe_roots=stripe_roots
+            )
+            # A killed import's leftover staging folder holds up to the whole payload and
+            # counts as used space in the disk pre-flight below, which would refuse a run
+            # the sweep makes room for. A live sibling's folder is kept (it names its pid).
+            remove_stale_nf4_staging(shard_dir)
+            console.print(
+                "[dim]Pre-quantised bitsandbytes NF4 base: imported byte for byte, "
+                "not re-quantised[/]"
+            )
         if stripe_roots:
             console.print(
                 "[dim]Layer cache striped over "
@@ -1066,7 +1097,15 @@ class StreamingSetupMixin:
                 )
                 + "[/]"
             )
-        quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
+        # The device the cache index is looked up under. A cache Soup quantised depends on
+        # the device (CPU and CUDA disagree on some float32 statistics); a pre-quantised
+        # source's cache was quantised on none and its index says so.
+        if serialized_nf4:
+            quant_device_kind = SERIALIZED_QUANT_DEVICE
+        elif quant == QUANT_NF4:
+            quant_device_kind = str(self.device).split(":", 1)[0]
+        else:
+            quant_device_kind = ""
         # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
         # decoder layer; the sharder drops them against the config's count (and the
         # disk pre-flight does not charge them).
