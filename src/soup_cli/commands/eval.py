@@ -222,10 +222,12 @@ def aider(
         from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
-        if tracker.get_run(run_id) is None:
+        run_data = tracker.get_run(run_id)
+        if run_data is None:
             console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
+        run_id = run_data["run_id"]
 
     try:
         output_dir = prepare_output_dir(output)
@@ -823,15 +825,16 @@ def compare(
 
     tracker = ExperimentTracker()
 
-    # Verify runs exist
-    for rid in [run1, run2]:
+    resolved_ids: list[str] = []
+    for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
             console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
             raise typer.Exit(1)
+        resolved_ids.append(run_data["run_id"])
 
     try:
-        comparison = compare_runs(tracker, run1, run2)
+        comparison = compare_runs(tracker, *resolved_ids)
     except ValueError as exc:
         console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from None
