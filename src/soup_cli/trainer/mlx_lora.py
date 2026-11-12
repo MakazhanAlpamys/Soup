@@ -103,8 +103,7 @@ def validate_pattern_manifest(manifest: Any) -> dict:
     for name, params in modules.items():
         if (not isinstance(params, dict) or set(params) != {"rank", "alpha", "scale", "dropout"}
                 or type(params["rank"]) is not int or type(params["alpha"]) is not int
-                or any(type(params[key]) not in (int, float) or
-                       not math.isfinite(params[key]) for key in ("scale", "dropout"))
+                or any(type(params[key]) not in (int, float) for key in ("scale", "dropout"))
                 or params != expected[name]):
             raise ValueError(f"Soup MLX per-module metadata drift for {name}")
     return manifest

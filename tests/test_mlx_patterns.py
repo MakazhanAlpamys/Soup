@@ -327,6 +327,17 @@ def test_recipe_defaults_are_revalidated_when_read_back(change):
         resolve_module_parameters(NAMES, _recipe(**change))
 
 
+@pytest.mark.parametrize("field", ["scale", "dropout"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_module_values_are_refused_as_recipe_drift(field, value):
+    manifest = _manifest()
+    assert validate_pattern_manifest(copy.deepcopy(manifest)) == manifest
+    altered = copy.deepcopy(manifest)
+    altered["modules"][NAMES[0]][field] = value
+    with pytest.raises(ValueError, match="metadata drift"):
+        validate_pattern_manifest(altered)
+
+
 def test_bool_module_values_are_refused_even_when_they_equal_the_resolved_value():
     recipe = _recipe(rank_pattern={"q_proj": 1})
     manifest = {"version": 1, "recipe": recipe,
