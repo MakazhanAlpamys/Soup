@@ -1,0 +1,273 @@
+{
+  "schema": "root-context80-handoff-v1",
+  "status": "passed",
+  "recorded_at": "2026-11-06T22:58:08.054339+05:00",
+  "quality_gate": "not_met",
+  "analysis_plan": {
+    "path": "QUALITY80_EVAL_PLAN_01.json",
+    "sha256": "30514246ad0a399d6090c5e11a96c3cdce88013bc989fb9855bb0397e6811f6e"
+  },
+  "launch_plan": {
+    "path": "QUALITY80_LAUNCH_PLAN_01.json",
+    "sha256": "e008f40ef3739cbcbb975a75c69da1c68e361c985059c3486575666b729f985e"
+  },
+  "verification": {
+    "path": "results/modal-l40s-full88-native-quality-b4-01/verification.json",
+    "sha256": "f8e64ba3041311e7c7dcf579747d17de548713ead493a6913789983fa3bad80f"
+  },
+  "branch_launch": {
+    "path": "ROOT_CONTEXT80_BRANCH_LAUNCH_01.json",
+    "sha256": "790d425eccb871a555fec22bdb98245f899bcbbd5599c0461cd7dc1840e1f94b"
+  },
+  "control_launch": {
+    "path": "ROOT_CONTEXT80_CONTROLS_LAUNCH_01.json",
+    "sha256": "2b8a2ba3d775973c8f739b658606b88e2cc4b9edec0968a8069ac888ae7cdc6f"
+  },
+  "control_interruption": {
+    "path": "ROOT_CONTEXT80_CONTROLS_INTERRUPTION_01.json",
+    "sha256": "64c645f444451f227ab23e0bad3291bf56b33a2799c1d5bfe76c0a3b75db1c45"
+  },
+  "a6_recovery_launch": {
+    "path": "ROOT_CONTEXT80_A6_RECOVERY_LAUNCH_01.json",
+    "sha256": "b14545ff2466eb9d9b16b130b42bd6c4752df24f8cc53de655362eaa70ba8d98"
+  },
+  "sources": [
+    {
+      "path": "quality_native80.py",
+      "sha256": "afe62a2949c0e4d65f446234d285b4024c7f266e552ed94ae9100fdc64b5b0a4"
+    },
+    {
+      "path": "quality_eval80.py",
+      "sha256": "2eeff0c4559dd88bd6352d938257316b97a1aced1ab6251f6fcaf214010597db"
+    },
+    {
+      "path": "modal_quality80.py",
+      "sha256": "dca0181c1a2ee628505dc8fac441dc8b3a64750906d7358500bcb82d7daf7f71"
+    },
+    {
+      "path": "modal_quality80_recover.py",
+      "sha256": "348a5f6f27b14f4fbbfbea6ee1b272ba0343a59e83206594c8078b844c863678"
+    },
+    {
+      "path": "verify_context80.py",
+      "sha256": "ea64cf42ab3ede41b246a5471ea610599ff3b209fd29d1bedf56ca2c400c4895"
+    },
+    {
+      "path": "verify_context80_recovery.py",
+      "sha256": "82e166c68f1f3c3b4b9d28c049baf7a97bccc6add96fea92fa96cbd745f5ccd2"
+    }
+  ],
+  "train_seconds_excluding_download": 2192.8135180609997,
+  "result": {
+    "schema": "root-context80-independent-verification-v1",
+    "status": "passed",
+    "verified_at": "2026-11-06T22:57:03.262012+05:00",
+    "holdout_sha256": "313400d0c6382d7cc4f02b53543f2cf9724bff9aead51173ba9b3b036fd799af",
+    "scope": "32 fresh synthetic 8192-token examples, 16 counterfactual pairs",
+    "metrics": {
+      "a2": {
+        "choice_correct": 15,
+        "accuracy": 0.46875,
+        "pair_both_correct": 2,
+        "pair_changed_choice": 5,
+        "mean_conditional_choice_nll": 1.128854376649014,
+        "mean_label_nll": 3.278946064412594,
+        "mean_eos_nll": 1.6517325136810541,
+        "mean_answer_nll": 2.465339289046824
+      },
+      "a6": {
+        "choice_correct": 22,
+        "accuracy": 0.6875,
+        "pair_both_correct": 7,
+        "pair_changed_choice": 11,
+        "mean_conditional_choice_nll": 1.1384142584447776,
+        "mean_label_nll": 1.219617900409503,
+        "mean_eos_nll": 0.058264359046006575,
+        "mean_answer_nll": 0.6389411297277547
+      },
+      "b6": {
+        "choice_correct": 22,
+        "accuracy": 0.6875,
+        "pair_both_correct": 7,
+        "pair_changed_choice": 9,
+        "mean_conditional_choice_nll": 0.7659106594704765,
+        "mean_label_nll": 0.8627309076837264,
+        "mean_eos_nll": 0.4389745588414371,
+        "mean_answer_nll": 0.6508527332625818
+      }
+    },
+    "b6_minus_a6_correct": 0,
+    "advances": false,
+    "paired_control_to_branch": {
+      "False->False": 8,
+      "True->True": 20,
+      "False->True": 2,
+      "True->False": 2
+    },
+    "native_first_step_checkpoint_exact": true,
+    "native_steps": [
+      {
+        "step": 3,
+        "loss": 0.9882274270057678,
+        "checkpoint": {
+          "path": "/tmp/soup-stage80-branch-nus6n38l/train/step-003/checkpoint-003",
+          "completed_steps": 3,
+          "manifest_sha256": "023e63f54866757ca7e69d58c602c935511ee3f1acab47d07365c00681220478",
+          "state_sha256": "6e1bef7423f8d238d283e6a496a3f45752164ad96aa2ff9d3927d195f9f26db7",
+          "state_bytes": 320486997
+        },
+        "result_sha256": "daac62fdccadb0b940681f3ed67bbdf978c905d2569180d43525f1c579cd18ce"
+      },
+      {
+        "step": 4,
+        "loss": 0.17094676196575165,
+        "checkpoint": {
+          "path": "/tmp/soup-stage80-branch-nus6n38l/train/step-004/checkpoint-004",
+          "completed_steps": 4,
+          "manifest_sha256": "c3ff29d91402d6a4a2f1b3e1daac9a78080f0855ff4c7c46b4a9d79a8854c61a",
+          "state_sha256": "a9d25249b325f388ec34bbeeea5b68d8c913436b5bda828465f4c3059a13b995",
+          "state_bytes": 320486997
+        },
+        "result_sha256": "d42df5cd5041a7f460f7495489b3e49cfa20f670ec183116790383ca31b313cd"
+      },
+      {
+        "step": 5,
+        "loss": 0.005284124054014683,
+        "checkpoint": {
+          "path": "/tmp/soup-stage80-branch-nus6n38l/train/step-005/checkpoint-005",
+          "completed_steps": 5,
+          "manifest_sha256": "dd7875062e0f637a9730ddcfea0489a27644647d9fc8a32e7505360c76f9ad85",
+          "state_sha256": "95a7c7e9d0f6740197aa24ba681dce4c5a64ff9d9b48e7acfccb60ee11a05410",
+          "state_bytes": 320486997
+        },
+        "result_sha256": "f820eb77503722ff2f05a9da85a2431de4e28d04bab8a80f573ef9e401e053a9"
+      },
+      {
+        "step": 6,
+        "loss": 0.10067138075828552,
+        "checkpoint": {
+          "path": "/tmp/soup-stage80-branch-nus6n38l/train/step-006/checkpoint-006",
+          "completed_steps": 6,
+          "manifest_sha256": "a96dc4f32331f27756ec075c3c786d63fbda195fec15c94ef4fc6206d5f259ba",
+          "state_sha256": "8415991f7d4b3941e6dad5bfccf54fd046b528377bc0a0e197d6de91656e8178",
+          "state_bytes": 320486997
+        },
+        "result_sha256": "ab419421cc4c5dedad24ba56199fdd1eba40dd528a7a6012e7bb4310ec5122c1"
+      }
+    ],
+    "lock": {
+      "protocol": "stage80-branch-lock-v1",
+      "run_id": "l40s-strict-full88-native-quality-b4-20261106-01",
+      "controls_run_id": "l40s-strict-full88-blind-controls-20261106-01",
+      "plan_sha256": "e008f40ef3739cbcbb975a75c69da1c68e361c985059c3486575666b729f985e",
+      "analysis_plan_sha256": "30514246ad0a399d6090c5e11a96c3cdce88013bc989fb9855bb0397e6811f6e",
+      "holdout_sha256": "313400d0c6382d7cc4f02b53543f2cf9724bff9aead51173ba9b3b036fd799af",
+      "checkpoint": {
+        "result_sha256": "ab419421cc4c5dedad24ba56199fdd1eba40dd528a7a6012e7bb4310ec5122c1",
+        "completed_steps": 6,
+        "manifest_sha256": "a96dc4f32331f27756ec075c3c786d63fbda195fec15c94ef4fc6206d5f259ba",
+        "state_sha256": "8415991f7d4b3941e6dad5bfccf54fd046b528377bc0a0e197d6de91656e8178",
+        "state_bytes": 320486997
+      }
+    },
+    "lanes": {
+      "branch": {
+        "app": {
+          "app_id": "ap-<redacted>",
+          "description": "soup-stage80-native-quality-branch",
+          "state": "stopped",
+          "tasks": "0",
+          "created_at": "2026-11-06 20:07:02+05:00",
+          "stopped_at": "2026-11-06 21:29:25+05:00"
+        },
+        "run_id": "l40s-strict-full88-native-quality-b4-20261106-01",
+        "sha256": {
+          "launch.log": "3410a8b1efa90baa3ee27f7c6c106354edd0aff8c739eaadcbd60f539b3bf37a",
+          "app-stopped.json": "0d26373cf64e71ce41bc58e4b58b14c491894e63511b5f480cf09aa8d3d2d006",
+          "evidence/summary.json": "ff68c424759092833ae6e425f3fb9a1529f6b9f6e377f19347290c66d283f243",
+          "evidence/launch-plan.json": "e008f40ef3739cbcbb975a75c69da1c68e361c985059c3486575666b729f985e",
+          "evidence/source.log": "6481bb9ea761099a656722ef9af404d9446437b4234cd5142f76511d18e1424a",
+          "evidence/train/step-003/result.json": "daac62fdccadb0b940681f3ed67bbdf978c905d2569180d43525f1c579cd18ce",
+          "evidence/train/step-003/checkpoint-003/manifest.json": "023e63f54866757ca7e69d58c602c935511ee3f1acab47d07365c00681220478",
+          "evidence/train/step-003/checkpoint-003/state.pt": "6e1bef7423f8d238d283e6a496a3f45752164ad96aa2ff9d3927d195f9f26db7",
+          "evidence/train/step-004/result.json": "d42df5cd5041a7f460f7495489b3e49cfa20f670ec183116790383ca31b313cd",
+          "evidence/train/step-004/checkpoint-004/manifest.json": "c3ff29d91402d6a4a2f1b3e1daac9a78080f0855ff4c7c46b4a9d79a8854c61a",
+          "evidence/train/step-004/checkpoint-004/state.pt": "a9d25249b325f388ec34bbeeea5b68d8c913436b5bda828465f4c3059a13b995",
+          "evidence/train/step-005/result.json": "f820eb77503722ff2f05a9da85a2431de4e28d04bab8a80f573ef9e401e053a9",
+          "evidence/train/step-005/checkpoint-005/manifest.json": "dd7875062e0f637a9730ddcfea0489a27644647d9fc8a32e7505360c76f9ad85",
+          "evidence/train/step-005/checkpoint-005/state.pt": "95a7c7e9d0f6740197aa24ba681dce4c5a64ff9d9b48e7acfccb60ee11a05410",
+          "evidence/train/step-006/result.json": "ab419421cc4c5dedad24ba56199fdd1eba40dd528a7a6012e7bb4310ec5122c1",
+          "evidence/train/step-006/checkpoint-006/manifest.json": "a96dc4f32331f27756ec075c3c786d63fbda195fec15c94ef4fc6206d5f259ba",
+          "evidence/train/step-006/checkpoint-006/state.pt": "8415991f7d4b3941e6dad5bfccf54fd046b528377bc0a0e197d6de91656e8178",
+          "evidence/train/worker.log": "b92c60b39d5820fc64c35a5a4e6ad3653786997f7f7939d309ce713287c329f8",
+          "evidence/train/progress.jsonl": "02c7655b8aa02dab9bd8597dcdaf0032df15f4be279f6eb1975292a6e382ae46",
+          "evidence/train/result.json": "54a33897999f97bfb07089d1679794d082a104b727086ba53410127f350181f5",
+          "evidence/branch-lock.json": "5c18a1880ec5233cf42afefbd173315c8c52a19cef53caa18d4822ffe3069442",
+          "evidence/b6/worker.log": "f0c0e3360671ef1ac3b01ad2bc285b97058f87eed3807989d5465d92b15607e9",
+          "evidence/b6/progress.jsonl": "8e7a782dd6e8e8e15fbff407ddfa4c8005687d09c712e261c98744cadcd2cb18",
+          "evidence/b6/result.json": "edd1178e852d4ca9e002ea34682e4e95c4b23c087a6ec9e040a8458032d290de"
+        }
+      },
+      "controls": {
+        "app": {
+          "app_id": "ap-<redacted>",
+          "description": "soup-stage80-blind-controls-recovery",
+          "state": "stopped",
+          "tasks": "0",
+          "created_at": "2026-11-06 22:09:43+05:00",
+          "stopped_at": "2026-11-06 22:54:02+05:00"
+        },
+        "run_id": "l40s-strict-full88-blind-a6-20261106-01",
+        "sha256": {
+          "launch.log": "d44f95464adec65e75635d13a7dc05dc46757e254937e5905d1d351cde6876a6",
+          "app-stopped.json": "dd59df8368760ea1fb487f511c654c0bbfb93f1b0a5f8a45553a6839d0557802",
+          "evidence/summary.json": "493b291161f04f7f42c03b6f25bc4e419fe89b1d593e27cd87d766a69b5f8ea1",
+          "evidence/launch-plan.json": "e008f40ef3739cbcbb975a75c69da1c68e361c985059c3486575666b729f985e",
+          "evidence/branch-lock.json": "5c18a1880ec5233cf42afefbd173315c8c52a19cef53caa18d4822ffe3069442",
+          "evidence/original-controls-summary.json": "a5e09ab9a8b9e21998b1608f03c524e743c3a2e88ea01a1927c541756dda3b71",
+          "evidence/original-controls-app-stopped.json": "c4126ccffee7f949320bae11eb43c7d18353cbbaa5c5ca1ef33aa0dc323c48d2",
+          "evidence/a2/result.json": "46969ceab2a6347bf00b2271b26a2d9a3f24e4354f4e7f40b1d79c94e0379970",
+          "evidence/a2/worker.log": "8210af3654e63307ae9d8c99589c4f3fae539ebc78a9a938d6ea01b1f77ef0e9",
+          "evidence/a2/progress.jsonl": "b9ba15eb949bb8e38fd471701aeee2b06941ca8d39bf1683810539ff9ee5a57d",
+          "evidence/source.log": "0177d47b38fef76524a4368ae2db13e2d22e8e94ef3eec522fd5cc979d8afea1",
+          "evidence/a6/worker.log": "530c664a2f623cdbf03a0c4622cf2bc8eb51f81afff88fe9b6aa890d0c83c8cb",
+          "evidence/a6/progress.jsonl": "fb7f5afc15b26803f4089ac31245211a549eb9acdb9782f787e020830413d7f3",
+          "evidence/a6/result.json": "d533fd04dbae8c017b8153b5ddbaa5c9c6793d4aaaf1c38693e675d08570c333"
+        }
+      }
+    },
+    "controls_recovery": {
+      "original": {
+        "run_id": "l40s-strict-full88-blind-controls-20261106-01",
+        "app": {
+          "app_id": "ap-<redacted>",
+          "description": "soup-stage80-blind-controls",
+          "state": "stopped",
+          "tasks": "0",
+          "created_at": "2026-11-06 20:59:45+05:00",
+          "stopped_at": "2026-11-06 21:44:30+05:00"
+        },
+        "summary_sha256": "a5e09ab9a8b9e21998b1608f03c524e743c3a2e88ea01a1927c541756dda3b71",
+        "a2_pid": 493,
+        "a2_artifact_sha256": {
+          "a2/result.json": "46969ceab2a6347bf00b2271b26a2d9a3f24e4354f4e7f40b1d79c94e0379970",
+          "a2/worker.log": "8210af3654e63307ae9d8c99589c4f3fae539ebc78a9a938d6ea01b1f77ef0e9",
+          "a2/progress.jsonl": "b9ba15eb949bb8e38fd471701aeee2b06941ca8d39bf1683810539ff9ee5a57d"
+        }
+      },
+      "original_retrieval_sha256": "dd0f7026bc7cf09f0cb638d644827cca8ef080dc264e862eb8f8a8ea7018b98b",
+      "fresh": {
+        "app": {
+          "app_id": "ap-<redacted>",
+          "description": "soup-stage80-blind-controls-recovery",
+          "state": "stopped",
+          "tasks": "0",
+          "created_at": "2026-11-06 22:09:43+05:00",
+          "stopped_at": "2026-11-06 22:54:02+05:00"
+        },
+        "run_id": "l40s-strict-full88-blind-a6-20261106-01",
+        "a6_pid": 472
+      }
+    }
+  }
+}
