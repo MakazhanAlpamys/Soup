@@ -51,6 +51,29 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 # ─── soup eval benchmark ───
 
 
+def _resolve_run_id(run_id: Optional[str]) -> Optional[str]:
+    """Return the full id of the run ``run_id`` names, or ``None`` if it names none.
+
+    The tracker stores a row under the id it is given, so a prefix, or an id
+    that names no run at all, has to be resolved before the row is written
+    (#2742).  A missing or ambiguous run is refused with the wording the other
+    run-lookup commands use.
+    """
+    if not run_id:
+        return None
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
+            raise typer.Exit(1)
+        return run["run_id"]
+    finally:
+        tracker.close()
+
+
 @app.command()
 def benchmark(
     model: str = typer.Option(
@@ -87,6 +110,10 @@ def benchmark(
     ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     model_path = Path(model)
     if not model_path.exists():
         console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
@@ -150,7 +177,7 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, resolved_run_id)
     if not saved:
         console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
         raise typer.Exit(1)
@@ -385,6 +412,10 @@ def custom(
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
 
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     tasks_path = Path(tasks)
     model_path = Path(model)
 
@@ -450,7 +481,7 @@ def custom(
     _display_custom_results(eval_results)
 
     # Save to tracker
-    _save_custom_results(eval_results, str(model_path), run_id)
+    _save_custom_results(eval_results, str(model_path), resolved_run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
     # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
@@ -1188,17 +1219,20 @@ def _save_custom_results(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    tracker.save_eval_result(
-        model_path=model_path,
-        benchmark=TASK_NAME,
-        score=eval_results.accuracy,
-        details={
-            "total": eval_results.total,
-            "correct": eval_results.correct,
-            "category_scores": eval_results.category_scores,
-        },
-        run_id=run_id,
-    )
+    try:
+        tracker.save_eval_result(
+            model_path=model_path,
+            benchmark=TASK_NAME,
+            score=eval_results.accuracy,
+            details={
+                "total": eval_results.total,
+                "correct": eval_results.correct,
+                "category_scores": eval_results.category_scores,
+            },
+            run_id=run_id,
+        )
+    finally:
+        tracker.close()
 
 
 def _display_judge_results(results: object) -> None:
