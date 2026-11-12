@@ -47,6 +47,23 @@ output: ./output
 
 Soup reported 168 W4 weights, with 161 A4 and 7 A16 activation paths. This experimental route is neither pure W4A4 nor packed INT4.
 
+## First run and follow-up
+
+The initial run reported 8/8 optimizer updates in 10 minutes 41 seconds on 32
+synthetic ChatML rows, with a longest formatted row of 59 tokens. Its environment
+reported PyTorch `2.14.1+cu130`. Soup printed `GPU peak: 11.2/8.0 GB`; direct
+`max_memory_allocated` and `max_memory_reserved` readings were not captured, so
+this remains an unexplained summary value rather than a physical VRAM measurement.
+
+The follow-up report says the first draft exceeded the requested 59-token row
+limit, so the data was shortened and the run repeated with rows up to 45 tokens.
+That run used PyTorch `2.15.0+cu132` and is the measured run detailed below. The
+two runs therefore differ in row length and PyTorch build; this record does not
+treat them as a controlled comparison. The first-run result reported a 59-token
+maximum, while the follow-up comment describes the draft that prompted the rerun
+as over the limit; both statements are retained as reported rather than
+reconciled without the original row-level artifacts.
+
 ## Result
 
 - 8/8 optimizer updates completed without OOM. Trainer runtime: 370.8 seconds; total harness time from preflight through command exit: 429.98 seconds.
