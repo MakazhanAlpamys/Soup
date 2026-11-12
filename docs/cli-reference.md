@@ -2689,6 +2689,7 @@ Subcommands:
 - [`pause`](#soup-loop-pause)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
+- [`rollback`](#soup-loop-rollback)
 - [`status`](#soup-loop-status)
 - [`watch`](#soup-loop-watch)
 
@@ -2720,11 +2721,11 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
 | `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
 | `--base-model` | text |  |  | Model the pre-wired train stage starts from. Default: the registry entry's base model for a registry://&lt;id> served model, the base_model_name_or_path of a LoRA adapter directory, otherwise the served model itself. |
-| `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, *.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
+| `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, \*.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
+| `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
 | `--canary-traffic` | text | `5%` |  | Share of keyed traffic a newly deployed adapter gets while its canary runs, e.g. "5%" (the default) or "10". |
 | `--canary-max-wait` | text | `24h` |  | How long after a canary started its ratings may stay short of the 30 per side the quality verdict needs: &lt;int>m, &lt;int>h or &lt;int>d, or plain seconds (at most 30d, default 24h). Then --canary-on-timeout applies. |
 | `--canary-on-timeout` | text | `errors-only` |  | What happens when --canary-max-wait runs out: errors-only (the request-error verdict alone decides; the default), rollback (withdraw the canary) or wait (keep waiting, no time limit). |
-| `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
 | `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. An sft loop with a feedback log uses --min-new-edits and --min-new-rated instead. |
 | `--min-new-edits` | integer | `8` |  | An sft loop with a feedback log trains once at least this many new edits (corrected answers newer than the last training run) have arrived, or --min-new-rated new rated answers, whichever comes first. Default 8. |
 | `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
