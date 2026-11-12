@@ -690,8 +690,8 @@ class TestPerArchitectureCoverage:
         """`minimax-m3-sft` sets no `moe_lora` (it loads through SFT's vision
         path, which never runs the MoE step), so it trains attention-only. That
         has to be written down where a user looks, not only in a test.
-        (`minimax-m3-dpo` was removed in #1145: DPO cannot build the
-        `minimax_m3_vl` wrapper.)"""
+        (`minimax-m3-dpo` was removed in #1145, when DPO could not build the
+        `minimax_m3_vl` wrapper, and came back without `moe_lora` after #1393.)"""
         from pathlib import Path
 
         docs = (Path(__file__).resolve().parents[1]

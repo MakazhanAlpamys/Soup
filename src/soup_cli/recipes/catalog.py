@@ -51,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (176 recipes)
+# Recipe catalog (177 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -5173,6 +5173,48 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "minimax-m3-dpo": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M3",
+        task="dpo",
+        size="428B",
+        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
+            "- commercial use requires a separate agreement. Multi-GPU recommended. "
+            "Loads through the vision path, whose processor is custom code: run "
+            "soup train --trust-remote-code."
+        ),
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M3
+task: dpo
+# A vision-language checkpoint (minimax_m3_vl): DPO builds it through the
+# image-text class since #1393. target_modules: auto attaches to the language
+# tower alone (#1102), so the preference tune stays textual: rows are text-only
+# prompt / chosen / rejected, tokenized through the processor.
+modality: vision
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # as minimax-m3-sft; no moe_lora, the minimax experts take none (#1145)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
   gradient_checkpointing: true
 
 output: ./output
