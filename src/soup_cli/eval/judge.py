@@ -190,6 +190,7 @@ def load_rubric(path: Path) -> dict:
     if not isinstance(rubric["criteria"], list) or not rubric["criteria"]:
         raise ValueError("Rubric 'criteria' must be a non-empty list")
 
+    seen_names: dict[str, int] = {}
     for idx, crit in enumerate(rubric["criteria"]):
         if not isinstance(crit, dict):
             raise ValueError(f"Criterion {idx} must be a mapping")
@@ -197,6 +198,11 @@ def load_rubric(path: Path) -> dict:
             raise ValueError(
                 f"Criterion {idx} must have 'name' and 'description'"
             )
+        name = crit["name"]
+        key = str(name).strip().lower()
+        if key in seen_names:
+            raise ValueError(f"Criterion {idx} ({name!r}) duplicates criterion {seen_names[key]}")
+        seen_names[key] = idx
 
     return rubric
 
