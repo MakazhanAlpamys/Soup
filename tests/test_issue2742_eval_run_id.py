@@ -73,10 +73,16 @@ def tasks(tmp_path) -> Path:
 
 @pytest.fixture
 def custom_generator(monkeypatch) -> list[str]:
-    """Replace the model generator of ``soup eval custom``; record its calls."""
+    """Replace the model generator of ``soup eval custom``; record its calls.
+
+    The factory call is recorded as well as the prompts, so an empty list
+    means the model was never loaded, not only that no prompt was generated.
+    """
     calls: list[str] = []
 
     def generator(model_path, trust_remote_code=False):
+        calls.append(f"factory:{model_path}")
+
         def generate(prompt: str) -> str:
             calls.append(prompt)
             return "an answer"
