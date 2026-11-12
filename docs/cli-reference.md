@@ -3401,12 +3401,7 @@ Usage: `soup runs clean [OPTIONS] [RUN_ID]`
 
 ### `soup runs compare`
 
-Compare two local training runs side by side. The summary includes stored dataset
-SHA-256 hashes. The config table shows differing paths and labels fields absent
-from one run as not stored. If either full config is unavailable, the command
-identifies that run and skips the config table. The evaluation table uses the
-latest stored score for each benchmark and shows the right-minus-left delta
-when both runs have a score.
+Compare two training runs side by side.
 
 Usage: `soup runs compare RUN_1 RUN_2`
 
