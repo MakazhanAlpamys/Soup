@@ -64,14 +64,21 @@ def adapter(tmp_path, monkeypatch):
 
 @pytest.fixture
 def quantized(monkeypatch):
-    """Stand in for torchao: record the model ``quantize_`` receives, change nothing."""
+    """Stand in for torchao: record the LoRA modules of the model ``quantize_`` receives.
+
+    Only their names are kept, not the model: a live model maps the merged weights
+    file, and Windows would not let the export delete its scratch merge.
+    """
     from soup_cli.utils import torchao_compat
 
     seen = []
 
+    def quantize_(model, config):
+        seen.append([name for name, _ in model.named_modules() if "lora_" in name])
+
     def resolve(name):
         if name == "quantize_":
-            return lambda model, config: seen.append(model)
+            return quantize_
         return lambda **kwargs: ("config", name, kwargs)
 
     monkeypatch.setattr(torchao_compat, "resolve_torchao_class", resolve)
@@ -98,8 +105,8 @@ def test_adapter_is_merged_before_quantizing_and_the_output_is_a_model(
     assert "config.json" in files, files
     assert any(name.endswith(".safetensors") for name in files), files
 
-    (model,) = quantized
-    assert not any("lora_" in name for name, _ in model.named_modules())
+    (lora_modules,) = quantized
+    assert lora_modules == []
 
     from transformers import AutoModelForCausalLM
 
