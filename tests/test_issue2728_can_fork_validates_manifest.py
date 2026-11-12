@@ -29,14 +29,24 @@ def _pack(tmp_path, monkeypatch, name="recipe"):
     return out
 
 
-@pytest.mark.parametrize("author", ["alice\tbob", "alice\nbob", "a" * 200])
-def test_a_bad_author_is_refused_and_nothing_is_written(tmp_path, monkeypatch, author):
+@pytest.mark.parametrize(
+    "author, expected",
+    [
+        ("alice\tbob", "--author must not contain control characters"),
+        ("alice\nbob", "--author must not contain control characters"),
+        ("a" * 200, "--author: 200 characters, over the 128-character limit"),
+    ],
+)
+def test_a_bad_author_is_refused_and_nothing_is_written(
+    tmp_path, monkeypatch, author, expected,
+):
     from soup_cli.cans.pack import fork_can
 
     src = _pack(tmp_path, monkeypatch)
     out = tmp_path / "fork.can"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as excinfo:
         fork_can(source=str(src), out_path=str(out), modifications=[], author=author)
+    assert expected in str(excinfo.value)
     assert not out.exists()
 
 
@@ -45,9 +55,26 @@ def test_a_name_that_fork_pushes_past_the_limit_is_refused(tmp_path, monkeypatch
 
     src = _pack(tmp_path, monkeypatch, name="m" * 128)
     out = tmp_path / "fork.can"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as excinfo:
         fork_can(source=str(src), out_path=str(out), modifications=[], author="alice")
+    message = str(excinfo.value)
+    assert "name: the forked name is the source name plus '-fork', 133 characters" in message
+    assert "over the 128-character limit" in message
+    assert "at most 123 characters" in message
     assert not out.exists()
+
+
+def test_the_longest_forkable_name_forks_and_verifies(tmp_path, monkeypatch):
+    from soup_cli.cans.pack import fork_can
+    from soup_cli.cans.unpack import inspect_can
+    from soup_cli.cans.verify import verify_can
+
+    src = _pack(tmp_path, monkeypatch, name="m" * 123)
+    out = tmp_path / "fork.can"
+    fork_can(source=str(src), out_path=str(out), modifications=[], author="alice")
+    report = verify_can(str(out))
+    assert report.manifest_ok and report.config_ok, report
+    assert inspect_can(str(out)).name == "m" * 123 + "-fork"
 
 
 def test_the_cli_exits_1_on_a_bad_author(tmp_path, monkeypatch):
@@ -55,6 +82,7 @@ def test_the_cli_exits_1_on_a_bad_author(tmp_path, monkeypatch):
     result = runner.invoke(app, ["can", "fork", "src.can", "--out", "fork.can",
                                  "--author", "alice\tbob"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "--author" in " ".join(result.output.split())
     assert not (tmp_path / "fork.can").exists()
 
 
