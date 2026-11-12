@@ -1,0 +1,29 @@
+{
+  "command": "compare",
+  "ref": "<OUT>\\qwen3-32b.live.safetensors",
+  "ref_producer": "train_dump.py (live trained model, end of soup train)",
+  "ref_device": "cuda:0",
+  "adapter_sha256": "4aed2c950089bbdbb5daac19232a4c4b9b2d2bd98e433b080144f90ea7621654",
+  "reload_logits_sha256": "302dfa816f3168ced5471212bdf53aecd6e10ae4d0862113f7c6ee63111f2bc3",
+  "ref_logits_sha256": "6f13e93219c3f763c080eea74d78ae6ba3857321baec70d841617ad970ffc370",
+  "exact": false,
+  "reason": "shape/dtype differ: (1, 128, 151936) torch.bfloat16 vs (1, 128, 151936) torch.float32",
+  "adapter_loaded": true,
+  "build_seconds": 5.8,
+  "forward_seconds": 8.9,
+  "runtime_stats": {
+    "buffer_bytes": 2058929720,
+    "store_bytes": 3363201820,
+    "pinned": true,
+    "pinned_bytes": 4294967296,
+    "tier": "disk",
+    "disk_bytes": 19211011840,
+    "layer_loads": 64,
+    "device": "cuda"
+  },
+  "cuda_max_allocated_MiB": 2073.6,
+  "cuda_max_reserved_MiB": 2122.0,
+  "adapter_changes_output": true,
+  "elements_differing_from_base": 17094803,
+  "max_abs_diff_from_base": 1.2421875
+}

@@ -1,0 +1,27 @@
+{
+  "what": "Same worker (runner sha256 813a9a17d40997f1152d7e8895439f7e812d5db9c6227fba9a0093030a28c0b6), same inputs, same frozen runtime. Fields read from the worker's result.json and the guard's samples.jsonl; neither file is copied here (290 KB and 220 KB), each is identified by SHA-256.",
+  "earlier_recorded_run": {
+    "result.json_sha256": "38fd8cfccf8e78253ddfe31cccefec7bd21db94f14e2eb9f30fefbb7fbc1d57e",
+    "samples.jsonl_sha256": "b637000ebc2362c3a815fedeb7f399a9b9b00dc273374f8c1e950df35ba48f26",
+    "worker_elapsed_seconds": 169.35433509999712,
+    "hash_before_seconds": 35.24872190000315,
+    "hash_after_seconds": 36.93973709999409,
+    "worker_own_io_read_bytes_last_host_sample": 238802365746,
+    "last_host_sample_elapsed_s": 174.53100000000268,
+    "system_commit_limit_bytes": 54471286784,
+    "baseline_host_available_bytes": 14809038848,
+    "baseline_system_commit_headroom_bytes": 18795163648
+  },
+  "rerun_2026_11_07": {
+    "result.json_sha256": "28bdf98e1ff6574a12d607b375e9c3e4faa002a20c7e90028060aa91827762aa",
+    "samples.jsonl_sha256": "11476d362414aa1c2a1c4d5f138c5cac49f731c80d5500a49e51bf134646d830",
+    "worker_elapsed_seconds": 256.1321995999897,
+    "hash_before_seconds": 48.70826619997388,
+    "hash_after_seconds": 42.14811860001646,
+    "worker_own_io_read_bytes_last_host_sample": 238862422624,
+    "last_host_sample_elapsed_s": 305.01600000000326,
+    "system_commit_limit_bytes": 93339557888,
+    "baseline_host_available_bytes": 10386354176,
+    "baseline_system_commit_headroom_bytes": 37846593536
+  }
+}
