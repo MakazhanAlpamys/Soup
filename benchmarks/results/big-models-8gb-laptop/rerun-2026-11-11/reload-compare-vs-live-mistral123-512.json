@@ -1,0 +1,29 @@
+{
+  "command": "compare",
+  "ref": "<OUT>\\mistral123-512.live.safetensors",
+  "ref_producer": "train_dump.py (live trained model, end of soup train)",
+  "ref_device": "cuda:0",
+  "adapter_sha256": "7300cf9f74589e02752a9f5c28572ca5fbba65bf825e9cbd1f63f03de2202f5e",
+  "reload_logits_sha256": "a121e5e84906cebfdb6734a03c2b7826709eb2fd11a5e70fa51276b07c01ba52",
+  "ref_logits_sha256": "ba26465395dde668e7efc36d7d5391e3ac61b922b1c940dd101983a0d3ed01c1",
+  "exact": false,
+  "reason": "shape/dtype differ: (1, 128, 32768) torch.bfloat16 vs (1, 128, 32768) torch.float32",
+  "adapter_loaded": true,
+  "build_seconds": 5.7,
+  "forward_seconds": 15.2,
+  "runtime_stats": {
+    "buffer_bytes": 2233454648,
+    "store_bytes": 2324686876,
+    "pinned": true,
+    "pinned_bytes": 3221225472,
+    "tier": "disk",
+    "disk_bytes": 64449137056,
+    "layer_loads": 88,
+    "device": "cuda"
+  },
+  "cuda_max_allocated_MiB": 2301.3,
+  "cuda_max_reserved_MiB": 2350.0,
+  "adapter_changes_output": true,
+  "elements_differing_from_base": 4065893,
+  "max_abs_diff_from_base": 6.84375
+}

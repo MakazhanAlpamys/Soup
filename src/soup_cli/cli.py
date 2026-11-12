@@ -20,6 +20,7 @@ from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
     bench,
+    cache,
     can,
     card,
     chat,
@@ -120,6 +121,7 @@ app.add_typer(
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
 )
 app.command()(migrate.migrate)
+app.command(name="prune-layer-cache")(cache.prune_layer_cache)
 app.add_typer(
     adapters.app, name="adapters",
     help="Adapter management: list, info, compare LoRA adapters.",
