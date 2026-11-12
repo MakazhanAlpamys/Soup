@@ -280,7 +280,9 @@ Scope: task `sft` on the transformers and MLX backends, single process, on the p
 text path. The recorder turns itself off, with one warning naming the reason, for
 resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
 dataset, and anything else it cannot attribute row by row. Previews are shown only when
-the dataset on disk still matches the one the run trained on.
+the dataset on disk still matches the one the run trained on. With `training.curriculum:
+true` the rows are numbered in the length-sorted order the run trained on, shortest first,
+and the previews are rebuilt in that order.
 
 **What it costs.** Writing one line per micro-batch measured under 0.1 ms per
 micro-batch, which is negligible against any real step, and a run's peak memory was
