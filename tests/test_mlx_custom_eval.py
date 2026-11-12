@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.eval import _save_custom_results as save_custom_results
+from tests.conftest import strip_ansi
 
 
 @pytest.fixture
@@ -95,8 +96,9 @@ def test_errors_never_save_a_partial_score_as_complete(workspace, monkeypatch, s
     result = invoke([{'prompt': 'first', 'expected': 'yes'},
                      {'prompt': 'second', 'expected': 'no'}])
     assert result.exit_code != 0
-    assert ('loading' if stage == 'loading' else '2/2') in result.output.lower()
-    assert 'incomplete' in result.output.lower()
+    output = strip_ansi(result.output).lower()
+    assert ('loading' if stage == 'loading' else '2/2') in output
+    assert 'incomplete' in output
     assert not (workspace / 'report.json').exists()
     assert saved == []
 
@@ -173,3 +175,59 @@ def test_native_evidence_is_retained_in_tracker_without_output(workspace, monkey
     assert details['complete'] is True and details['requested'] == details['evaluated'] == 1
     assert details['results'][0]['output'] == 'yes'
     assert details['backend'] == 'mlx' and details['dataset_sha256']
+
+
+@pytest.mark.parametrize('run_id, expected_run, diagnostic', [
+    ('run_reference_v1', 'run_reference_v1', None),
+    ('run_reference', 'run_reference_v1', None),
+    (None, None, None),
+    ('run_gone', None, 'Run not found: run_gone'),
+    ('run_dup_', None, "matches 2 runs"),
+])
+def test_native_custom_eval_resolves_run_before_loading(
+    workspace, monkeypatch, run_id, expected_run, diagnostic,
+):
+    import soup_cli.commands.eval as command
+    import soup_cli.utils.mlx_generation as native
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    monkeypatch.setattr(command, '_save_custom_results', save_custom_results)
+    monkeypatch.setenv('SOUP_DB_PATH', str(workspace / 'tracker.db'))
+    tracker = ExperimentTracker()
+    try:
+        for identifier in ('run_reference_v1', 'run_dup_1', 'run_dup_2'):
+            tracker.start_run(config_dict={}, device='cpu', device_name='CPU', gpu_info={},
+                              run_id=identifier)
+    finally:
+        tracker.close()
+
+    stub_native(monkeypatch, ['yes'])
+    loads = []
+
+    def load(*args, **kwargs):
+        loads.append(args)
+        return object(), object()
+
+    monkeypatch.setattr(native, 'load_native_model', load)
+    extra = ('--run-id', run_id) if run_id is not None else ()
+    result = invoke([{'prompt': 'x', 'expected': 'yes'}], extra=extra)
+    tracker = ExperimentTracker()
+    try:
+        rows = tracker.get_eval_results()
+    finally:
+        tracker.close()
+
+    if diagnostic is not None:
+        assert result.exit_code == 1, (result.output, result.exception)
+        assert diagnostic in strip_ansi(result.output)
+        assert loads == [] and rows == []
+        assert not (workspace / 'report.json').exists()
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert len(loads) == len(rows) == 1
+        assert rows[0]['run_id'] == expected_run
+        report = json.loads((workspace / 'report.json').read_text())
+        details = json.loads(rows[0]['details_json'])
+        assert rows[0]['score'] == report['accuracy'] == 1
+        assert details['results'] == report['results']
+        assert details['complete'] is True and details['backend'] == 'mlx'

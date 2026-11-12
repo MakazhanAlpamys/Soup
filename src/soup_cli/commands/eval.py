@@ -560,7 +560,9 @@ def custom(
         native_details.update(
             complete=True, requested=len(eval_tasks), evaluated=eval_results.total, results=records,
         )
-        _save_custom_results(eval_results, str(model_path), resolved_run_id, extra_details=native_details)
+        _save_custom_results(
+            eval_results, str(model_path), resolved_run_id, extra_details=native_details,
+        )
     else:
         _save_custom_results(eval_results, str(model_path), resolved_run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
