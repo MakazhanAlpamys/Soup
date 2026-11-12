@@ -1318,6 +1318,33 @@ def gate_cmd(
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    if write_baseline:
+        import os
+
+        from soup_cli.utils.paths import check_report_output_path, quote_path
+
+        try:
+            check_report_output_path(write_baseline, "--write-baseline")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write --write-baseline:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
+
+        inputs = [("--suite", suite)]
+        for task in eval_suite.tasks:
+            if task.type == "custom" and task.tasks:
+                inputs.append((f"task {task.name!r} --tasks", task.tasks))
+            elif task.type == "judge" and task.prompts:
+                inputs.append((f"task {task.name!r} --prompts", task.prompts))
+        output_identity = os.path.normcase(os.path.realpath(write_baseline))
+        for field, input_path in inputs:
+            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+                message = (
+                    f"--write-baseline {quote_path(write_baseline)} aliases "
+                    f"{field} {quote_path(input_path)}; choose a different --write-baseline"
+                )
+                console.print(f"[red]{for_terminal(message)}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR)
+
     try:
         baseline_scores = resolve_baseline(
             baseline,
