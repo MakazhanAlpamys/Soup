@@ -28,9 +28,9 @@ def _plain(text: str) -> str:
 
 def _expected(flag: str) -> str:
     return (
-        f"soup train {flag} is not supported for task: ppo (resume is not implemented for "
-        "PPO). trl's PPOTrainer.train() takes no checkpoint, so the run would start over "
-        "from step 0 and overwrite the progress already in the output directory. "
+        f"soup train {flag} is not supported for task 'ppo': trl's PPOTrainer.train() takes "
+        "no checkpoint, so the run would start over from step 0 and write over the files "
+        "in the output directory. "
         f"Remove {flag} to start a new run, or point output at a new directory to keep "
         "the old one."
     )
@@ -111,7 +111,7 @@ class TestResumeRefusalFunction:
     def test_message_names_the_flag_the_task_and_the_way_out(self):
         message = _resume_refusal(_config(), "--resume")
         assert "--resume" in message
-        assert "task: ppo" in message
+        assert "task 'ppo'" in message
         assert "Remove --resume to start a new run" in message
 
     @pytest.mark.parametrize("task", ["sft", "dpo", "kto", "orpo", "simpo", "ipo", "online_dpo"])
@@ -159,6 +159,39 @@ class TestTrainCommandRefusesBeforeAnythingLoads:
         assert "Resuming from" not in output
         assert reached == [], f"loaders reached before the refusal: {reached}"
         assert _tree(out) == before
+
+    def test_hf_resume_is_refused_even_when_no_checkpoint_branch_exists(
+        self, ppo_run, monkeypatch,
+    ):
+        """``--hf-resume`` on a first launch would have trained fresh ("no checkpoint
+        branch found; starting fresh"); for task: ppo it is refused all the same, and
+        before the Hub is asked."""
+        config, out, reached = ppo_run
+        import shutil
+
+        import soup_cli.monitoring.hf_push as hf_push
+
+        shutil.rmtree(out)
+        asked_the_hub: list[str] = []
+
+        def no_checkpoint_branch(**kwargs):
+            asked_the_hub.append(kwargs.get("repo_id", ""))
+            return None
+
+        monkeypatch.setattr(hf_push, "prepare_hf_resume", no_checkpoint_branch)
+
+        result = CliRunner().invoke(
+            app,
+            ["train", "--config", str(config), "--hf-resume", "--push-as", "org/repo", "--yes"],
+        )
+
+        output = _plain(result.output)
+        assert result.exit_code == 1, (output, repr(result.exception))
+        assert _plain(_expected("--hf-resume")) in output
+        assert "starting fresh" not in output
+        assert asked_the_hub == []
+        assert reached == []
+        assert not out.exists()
 
     def test_auto_with_no_checkpoint_gets_the_ppo_refusal_not_a_missing_checkpoint(
         self, ppo_run,

@@ -35,11 +35,11 @@ console = Console()
 
 #: The refusal behind ``--resume`` / ``--hf-resume`` for ``task: ppo``. trl's
 #: experimental ``PPOTrainer.train()`` takes no checkpoint, so a resume request
-#: used to train again from step 0 over the progress already in ``output``.
+#: used to train again from step 0 over the files already in ``output``.
 RESUME_REFUSAL = (
-    "soup train --resume is not supported for task: ppo (resume is not implemented for "
-    "PPO). trl's PPOTrainer.train() takes no checkpoint, so the run would start over "
-    "from step 0 and overwrite the progress already in the output directory. "
+    "soup train --resume is not supported for task 'ppo': trl's PPOTrainer.train() takes "
+    "no checkpoint, so the run would start over from step 0 and write over the files "
+    "in the output directory. "
     "Remove --resume to start a new run, or point output at a new directory to keep "
     "the old one."
 )
