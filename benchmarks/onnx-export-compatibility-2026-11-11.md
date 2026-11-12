@@ -116,11 +116,19 @@ Set `PYTHONPATH=src`, `CUDA_VISIBLE_DEVICES=''`, `OMP_NUM_THREADS=1`, `MKL_NUM_T
 and `TRANSFORMERS_OFFLINE=1` for the recorded CPU/offline protocol. No pretrained model
 cache is needed. Install/build dependencies before switching network access off.
 
-## Next decision
+## Support decision — 2026-11-12
 
-For compatible checkpoints, keep training/merging in the training environment and
-run export in the separate, normally resolved ONNX environment. For a first-class
-Transformers-5-native path, an explicit native export backend and independent optional
-dependencies would need a separate scope decision and wider model/shape qualification.
-The lab prototype is evidence for that decision; it is not a silent replacement of
-Optimum and does not change #2695's default or claim support for every architecture.
+The maintainer [confirmed the separate export-only path](https://github.com/MakazhanAlpamys/Soup/issues/2676#issuecomment-6816046820):
+keep training and merging in the training environment, and install `soup-cli[onnx]`
+in its own environment without `[train]`. The `[onnx]` requirement remains
+`optimum[onnxruntime]>=1.16.0`; dependency bounds and the export backend do not change.
+The opt-in check in #2695 remains scoped to that export-only environment.
+
+The guide documents the two-environment workflow and the known limit of
+Transformers-5-saved tokenizers that the 4.x loader cannot read. The measurements
+above remain author-reported qualification records; the support decision is not
+a claim that maintainers reran them or that every architecture is compatible.
+
+A native exporter for Transformers 5 is a separate question requiring its own
+issue and optional-dependency decision. It is not requested for #2676, and the
+prototype in this report remains a lab harness rather than a Soup export backend.

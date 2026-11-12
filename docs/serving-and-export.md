@@ -233,13 +233,28 @@ Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are unteste
 
 ### ONNX Export
 
-Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
+Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/).
+The supported path uses **two environments**: keep training and adapter merging
+in the training environment, and install only `soup-cli[onnx]` in a separate
+export environment. Installing `[train]` and `[onnx]` together is unsupported.
+
+For an adapter-only output, merge it in the existing training environment first;
+a standalone dense checkpoint can be exported directly. For compatible model
+configurations and tokenizers, the POSIX workflow is:
 
 ```bash
-pip install "soup-cli[onnx]"
-soup export --model ./output --format onnx
-soup export --model ./output --format onnx --output ./model_onnx
+# In the existing training environment, for an adapter-only output:
+soup merge --adapter ./output --output ./merged
+
+# Switch to a fresh export-only environment:
+python3 -m venv .venv-onnx
+source .venv-onnx/bin/activate
+python -m pip install "soup-cli[onnx]"
+soup export --model ./merged --format onnx --output ./model_onnx
 ```
+
+On Windows, activate the export environment with
+`.venv-onnx\Scripts\Activate.ps1` in PowerShell instead of `source`.
 
 To check a causal-LM export numerically on your own inputs, add `--validate-onnx`:
 
@@ -284,11 +299,13 @@ the reference is its freshly merged model, checked before the temporary merge is
 Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
 the flag.
 
-**Exporter/dependency support remains a separate decision.** The environment below is
-a local qualification record, not a maintainer-approved supported-version combination.
-The validation feature does not select a new exporter or alter dependency requirements.
+**Supported exporter/dependency policy.** ONNX export and the opt-in validation
+check use the separate export-only environment described above. The `[onnx]`
+extra remains `optimum[onnxruntime]>=1.16.0`; this feature does not change any
+dependency bounds or select a different export backend. The policy is confirmed
+in [the exporter support decision](https://github.com/MakazhanAlpamys/Soup/issues/2676#issuecomment-6816046820).
 
-**Keep the export environment separate when using released Optimum packages.** The tested
+**Why the environments are separate.** The tested
 `optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires
 Transformers 5.16.1 or newer. These requirements do not fit in one environment. For a
 merged checkpoint whose model configuration and tokenizer are supported by Transformers 4.57.6,
@@ -306,11 +323,17 @@ python3 -m venv .venv-onnx
 ```
 
 Install only the ONNX extra there; keep training and merging in their training environment.
-This is a bounded path for compatible checkpoints, not support for Transformers-5-only
-architectures or tokenizer classes. For example, a tokenizer saved as `TokenizersBackend`
-cannot be loaded by the tested 4.x loader. Do not rename a real tokenizer class to make
-an error disappear. The compatibility report and the separate native-PyTorch lab prototype
-are in [the ONNX qualification record](../benchmarks/onnx-export-compatibility-2026-11-11.md).
+**Known tokenizer limit:** a checkpoint saved by Transformers 5 may have a tokenizer
+that the export environment's 4.x loader cannot read. For example, a tokenizer saved
+as `TokenizersBackend` cannot be loaded by the tested 4.x loader. Such a checkpoint
+is outside this export path's compatibility scope; do not rename its tokenizer
+class to bypass the error. Transformers-5-only architectures are likewise not
+qualified by these checks.
+
+The compatibility report and a separate native-PyTorch lab prototype are in
+[the ONNX qualification record](../benchmarks/onnx-export-compatibility-2026-11-11.md).
+That prototype remains a lab harness. A native exporter for Transformers 5 would
+require a separate issue and optional-dependency decision; it is outside this feature.
 
 ### TensorRT-LLM Export
 
