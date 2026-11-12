@@ -400,6 +400,10 @@ large vocabulary costs more than a flat 0.5 or 1.0 suggests. Without the model's
 `config.json` the flat figures (0.5 and 1.0) are used. `hqq:*` has no figure yet, so the run starts and the pre-flight prints
 `Pre-flight skipped: no memory model for quantization: hqq:4bit` (with the
 format you set). No refusal there does not mean the run fits.
+With `batch_size: auto` (the default), the pre-flight says the fit is not checked
+before training because the batch is chosen after the model loads; no refusal
+there does not mean the run fits.
+Any other input the estimate cannot price is named in a `Pre-flight skipped:` line.
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
 startup. HQQ / EETQ / AQLM hard-fail with FSDP and ZeRO-3 (sourced from
@@ -1063,8 +1067,9 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
+- a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources
 - any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `base` at a bf16 or FP8-block copy. Refused:
-  - a `config.json` `quantization_config` whose `quant_method` is not `fp8`: `compressed-tensors` in any format (Kimi-K2-Thinking's `pack-quantized` INT4 among them), `gptq`, `awq`, `bitsandbytes` (or `load_in_4bit` / `load_in_8bit` with no method), `hqq`, `aqlm`, `eetq`, `torchao`, `quanto`, `fbgemm_fp8`, `mxfp4`, `mxfp8`, `nvfp4`, `gguf` and every other quantiser transformers registers, or a name it does not. Also read from `text_config` when the top level has none, and a value that is not a mapping (a string, a list, a number) is refused as malformed. `quant_method` is matched exactly, as transformers matches it: `FP8` is not `fp8`. Refused at setup, before any weight is resolved or downloaded. A config with no `quant_method` (the oMLX/oQ spelling, `bits` and `group_size` only) is decided by its tensors;
+  - a `config.json` `quantization_config` whose `quant_method` is not `fp8`: `compressed-tensors` in any format (Kimi-K2-Thinking's `pack-quantized` INT4 among them), `gptq`, `awq`, `bitsandbytes` (or `load_in_4bit` / `load_in_8bit` with no method; the NF4 base above excepted), `hqq`, `aqlm`, `eetq`, `torchao`, `quanto`, `fbgemm_fp8`, `mxfp4`, `mxfp8`, `nvfp4`, `gguf` and every other quantiser transformers registers, or a name it does not. Also read from `text_config` when the top level has none, and a value that is not a mapping (a string, a list, a number) is refused as malformed. `quant_method` is matched exactly, as transformers matches it: `FP8` is not `fp8`. Refused at setup, before any weight is resolved or downloaded. A config with no `quant_method` (the oMLX/oQ spelling, `bits` and `group_size` only) is decided by its tensors;
   - a tensor stored as an integer or packed type (I8, I16, I32, I64, U8, U16, U32, U64, BOOL, F4), which a plain read would cast to floats and train on: GPTQ/AWQ `qweight`, compressed-tensors `weight_packed`, bitsandbytes uint8 and int8 weights, oMLX/oQ uint32 words on an architecture other than qwen4_exp;
   - a floating-point tensor named like a quantiser's companion: `weight_scale` (compressed-tensors; DeepSeek-V3's block FP8 spells its scale `weight_scale_inv`), `weight_global_scale`, `weight_zero_point`, `input_scale`, `qzeros`, `g_idx`, `SCB`, `absmax`, `quant_map`, `W_q`, `codebooks` and the like.
 
@@ -1348,6 +1353,12 @@ snapshot still passes these checks: when its layout changes into a refused one a
 the next run stops with the same message and leaves the copy in place.
 
 
+**Stale cache slots (#2196).** The cache lives at `<cache root>/<slug>@<commit>` (bare `<slug>` for a legacy cache). A base update resolves to a new slot and leaves the old one on disk. The disk pre-flight panel now lists the other slots of the same base with sizes and exact paths, and names `soup prune-layer-cache --model <base> --yes`.
+
+- `soup prune-layer-cache --model <base>` is a dry run: it lists the stale slots with sizes and exact paths. Only `--yes` removes them. Training never deletes.
+- Kept, never removed: the slot the run resolves to; the newest complete slot of the base (the `index.json` with the latest mtime), so a base with one complete slot never loses it; a slot with `index.json.resharding`; a slot holding a `.soup.*.tmp` file (a write in progress); a slot with no readable `index.json`.
+- Stripe folders sit outside the cache root. They are listed with sizes and are never deleted: remove them by hand.
+
 ### Forward-only inference mode (API only, no CLI yet)
 
 The streaming runtime can also *run* a model that does not fit in VRAM, without training it.
@@ -1533,21 +1544,24 @@ soup train --config soup.yaml --fsdp full_offload
 
 `zero3_offload` keeps `offload_optimizer: none`: offloading the optimizer makes DeepSpeed JIT-build its `cpu_adam` op, which requires a matching CUDA toolkit (`nvcc`) on the box. Copy the emitted JSON and flip it if you have one — or start from the bundled `soup fetch deepspeed_configs zero3-cpu-offload`, which is the optimizer-offloading variant and therefore needs that toolkit. Measured on one H100 with Llama-3.1-8B (bf16, LoRA r=8, 256 steps): 21.65 tok/s at a 38,135 MiB peak — see [benchmarks/gate-h100-validation.md](../benchmarks/gate-h100-validation.md), STEP 3, which also compares it against layer streaming on the same box, data and model.
 
+Before the config is written, its `bf16` / `fp16` are matched to the precision the trainer will use: bf16 on an Ampere or newer card, fp16 on a card without bf16 hardware (a T4 or V100) and under `grpo_fp16`, and `"auto"`, filled in by the trainer, under `auto_mixed_precision`. A change is printed. Every preset declares `bf16`, and until this was matched a trainer running fp16 stopped before its first step with "`--mixed_precision` arg cannot be set to `fp16` when `bf16` is set in the DeepSpeed config file" (#2266).
+
 ### `--deepspeed <file>` — your own JSON
 
 `--deepspeed` also takes a path to a JSON config instead of a preset name. That
 file is yours: it reaches DeepSpeed **byte-identical, by the same path**, unless
 it carries a key that is invalid for the run it is about to start.
 
-Two keys are rewritten, and both are errors rather than preferences (#359):
+These keys are rewritten, and all are errors rather than preferences (#359, #2266):
 
 | key | why it is repaired |
 |---|---|
+| `bf16` / `fp16` | accelerate refuses a config that enables the dtype the trainer is not using, so a `bf16: true` file stops an fp16 run (a T4, `grpo_fp16`) before its first step. A value that already agrees, `"auto"` included, is left alone (#2266) |
 | `zero_hpz_partition_size` | DeepSpeed refuses a value the world size is not divisible by, so the ZeRO++ preset's placeholder `8` is invalid on any box that is not a multiple of 8 |
-| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against the `bf16` the same file enables makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype` |
+| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against a bf16 run makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype`. They are turned off when the run is bf16 or `"auto"`, and kept for an fp16 run |
 
 The documented way to customise ZeRO++ is to copy the preset JSON — which copies
-both defects — so an unresolved user file would inherit a crash the presets are
+these defects — so an unresolved user file would inherit a crash the presets are
 already protected from. When a rewrite happens it is **printed**, the repaired
 config goes to a temp copy, and **your file on disk is never modified**. A
 config that uses none of those keys is not touched at all.
@@ -1786,7 +1800,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 | `mixtral` | **no — attention-only** | yes |
 | `kimi_k2` | **not measured** (no stand-in builds here) | not measured |
 
-`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
+`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo`, removed in #1145 and restored once DPO could build the `minimax_m3_vl` wrapper (#1393), sets none either and trains the same attention-only LoRA. The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
 
 **A string `target_modules` keeps its meaning under `moe_lora`.** A list target is extended with the MoE names (above). A string is not a list to extend, and it used to be replaced by the MoE list. peft reads a string in one of two ways, and each is now kept:
 

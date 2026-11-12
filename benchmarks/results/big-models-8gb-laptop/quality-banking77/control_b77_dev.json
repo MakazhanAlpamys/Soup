@@ -1,0 +1,51 @@
+{
+ "suite": "b77_dev",
+ "n": 308,
+ "base_vs_control": {
+  "a_acc_pct": 67.20779220779221,
+  "b_acc_pct": 83.11688311688312,
+  "delta_points": 15.909090909090908,
+  "ci95_points": [
+   11.363636363636363,
+   20.454545454545457
+  ],
+  "a_right_b_wrong": 5,
+  "a_wrong_b_right": 54,
+  "mcnemar_exact_p": 1.9067358802971057e-11,
+  "identical_generated_ids": null
+ },
+ "base_vs_streamed_ft": {
+  "a_acc_pct": 67.20779220779221,
+  "b_acc_pct": 82.14285714285714,
+  "delta_points": 14.935064935064934,
+  "ci95_points": [
+   10.38961038961039,
+   19.480519480519483
+  ],
+  "a_right_b_wrong": 5,
+  "a_wrong_b_right": 51,
+  "mcnemar_exact_p": 1.170292474039769e-10,
+  "identical_generated_ids": null
+ },
+ "streamed_ft_vs_control": {
+  "a_acc_pct": 82.14285714285714,
+  "b_acc_pct": 83.11688311688312,
+  "delta_points": 0.974025974025974,
+  "ci95_points": [
+   0.0,
+   2.272727272727273
+  ],
+  "a_right_b_wrong": 0,
+  "a_wrong_b_right": 3,
+  "mcnemar_exact_p": 0.25,
+  "identical_generated_ids": null
+ },
+ "control_valid_pct": 99.67532467532467,
+ "generated_ids_identical_streamed_vs_control": 304,
+ "control_adapter": {
+  "adapter_config_json_sha256": "49e4b49ce2662ed3f3ce38bb51eb3d3a1744489da4b762d45e7b35f44e8e85cf",
+  "adapter_model_safetensors_sha256": "78722e57538a408d1fb244fcc19be62c3b77a27884a95dba3e7c254b4a3029f5",
+  "path": "/workspace/out/artifacts/control/adapter_final"
+ },
+ "note": "informational (arm R, the protocol); decides no gate"
+}
