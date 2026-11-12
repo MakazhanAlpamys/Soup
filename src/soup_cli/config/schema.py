@@ -1851,7 +1851,8 @@ class TrainingConfig(BaseModel):
         description=(
             "vLLM sleep/standby between rollouts. Has no effect in this "
             "version: GRPO does not use a vLLM server for rollouts, so there "
-            "is no engine to put to sleep. Refused at load when set to true."
+            "is no engine to put to sleep. Refused at load as of v0.78.0 when set "
+            "to true."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -8120,7 +8121,7 @@ class SoupConfig(BaseModel):
         raise ValueError(
             "training.vllm_sleep_mode has no effect: GRPO does not use a vLLM server "
             "for rollouts in this version, so there is no vLLM engine to put to sleep "
-            "between rollouts. Remove training.vllm_sleep_mode from the config."
+            "between rollouts. Refused as of v0.78.0. Delete the line."
         )
 
     # ---- v0.53.0 Quant Menu II cross-validators ----------------------------

@@ -21,7 +21,7 @@ from tests.conftest import strip_ansi
 NO_EFFECT = (
     "training.vllm_sleep_mode has no effect: GRPO does not use a vLLM server for rollouts "
     "in this version, so there is no vLLM engine to put to sleep between rollouts. "
-    "Remove training.vllm_sleep_mode from the config."
+    "Refused as of v0.78.0. Delete the line."
 )
 
 
@@ -100,6 +100,7 @@ class TestGrpoRefusesTheKey:
         assert "training.vllm_sleep_mode" in message
         assert "GRPO does not use a vLLM server for rollouts in this version" in message
         assert "has no effect" in message
+        assert "Refused as of v0.78.0. Delete the line." in message
 
 
 class TestOtherGatesKeepTheirWording:
