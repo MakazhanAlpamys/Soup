@@ -1,0 +1,44 @@
+# soup.yaml of the 300-step Qwen3-32B Banking77 run (Soup main, `soup train` with training.stream_layers).
+# The leading comment block of the original was removed for publication.
+base: /workspace/b77/models/qwen3-32b-bf16
+task: sft
+modality: text
+backend: transformers
+
+data:
+  train: ./soup_train_n300.jsonl
+  format: chatml
+  val_split: 0.0
+  max_length: 576
+  train_on_responses_only: true
+  # Same token layout as the protocol 5.2: <|im_start|>user\nPROMPT<|im_end|>\n<|im_start|>assistant\n
+  # <think>\n\n</think>\n\n  then LABEL<|im_end|> (the only supervised span, no trailing newline).
+  chat_template: |-
+    {%- for message in messages -%}{%- if message['role'] == 'assistant' -%}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' -}}{% generation %}{{- message['content'] + '<|im_end|>' -}}{% endgeneration %}{%- else -%}{{- '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' -}}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' -}}{%- endif -%}
+
+training:
+  epochs: 1
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  lr: 0.0001
+  warmup_ratio: 0.0334
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  optimizer: adamw_torch
+  scheduler: cosine
+  logging_steps: 1
+  save_steps: 25
+  seed: 32017
+  quantization: 4bit
+  stream_layers: true
+  stream_source: auto
+  stream_buffers: 2
+  stream_vram_override: 6710886400
+  stream_loss_chunk: 128
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.0
+    target_modules: [q_proj, v_proj]
+
+output: ./output/main
