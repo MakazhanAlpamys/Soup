@@ -780,6 +780,111 @@ def test_sft_refuses_a_rope_override_before_fetching_a_tokenizer_or_config(monke
     assert "rope_scaling_type 'yarn'" in str(caught.value)
 
 
+def _record_console_prints(monkeypatch, module):
+    """Swap a trainer module's rich console for a recorder; returns the captured lines."""
+
+    class _Recorder:
+        def __init__(self):
+            self.lines: list[str] = []
+
+        def print(self, *args, **kwargs):
+            self.lines.append(" ".join(str(arg) for arg in args))
+
+    recorder = _Recorder()
+    monkeypatch.setattr(module, "console", recorder)
+    return recorder.lines
+
+
+def _tokenizer_load_fails(monkeypatch):
+    """Make every AutoTokenizer.from_pretrained raise, as a bare custom-code load does."""
+
+    def _fails(*args, **kwargs):
+        raise RuntimeError("tokenizer load failed")
+
+    import transformers
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", _fails)
+
+
+def test_sft_tokenizer_failure_on_a_kimi_k2_base_prints_the_hint(tmp_path, monkeypatch):
+    """The resident sft route's tokenizer failure names the K2 fix (#2104 final critic F3):
+    the streamed route has printed this hint since #2107, while a default resident K2 run
+    died bare at the tokenizer — no --trust-remote-code / tiktoken pointer at all."""
+    import soup_cli.trainer.sft as sft_mod
+    import soup_cli.utils.kimi_k2 as kimi_k2
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    # Without auto_map: wrapper init probes a LOCAL base for auto_map and refuses
+    # before the tokenizer site; the hint test needs to reach the tokenizer.
+    raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
+    base = Path(_write_config(tmp_path, raw)).as_posix()
+    monkeypatch.setattr(kimi_k2, "_tiktoken_available", lambda: False)
+    _tokenizer_load_fails(monkeypatch)
+    printed = _record_console_prints(monkeypatch, sft_mod)
+
+    cfg = load_config_from_string(f"base: {base}\ntask: sft\ndata: {{train: data.jsonl}}\n")
+    wrapper = SFTTrainerWrapper(cfg, device="cpu")
+    with pytest.raises(RuntimeError, match="tokenizer load failed"):
+        wrapper._setup_transformers(cfg, cfg.training)
+
+    output = "\n".join(printed)
+    assert "--trust-remote-code" in output
+    assert "tiktoken" in output
+
+
+def test_grpo_tokenizer_failure_on_a_kimi_k2_base_prints_the_hint(tmp_path, monkeypatch):
+    """The grpo resident route wires the same hint at its own tokenizer load site."""
+    import soup_cli.trainer.grpo as grpo_mod
+    import soup_cli.utils.kimi_k2 as kimi_k2
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+    # Without auto_map: wrapper init probes a LOCAL base for auto_map and refuses
+    # before the tokenizer site; the hint test needs to reach the tokenizer.
+    raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
+    base = Path(_write_config(tmp_path, raw)).as_posix()
+    monkeypatch.setattr(kimi_k2, "_tiktoken_available", lambda: False)
+    _tokenizer_load_fails(monkeypatch)
+    printed = _record_console_prints(monkeypatch, grpo_mod)
+
+    cfg = load_config_from_string(f"base: {base}\ntask: grpo\ndata: {{train: data.jsonl}}\n")
+    wrapper = GRPOTrainerWrapper(cfg, device="cpu")
+    with pytest.raises(RuntimeError, match="tokenizer load failed"):
+        wrapper._setup_transformers(cfg, cfg.training)
+
+    output = "\n".join(printed)
+    assert "--trust-remote-code" in output
+    assert "tiktoken" in output
+
+
+def test_sft_tokenizer_failure_off_kimi_k2_bases_stays_quiet(tmp_path, monkeypatch):
+    """The hint is K2-gated: another base's tokenizer failure re-raises with no hint text."""
+    import soup_cli.trainer.sft as sft_mod
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    llama = {
+        "model_type": "llama",
+        "hidden_size": 8,
+        "num_attention_heads": 2,
+        "num_key_value_heads": 2,
+        "intermediate_size": 16,
+        "vocab_size": 32,
+        "num_hidden_layers": 1,
+    }
+    base = Path(_write_config(tmp_path, llama)).as_posix()
+    _tokenizer_load_fails(monkeypatch)
+    printed = _record_console_prints(monkeypatch, sft_mod)
+
+    cfg = load_config_from_string(f"base: {base}\ntask: sft\ndata: {{train: data.jsonl}}\n")
+    wrapper = SFTTrainerWrapper(cfg, device="cpu")
+    with pytest.raises(RuntimeError, match="tokenizer load failed"):
+        wrapper._setup_transformers(cfg, cfg.training)
+
+    assert all("--trust-remote-code" not in line for line in printed)
+
+
 # ==========================================================================
 # Maintainer follow-up 2026-11-12, item (a): the committed published tensor
 # names cover what the resident loader writes (#2104)

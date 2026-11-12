@@ -663,10 +663,19 @@ class GRPOTrainerWrapper:
         from transformers import AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code,
-            **base_revision_kwargs(cfg.base),
-        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
+            )
+        except Exception:
+            # Kimi K2's tokenizer is repository code that imports tiktoken: say so by name.
+            # Same wiring as the sft and streamed routes (#2104); print_ is K2-gated itself
+            # (the base's config.json must declare model_type: kimi_k2) and never raises.
+            from soup_cli.utils.kimi_k2 import print_kimi_k2_tokenizer_hint
+
+            print_kimi_k2_tokenizer_hint(cfg.base, console, **base_revision_kwargs(cfg.base))
+            raise
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
