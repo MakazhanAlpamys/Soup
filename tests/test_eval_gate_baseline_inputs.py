@@ -133,27 +133,41 @@ def test_case_alias_is_refused_using_entry_identity(
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native macOS path lookup")
 @pytest.mark.requires_hardlink
-@pytest.mark.parametrize("native_id", [True, False], ids=["native", "no-link-id"])
+@pytest.mark.parametrize("lookup", ["native", "no-link-id", "no-link-id-or-listing"])
 def test_case_alias_and_separate_link_on_case_insensitive_volume(
-    fixture: dict, monkeypatch: pytest.MonkeyPatch, native_id: bool,
+    fixture: dict, monkeypatch: pytest.MonkeyPatch, lookup: str,
 ) -> None:
     alias = str(Path(CUSTOM).with_name("TASKS.JSONL"))
     if not Path(alias).exists():
         pytest.skip("the test volume is case-sensitive")
     separate = str(Path(CUSTOM).with_name("copy.jsonl"))
     os.link(CUSTOM, separate)
-    if native_id:
+    if lookup == "native":
         read_link_id = getattr(paths, "_macos_link_id", lambda _: 0)
         if read_link_id(CUSTOM) is None:
             pytest.skip("the test volume does not supply a link ID")
     else:
         monkeypatch.setattr(paths, "_macos_link_id", lambda _: None, raising=False)
 
-    assert_collision(fixture, alias, CUSTOM, FIELDS[1])
-    result = invoke(separate.upper())
-    assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert json.loads(Path(separate).read_text())["scores"] == {"custom": 1.0, "judge": 1.0}
-    preserved(fixture)
+    directory = Path(CUSTOM).parent
+    original_mode = directory.stat().st_mode & 0o777
+    try:
+        if lookup == "no-link-id-or-listing":
+            directory.chmod(0o300)
+            try:
+                os.listdir(directory)
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("the current user can list a write/search-only directory")
+        assert_collision(fixture, alias, CUSTOM, FIELDS[1])
+        result = invoke(separate.upper())
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert json.loads(Path(separate).read_text())["scores"] == {"custom": 1.0, "judge": 1.0}
+        preserved(fixture)
+    finally:
+        if lookup == "no-link-id-or-listing":
+            directory.chmod(original_mode)
 
 
 def test_fresh_baseline_preserves_inputs(fixture: dict) -> None:
