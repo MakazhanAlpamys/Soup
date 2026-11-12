@@ -1427,6 +1427,15 @@ Loading a local adapter folder directly also reuses that commit when its
 `adapter_config.json` names the same base and has no conflicting explicit revision;
 the tokenizer still comes from the adapter folder.
 
+Single-process Hugging Face Transformers `soup sweep` arms use the same identity
+contract. Each arm resolves its own base once, immediately before its first base
+load, and pins that arm's model, tokenizer, config, processor and training-time
+base loads to that outcome. Arms may name different bases or record different
+commits if the Hub moves during a sweep; each arm's `runs` row shows which one it
+used. Each completed arm writes `soup_run.json` beside its final artifact, so a
+copied adapter retains the commit for `soup merge` and `soup export`. A sweep arm's
+training-data hash stays unknown in both its row and file.
+
 For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
 resolves the base once and broadcasts its nullable result before trainer setup.
 Soup initializes or reuses Accelerate's shared process group with Trainer's default
@@ -1445,8 +1454,8 @@ not established by those tests.
 
 **Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
-wrapper/sweep invocations do not automatically establish a run scope. Metadata is
-written for the final artifact, not each intermediate checkpoint. Other exporters
+wrapper invocations and distributed sweep launches do not gain a binding guarantee.
+Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
 and independent teacher/reward/scorer repositories do not gain a binding guarantee.
 Evaluation engines that bypass the shared live-eval loader (including lm-eval's
