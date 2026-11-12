@@ -718,21 +718,34 @@ def curriculum_curve(
     rows = []
     max_lines = 100_000
     with open(real, "r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_no, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            # #2731: a truncated or non-JSON line is a malformed history, the
+            # command's own refusal (exit 2), not a generic crash (exit 1).
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]history malformed: line {line_no} is not JSON: "
+                    f"{markup_escape(exc.msg)}[/]"
+                )
+                raise typer.Exit(2) from exc
             if len(rows) > max_lines:
                 console.print("[red]history exceeds 100k-row cap[/]")
                 raise typer.Exit(2)
     if not rows:
         console.print("[yellow](no curriculum history rows)[/]")
         return
-    nb = len(rows[0].get("weights", []))
     try:
         normalised = parse_history_jsonl(rows)
+        # The bucket count comes from the validated first row, and render_curve
+        # refuses a row with a different count (two runs with different
+        # curriculum_buckets append to one file): both are malformed histories.
+        nb = len(normalised[0]["weights"])
+        curve = render_curve(normalised, num_buckets=nb, width=width)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]history malformed: {markup_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    console.print(render_curve(normalised, num_buckets=nb, width=width))
+    console.print(curve)
