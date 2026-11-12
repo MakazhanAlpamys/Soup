@@ -1,5 +1,5 @@
 W1111 19:28:13.178000 33464 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
-Loading config from d6-kit\mistral123-128.soup.yaml...
+Loading config from kit\mistral123-128.soup.yaml...
 +------------------------------ Training Setup -------------------------------+
 | Device:  NVIDIA GeForce RTX 5070 Laptop GPU                                 |
 | Memory:  7.9 GB                                                             |
