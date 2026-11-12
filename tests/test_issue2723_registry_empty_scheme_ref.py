@@ -30,7 +30,9 @@ def _count() -> int:
         return len(store.list())
 
 
-@pytest.mark.parametrize("ref", ["registry://", "", None])
+@pytest.mark.parametrize(
+    "ref", ["registry://", "", None, "   ", "\t\n", "registry://   ", "registry://\t"],
+)
 def test_an_empty_reference_resolves_to_nothing(one_entry, ref):
     with RegistryStore() as store:
         assert store.resolve(ref) is None
@@ -38,8 +40,15 @@ def test_an_empty_reference_resolves_to_nothing(one_entry, ref):
 
 def test_the_scheme_still_resolves_a_real_id_and_prefix(one_entry):
     with RegistryStore() as store:
+        assert store.resolve(one_entry) == one_entry
         assert store.resolve(f"registry://{one_entry}") == one_entry
         assert store.resolve(f"registry://{one_entry[:-4]}") == one_entry
+
+
+@pytest.mark.parametrize("ref", ["model:v1", "registry://model:v1"])
+def test_name_and_tag_still_resolve(one_entry, ref):
+    with RegistryStore() as store:
+        assert store.resolve(ref) == one_entry
 
 
 def test_delete_of_a_bare_scheme_keeps_the_entry(one_entry):

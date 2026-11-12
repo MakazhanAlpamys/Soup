@@ -538,7 +538,8 @@ class RegistryStore:
         # Checked after the scheme is stripped: a bare ``registry://`` would
         # otherwise reach the prefix lookup as "" and match every entry, so
         # ``soup registry delete registry:// --yes`` deleted a lone entry (#2723).
-        if not ref:
+        # A whitespace-only remainder names nothing either.
+        if not ref or not ref.strip():
             return None
 
         conn = self._get_conn()
