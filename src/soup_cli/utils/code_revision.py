@@ -43,8 +43,8 @@ def _bounded_git_output(argv: list[str], env: dict[str, str], deadline: float, l
 
     A reader thread permits a deadline on pipe reads on Windows as well as Unix;
     it never reads more than ``limit`` bytes. The child is stopped and reaped even
-    on timeout. HEAD needs at most 64 hex digits and a newline; status needs one
-    byte, never the potentially large/private list of changed paths.
+    on timeout. HEAD needs at most 64 hex digits and a newline; status and filter
+    names need one byte, never changed paths or configuration values.
     """
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -105,6 +105,8 @@ def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
     than pair one commit's ID with another commit's status. This cannot freeze
     edits made after the observation. Repository fsmonitor hooks are disabled,
     Git's ownership checks are preserved, and no paths or file contents are stored.
+    Local content-filter drivers leave the commit known but skip status, so the
+    observation does not execute their repository-configured commands.
     """
     unknown = CodeRevision()
     deadline = time.monotonic() + _PROBE_TIMEOUT_SECONDS
@@ -119,10 +121,16 @@ def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
             return unknown
 
         def git(*args: str) -> str:
-            output = _bounded_git_output(
-                [program, "-c", "core.fsmonitor=false", "-C", directory, *args],
-                env, deadline, 1 if args[0] == "status" else 66,
-            )
+            try:
+                output = _bounded_git_output(
+                    [program, "-c", "core.fsmonitor=false", "-C", directory, *args],
+                    env, deadline, 1 if args[0] == "status" or "--get-regexp" in args else 66,
+                )
+            except subprocess.CalledProcessError as exc:
+                # Config lookups exit 1 when the requested key/name is absent.
+                if args[0] != "config" or exc.returncode != 1:
+                    raise
+                output = b""
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired("git", _PROBE_TIMEOUT_SECONDS)
             return output.decode("ascii")
@@ -130,10 +138,22 @@ def capture_code_revision(cwd: str | Path | None = None) -> CodeRevision:
         commit = git("rev-parse", "--verify", "HEAD").strip()
         if _COMMIT.fullmatch(commit) is None:
             return unknown
-        status = git("status", "--porcelain=v1", "--untracked-files=normal",
-                     "--ignore-submodules=none")
+        # Read names only, including local includes; never remote URLs or values.
+        has_filters = bool(git(
+            "config", "--local", "--includes", "--name-only", "--get-regexp", r"^filter\.",
+        ))
+        # Older Git refuses --worktree on linked trees without this extension.
+        if not has_filters and git(
+            "config", "--local", "--includes", "--bool", "--get", "extensions.worktreeConfig",
+        ).strip() == "true":
+            has_filters = bool(git(
+                "config", "--worktree", "--includes", "--name-only", "--get-regexp", r"^filter\.",
+            ))
+        dirty = None if has_filters else bool(git(
+            "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none",
+        ))
         if git("rev-parse", "--verify", "HEAD").strip() != commit:
             return unknown
-        return CodeRevision(commit=commit, dirty=bool(status))
+        return CodeRevision(commit=commit, dirty=dirty)
     except (OSError, ValueError, subprocess.SubprocessError):
         return unknown

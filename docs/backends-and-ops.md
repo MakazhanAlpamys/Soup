@@ -1058,7 +1058,9 @@ Evaluation comparison uses the latest stored score for each benchmark and run,
 with the signed difference **right minus left**; `-` means that side has no score.
 This reads local experiment records without a registry push, rerunning evaluation
 or hashing the current dataset. It does not establish that two evaluation runs
-used the same scorer or data, and it adds no code-revision provenance.
+used the same scorer or data. The `Code commit` and `Code state` rows show the
+startup observation described under [Recorded project code](#recorded-project-code),
+not proof that the code was identical.
 
 
 ## Alternative Model Hubs
@@ -1399,6 +1401,11 @@ saved values even after the working tree has moved on. In particular, an untrack
 Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
 failed probes or a changing HEAD record `unknown` without stopping training. The
 read-only local probe has a two-second total deadline and makes no network calls.
+A large repository whose status scan exceeds that deadline also records `unknown`.
+`soup sweep` arms call `start_run` directly and leave both code fields unknown.
+If repository-local or worktree configuration (including its includes) defines a
+content-filter driver, Soup skips status and records an unknown state while keeping
+the commit, so observing a run does not execute that filter.
 Every Git call disables repository-configured filesystem monitoring and optional
 index updates; Git's `safe.directory` ownership checks are not overridden. Only a
 bounded prefix of status output is read, and the child is stopped as soon as a

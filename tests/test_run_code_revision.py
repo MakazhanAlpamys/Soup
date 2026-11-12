@@ -154,6 +154,68 @@ def test_non_repo_and_unborn_head_are_unknown(repository, tmp_path):
     assert _capture(unborn).dirty is None
 
 
+def test_bare_repository_has_no_working_tree_state(repository, tmp_path):
+    bare = tmp_path / "bare.git"
+    _git(repository, "clone", "--bare", "--quiet", str(repository), str(bare))
+    captured = _capture(bare)
+    assert captured.commit is None and captured.dirty is None
+
+
+@pytest.mark.parametrize("driver,included", [
+    ("clean", False), ("smudge", False), ("process", False), ("clean", True),
+])
+def test_local_content_filter_keeps_commit_but_skips_status(
+    repository, monkeypatch, driver, included,
+):
+    from soup_cli.utils import code_revision
+
+    marker = repository / "ignored" / "filter-ran"
+    marker.parent.mkdir()
+    hook = marker.parent / "filter.py"
+    hook.write_text(
+        "from pathlib import Path\nimport sys\n"
+        f"Path({str(marker)!r}).write_text('called')\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    command = " ".join(shlex.quote(str(path).replace("\\", "/"))
+                       for path in (sys.executable, hook))
+    if included:
+        config = marker.parent / "filter.config"
+        _git(repository, "config", "--file", str(config), f"filter.soup.{driver}", command)
+        _git(repository, "config", "include.path", str(config))
+    else:
+        _git(repository, "config", f"filter.soup.{driver}", command)
+    (repository / ".gitattributes").write_text("code.py filter=soup\n", encoding="utf-8")
+    (repository / "code.py").write_text("changed\n", encoding="utf-8")
+    expected = _git(repository, "rev-parse", "HEAD")
+    calls = []
+    original = code_revision._bounded_git_output
+
+    def observe(argv, env, deadline, limit):
+        calls.append(argv[5:])
+        return original(argv, env, deadline, limit)
+
+    monkeypatch.setattr(code_revision, "_bounded_git_output", observe)
+    captured = _capture(repository)
+
+    assert captured.commit == expected
+    assert captured.dirty is None
+    assert not any(args[0] == "status" for args in calls)
+    assert not marker.exists()
+
+
+def test_worktree_content_filter_is_checked_in_its_own_configuration(repository, tmp_path):
+    linked = tmp_path / "filtered-worktree"
+    _git(repository, "config", "extensions.worktreeConfig", "true")
+    _git(repository, "worktree", "add", "--detach", str(linked), "HEAD")
+    _git(linked, "config", "--worktree", "filter.soup.clean", "unused-filter-command")
+    captured = _capture(linked)
+    assert captured.commit == _git(linked, "rev-parse", "HEAD")
+    assert captured.dirty is None
+    assert _capture(repository).dirty is False
+
+
 @pytest.mark.parametrize("failure", [FileNotFoundError("git"),
                                      subprocess.TimeoutExpired("git", 2)])
 def test_probe_failure_does_not_abort_training(monkeypatch, tmp_path, failure):
@@ -173,8 +235,9 @@ def test_probe_failure_does_not_abort_training(monkeypatch, tmp_path, failure):
 @pytest.mark.parametrize("outputs", [
     [(0, "not-a-commit"), (0, ""), (0, "a" * 40)],
     [(0, "a" * 100000)],
-    [(0, "a" * 40), (1, ""), (0, "a" * 40)],
-    [(0, "a" * 40), (0, ""), (0, "b" * 40)],
+    [(0, "a" * 40), (1, ""), (1, ""), (1, ""), (0, "a" * 40)],
+    [(0, "a" * 40), (1, ""), (1, ""), (0, ""), (0, "b" * 40)],
+    [(0, "a" * 40), (2, "")],
 ])
 def test_bad_commit_failed_status_or_moving_head_stays_unknown(git_processes, tmp_path, outputs):
     from soup_cli.utils import code_revision
@@ -194,6 +257,8 @@ def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path
     def output(argv, env, deadline, limit):
         deadlines.append((deadline, deadline - clock["now"]))
         clock["now"] += 0.75
+        if "config" in argv:
+            return b""
         return b"a" * 40 if limit > 1 else b" "
 
     monkeypatch.setattr(code_revision.time, "monotonic", lambda: clock["now"])
@@ -206,7 +271,7 @@ def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path
 def test_sha256_git_object_id_is_not_truncated(git_processes, tmp_path):
     from soup_cli.utils import code_revision
 
-    git_processes([(0, "a" * 64), (0, ""), (0, "a" * 64)])
+    git_processes([(0, "a" * 64), (1, ""), (1, ""), (0, ""), (0, "a" * 64)])
     captured = code_revision.capture_code_revision(tmp_path)
     assert captured.commit == "a" * 64
     assert captured.dirty is False
@@ -238,7 +303,7 @@ def test_git_is_resolved_from_absolute_path_entries_not_the_current_directory(
     trusted.chmod(0o755)
     monkeypatch.setenv("PATH", os.pathsep.join(["", ".", str(installed)]))
     monkeypatch.setenv("PATHEXT", ".EXE")
-    calls = git_processes([(0, "a" * 40), (0, ""), (0, "a" * 40)])
+    calls = git_processes([(0, "a" * 40), (1, ""), (1, ""), (0, ""), (0, "a" * 40)])
     # Restore the real resolver; the process double records the selected program.
     from soup_cli.utils.tool_paths import find_tool
 
@@ -326,16 +391,25 @@ def test_show_and_compare_display_stored_values_even_outside_the_repository(tmp_
 
 def test_old_run_displays_unknown_rather_than_the_current_checkout(tmp_path, monkeypatch):
     from soup_cli.cli import app
+    from soup_cli.commands import runs
 
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(runs, "console", Console(width=200, force_terminal=True))
     tracker = ExperimentTracker()
     run_id = tracker.start_run({"base": "model"}, "cpu", "CPU", {})
+    other_id = tracker.start_run({"base": "model"}, "cpu", "CPU", {})
     tracker.close()
     result = CliRunner().invoke(app, ["runs", "show", run_id, "--no-plot"])
     text = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 0, (text, result.exception)
-    assert "Code commit: unknown" in text
-    assert "Code state: unknown" in text
+    assert "Commit: unknown" in text
+    assert "State: unknown" in text
+    compared = CliRunner().invoke(app, ["runs", "compare", run_id, other_id])
+    assert compared.exit_code == 0, (compared.output, compared.exception)
+    lines = [" ".join(strip_ansi(line).split()) for line in compared.output.splitlines()]
+    for label in ("Code commit", "Code state"):
+        row = next(line for line in lines if label in line)
+        assert row.count("unknown") == 2, row
 
 
 @pytest.mark.parametrize("config_location", ["startup", "other-repository"])
@@ -468,8 +542,8 @@ def test_database_commit_is_validated_again_before_show_and_compare(
         assert result.exit_code == 0, (text, result.exception)
         assert commit not in result.output
         if "show" in argv:
-            assert "Code commit: unknown" in text
-            assert "Code state: unknown" in text
+            assert "Commit: unknown" in text
+            assert "State: unknown" in text
         else:
             assert "b" * 64 in text
 
@@ -487,11 +561,14 @@ def test_git_arguments_and_stored_fields_are_limited_to_the_two_observations(
 ):
     from soup_cli.utils.code_revision import capture_code_revision
 
-    calls = git_processes([(0, "a" * 40), (0, ""), (0, "a" * 40)])
+    calls = git_processes([(0, "a" * 40), (1, ""), (1, ""), (0, ""), (0, "a" * 40)])
     captured = capture_code_revision(tmp_path)
     prefix = [str(tmp_path / "git"), "-c", "core.fsmonitor=false", "-C", str(tmp_path)]
     assert [argv for argv, _, _ in calls] == [
         [*prefix, "rev-parse", "--verify", "HEAD"],
+        [*prefix, "config", "--local", "--includes", "--name-only", "--get-regexp", r"^filter\."],
+        [*prefix, "config", "--local", "--includes", "--bool", "--get",
+         "extensions.worktreeConfig"],
         [*prefix, "status", "--porcelain=v1", "--untracked-files=normal",
          "--ignore-submodules=none"],
         [*prefix, "rev-parse", "--verify", "HEAD"],
@@ -515,13 +592,25 @@ def test_git_arguments_and_stored_fields_are_limited_to_the_two_observations(
 
 
 def test_status_reads_one_byte_and_stops_without_consuming_the_file_list(tmp_path, git_processes):
-    calls = git_processes([(0, "a" * 40), (0, " M " + "private-name\n" * 100000),
+    calls = git_processes([(0, "a" * 40), (1, ""), (1, ""),
+                          (0, " M " + "private-name\n" * 100000),
                           (0, "a" * 40)])
     captured = _capture(tmp_path)
     assert captured.commit == "a" * 40 and captured.dirty is True
-    status = calls[1][2]
+    status = calls[3][2]
     assert status.stdout.requests == [1]
     assert status.killed
+
+
+def test_filter_probe_reads_only_a_bounded_name_prefix(tmp_path, git_processes):
+    calls = git_processes([(0, "a" * 40), (0, "filter.private.clean\n" * 100000),
+                          (0, "a" * 40)])
+    captured = _capture(tmp_path)
+    assert captured.commit == "a" * 40 and captured.dirty is None
+    config = calls[1][2]
+    assert config.stdout.requests == [1]
+    assert config.killed
+    assert not any("status" in argv[5:] for argv, _, _ in calls)
 
 
 def test_blocked_status_read_is_cancelled_by_the_total_deadline(tmp_path, monkeypatch):

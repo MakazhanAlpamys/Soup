@@ -223,8 +223,8 @@ def show(
         f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
-        f"Code commit: {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
-        f"Code state: {_code_state(run)}",
+        f"Commit:     {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
+        f"State:      {_code_state(run)}",
         f"Task:       {for_terminal(run.get('task') or '-')}",
         f"Device:     {for_terminal(run.get('device_name') or '-')} "
         f"({for_terminal(run.get('device') or '-')})",
