@@ -19,7 +19,7 @@ class ConfigChange:
 def _walk(obj: Any, prefix: str = "") -> dict[str, Any]:
     """Flatten a nested dict into ``dot.path → leaf`` pairs."""
     flat: dict[str, Any] = {}
-    if isinstance(obj, dict):
+    if isinstance(obj, dict) and (obj or not prefix):
         for key in sorted(obj):
             sub = _walk(obj[key], f"{prefix}.{key}" if prefix else str(key))
             flat.update(sub)

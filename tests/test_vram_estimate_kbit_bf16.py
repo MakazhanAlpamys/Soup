@@ -18,6 +18,7 @@ import pytest
 
 from soup_cli.utils import vram_estimate as ve
 from soup_cli.utils.hardware_fit import (
+    FitUnavailable,
     HardwareFitInput,
     estimate_peak_vram_gb,
     hardware_fit_input_from_config,
@@ -251,10 +252,14 @@ class TestHardwareFit:
         from soup_cli.commands import train as train_mod
 
         seen = []
+
+        def fake_input_or_reason(cfg, **kw):
+            seen.append(kw)
+            # The reason that stops the pre-flight after the input is built.
+            return FitUnavailable(field=None, reason="stopped after the input was built")
+
         monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device, **kw: flags)
-        monkeypatch.setattr(
-            train_mod, "_build_hardware_fit_input", lambda cfg, **kw: seen.append(kw)
-        )
+        monkeypatch.setattr(train_mod, "_hardware_fit_input_or_reason", fake_input_or_reason)
         train_mod._hardware_fit_preflight(
             self._config(tmp_path), {"memory_total_bytes": int(24e9)}, allow_oom_attempt=False
         )

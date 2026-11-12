@@ -1,0 +1,4794 @@
+{
+ "A-r1-P": {
+  "cell": "A-r1-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 915.7732416666664,
+   "memcpy / memset": 99.56644999999999,
+   "cross-entropy / logits kernels": 80.07759133333325,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 929.6975570000004,
+   "NF4 dequant (bitsandbytes)": 52.50679666666662,
+   "LoRA GEMM (rank 16)": 83.6984106666665,
+   "attention": 22.359356000000005,
+   "LM head GEMM": 50.66536066666666,
+   "optimizer + grad clip": 1.9567360000000007
+  },
+  "gpu_busy_ms": 2236.3014441731766,
+  "step_wall_ms": 2269.7144034830726,
+  "idle_ms": 33.412959309895825,
+  "elementwise_fp32_in_ms": 837.0315973333342,
+  "elementwise_other_in_ms": 78.74164433333337,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 300.7075076666668
+   },
+   {
+    "label": "casts / copies [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 193.83171266666685
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 179.31599433333372
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 90.1038060000001
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 56.392156666666686
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "fp32 in",
+    "ms_per_step": 45.12941499999999
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 18.90958733333338
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 11.18850866666667
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 9.018662000000038
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 8.492416666666672
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 2.6540133333333342
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.014912333333333333
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.007989000000000001
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.00656
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.239904666666654
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.757163666666663
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.202994333333335
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.153957666666667
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 7.537613333333332
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.359445666666667
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.622149666666668
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.667333333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.5838343333333333
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.8488106666666668
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.06792533333333332
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.02855466666666667
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.007904
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.861627333333326,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 393.59753199999966,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 204.37620233333342,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+    "calls_per_step": 1209.0,
+    "ms_per_step": 189.87612699999968,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 179.31605366666645,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 323.0,
+    "ms_per_step": 143.02438766666663,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 770.0,
+    "ms_per_step": 120.94139066666692,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, 4, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 364.0,
+    "ms_per_step": 116.93098233333312,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+    "calls_per_step": 450.0,
+    "ms_per_step": 99.19958299999996,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 98.77472199999991,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 93.03407666666669,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 62.59797100000005,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1})",
+    "calls_per_step": 676.0,
+    "ms_per_step": 59.8776483333333,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.020095333333333326,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.002112,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 98.77472199999991,
+    "mb_per_step": 47269.80608
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.7695206666666767,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9900674869858765,
+  "phase_peaks_mib": {
+   "pre_step": 7633.1,
+   "pre_fwd": 7633.0,
+   "fwd_pre_body": 7633.0,
+   "fwd_body": 10349.5,
+   "head_ce": 17421.2,
+   "backward": 17425.0,
+   "clip": 7710.2,
+   "optimizer": 7787.0,
+   "post": 7710.0
+  },
+  "step_peak_mib_phase_max": 17425.0,
+  "after_load": {
+   "alloc_mib": 7460.9,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 9700.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "lm_head [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [float32]",
+    "tensors": 57,
+    "mib": 0.8
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 17425.0,
+   "base_alloc_before_step_mib": 7633.0,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 1039.5,
+     "frames": [
+      "linear.py:134:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:465:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 28,
+     "mib": 1568.0
+    },
+    {
+     "stack_top3": "linear.py:134:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 1039.5
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:99:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:100:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   2.25755,
+   2.2615,
+   2.26125,
+   2.26245
+  ],
+  "profiled_wall_s_steps_6_8": [
+   2.27106,
+   2.26876,
+   2.26866
+  ],
+  "arm_info": {
+   "prepare_calls": 0,
+   "events": [
+    "arm A installed (patched peft.prepare_model_for_kbit_training: False)"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "A-r2-P": {
+  "cell": "A-r2-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 915.7643373333322,
+   "memcpy / memset": 99.56476599999999,
+   "cross-entropy / logits kernels": 80.1142903333333,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 929.5722260000003,
+   "NF4 dequant (bitsandbytes)": 52.52576866666664,
+   "LoRA GEMM (rank 16)": 83.68669133333319,
+   "attention": 22.342096333333323,
+   "LM head GEMM": 50.65752033333333,
+   "optimizer + grad clip": 1.9599733333333327
+  },
+  "gpu_busy_ms": 2236.1876201171876,
+  "step_wall_ms": 2269.3385338541666,
+  "idle_ms": 33.15091373697916,
+  "elementwise_fp32_in_ms": 836.9706759999997,
+  "elementwise_other_in_ms": 78.79366133333338,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 300.6998219999999
+   },
+   {
+    "label": "casts / copies [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 193.8313939999995
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 179.28540233333356
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 90.084318
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 56.40123033333338
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "fp32 in",
+    "ms_per_step": 45.13161233333334
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 18.90751333333333
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 11.197847333333327
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 9.01564800000002
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 8.526680666666666
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 2.6532043333333313
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.014966000000000004
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.008010666666666668
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.0066879999999999995
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.26359433333334
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.760981666666666
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.206556000000003
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.155769666666664
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 7.538531333333333
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.359769999999999
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.6244603333333325
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.6659066666666664
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.585585
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.850179666666666
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.06626266666666666
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.028916999999999995
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.007776
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.858405333333327,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 393.62595166666665,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 204.31622033333323,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+    "calls_per_step": 1209.0,
+    "ms_per_step": 189.85575633333278,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 179.281628,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 323.0,
+    "ms_per_step": 143.03244499999983,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 770.0,
+    "ms_per_step": 120.9414976666667,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, 4, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 364.0,
+    "ms_per_step": 116.9257736666667,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+    "calls_per_step": 450.0,
+    "ms_per_step": 99.1992176666665,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 98.78707533333318,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 92.99992766666662,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 62.61221466666657,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1})",
+    "calls_per_step": 676.0,
+    "ms_per_step": 59.900891333333426,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.02035266666666666,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0021866666666666666,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 98.78707533333318,
+    "mb_per_step": 47269.80608
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.755151333333346,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9899920363080369,
+  "phase_peaks_mib": {
+   "pre_step": 7633.1,
+   "pre_fwd": 7633.0,
+   "fwd_pre_body": 7633.0,
+   "fwd_body": 10349.5,
+   "head_ce": 17421.2,
+   "backward": 17425.0,
+   "clip": 7710.2,
+   "optimizer": 7787.0,
+   "post": 7710.0
+  },
+  "step_peak_mib_phase_max": 17425.0,
+  "after_load": {
+   "alloc_mib": 7460.9,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 9700.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "lm_head [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [float32]",
+    "tensors": 57,
+    "mib": 0.8
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 17425.0,
+   "base_alloc_before_step_mib": 7633.0,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 1039.5,
+     "frames": [
+      "linear.py:134:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:465:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 28,
+     "mib": 1568.0
+    },
+    {
+     "stack_top3": "linear.py:134:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 1039.5
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:99:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:100:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   2.2613,
+   2.25871,
+   2.26213,
+   2.26151
+  ],
+  "profiled_wall_s_steps_6_8": [
+   2.26984,
+   2.26827,
+   2.26939
+  ],
+  "arm_info": {
+   "prepare_calls": 0,
+   "events": [
+    "arm A installed (patched peft.prepare_model_for_kbit_training: False)"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "B-r1-P": {
+  "cell": "B-r1-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 395.22025966666627,
+   "memcpy / memset": 47.664200333333206,
+   "cross-entropy / logits kernels": 76.60066233333328,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 936.7316186666668,
+   "NF4 dequant (bitsandbytes)": 52.801743666666674,
+   "LoRA GEMM (rank 16)": 89.19729599999981,
+   "attention": 22.37668133333332,
+   "LM head GEMM": 51.06851533333333,
+   "optimizer + grad clip": 1.9575336666666665
+  },
+  "gpu_busy_ms": 1673.6184916992188,
+  "step_wall_ms": 1706.5354446614583,
+  "idle_ms": 32.91695296223958,
+  "elementwise_fp32_in_ms": 107.24035700000002,
+  "elementwise_other_in_ms": 287.9799026666665,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 214.64225266666634
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 81.38399666666669
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 41.685469000000055
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 23.47905599999997
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 21.638560000000084
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 6.310102333333334
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 3.696788000000006
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 2.357944000000022
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.015424333333333339
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.006730666666666666
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.003936
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.335391999999995
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.753983333333334
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.192156999999998
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.153938666666665
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.359631333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.636161
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 4.017427666666667
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.668706333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.5851219999999997
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.8373856666666666
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.02891699999999999
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.023679999999999996
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.008160333333333334
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.90527433333333,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 396.4042133333329,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 205.9214283333333,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 180.60097766666672,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>)",
+    "calls_per_step": 840.0,
+    "ms_per_step": 103.48794133333318,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 93.71591099999996,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 61.919054333333264,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 112.0,
+    "ms_per_step": 56.08217766666665,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, 2>(float*, unsigned char*, float*, __nv_bfloat16*, int, int)",
+    "calls_per_step": 588.0,
+    "ms_per_step": 50.486964333333354,
+    "category": "NF4 dequant (bitsandbytes)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.896772999999975,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn",
+    "calls_per_step": 365.0,
+    "ms_per_step": 45.92477633333329,
+    "category": "LoRA GEMM (rank 16)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_relu_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 45.648099,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 56.0,
+    "ms_per_step": 38.115471333333346,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.021119666666666665,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0022186666666666665,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.896772999999975,
+    "mb_per_step": 26130.51392
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.7440890000000128,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9957848798081532,
+  "phase_peaks_mib": {
+   "pre_step": 5551.7,
+   "pre_fwd": 5551.6,
+   "fwd_pre_body": 5551.6,
+   "fwd_body": 6983.9,
+   "head_ce": 13516.1,
+   "backward": 13519.9,
+   "clip": 5628.8,
+   "optimizer": 5705.6,
+   "post": 5628.6
+  },
+  "step_peak_mib_phase_max": 13519.9,
+  "after_load": {
+   "alloc_mib": 5379.5,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 5540.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "lm_head [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "norm [bfloat16]",
+    "tensors": 57,
+    "mib": 0.4
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 13519.9,
+   "base_alloc_before_step_mib": 5551.6,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:249:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:398:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 756.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:249:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 28.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:102:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 2,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   1.69511,
+   1.69651,
+   1.6983,
+   1.69881
+  ],
+  "profiled_wall_s_steps_6_8": [
+   1.70661,
+   1.70688,
+   1.70556
+  ],
+  "arm_info": {
+   "prepare_calls": 1,
+   "events": [
+    "arm B installed (patched peft.prepare_model_for_kbit_training: True)",
+    "B: peft prepare_model_for_kbit_training ran, then cast back to bf16: {'embed_tokens': 1, 'norm': 57, 'lm_head': 1}"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "B-r2-P": {
+  "cell": "B-r2-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 395.18839800000006,
+   "memcpy / memset": 47.65537899999986,
+   "cross-entropy / logits kernels": 76.57329599999993,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 935.1055219999997,
+   "NF4 dequant (bitsandbytes)": 52.7803126666667,
+   "LoRA GEMM (rank 16)": 89.16958533333336,
+   "attention": 22.362806666666668,
+   "LM head GEMM": 50.859853666666666,
+   "optimizer + grad clip": 1.9616173333333329
+  },
+  "gpu_busy_ms": 1671.6567563476563,
+  "step_wall_ms": 1703.5012724609376,
+  "idle_ms": 31.84451611328125,
+  "elementwise_fp32_in_ms": 107.23255366666676,
+  "elementwise_other_in_ms": 287.9558443333331,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 214.63932599999978
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 81.38549866666673
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 41.6788653333333
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 23.471414666666668
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 21.63068500000003
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 6.307705333333329
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 3.6927880000000015
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 2.356675333333354
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.015050333333333336
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.006474666666666668
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.003914666666666666
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.314670333333336
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.766814333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.185523000000002
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.154117000000001
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.358462333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.637173333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 4.010540333333333
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.666682333333333
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.585144666666667
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.8344336666666672
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.028694000000000004
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.023211333333333334
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.007829333333333332
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.890300000000003,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 395.60298266666626,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 205.64796599999994,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 180.25299866666663,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>)",
+    "calls_per_step": 840.0,
+    "ms_per_step": 103.49117299999968,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 93.63769933333336,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 61.92471333333323,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 112.0,
+    "ms_per_step": 56.08049933333333,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, 2>(float*, unsigned char*, float*, __nv_bfloat16*, int, int)",
+    "calls_per_step": 588.0,
+    "ms_per_step": 50.467942333333404,
+    "category": "NF4 dequant (bitsandbytes)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.892047000000005,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn",
+    "calls_per_step": 365.0,
+    "ms_per_step": 45.718543000000004,
+    "category": "LoRA GEMM (rank 16)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_relu_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 45.5635933333333,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 56.0,
+    "ms_per_step": 38.065011000000005,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.020928666666666665,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0022400000000000002,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.892047000000005,
+    "mb_per_step": 26130.51392
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.7401633333333446,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9966711153381075,
+  "phase_peaks_mib": {
+   "pre_step": 5551.7,
+   "pre_fwd": 5551.6,
+   "fwd_pre_body": 5551.6,
+   "fwd_body": 6983.9,
+   "head_ce": 13516.1,
+   "backward": 13519.9,
+   "clip": 5628.8,
+   "optimizer": 5705.6,
+   "post": 5628.6
+  },
+  "step_peak_mib_phase_max": 13519.9,
+  "after_load": {
+   "alloc_mib": 5379.5,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 5540.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "lm_head [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "norm [bfloat16]",
+    "tensors": 57,
+    "mib": 0.4
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 13519.9,
+   "base_alloc_before_step_mib": 5551.6,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:249:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:398:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 756.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:249:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 28.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:102:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 2,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   1.69413,
+   1.69496,
+   1.69514,
+   1.6955
+  ],
+  "profiled_wall_s_steps_6_8": [
+   1.70454,
+   1.70233,
+   1.70314
+  ],
+  "arm_info": {
+   "prepare_calls": 1,
+   "events": [
+    "arm B installed (patched peft.prepare_model_for_kbit_training: True)",
+    "B: peft prepare_model_for_kbit_training ran, then cast back to bf16: {'embed_tokens': 1, 'norm': 57, 'lm_head': 1}"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "C-r1-P": {
+  "cell": "C-r1-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 395.2728563333341,
+   "memcpy / memset": 47.67623433333322,
+   "cross-entropy / logits kernels": 76.5590206666667,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 936.0851513333329,
+   "NF4 dequant (bitsandbytes)": 52.79412033333332,
+   "LoRA GEMM (rank 16)": 89.19296966666651,
+   "attention": 22.369694333333335,
+   "LM head GEMM": 50.92582066666667,
+   "optimizer + grad clip": 1.9560819999999999
+  },
+  "gpu_busy_ms": 1672.8319269205729,
+  "step_wall_ms": 1705.2561818033853,
+  "idle_ms": 32.4242548828125,
+  "elementwise_fp32_in_ms": 107.25054599999987,
+  "elementwise_other_in_ms": 288.0223103333331,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 214.62367333333304
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 81.37819266666655
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 41.73348833333331
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 23.493829999999974
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 21.657039666666744
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 6.30233133333334
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 3.699207000000003
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 2.3595790000000174
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.015008000000000004
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.006570666666666667
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.003936333333333333
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.301126333333322
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.758792666666666
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.190566999999998
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.151718666666667
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.359737666666666
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.633035333333332
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 4.016221666666667
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.6669353333333334
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.5837879999999998
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.8361693333333335
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.028523
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.02436266666666666
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.008043
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.918383666666662,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 396.1278499999995,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 205.68891366666665,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 180.4998023333333,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>)",
+    "calls_per_step": 840.0,
+    "ms_per_step": 103.52509133333295,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 93.59550499999992,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 61.89958533333329,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 112.0,
+    "ms_per_step": 56.07579800000001,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, 2>(float*, unsigned char*, float*, __nv_bfloat16*, int, int)",
+    "calls_per_step": 588.0,
+    "ms_per_step": 50.47373600000008,
+    "category": "NF4 dequant (bitsandbytes)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.90339766666666,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn",
+    "calls_per_step": 365.0,
+    "ms_per_step": 45.80585733333333,
+    "category": "LoRA GEMM (rank 16)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_relu_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 45.64787666666666,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 56.0,
+    "ms_per_step": 38.17291766666666,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.020533999999999993,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0022506666666666664,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.90339766666666,
+    "mb_per_step": 26130.51392
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.7500520000000112,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9951635775276325,
+  "phase_peaks_mib": {
+   "pre_step": 5551.7,
+   "pre_fwd": 5551.6,
+   "fwd_pre_body": 5551.6,
+   "fwd_body": 6983.9,
+   "head_ce": 13516.1,
+   "backward": 13519.9,
+   "clip": 5628.8,
+   "optimizer": 5705.6,
+   "post": 5628.6
+  },
+  "step_peak_mib_phase_max": 13519.9,
+  "after_load": {
+   "alloc_mib": 5379.3,
+   "peak_mib_since_process_start": 5459.2,
+   "reserved_mib": 5538.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "lm_head [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [bfloat16]",
+    "tensors": 57,
+    "mib": 0.4
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bias [bfloat16]",
+    "tensors": 84,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 13519.9,
+   "base_alloc_before_step_mib": 5551.6,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:249:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:398:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 756.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:249:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 28.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:102:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 2,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   1.69455,
+   1.69588,
+   1.69542,
+   1.69712
+  ],
+  "profiled_wall_s_steps_6_8": [
+   1.70693,
+   1.70338,
+   1.70492
+  ],
+  "arm_info": {
+   "prepare_calls": 1,
+   "events": [
+    "arm C installed (patched peft.prepare_model_for_kbit_training: True)",
+    "C: replacement ran: frozen base, loaded_in_kbit=True, gradient_checkpointing_requested=True, no dtype cast"
+   ],
+   "dtypes_at_construction": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "C-r2-P": {
+  "cell": "C-r2-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 395.2684463333351,
+   "memcpy / memset": 47.646532333333106,
+   "cross-entropy / logits kernels": 76.59443966666664,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 935.552896333333,
+   "NF4 dequant (bitsandbytes)": 52.80436833333334,
+   "LoRA GEMM (rank 16)": 89.15806999999981,
+   "attention": 22.361126333333335,
+   "LM head GEMM": 50.94944066666667,
+   "optimizer + grad clip": 1.9571233333333344
+  },
+  "gpu_busy_ms": 1672.29241796875,
+  "step_wall_ms": 1704.444569986979,
+  "idle_ms": 32.15215201822917,
+  "elementwise_fp32_in_ms": 107.28041933333323,
+  "elementwise_other_in_ms": 287.988027,
+  "elementwise_split": [
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 214.6199719999999
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 81.39912066666656
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 41.72483699999995
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 23.506226666666645
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 21.651520333333444
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 6.2913136666666585
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 3.6933763333333376
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 2.356053000000017
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.015061666666666664
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.007007666666666667
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 0.0039573333333333335
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax",
+    "ms_per_step": 28.32144733333333
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::_log_softmax_backward_data",
+    "ms_per_step": 10.762594
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::mul",
+    "ms_per_step": 8.189851999999997
+   },
+   {
+    "kernel": "at::native::unrolled_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 8.155749
+   },
+   {
+    "kernel": "at::native::elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 5.357350666666666
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::exp",
+    "ms_per_step": 4.640359666666667
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 4.018711333333333
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::argmax",
+    "ms_per_step": 2.666248
+   },
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::fill_",
+    "ms_per_step": 2.585159333333333
+   },
+   {
+    "kernel": "at::native::reduce_kernel",
+    "op": "aten::sum",
+    "ms_per_step": 1.8370103333333332
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_forward",
+    "ms_per_step": 0.02859766666666666
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.023712333333333332
+   },
+   {
+    "kernel": "at::native::",
+    "op": "aten::nll_loss_backward",
+    "ms_per_step": 0.007647999999999999
+   }
+  ],
+  "rewind_recorder_gpu_ms": 9.875739666666654,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 395.9296666666666,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 57.0,
+    "ms_per_step": 205.449962,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 180.42520666666678,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>)",
+    "calls_per_step": 840.0,
+    "ms_per_step": 103.4990659999996,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 93.5911826666667,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 61.90610333333323,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)",
+    "calls_per_step": 112.0,
+    "ms_per_step": 56.08306866666667,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, 2>(float*, unsigned char*, float*, __nv_bfloat16*, int, int)",
+    "calls_per_step": 588.0,
+    "ms_per_step": 50.48226333333328,
+    "category": "NF4 dequant (bitsandbytes)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.895541666666595,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn",
+    "calls_per_step": 365.0,
+    "ms_per_step": 45.87401433333331,
+    "category": "LoRA GEMM (rank 16)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_relu_f2f_tn",
+    "calls_per_step": 168.0,
+    "ms_per_step": 45.614362666666636,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 56.0,
+    "ms_per_step": 38.15746766666667,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 24.0,
+    "ms_per_step": 0.020599,
+    "mb_per_step": 9.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.002240333333333333,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 449.0,
+    "ms_per_step": 46.895541666666595,
+    "mb_per_step": 26130.51392
+   },
+   "Memset (Device)": {
+    "calls_per_step": 789.0,
+    "ms_per_step": 0.7281513333333448,
+    "mb_per_step": 1.29408
+   }
+  },
+  "recompute_over_forward": 0.9948517933475833,
+  "phase_peaks_mib": {
+   "pre_step": 5551.7,
+   "pre_fwd": 5551.6,
+   "fwd_pre_body": 5551.6,
+   "fwd_body": 6983.9,
+   "head_ce": 13516.1,
+   "backward": 13519.9,
+   "clip": 5628.8,
+   "optimizer": 5705.6,
+   "post": 5628.6
+  },
+  "step_peak_mib_phase_max": 13519.9,
+  "after_load": {
+   "alloc_mib": 5379.3,
+   "peak_mib_since_process_start": 5459.2,
+   "reserved_mib": 5538.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "lm_head [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [bfloat16]",
+    "tensors": 57,
+    "mib": 0.4
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bias [bfloat16]",
+    "tensors": 84,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 13519.9,
+   "base_alloc_before_step_mib": 5551.6,
+   "largest_blocks": [
+    {
+     "mib": 2376.0,
+     "frames": [
+      "functional.py:3504:cross_entropy",
+      "loss_utils.py:40:fixed_cross_entropy",
+      "loss_utils.py:70:ForCausalLMLoss",
+      "modeling_qwen2.py:469:forward",
+      "generic.py:939:wrapper",
+      "tuners_utils.py:333:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl"
+     ]
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 2376.0,
+     "frames": []
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:249:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:398:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 28.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 2,
+     "mib": 4752.0
+    },
+    {
+     "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+     "blocks": 1,
+     "mib": 2376.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 756.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:249:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 28.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:102:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 2,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+     "blocks": 1,
+     "mib": 0.0
+    },
+    {
+     "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   1.69566,
+   1.69642,
+   1.69696,
+   1.69526
+  ],
+  "profiled_wall_s_steps_6_8": [
+   1.70552,
+   1.70242,
+   1.7048
+  ],
+  "arm_info": {
+   "prepare_calls": 1,
+   "events": [
+    "arm C installed (patched peft.prepare_model_for_kbit_training: True)",
+    "C: replacement ran: frozen base, loaded_in_kbit=True, gradient_checkpointing_requested=True, no dtype cast"
+   ],
+   "dtypes_at_construction": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lm_head [bfloat16]": {
+     "tensors": 1,
+     "mib": 1039.5
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [bfloat16]": {
+     "tensors": 57,
+     "mib": 0.4
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "Qwen2MLP": 28,
+    "Qwen2RMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "transformers.models.qwen2.modeling_qwen2",
+    "forward_name": "forward"
+   },
+   "use_liger_kernel_arg": false
+  }
+ },
+ "D-r1-P": {
+  "cell": "D-r1-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 704.8326973333322,
+   "memcpy / memset": 92.0182463333334,
+   "cross-entropy / logits kernels": 225.4515056666666,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 928.3027363333327,
+   "NF4 dequant (bitsandbytes)": 52.45912266666663,
+   "LoRA GEMM (rank 16)": 83.5746793333333,
+   "attention": 22.37107166666666,
+   "LM head GEMM": 84.90096666666668,
+   "optimizer + grad clip": 1.959819333333333
+  },
+  "gpu_busy_ms": 2195.870789876302,
+  "step_wall_ms": 2228.733682454427,
+  "idle_ms": 32.862892578125,
+  "elementwise_fp32_in_ms": 633.4524973333333,
+  "elementwise_other_in_ms": 71.38019999999995,
+  "elementwise_split": [
+   {
+    "label": "casts / copies [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 193.84144133333328
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 122.14993100000007
+   },
+   {
+    "label": "SwiGLU (fused)",
+    "dtype": "fp32 in",
+    "ms_per_step": 103.75605066666671
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 90.87760999999999
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 76.40339033333333
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 56.61996966666661
+   },
+   {
+    "label": "RMSNorm",
+    "dtype": "fp32 in",
+    "ms_per_step": 20.624451333333337
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 11.483326000000003
+   },
+   {
+    "label": "RoPE",
+    "dtype": "fp32 in",
+    "ms_per_step": 11.339998666666666
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 10.878362333333314
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 3.581261666666662
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 2.648580666666666
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.6182113333333328
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.008096
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.0020163333333333327
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 223.40360333333328
+   },
+   {
+    "kernel": "liger_cross_entropy_kernel",
+    "op": "LigerFusedLinearCrossEntropyFunction",
+    "ms_per_step": 1.9802436666666674
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.06765866666666666
+   }
+  ],
+  "rewind_recorder_gpu_ms": 0.0,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 200.0,
+    "ms_per_step": 435.9290136666667,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+    "calls_per_step": 1364.0,
+    "ms_per_step": 406.44043466666506,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 179.031874,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 178.78425866666663,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, 4, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 364.0,
+    "ms_per_step": 116.87071300000002,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 789.0,
+    "ms_per_step": 112.56058233333327,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 92.78771033333331,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 393.0,
+    "ms_per_step": 91.28513633333313,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+    "calls_per_step": 337.0,
+    "ms_per_step": 83.35185633333332,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 88.0,
+    "ms_per_step": 79.8618606666667,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 63.14295899999995,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "_swiglu_forward_kernel",
+    "calls_per_step": 56.0,
+    "ms_per_step": 56.39053566666671,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 8.0,
+    "ms_per_step": 0.007275666666666668,
+    "mb_per_step": 3.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0022933333333333334,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 393.0,
+    "ms_per_step": 91.28513633333313,
+    "mb_per_step": 43922.751489
+   },
+   "Memset (Device)": {
+    "calls_per_step": 788.0,
+    "ms_per_step": 0.7232103333333418,
+    "mb_per_step": 1.284864
+   },
+   "Memcpy HtoD (Pageable -> Device)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.00033066666666666666,
+    "mb_per_step": 4e-06
+   }
+  },
+  "recompute_over_forward": 0.9876650573721281,
+  "phase_peaks_mib": {
+   "pre_step": 7633.1,
+   "pre_fwd": 7633.0,
+   "fwd_pre_body": 7633.0,
+   "fwd_body": 10349.5,
+   "head_ce": 10447.1,
+   "backward": 10851.6,
+   "clip": 7710.2,
+   "optimizer": 7787.0,
+   "post": 7710.0
+  },
+  "step_peak_mib_phase_max": 10851.6,
+  "after_load": {
+   "alloc_mib": 7460.9,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 9700.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "lm_head [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [float32]",
+    "tensors": 57,
+    "mib": 0.8
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 10851.4,
+   "base_alloc_before_step_mib": 7633.0,
+   "largest_blocks": [
+    {
+     "mib": 296.0,
+     "frames": [
+      "bnb.py:552:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "swiglu.py:35:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:296:forward",
+      "tco_profile.py:290:forward"
+     ]
+    },
+    {
+     "mib": 296.0,
+     "frames": [
+      "bnb.py:552:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "swiglu.py:35:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:296:forward",
+      "tco_profile.py:290:forward"
+     ]
+    },
+    {
+     "mib": 296.0,
+     "frames": []
+    },
+    {
+     "mib": 296.0,
+     "frames": []
+    },
+    {
+     "mib": 148.0,
+     "frames": [
+      "_functions.py:384:backward",
+      "function.py:317:apply"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 1512.0
+    },
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 4,
+     "mib": 592.7
+    },
+    {
+     "stack_top3": "bnb.py:552:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 2,
+     "mib": 592.0
+    },
+    {
+     "stack_top3": "_functions.py:384:backward < function.py:317:apply",
+     "blocks": 1,
+     "mib": 148.0
+    },
+    {
+     "stack_top3": "linear.py:134:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 11,
+     "mib": 140.8
+    },
+    {
+     "stack_top3": "sdpa_attention.py:158:sdpa_attention_forward < modeling_qwen2.py:220:forward < module.py:1790:_call_impl",
+     "blocks": 7,
+     "mib": 64.4
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "fused_linear_cross_entropy.py:108:fused_linear_cross_entropy_forward < fused_linear_cross_entropy.py:531:forward < autocast_mode.py:481:decorate_fwd",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:291:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:99:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:100:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   2.21935,
+   2.22131,
+   2.221,
+   2.22429
+  ],
+  "profiled_wall_s_steps_6_8": [
+   2.22975,
+   2.22776,
+   2.22806
+  ],
+  "arm_info": {
+   "prepare_calls": 0,
+   "events": [
+    "arm D installed (patched peft.prepare_model_for_kbit_training: False)"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "LigerSwiGLUMLP": 28,
+    "LigerRMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "liger_kernel.transformers.model.qwen2",
+    "forward_name": "lce_forward"
+   },
+   "use_liger_kernel_arg": true
+  }
+ },
+ "D-r2-P": {
+  "cell": "D-r2-P",
+  "categories_ms": {
+   "RMSNorm / RoPE / SwiGLU / elementwise": 704.8499999999993,
+   "memcpy / memset": 92.00650433333335,
+   "cross-entropy / logits kernels": 225.43042300000008,
+   "base-weight GEMM (q,k,v,o,gate,up,down)": 928.2543843333337,
+   "NF4 dequant (bitsandbytes)": 52.45830833333329,
+   "LoRA GEMM (rank 16)": 83.57531599999992,
+   "attention": 22.369012666666663,
+   "LM head GEMM": 84.87460066666665,
+   "optimizer + grad clip": 1.9593129999999999
+  },
+  "gpu_busy_ms": 2195.777815917969,
+  "step_wall_ms": 2226.2124202473956,
+  "idle_ms": 30.43460432942708,
+  "elementwise_fp32_in_ms": 633.4801889999998,
+  "elementwise_other_in_ms": 71.36981099999997,
+  "elementwise_split": [
+   {
+    "label": "casts / copies [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 193.85450466666663
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "fp32 in",
+    "ms_per_step": 122.13194899999996
+   },
+   {
+    "label": "SwiGLU (fused)",
+    "dtype": "fp32 in",
+    "ms_per_step": 103.76566300000003
+   },
+   {
+    "label": "casts / copies [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 90.88334933333299
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "fp32 in",
+    "ms_per_step": 76.39726533333344
+   },
+   {
+    "label": "MLP act (silu*up) [..,18944]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 56.616537999999956
+   },
+   {
+    "label": "RMSNorm",
+    "dtype": "fp32 in",
+    "ms_per_step": 20.635267000000017
+   },
+   {
+    "label": "hidden-state elementwise (norm, residual) [..,3584]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 11.475642666666682
+   },
+   {
+    "label": "RoPE",
+    "dtype": "fp32 in",
+    "ms_per_step": 11.356797999999992
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "fp32 in",
+    "ms_per_step": 10.875395666666671
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "fp32 in",
+    "ms_per_step": 3.579996999999999
+   },
+   {
+    "label": "RoPE / q,k,v layout [..,H,128]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 2.650221000000001
+   },
+   {
+    "label": "other elementwise",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.617297333333332
+   },
+   {
+    "label": "casts / copies [..,512]",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.008064
+   },
+   {
+    "label": "casts / copies (other shapes)",
+    "dtype": "bf16/other in",
+    "ms_per_step": 0.002048
+   }
+  ],
+  "ce_split": [
+   {
+    "kernel": "at::native::vectorized_elementwise_kernel",
+    "op": "aten::copy_",
+    "ms_per_step": 223.38311133333337
+   },
+   {
+    "kernel": "liger_cross_entropy_kernel",
+    "op": "LigerFusedLinearCrossEntropyFunction",
+    "ms_per_step": 1.9802813333333333
+   },
+   {
+    "kernel": "at::native::vectorized_gather_kernel",
+    "op": "aten::gather",
+    "ms_per_step": 0.06703033333333333
+   }
+  ],
+  "rewind_recorder_gpu_ms": 0.0,
+  "top_kernels": [
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 200.0,
+    "ms_per_step": 435.8747703333332,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+    "calls_per_step": 1364.0,
+    "ms_per_step": 406.4049053333323,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_tn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 178.99498200000008,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "ampere_bf16_s1688gemm_bf16_128x64_sliced1x2_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 178.76109999999997,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, 4, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>, TrivialOffsetCalculator<2, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<2>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 364.0,
+    "ms_per_step": 116.85857933333321,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+    "calls_per_step": 789.0,
+    "ms_per_step": 112.59145566666676,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   },
+   {
+    "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_nn",
+    "calls_per_step": 56.0,
+    "ms_per_step": 92.8226543333333,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "[gpu_memcpy] Memcpy DtoD (Device -> Device)",
+    "calls_per_step": 393.0,
+    "ms_per_step": 91.27360866666658,
+    "category": "memcpy / memset"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+    "calls_per_step": 337.0,
+    "ms_per_step": 83.33774000000014,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8::Params)",
+    "calls_per_step": 88.0,
+    "ms_per_step": 79.86621900000002,
+    "category": "base-weight GEMM (q,k,v,o,gate,up,down)"
+   },
+   {
+    "name": "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul> >(int, at::native::AUnaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 2ul>)",
+    "calls_per_step": 561.0,
+    "ms_per_step": 63.133053333333145,
+    "category": "optimizer + grad clip"
+   },
+   {
+    "name": "_swiglu_forward_kernel",
+    "calls_per_step": 56.0,
+    "ms_per_step": 56.40355266666666,
+    "category": "RMSNorm / RoPE / SwiGLU / elementwise"
+   }
+  ],
+  "memcpy": {
+   "Memcpy DtoH (Device -> Pinned)": {
+    "calls_per_step": 8.0,
+    "ms_per_step": 0.007243333333333336,
+    "mb_per_step": 3.2e-05
+   },
+   "Memcpy DtoH (Device -> Pageable)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.0023146666666666667,
+    "mb_per_step": 0.032768
+   },
+   "Memcpy DtoD (Device -> Device)": {
+    "calls_per_step": 393.0,
+    "ms_per_step": 91.27360866666658,
+    "mb_per_step": 43922.751489
+   },
+   "Memset (Device)": {
+    "calls_per_step": 788.0,
+    "ms_per_step": 0.7229856666666774,
+    "mb_per_step": 1.284864
+   },
+   "Memcpy HtoD (Pageable -> Device)": {
+    "calls_per_step": 1.0,
+    "ms_per_step": 0.000352,
+    "mb_per_step": 4e-06
+   }
+  },
+  "recompute_over_forward": 0.9876677125701117,
+  "phase_peaks_mib": {
+   "pre_step": 7633.1,
+   "pre_fwd": 7633.0,
+   "fwd_pre_body": 7633.0,
+   "fwd_body": 10349.5,
+   "head_ce": 10447.1,
+   "backward": 10851.6,
+   "clip": 7710.2,
+   "optimizer": 7787.0,
+   "post": 7710.0
+  },
+  "step_peak_mib_phase_max": 10851.6,
+  "after_load": {
+   "alloc_mib": 7460.9,
+   "peak_mib_since_process_start": 8423.4,
+   "reserved_mib": 9700.0
+  },
+  "param_groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "lm_head [float32]",
+    "tensors": 1,
+    "mib": 2079.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [float32]",
+    "tensors": 57,
+    "mib": 0.8
+   },
+   {
+    "group": "bias [float32]",
+    "tensors": 84,
+    "mib": 0.5
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ],
+  "snapshot": {
+   "peak_total_mib_estimate": 10851.4,
+   "base_alloc_before_step_mib": 7633.0,
+   "largest_blocks": [
+    {
+     "mib": 296.0,
+     "frames": [
+      "bnb.py:552:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "swiglu.py:35:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:296:forward",
+      "tco_profile.py:290:forward"
+     ]
+    },
+    {
+     "mib": 296.0,
+     "frames": [
+      "bnb.py:552:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "swiglu.py:35:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:296:forward",
+      "tco_profile.py:290:forward"
+     ]
+    },
+    {
+     "mib": 296.0,
+     "frames": []
+    },
+    {
+     "mib": 296.0,
+     "frames": []
+    },
+    {
+     "mib": 148.0,
+     "frames": [
+      "_functions.py:384:backward",
+      "function.py:317:apply"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "functional.py:2567:embedding",
+      "sparse.py:189:forward",
+      "module.py:1833:inner",
+      "module.py:1885:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "modeling_qwen2.py:356:forward",
+      "output_capturing.py:286:wrapper",
+      "generic.py:1068:wrapper"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    },
+    {
+     "mib": 56.0,
+     "frames": [
+      "modeling_qwen2.py:297:forward",
+      "tco_profile.py:290:forward",
+      "module.py:1790:_call_impl",
+      "module.py:1779:_wrapped_call_impl",
+      "checkpoint.py:512:checkpoint",
+      "eval_frame.py:1263:_fn",
+      "_compile.py:54:inner",
+      "modeling_layers.py:108:__call__"
+     ]
+    }
+   ],
+   "by_stack_top3": [
+    {
+     "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 27,
+     "mib": 1512.0
+    },
+    {
+     "stack_top3": "(no python frame)",
+     "blocks": 4,
+     "mib": 592.7
+    },
+    {
+     "stack_top3": "bnb.py:552:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 2,
+     "mib": 592.0
+    },
+    {
+     "stack_top3": "_functions.py:384:backward < function.py:317:apply",
+     "blocks": 1,
+     "mib": 148.0
+    },
+    {
+     "stack_top3": "linear.py:134:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+     "blocks": 11,
+     "mib": 140.8
+    },
+    {
+     "stack_top3": "sdpa_attention.py:158:sdpa_attention_forward < modeling_qwen2.py:220:forward < module.py:1790:_call_impl",
+     "blocks": 7,
+     "mib": 64.4
+    },
+    {
+     "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "fused_linear_cross_entropy.py:108:fused_linear_cross_entropy_forward < fused_linear_cross_entropy.py:531:forward < autocast_mode.py:481:decorate_fwd",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:291:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+     "blocks": 1,
+     "mib": 56.0
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:99:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:100:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+     "blocks": 1,
+     "mib": 0.2
+    },
+    {
+     "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+     "blocks": 1,
+     "mib": 0.0
+    }
+   ]
+  },
+  "unprofiled_wall_s_steps_2_5": [
+   2.22032,
+   2.21555,
+   2.21879,
+   2.21977
+  ],
+  "profiled_wall_s_steps_6_8": [
+   2.22398,
+   2.22683,
+   2.22729
+  ],
+  "arm_info": {
+   "prepare_calls": 0,
+   "events": [
+    "arm D installed (patched peft.prepare_model_for_kbit_training: False)"
+   ],
+   "dtypes_at_construction": {
+    "bias [float32]": {
+     "tensors": 84,
+     "mib": 0.5
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "dtypes_at_train_end": {
+    "bias [bfloat16]": {
+     "tensors": 84,
+     "mib": 0.2
+    },
+    "embed_tokens [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lm_head [float32]": {
+     "tensors": 1,
+     "mib": 2079.0
+    },
+    "lora_AB [bfloat16]": {
+     "tensors": 392,
+     "mib": 77.0
+    },
+    "nf4_weight [uint8]": {
+     "tensors": 196,
+     "mib": 3111.5
+    },
+    "norm [float32]": {
+     "tensors": 57,
+     "mib": 0.8
+    }
+   },
+   "module_classes": {
+    "PeftModelForCausalLM": 1,
+    "Qwen2ForCausalLM": 1,
+    "Qwen2DecoderLayer": 28,
+    "Qwen2Attention": 28,
+    "LigerSwiGLUMLP": 28,
+    "LigerRMSNorm": 57,
+    "Qwen2RotaryEmbedding": 1
+   },
+   "causal_lm_forward": {
+    "class": "Qwen2ForCausalLM",
+    "forward_module": "liger_kernel.transformers.model.qwen2",
+    "forward_name": "lce_forward"
+   },
+   "use_liger_kernel_arg": true
+  }
+ }
+}

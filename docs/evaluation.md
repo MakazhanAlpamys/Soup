@@ -817,6 +817,11 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+`--write-baseline` refuses an output resolving to the suite, custom-task file,
+or judge-prompts file before model construction (exit 3), preserving those inputs.
+Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
+
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
@@ -1129,6 +1134,10 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
+
+`soup eval compare` reads results for the full run IDs resolved from its arguments.
+When `soup eval aider --run-id` accepts a unique prefix, it saves the result under
+the matching full run ID. Existing evaluation rows keep their stored run IDs.
 
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;
