@@ -1299,7 +1299,7 @@ good for before/after deltas, not leaderboard-comparable absolutes.
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
 
-Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
+Soup ships seven GRPO objective variants, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
 
 ```yaml
 # soup.yaml — DAPO with replay buffer and TIS truncation masking
@@ -1317,7 +1317,7 @@ training:
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 — #808
-  vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
+  # vllm_sleep_mode: true            # refused as of v0.78.0: GRPO does not use a vLLM server for rollouts, so there is no engine to sleep
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
   rollout_func: my_module:my_rollout  # module:function resolver (openenv; trusted operator code)
@@ -1361,7 +1361,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
+All flags shipped as schema gates in v0.50.0. `openenv` rollout and PRM training (`task: prm`) are live. `vllm_sleep_mode` has no effect, because GRPO generates with the model's own `generate` and never starts a vLLM server for rollouts; `training.vllm_sleep_mode: true` is refused at load as of v0.78.0 (delete the line). Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
 
 
 ## DPO Training
