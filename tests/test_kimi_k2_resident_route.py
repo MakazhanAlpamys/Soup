@@ -555,7 +555,7 @@ def _record_model_to(monkeypatch):
 
 
 def test_resident_model_resolves_device_map_auto(resident_checkpoints, monkeypatch):
-    import torch
+    torch = _fake_cuda(monkeypatch, count=0)
 
     from soup_cli.utils.kimi_k2 import load_resident_model
 
@@ -563,12 +563,10 @@ def test_resident_model_resolves_device_map_auto(resident_checkpoints, monkeypat
     load_resident_model(
         resident_checkpoints["k2-bf16"], model_kwargs={"device_map": "auto"}
     )
-    expected = (
-        torch.device("cuda", torch.cuda.current_device())
-        if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
-    assert recorded == [expected]
+    # No CUDA visible: "auto" resolves to CPU (the served-device branch is pinned
+    # by test_resident_model_resolves_single_entry_device_map; #833 forbids probing
+    # cuda.is_available() from an unmarked test).
+    assert recorded == [torch.device("cpu")]
 
 
 def _fake_cuda(monkeypatch, *, count):

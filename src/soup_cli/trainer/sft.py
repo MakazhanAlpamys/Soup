@@ -1534,7 +1534,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # override to land on. Refuse before AutoConfig (which would execute that code
         # under trust_remote_code) or a tokenizer is fetched.
         rope_refusal = resident_kimi_k2_rope_refusal(
-            cfg.base, tcfg.rope_scaling_type, stream_layers=tcfg.stream_layers
+            cfg.base,
+            getattr(tcfg, "rope_scaling_type", None),
+            stream_layers=getattr(tcfg, "stream_layers", None),
         )
         if rope_refusal is not None:
             raise UnsupportedKimiK2Error(rope_refusal)
