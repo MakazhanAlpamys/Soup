@@ -17,6 +17,7 @@ from soup_cli.docs.chunker import split_markdown_by_headings
 from soup_cli.docs.retriever import (
     get_default_cache_dir,
     load_cache,
+    load_docs,
     save_cache,
     search_docs,
 )
@@ -281,6 +282,34 @@ def test_pure_bm25_serialization_roundtrip():
     assert bm25.score(q) == rebuilt.score(q)
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "has_pyproject,has_source",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_load_docs_requires_checkout_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, has_pyproject: bool, has_source: bool
+):
+    """Stray docs beside site-packages must not override the wheel's bundled guides."""
+    root = tmp_path / "root"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "guide.md").write_text("checkout guide", encoding="utf-8")
+    if has_pyproject:
+        (root / "pyproject.toml").touch()
+    if has_source:
+        (root / "src" / "soup_cli").mkdir(parents=True)
+
+    package = tmp_path / "package"
+    (package / "bundled").mkdir(parents=True)
+    (package / "bundled" / "guide.md").write_text("bundled guide", encoding="utf-8")
+    module_path = root / "site-packages" / "soup_cli" / "docs" / "retriever.py"
+    monkeypatch.setattr("soup_cli.docs.retriever.__file__", str(module_path))
+    monkeypatch.setattr("soup_cli.docs.retriever.resources.files", lambda _package: package)
+
+    expected = "checkout guide" if has_pyproject and has_source else "bundled guide"
+    assert load_docs() == {"guide.md": expected}
+
+
 @pytest.mark.unit
 def test_cache_save_load_and_invalidation(tmp_path: Path):
     """Index cache saves atomically and invalidates on fingerprint or schema changes."""
@@ -462,6 +491,8 @@ def test_cli_docs_search_terminal_hygiene(tmp_path: Path, monkeypatch: pytest.Mo
     hostile_query = "[red]safetensors[/red]\x1b[31m\x00\u202e"
     result = runner.invoke(app, ["docs", "search", hostile_query, "--top-k", "1"])
     assert result.exit_code == 0, result.output
+    plain = " ".join(strip_ansi(result.stdout).split())
+    assert "[red]safetensors[/red]" in plain
     # Verify no raw escape codes or raw unescaped control codes leak
     assert "\x1b[31m" not in result.stdout
     assert "\x00" not in result.stdout
@@ -482,8 +513,9 @@ def test_cli_docs_search_invalid_format(tmp_path: Path, monkeypatch: pytest.Monk
 
     result = runner.invoke(app, ["docs", "search", "safetensors", "--format", "yaml"])
     assert result.exit_code == 2
-    assert "Unknown --format" in result.output
-    assert "Choose 'table' or 'json'" in result.output
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "Unknown --format" in plain
+    assert "Choose 'table' or 'json'" in plain
 
 
 @pytest.mark.unit
@@ -493,11 +525,13 @@ def test_cli_docs_search_invalid_top_k(tmp_path: Path, monkeypatch: pytest.Monke
 
     r1 = runner.invoke(app, ["docs", "search", "safetensors", "--top-k", "0"])
     assert r1.exit_code == 2
-    assert "--top-k must be greater than or equal to 1" in r1.output
+    plain = " ".join(strip_ansi(r1.output).split())
+    assert "--top-k must be greater than or equal to 1" in plain
 
     r2 = runner.invoke(app, ["docs", "search", "safetensors", "--top-k", "-1"])
     assert r2.exit_code == 2
-    assert "--top-k must be greater than or equal to 1" in r2.output
+    plain = " ".join(strip_ansi(r2.output).split())
+    assert "--top-k must be greater than or equal to 1" in plain
 
 
 @pytest.mark.unit
@@ -529,7 +563,6 @@ def test_wheel_force_include_parity():
     assert pyproject_file.is_file()
 
     actual_docs = {p.name for p in docs_dir.glob("*.md")}
-    assert len(actual_docs) == 16
 
     with open(pyproject_file, "rb") as f:
         pyproject = tomllib.load(f)
@@ -542,6 +575,8 @@ def test_wheel_force_include_parity():
         .get("wheel", {})
         .get("force-include", {})
     )
+    mapped = {Path(key).name for key in force_include}
+    assert actual_docs == mapped, sorted(actual_docs ^ mapped)
 
     for doc in actual_docs:
         key = f"docs/{doc}"

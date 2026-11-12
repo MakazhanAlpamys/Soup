@@ -34,8 +34,9 @@ def load_docs() -> dict[str, str]:
 
     # 1. Source checkout: locate repository root docs/ directory
     try:
-        repo_docs = Path(__file__).resolve().parents[3] / "docs"
-        if repo_docs.is_dir():
+        root = Path(__file__).resolve().parents[3]
+        repo_docs = root / "docs"
+        if (root / "pyproject.toml").is_file() and (root / "src" / "soup_cli").is_dir():
             for entry in sorted(repo_docs.glob("*.md")):
                 doc_files[entry.name] = entry.read_text(encoding="utf-8")
             if doc_files:
