@@ -1,11 +1,3 @@
-"""`soup eval judge --run-id` links the result to a run that exists, by its full id.
-
-The option says it links results to an existing training run, but the command
-handed the value straight to ``save_eval_result``, whose insert never checks the
-run. A missing id saved a row nothing could find, and a unique prefix saved a
-row under the prefix, which ``get_run`` resolves to a different, full id.
-"""
-
 from __future__ import annotations
 
 import json
@@ -49,7 +41,6 @@ def db(tmp_path, monkeypatch) -> Path:
 
 
 def _judge(run_id: str):
-    """Invoke the CLI with a stubbed judge reply; return (result, judge mock)."""
     with mock.patch.object(JudgeEvaluator, "_call_llm", return_value=REPLY) as call:
         result = runner.invoke(
             app, ["eval", "judge", "--target", "responses.jsonl", "--run-id", run_id]
@@ -106,3 +97,18 @@ def test_without_run_id_nothing_is_saved_and_no_tracker_is_needed(db):
 
     assert result.exit_code == 0, result.output
     assert _saved(db) == []
+
+
+@pytest.mark.parametrize("run_id", [FULL_ID, "run_missing", "run_twin_"])
+def test_the_tracker_is_closed_exactly_once(db, run_id):
+    closes = []
+    real_close = ExperimentTracker.close
+
+    def counting_close(self):
+        closes.append(self.db_path)
+        real_close(self)
+
+    with mock.patch.object(ExperimentTracker, "close", counting_close):
+        _judge(run_id)
+
+    assert closes == [db]
