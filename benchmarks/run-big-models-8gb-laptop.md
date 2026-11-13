@@ -41,7 +41,9 @@ all three completed, with whole-device peaks of 3,042, 4,388 and 6,998 MiB (3,00
 the earlier runs); the +1,396 MiB at 512 tokens is in the run's own torch peak (about 6.2 GiB against 4.63
 GiB) and its cause is not determined; and the saved adapters reload identically across fresh processes, but
 the reloaded model's logits are NOT bit-identical to the training process's own logits (70.5% to 84.3% of
-the elements differ after the cast, largest absolute difference 1.31; cause not determined) (section 13).
+the elements differ after the cast, largest absolute difference 1.31, on the RTX 5070 Laptop; on a 0.5B model on
+that card the difference is the precision of the LoRA branch, bfloat16 in training and float32 in a fresh reload,
+and it vanishes when the two match; the 32B and Mistral cases were not re-measured) (sections 13 and 13.1).
 This is a capacity record. It is not a throughput benchmark and it makes no model-quality claim for
 Mistral Large.
 
@@ -604,8 +606,10 @@ measurements through `soup train`, and the earlier-runner reload-only row is Qwe
   `soup train` adapters of section 13 even that did not hold against the training process: the reloaded
   model's logits are not bit-identical to the training process's own logits.
 - **The `soup train` adapters do not reload to the training process's logits.** In all three 2026-11-11 runs
-  70.5% to 84.3% of the logits differ (largest absolute difference 1.3125, 0.875 and 0.625), the cause is
-  not determined, and reload against another reload is the only exact comparison made there (section 13.1).
+  70.5% to 84.3% of the logits differ (largest absolute difference 1.3125, 0.875 and 0.625; RTX 5070 Laptop,
+  8 GB), the cause was not measured on these models (on a 0.5B model on the same card it is the precision of
+  the LoRA branch, section 13.1), and reload against another reload is the only exact comparison made there
+  (section 13.1).
 - **Not full-weight training**: rank-8 LoRA on q_proj and v_proj only; all base weights frozen.
 - **Not Soup's shipped training path, except the Banking77 run and the 2026-11-11 laptop runs.** The earlier
   laptop runs use Soup's layer-streaming runtime as of f215941b under separate experiment runners; the cloud
@@ -782,10 +786,22 @@ itself stopped at its dtype guard and gave no element-wise verdict; the CPU comp
 separate script on the saved files and not an output of the comparison script, found the training process's
 logits and the reloaded model's logits **not bit-identical**: 70.5% to 84.3% of the elements differ after the
 cast, the largest absolute difference is 1.3125 (Qwen3-32B), 0.875 and 0.625 (Mistral Large), and the top-1
-token differs at 2, 1 and 1 positions. The cause was not determined. The dtype is not the cause: the live
-values are exactly representable in bfloat16. A different forward path or a different LoRA precision between
-the live training model and the inference model are possibilities that were not investigated; the config sets
-`lora.dropout: 0.0`, and whether the capture ran in eval mode is not recorded. Sections 5 and 9 compare a
+token differs at 2, 1 and 1 positions. The cause was not measured on these three models. The dtype is not the
+cause: the live values are exactly representable in bfloat16 (the float32 comes from the output cast of
+accelerate's wrapped forward).
+
+The cause was measured afterwards on Qwen2.5-0.5B-Instruct on the same card (RTX 5070 Laptop, 8 GB; rank-8 q/v
+LoRA, 15 steps; eight configurations: layer-streamed and resident, NF4 and BF16). The saved adapter equals the
+live LoRA bitwise, so the weights are the same; what differs is the arithmetic of the LoRA branch. The training
+forward runs under accelerate's autocast in bfloat16, so the branch is computed in bfloat16; a fresh reload
+loads the LoRA in float32 and runs without autocast, so it is computed in float32. Reloading under autocast, or
+casting the reload's LoRA weights to bfloat16, gave 0 differing logit elements in seven of the eight
+configurations; the eighth (resident NF4, whose live embeddings and norms were float32 after the k-bit upcast
+of #2609) also needs those cast to bfloat16. Eval against train mode, autocast around the whole call and
+gradient mode made no difference. The held-out loss differed between live and reload by 0.0013 to 0.0119, in
+both directions. This is rounding in the LoRA branch, not lost training. It is not a measurement of
+Qwen3-32B or Mistral Large: they were not re-measured, and a 4-bit train followed by a bfloat16 merge was not
+measured at all. Sections 5 and 9 compare a
 reload with the earlier runner's own trained held-out losses and logits slices; that is a different comparison
 from this one, and neither replaces the other.
 
@@ -809,6 +825,8 @@ adapter and a different comparison from 13.1 and does not resolve the gap in 13.
 
 ### 13.3 Not measured
 
+- **The cause of the live-versus-reload difference on Qwen3-32B and Mistral Large.** It was measured on a 0.5B
+  model only (13.1); the three models above were not re-run with a LoRA-matched reload.
 - **A repeat of any peak.** Each peak is one run. The 128-token Mistral peak comes from the retry after the
   contaminated first attempt; none was repeated on an idle device; the 512-token difference is not explained.
 - **Step time.** The wall times and `train_runtime` values above are 3-step wall figures of `soup train`

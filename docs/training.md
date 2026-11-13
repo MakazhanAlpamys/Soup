@@ -103,6 +103,9 @@ hidden until the total and a usable speed are known. Evaluation, checkpoint
 saves and changes in step speed can shift the finish time.
 The Speed row uses the panel's measurement when the trainer reports no usable
 speed, and progress stays between 0% and 100%.
+Each step row in the run's record stores the same speed the panel shows: the
+average since the first logged step, empty on that first row, where there is no
+interval yet. The final summary row stores the trainer's own steps per second.
 
 **Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
 generating completions, which costs about as much per row as training on it. So

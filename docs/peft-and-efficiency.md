@@ -794,15 +794,16 @@ The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the re
 
 The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
-### Auto Warmup Schedule
+### Warmup Schedule
 
 ```yaml
 training:
-  warmup_auto: true       # Pick warmup_steps from dataset_size × epochs × warmup_ratio
-  warmup_ratio: 0.03      # 3% of total update steps (default)
+  warmup_ratio: 0.03      # 3% of the real optimizer steps (default)
 ```
 
-Clamped to `[10, 1000]` so tiny datasets get some warmup and huge datasets don't burn half a million wasted steps.
+`warmup_ratio` resolves over the run's real optimizer steps, so the warmup follows the dataset size, epochs and accumulation you actually train with.
+
+`training.warmup_auto` is deprecated (#1814): it was documented as picking the warmup from the dataset size, but no trainer ever read it, so `warmup_auto: true` has no effect. v0.78.0 loads it with a warning that says so, and v0.79.0 refuses it. `warmup_auto: false` is the default and is silent. Migration: delete the `warmup_auto` line; set `training.warmup_ratio` to change the warmup.
 
 ### Auto Mixed-Precision
 
@@ -869,10 +870,15 @@ Records peak memory each step. Pressure is peak allocated memory divided by the 
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, `convergence_detection`, and `forgetting_threshold` settings are
+The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, and `convergence_detection` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
+`forgetting_threshold` is deprecated (#1814): nothing reads it, so setting it away from
+its default of `0.1` has no effect. v0.78.0 loads it with a warning that says so and
+v0.79.0 refuses it. Migration: delete the `training.forgetting_threshold` line (it is not
+`eval.ship.forgetting_threshold`, which `soup ship` reads); for regression checks use
+`--gate <suite.yaml>` below.
 Their tuning knobs (`forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`,
 `checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`,
 `convergence_window`, and `convergence_rel_tol`) warned at load in v0.76 and are

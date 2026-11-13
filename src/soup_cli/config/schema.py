@@ -13,6 +13,13 @@ from pydantic import (
     model_validator,
 )
 
+# The warning for the fields no code reads (#1814) and the release that refuses them,
+# which their descriptions name; deprecation.py imports only the stdlib.
+from soup_cli.config.deprecation import (
+    UNCONSUMED_FIELD_REJECTION_VERSION,
+    warn_unconsumed_field,
+)
+
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
 # schema bound and the runtime validator's message are the same object, and the
@@ -3565,14 +3572,33 @@ class TrainingConfig(BaseModel):
             "relative range threshold below which the window is a plateau"
         ),
     )
-    # Warmup auto-schedule (v0.32.0 Part D) — reuses pre-existing warmup_ratio.
+    # Warmup auto-schedule (v0.32.0 Part D): no trainer ever read it (#1814).
     warmup_auto: bool = Field(
         default=False,
         description=(
-            "Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. "
-            "Overrides any manual warmup_steps in the trainer."
+            "Deprecated, no effect: no trainer reads it, and warmup_ratio already sets "
+            "the warmup over the real optimizer steps. Setting it to true warns at load; "
+            f"refused as of v{UNCONSUMED_FIELD_REJECTION_VERSION}."
         ),
     )
+
+    @field_validator("warmup_auto", mode="after")
+    @classmethod
+    def _warn_warmup_auto_has_no_effect(cls, value: bool) -> bool:
+        """#1814: ``true`` never reached a trainer; load it, unchanged, with a warning.
+
+        ``false`` is the default and what Soup's own config dumps write, so it stays
+        silent. The release that refuses ``true`` is named in ``config/deprecation.py``.
+        """
+        if value:
+            warn_unconsumed_field(
+                "training.warmup_auto: true",
+                "no trainer reads it, and training.warmup_ratio already sets the "
+                "warmup over the real optimizer steps",
+                "Remove the line.",
+            )
+        return value
+
     # Auto mixed-precision (v0.32.0 Part C); refused on every task outside
     # AMP_APPLYING_TASKS since #1618 — only the SFT trainer reads it.
     auto_mixed_precision: bool = Field(
@@ -4054,10 +4080,29 @@ class TrainingConfig(BaseModel):
     forgetting_threshold: float = Field(
         default=0.10, ge=0.01, le=0.50,
         description=(
-            "Staged, not enforced during training: warn if accuracy drops beyond "
-            "this threshold (0.01-0.50)"
+            "Deprecated, no effect: nothing reads it (soup ship reads "
+            "eval.ship.forgetting_threshold). Setting it away from the default warns "
+            f"at load; refused as of v{UNCONSUMED_FIELD_REJECTION_VERSION}."
         ),
     )
+
+    @field_validator("forgetting_threshold", mode="after")
+    @classmethod
+    def _warn_forgetting_threshold_has_no_effect(cls, value: float) -> float:
+        """#1814: no check during training reads it; load it, unchanged, with a warning.
+
+        The default is silent, as for the staged fields: a config Soup dumped carries
+        it. ``eval.ship.forgetting_threshold`` is another field, read by ``soup ship``.
+        """
+        if value != cls.model_fields["forgetting_threshold"].default:
+            warn_unconsumed_field(
+                f"training.forgetting_threshold: {value!r}",
+                "nothing reads it, and no check during training uses it",
+                "Remove the line. For regression checks use `soup train --gate "
+                "<suite.yaml>`; `soup ship` reads eval.ship.forgetting_threshold.",
+            )
+        return value
+
     forgetting_benchmark: Literal["mini_mmlu", "mini_common_sense", "mini_instruction"] = Field(
         default="mini_mmlu",
         description=(

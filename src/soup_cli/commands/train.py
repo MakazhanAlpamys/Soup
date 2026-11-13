@@ -46,13 +46,15 @@ console = Console()
 # tables live with the shared estimate in utils/hardware_fit.py (#2049).
 _HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
 
-_UNWIRED_TRAINING_TUNABLES = (
+_UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
     # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
     # config/staged_fields.py (#808), and early_stop_patience moved in #761:
     # the loader refuses them (config/staged_fields.py), so they are not listed here.
-    "forgetting_threshold",
+    # forgetting_threshold moved to the loader too (#1814): it warns at load with the
+    # release that refuses it (config/deprecation.py), so it is not listed twice. That
+    # warning carries the --gate hint this note gave it.
 )
 
 
@@ -661,14 +663,20 @@ def _loads_on_unsloth(cfg) -> bool:
     unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
     instead of a list kept here: the dumped config is validated again with the
     backend changed. Only that pass's ``ValidationError`` means no; anything
-    else is a bug and must surface.
+    else is a bug and must surface. A deprecation warning the dump raises again
+    (#1814) is the loader's line already printed, so the probe drops it.
     """
+    import warnings
+
     from pydantic import ValidationError
 
+    from soup_cli.config.deprecation import SoupConfigDeprecationWarning
     from soup_cli.config.schema import SoupConfig
 
     try:
-        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SoupConfigDeprecationWarning)
+            SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
     except ValidationError:
         return False
     return True
@@ -1418,10 +1426,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
-    # but not enforced mid-training in this build. Their other tuning knobs are
-    # reported by the loader with refusal dates, so only active flags and
-    # non-default forgetting_threshold are reported here.
+    # Honesty guard: these staged flags are accepted but not enforced mid-training in
+    # this build. Their tuning knobs, forgetting_threshold included (#1814), are
+    # reported by the loader with refusal dates, so only the active flags are
+    # reported here.
     _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
