@@ -135,10 +135,10 @@ concurrency:
 # save runner-minutes that are only ever spent when a job is already hung.
 #
 # 2026-10-20: `test` is 60, not 90, and its two pytest steps carry a limit of
-# their own (45 then, 60 since 2026-11-07; see the first of them). The table above
-# predates the parallel run (2026-10-07). Measured 2026-10-12..19 over 1145 successful `test` jobs: the
-# slowest took 37.5 minutes (Windows, before the warm-cache fix of 2026-10-19
-# took 6.3 of them; 23.3 since), ubuntu 31.0, macOS 31.7. 60 is 1.6x the slowest
+# their own (45 then, 60 from 2026-11-07, 90 since 2026-11-13; see the first of them). The
+# table above predates the parallel run (2026-10-07). Measured 2026-10-12..19 over 1145
+# successful `test` jobs: the slowest took 37.5 minutes (Windows, before the warm-cache fix
+# of 2026-10-19 took 6.3 of them; 23.3 since), ubuntu 31.0, macOS 31.7. 60 is 1.6x the slowest
 # and leaves 15 minutes above the step limit for checkout, install and the warm-up.
 # What it saves: a job that hangs ends 30 minutes sooner (the nightly run of
 # 2026-10-20 held one Windows cell for the full 90).
@@ -149,6 +149,28 @@ concurrency:
 # its log; a macOS step on 2026-11-06 took 38 min 21 s), and each timeout cost a re-run
 # on the shared queue. The job limit moves with the step limit so that it keeps the 15
 # minutes above it for checkout, install and the warm-up, and stays above it at all.
+#
+# 2026-11-13: the two pytest steps go from 60 to 90 minutes and the `test` job from 75 to
+# 105. Measured over the `test` cells of the 400 most recent completed runs of this workflow
+# (2026-11-09..12, every attempt), step "Run unit tests without coverage", minutes of the
+# steps that finished (a failing test is not counted), and how many were cut off at 60:
+#
+#   cell (Python 3.12)   steps  min  median  p90   max   cut off at 60
+#   macos-latest           96    7.8   38.9   51.4  56.5        3
+#   windows-latest         98   17.4   25.6   28.0  29.6        1
+#   ubuntu-latest         248   14.6   20.7   25.1  27.2        0
+#
+# The macOS spread is the runner, not the suite: about 55k tests took 10 minutes on a runner
+# that gave pytest-xdist 5 workers and 16 to 56 minutes on runners that gave it 3 (`-n
+# logical`). Every cut-off step stopped at 99% of the run, so each needed about 61 minutes:
+# three macOS cells on 2026-11-12, none with a failed test, and one Windows cell on
+# 2026-11-10. The integration branch has 59.3k tests; on a 3-worker macOS runner it took
+# 54.5 minutes, and on a slower one it is cut off at 60. 90 is 1.5x the 60 minutes a step
+# was cut off at, which leaves room for about 45% more tests on the slowest runner seen, and
+# the job limit keeps its 15 minutes above the step. `test` still takes ONE value for the
+# matrix, as above: the slow cells need it, and what a higher value costs is only a hung
+# job, which the per-test cap below ends first. Splitting the macOS cell into shards would
+# remove the need for it.
 
 jobs:
   # Quick runs, the required cells at approval, the full matrix every night, and
@@ -876,7 +898,7 @@ jobs:
       # is what keeps a required one blocking a merge.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 105
     env:
       # Force UTF-8 mode on all platforms. Without this, Windows defaults to
       # cp1252 ('charmap'), which fails when importing upstream packages that
@@ -1114,7 +1136,7 @@ jobs:
         # default limit of four restarts per worker (9 failures of one test in that run), which
         # at ten minutes each would outlast the step. `--max-worker-restart=2` bounds it at three
         # tries, 30 minutes, and a one-off wedge still passes on the retry (the run stays red:
-        # the first failure is kept). `timeout-minutes: 60` on the step is the backstop for a
+        # the first failure is kept). `timeout-minutes: 90` on the step is the backstop for a
         # hang neither can see (a worker that never exits). `-o faulthandler_timeout=300`
         # (pytest's own, no dependency) dumps every thread's stack into the log once a test has
         # run for five minutes, before the cap above ends it, so a hang leaves its location in
@@ -1126,11 +1148,12 @@ jobs:
         # started 03:56:45, the other four workers idle from then on), and a macOS pull-request
         # cell of 2026-10-13 held its runner for 46 minutes. Measured: the slowest single test
         # in four recent full cells (ubuntu, macOS, Windows) took under 51 s (the gap between
-        # two finished tests of one worker, an upper bound), and the longest test step of the
-        # last 7 days took 27.7 minutes, so none of the caps can fire on a healthy run. A test
+        # two finished tests of one worker, an upper bound), and the longest test step that
+        # finished in 2026-11-09..12 took 56.5 minutes (a macOS runner with 3 workers; the
+        # 2026-11-13 note above `jobs:`), so none of the caps can fire on a healthy run. A test
         # that needs longer marks itself `@pytest.mark.timeout(N)`.
         if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Run unit tests without coverage
         # Same options as the step above minus the coverage reports; `--junitxml` stays in
@@ -1141,7 +1164,7 @@ jobs:
         # The exact opposite of the step above: every cell of a pull request, and every cell
         # of any run but ubuntu / 3.11. The same two caps.
         if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11')
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
         # The cell that measures coverage, nowhere else: ubuntu / 3.11 of a run that is not a
