@@ -1,0 +1,26 @@
+╭──────────────────────────────── Export Plan ─────────────────────────────────╮
+│ Model:                                                                       │
+│ lab/compat-fixtures/gpt2-legacy-t │
+│ okenizer                                                                     │
+│ Format: ONNX                                                                 │
+│ Output: lab/released-strict-gpt2  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Warning: ONNX export may execute custom model code if the model uses 
+trust_remote_code.
+Exporting to ONNX...
+`torch_dtype` is deprecated! Use `dtype` instead!
+lab/export-env/lib/python3.12/site-packages/transformers/masking_utils.py:207: TracerWarning: Converting a tensor to a Python boolean might cause the trace to be incorrect. We can't record the data flow of Python values, so this value will be treated as a constant in the future. This means that the trace might not generalize to other inputs!
+  if (padding_length := kv_length + kv_offset - attention_mask.shape[-1]) > 0:
+lab/export-env/lib/python3.12/site-packages/transformers/masking_utils.py:235: TracerWarning: Converting a tensor to a Python boolean might cause the trace to be incorrect. We can't record the data flow of Python values, so this value will be treated as a constant in the future. This means that the trace might not generalize to other inputs!
+  if padding_mask is not None and padding_mask.shape[-1] > kv_length:
+lab/export-env/lib/python3.12/site-packages/torch/onnx/symbolic_opset9.py:5383: UserWarning: Exporting aten::index operator of advanced indexing in opset 18 is achieved by combination of multiple ONNX operators, including Reshape, Transpose, Concat, and Gather. If indices include negative values, the exported graph will produce incorrect results.
+  warnings.warn(
+Weight deduplication check in the ONNX export requires accelerate. Please install accelerate to run it.
+╭─────────────────────────── ONNX Logits Validation ───────────────────────────╮
+│ FAIL                                                                         │
+│ Max absolute error: 5.96046e-08                                              │
+│ Mean absolute error: 1.46625e-08                                             │
+│ Absolute tolerance: 0                                                        │
+│ Checked: 4 prompts, 80 logits elements                                       │
+│ CPU float32; explicit prompts only; no cached generation or quality claim.   │
+╰──────────────────────────────────────────────────────────────────────────────╯

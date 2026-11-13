@@ -1,0 +1,100 @@
+[
+  {
+    "kind": "native",
+    "model": "gpt2",
+    "changed_initializers": [
+      "model.transformer.wte.weight",
+      "model.transformer.wpe.weight",
+      "model.transformer.h.0.ln_1.weight",
+      "model.transformer.h.0.ln_1.bias",
+      "model.transformer.h.0.attn.c_attn.weight",
+      "model.transformer.h.0.attn.c_attn.bias",
+      "model.transformer.h.0.attn.c_proj.weight",
+      "model.transformer.h.0.mlp.c_fc.weight",
+      "model.transformer.h.0.mlp.c_fc.bias",
+      "model.transformer.h.0.mlp.c_proj.weight",
+      "onnx::MatMul_365"
+    ],
+    "result": {
+      "max_abs_error": 8.375926971435547,
+      "mean_abs_error": 7.866546791233122,
+      "elements": 80,
+      "prompts": 4,
+      "atol": 0.0001
+    },
+    "passed": false
+  },
+  {
+    "kind": "native",
+    "model": "llama",
+    "changed_initializers": [
+      "model.model.embed_tokens.weight",
+      "model.model.layers.0.input_layernorm.weight",
+      "onnx::MatMul_393",
+      "onnx::MatMul_400",
+      "onnx::MatMul_401",
+      "onnx::MatMul_417",
+      "onnx::MatMul_418",
+      "onnx::MatMul_419",
+      "onnx::MatMul_420",
+      "onnx::MatMul_421"
+    ],
+    "result": {
+      "max_abs_error": 24.360271856188774,
+      "mean_abs_error": 23.97509283369582,
+      "elements": 80,
+      "prompts": 4,
+      "atol": 0.0001
+    },
+    "passed": false
+  },
+  {
+    "kind": "released-legacy",
+    "model": "gpt2",
+    "changed_initializers": [
+      "transformer.wte.weight",
+      "transformer.wpe.weight",
+      "transformer.h.0.ln_1.weight",
+      "transformer.h.0.ln_1.bias",
+      "transformer.h.0.attn.c_attn.weight",
+      "transformer.h.0.attn.c_attn.bias",
+      "transformer.h.0.attn.c_proj.weight",
+      "transformer.h.0.mlp.c_fc.weight",
+      "transformer.h.0.mlp.c_fc.bias",
+      "transformer.h.0.mlp.c_proj.weight",
+      "onnx::MatMul_399"
+    ],
+    "result": {
+      "max_abs_error": 8.375926971435547,
+      "mean_abs_error": 7.866471063531935,
+      "elements": 80,
+      "prompts": 4,
+      "atol": 0.0001
+    },
+    "passed": false
+  },
+  {
+    "kind": "released-legacy",
+    "model": "llama",
+    "changed_initializers": [
+      "model.embed_tokens.weight",
+      "model.layers.0.input_layernorm.weight",
+      "onnx::MatMul_438",
+      "onnx::MatMul_445",
+      "onnx::MatMul_446",
+      "onnx::MatMul_469",
+      "onnx::MatMul_470",
+      "onnx::MatMul_471",
+      "onnx::MatMul_472",
+      "onnx::MatMul_473"
+    ],
+    "result": {
+      "max_abs_error": 24.360271856188774,
+      "mean_abs_error": 23.97509283369582,
+      "elements": 80,
+      "prompts": 4,
+      "atol": 0.0001
+    },
+    "passed": false
+  }
+]
