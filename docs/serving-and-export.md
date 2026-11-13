@@ -249,7 +249,13 @@ soup merge --adapter ./output --output ./merged
 # Switch to a fresh export-only environment:
 python3 -m venv .venv-onnx
 source .venv-onnx/bin/activate
-python -m pip install "soup-cli[onnx]"
+```
+
+Install the [qualified export-only pins below](#qualified-export-only-setup),
+including CPU PyTorch and the compatible Optimum/Transformers versions, in this
+environment before exporting:
+
+```bash
 soup export --model ./merged --format onnx --output ./model_onnx
 ```
 
@@ -271,6 +277,10 @@ on CPU in float32, one prompt at a time, without a chat template, padding or tru
 The default absolute tolerance, `0.0001`, is a configurable starting point for an FP32
 smoke check; it is not a model-independent quality threshold. There is no additional
 relative tolerance. Non-finite logits never pass.
+
+Allow RAM for both the source model and ONNX Runtime: the source's float32 weights
+alone need roughly four bytes per parameter, plus logits and runtime buffers.
+A large merged checkpoint can therefore need substantially more RAM than its file size.
 
 The first version supports `--onnx-task text-generation` with exactly one ONNX graph,
 standard integer token inputs and a float32 `logits` output. Cached decoding, split
@@ -304,6 +314,8 @@ check use the separate export-only environment described above. The `[onnx]`
 extra remains `optimum[onnxruntime]>=1.16.0`; this feature does not change any
 dependency bounds or select a different export backend. The policy is confirmed
 in [the exporter support decision](https://github.com/MakazhanAlpamys/Soup/issues/2676#issuecomment-6816046820).
+
+#### Qualified export-only setup
 
 **Why the environments are separate.** The tested
 `optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires

@@ -12,6 +12,15 @@ from typer.testing import CliRunner
 
 from tests.conftest import strip_ansi
 
+_ONNX_ONLY_MESSAGE = (
+    "--validate-onnx, --prompts and --atol require --format onnx "
+    "--onnx-task text-generation and --validate-onnx."
+)
+
+
+def _plain(text):
+    return " ".join(strip_ansi(text).split())
+
 
 def _checker():
     return importlib.import_module("soup_cli.eval.onnx_check")
@@ -77,26 +86,32 @@ def test_requested_gate_controls_completion_and_registry(tmp_path, monkeypatch, 
     attach = Mock()
     monkeypatch.setattr(export, "_maybe_attach_export", attach)
     result = _invoke(tmp_path, ["--validate-onnx", "--prompts", str(prompts), "--atol", "0.001"])
+    output = _plain(result.output)
     assert result.exit_code == code, result.output
-    assert ("ONNX Export Complete" in result.output) is passed
-    assert ("PASS" if passed else "FAIL") in result.output
-    assert "0.001" in strip_ansi(result.output)
-    assert "mean" in result.output.lower() and "max" in result.output.lower()
+    assert ("ONNX Export Complete" in output) is passed
+    assert ("PASS" if passed else "FAIL") in output
+    assert "0.001" in output
+    assert "mean" in output.lower() and "max" in output.lower()
     assert attach.call_count == int(passed)
     assert exporter.call_count == 1
     assert observed == {"source": tmp_path / "model", "output": tmp_path / "model_onnx",
                         "texts": ["Hello world"], "atol": 0.001, "trust": False}
 
 
-@pytest.mark.parametrize("args", [
-    ["--validate-onnx"], ["--atol", "0.1"], ["--prompts", "missing.txt"],
-    ["--validate-onnx", "--prompts", "missing.txt"],
-    ["--validate-onnx", "--onnx-task", "feature-extraction", "--prompts", "missing.txt"],
+@pytest.mark.parametrize("args,message", [
+    (["--validate-onnx"], "--validate-onnx requires an explicit --prompts file."),
+    (["--atol", "0.1"], _ONNX_ONLY_MESSAGE),
+    (["--prompts", "missing.txt"], _ONNX_ONLY_MESSAGE),
+    (["--validate-onnx", "--prompts", "missing.txt"], "Cannot read --prompts:"),
+    (["--validate-onnx", "--onnx-task", "feature-extraction", "--prompts", "missing.txt"],
+     _ONNX_ONLY_MESSAGE),
 ])
-def test_bad_validation_options_stop_before_export(tmp_path, monkeypatch, args):
+def test_bad_validation_options_stop_before_export(tmp_path, monkeypatch, args, message):
+    monkeypatch.chdir(tmp_path)
     exporter = _fake_exporter(monkeypatch)
     result = _invoke(tmp_path, args)
     assert result.exit_code == 3, result.output
+    assert f"ONNX validation input error: {message}" in _plain(result.output)
     exporter.assert_not_called()
     assert "ONNX Export Complete" not in result.output
 
@@ -127,6 +142,10 @@ def test_invalid_tolerance_stops_before_export(tmp_path, monkeypatch, atol):
     path.write_text("Hi\n", encoding="utf-8")
     result = _invoke(tmp_path, ["--validate-onnx", "--prompts", str(path), "--atol", atol])
     assert result.exit_code == 3, result.output
+    assert (
+        "ONNX validation input error: --atol must be a finite, non-negative number."
+        in _plain(result.output)
+    )
     exporter.assert_not_called()
 
 
@@ -141,6 +160,7 @@ def test_validation_options_are_onnx_only(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["export", "--model", str(model), "--format", "tensorrt",
                                       "--validate-onnx", "--prompts", "missing.txt"])
     assert result.exit_code == 3, result.output
+    assert f"ONNX validation input error: {_ONNX_ONLY_MESSAGE}" in _plain(result.output)
     backend.assert_not_called()
 
 
@@ -317,7 +337,12 @@ def test_validation_failure_is_exit_three_and_never_registered(tmp_path, monkeyp
     path.write_text("Hi\n", encoding="utf-8")
     result = _invoke(tmp_path, ["--validate-onnx", "--prompts", str(path)])
     assert result.exit_code == 3, result.output
-    assert "ONNX Export Complete" not in result.output
+    output = _plain(result.output)
+    assert (
+        f"ONNX validation could not run: {error} "
+        'Check the graph, inputs and dependencies: pip install "soup-cli[onnx]".'
+    ) in output
+    assert "ONNX Export Complete" not in output
     attach.assert_not_called()
 
 
@@ -415,7 +440,8 @@ def test_real_corrupted_initializer_fails_the_cli_gate(real_export, tmp_path, mo
                                       "--output", str(corrupted), "--validate-onnx",
                                       "--prompts", str(prompts)])
     assert result.exit_code == 2, result.output
-    assert "FAIL" in result.output and "ONNX Export Complete" not in result.output
+    output = _plain(result.output)
+    assert "FAIL" in output and "ONNX Export Complete" not in output
     attach.assert_not_called()
 
 
