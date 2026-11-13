@@ -157,6 +157,33 @@ ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
+#### Vocabulary Expansion on MLX
+
+On `backend: mlx`, text SFT supports vocabulary expansion via `data.add_new_tokens` and
+`data.new_special_tokens` on dense models (`training.quantization: none`) with Llama-style
+architecture (`model.model.embed_tokens` and `model.lm_head`) matching tokenizer length ([#1994](https://github.com/MakazhanAlpamys/Soup/issues/1994)).
+
+The mechanism uses zero-allocation additive parameter slices rather than resizing the base
+embedding matrix in-place:
+- **Base weights frozen:** The base embedding table and LM head remain untouched and frozen.
+- **Registration order:** Special tokens are registered first to ensure semantic precedence,
+  whereas `backend: transformers` (`apply_vocab_expansion`) registers ordinary tokens first.
+- **Additive slice:** Only a new weight matrix $\Delta V \times D$ is allocated and registered
+  as trainable parameters with the optimizer, initialized with a normal distribution
+  matching the base embedding's standard deviation and dtype. The draw is always seeded via
+  `resolve_training_seed` (defaulting to 42 when unset), which reseeds `mx.random.seed`
+  before initialization.
+- **Zero-allocation gather:** The forward pass computes base and extended embeddings separately
+  and merges them via `mx.where(is_new, new_out, base_out)`, avoiding concatenation of large
+  weight tensors.
+- **Memory footprint:** Minimal additional memory during training and on disk:
+  $\Delta V \times D \times \text{sizeof(dtype)}$ bytes for tied embeddings (doubled for untied models).
+  For example, adding 100 tokens to a 4096-dim bf16 model takes only 800 KB of parameters.
+- **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
+  of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
+  Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
+
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
@@ -963,7 +990,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -983,6 +1014,26 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
@@ -1059,7 +1110,9 @@ Evaluation comparison uses the latest stored score for each benchmark and run,
 with the signed difference **right minus left**; `-` means that side has no score.
 This reads local experiment records without a registry push, rerunning evaluation
 or hashing the current dataset. It does not establish that two evaluation runs
-used the same scorer or data, and it adds no code-revision provenance.
+used the same scorer or data. The `Code commit` and `Code state` rows show the
+startup observation described under [Recorded project code](#recorded-project-code),
+not proof that the code was identical.
 
 
 ## Alternative Model Hubs
@@ -1385,6 +1438,43 @@ file; a program that starts and exits nonzero still means a failing checkpoint.
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+### Recorded project code
+
+For local `soup train` execution, Soup records the full Git HEAD commit of the
+directory the command starts in, plus `clean`, `dirty` or `unknown`. The observation
+is taken before dataset/model setup writes artifacts. It follows Git discovery
+from that directory, including subdirectories, detached HEADs and linked worktrees;
+it is not the commit of Soup's installation, the config file's directory or the
+model's Hugging Face repository. `dirty` includes staged, unstaged and untracked
+files; ignored files do not count. `soup runs show` and `soup runs compare` show the
+saved values even after the working tree has moved on. In particular, an untracked
+`soup.yaml` or output directory makes the observation dirty.
+
+Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
+failed probes or a changing HEAD record `unknown` without stopping training. The
+read-only local probe has a two-second total deadline and makes no network calls.
+A large repository whose status scan exceeds that deadline also records `unknown`.
+`soup sweep` arms call `start_run` directly and leave both code fields unknown.
+If repository-local or worktree configuration (including its includes) defines a
+content-filter driver, Soup skips status and records an unknown state while keeping
+the commit, so observing a run does not execute that filter.
+Every Git call disables repository-configured filesystem monitoring and optional
+index updates; Git's `safe.directory` ownership checks are not overridden. Only a
+bounded prefix of status output is read, and the child is stopped as soon as a
+change is observed. Soup stores only the full 40- or 64-digit hexadecimal commit
+and the dirty flag, never a remote URL, branch name, file name or diff. The commit
+is validated before recording and again before display; malformed observations
+in an edited database display as unknown.
+
+The nullable `runs.code_commit` and `runs.code_dirty` columns are added to existing
+databases in place; older rows remain unknown, never backfilled from today's
+checkout. Restarting a preallocated run ID clears its previous code observation.
+This is startup provenance, not a reproducibility guarantee: Soup does not archive
+the diff or untracked file contents, freeze concurrent edits, or add these fields
+to portable model artifacts or reproducibility receipts in this version. Remote
+cloud submission and direct trainer-wrapper calls do not establish this local
+CLI observation.
 
 ### Recorded base identity
 

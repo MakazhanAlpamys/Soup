@@ -827,7 +827,19 @@ def train(
         "--push-as",
         help=(
             "Auto-push each save_steps checkpoint to HF Hub as "
-            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model)"
+            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model). "
+            "A repository created by this flag is private unless --push-public "
+            "is given; an existing repository is used as it is and its "
+            "visibility is not changed."
+        ),
+    ),
+    push_public: bool = typer.Option(
+        False,
+        "--push-public",
+        help=(
+            "Create the --push-as repository public instead of private. "
+            "Requires --push-as. It does not change the visibility of a "
+            "repository that already exists."
         ),
     ),
     hf_resume: bool = typer.Option(
@@ -1066,6 +1078,17 @@ def train(
     """Start training from a soup.yaml config."""
     from soup_cli.utils.launcher import validate_multi_node_options
 
+    # Refused before every other path (--cloud, --find-lr, --dry-run, the config
+    # load): a visibility switch for a repository that is never created would
+    # otherwise be dropped without a word.
+    if push_public and not push_as:
+        console.print(
+            "[red]--push-public requires --push-as <repo>:[/] it sets the "
+            "visibility of the repository --push-as creates, so it does nothing "
+            "without it."
+        )
+        raise typer.Exit(1)
+
     try:
         validate_multi_node_options(nodes, node_rank, master_addr, master_port)
         if nodes > 1:
@@ -1128,6 +1151,12 @@ def train(
             raise typer.Exit(1) from exc
         console.print(f"[green]LR finder report written to:[/] {find_lr_output}")
         raise typer.Exit(0)
+
+    # Observe the launching directory before data/model setup can write artifacts.
+    # The config file's directory and Soup's installation may be other repositories.
+    from soup_cli.utils.code_revision import CodeRevision, capture_code_revision
+
+    code_revision = capture_code_revision() if not dry_run else CodeRevision()
 
     # Load & validate config
     console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
@@ -1595,6 +1624,7 @@ def train(
                         reward_hack_mitigation=reward_hack_mitigation,
                         gate=gate,
                         push_as=push_as,
+                        push_public=push_public,
                         hf_resume=hf_resume,
                         trust_remote_code=trust_remote_code,
                         tracker=tracker,
@@ -2046,6 +2076,9 @@ def train(
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
     tracker.record_training_data_hash(run_id, training_data_sha256)
+    tracker.record_code_revision(
+        run_id, commit=code_revision.commit, dirty=code_revision.dirty,
+    )
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
@@ -2184,29 +2217,44 @@ def train(
 
         # --- HF auto-push callback (Part B of v0.29.0) ---
         if push_as:
-            from soup_cli.monitoring.hf_push import build_push_callback
+            from soup_cli.monitoring.hf_push import (
+                build_push_callback,
+                describe_prepare_failure,
+                describe_push_repo,
+            )
 
+            # A repository this run creates is private unless --push-public;
+            # one that already exists is left exactly as it is (the visibility
+            # is only ever sent when the repository is found missing).
+            push_private = not push_public
             push_cb = build_push_callback(
                 repo_id=push_as,
                 output_dir=cfg.output,
-                private=False,
+                private=push_private,
             )
+            hf_trainer = getattr(trainer_wrapper, "trainer", None)
             if push_cb is None:
                 console.print(
                     "[yellow]--push-as: no HF token available; skipping auto-push[/]"
                 )
+            elif hf_trainer is None or not hasattr(hf_trainer, "add_callback"):
+                console.print(
+                    "[yellow]--push-as: trainer does not expose add_callback; "
+                    "auto-push disabled for this run[/]"
+                )
             else:
-                hf_trainer = getattr(trainer_wrapper, "trainer", None)
-                if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                # The repository is prepared here, once, so the line below is
+                # printed before training starts and the callback finds it ready.
+                repo_state = push_cb.prepare_repo()
+                if repo_state is None:
+                    failure = describe_prepare_failure(push_as, push_cb.prepare_error)
+                    console.print(f"[yellow]{for_terminal(failure)}[/]")
+                else:
+                    console.print(for_terminal(describe_push_repo(push_as, repo_state)))
                     hf_trainer.add_callback(push_cb)
                     console.print(
                         f"[green]HF auto-push enabled[/] -> {push_as} "
                         "(one branch per save_steps)"
-                    )
-                else:
-                    console.print(
-                        "[yellow]--push-as: trainer does not expose add_callback; "
-                        "auto-push disabled for this run[/]"
                     )
 
         # Train with live display and experiment tracking
