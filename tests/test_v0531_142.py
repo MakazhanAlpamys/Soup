@@ -296,7 +296,10 @@ class TestMergeSaveFormatCLI:
         assert result.exit_code != 0
         assert "save_format" in result.output or "save-format" in result.output
 
-    def test_no_double_quant_flag_reaches_merge_4bit(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("flags, expected", [
+        ([], True), (["--double-quant"], True), (["--no-double-quant"], False),
+    ])
+    def test_no_double_quant_flag_reaches_merge_4bit(self, tmp_path, monkeypatch, flags, expected):
         """#321 re-review: the ``--no-double-quant`` CLI flag had ZERO coverage —
         renaming it away left the suite green. Drive it end-to-end with the model
         loads mocked and assert the value reaches ``merge_4bit``. Mutations:
@@ -343,11 +346,10 @@ class TestMergeSaveFormatCLI:
                     "--base", "some/base",
                     "--save-format", "4bit",
                     "--output", str(tmp_path / "out"),
-                    "--no-double-quant",
-                ],
+                ] + flags,
             )
         assert result.exit_code == 0, result.output
-        assert captured.get("double_quant") is False, captured
+        assert captured.get("double_quant") is expected, captured
 
 
 # --- CLI plumbing for `soup export --format torchao` ------------------------

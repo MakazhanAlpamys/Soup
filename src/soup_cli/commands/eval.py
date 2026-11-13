@@ -51,6 +51,29 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 # ─── soup eval benchmark ───
 
 
+def _resolve_run_id(run_id: Optional[str]) -> Optional[str]:
+    """Return the full id of the run ``run_id`` names, or ``None`` if it names none.
+
+    The tracker stores a row under the id it is given, so a prefix, or an id
+    that names no run at all, has to be resolved before the row is written
+    (#2742).  A missing or ambiguous run is refused with the wording the other
+    run-lookup commands use.
+    """
+    if not run_id:
+        return None
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
+            raise typer.Exit(1)
+        return run["run_id"]
+    finally:
+        tracker.close()
+
+
 @app.command()
 def benchmark(
     model: str = typer.Option(
@@ -87,6 +110,10 @@ def benchmark(
     ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     model_path = Path(model)
     if not model_path.exists():
         console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
@@ -150,7 +177,7 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, resolved_run_id)
     if not saved:
         console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
         raise typer.Exit(1)
@@ -219,13 +246,15 @@ def aider(
 
     tracker = None
     if run_id:
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
-        if tracker.get_run(run_id) is None:
-            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+        run_data = tracker.get_run(run_id)
+        if run_data is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
+        run_id = run_data["run_id"]
 
     try:
         output_dir = prepare_output_dir(output)
@@ -385,6 +414,10 @@ def custom(
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
 
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     tasks_path = Path(tasks)
     model_path = Path(model)
 
@@ -450,7 +483,7 @@ def custom(
     _display_custom_results(eval_results)
 
     # Save to tracker
-    _save_custom_results(eval_results, str(model_path), run_id)
+    _save_custom_results(eval_results, str(model_path), resolved_run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
     # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
@@ -587,7 +620,8 @@ def judge(
             api_base=api_base,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        message = f"Cannot use rubric {rubric!r}: {exc}" if rubric else str(exc)
+        console.print(f"[red]{for_terminal(message)}[/]")
         raise typer.Exit(1)
 
     from rich.progress import (
@@ -819,19 +853,20 @@ def compare(
 ):
     """Compare eval results between two training runs."""
     from soup_cli.eval.leaderboard import compare_runs
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
-    # Verify runs exist
-    for rid in [run1, run2]:
+    resolved_ids: list[str] = []
+    for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]Run not found: {rid}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
             raise typer.Exit(1)
+        resolved_ids.append(run_data["run_id"])
 
     try:
-        comparison = compare_runs(tracker, run1, run2)
+        comparison = compare_runs(tracker, *resolved_ids)
     except ValueError as exc:
         console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from None
@@ -1188,17 +1223,20 @@ def _save_custom_results(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    tracker.save_eval_result(
-        model_path=model_path,
-        benchmark=TASK_NAME,
-        score=eval_results.accuracy,
-        details={
-            "total": eval_results.total,
-            "correct": eval_results.correct,
-            "category_scores": eval_results.category_scores,
-        },
-        run_id=run_id,
-    )
+    try:
+        tracker.save_eval_result(
+            model_path=model_path,
+            benchmark=TASK_NAME,
+            score=eval_results.accuracy,
+            details={
+                "total": eval_results.total,
+                "correct": eval_results.correct,
+                "category_scores": eval_results.category_scores,
+            },
+            run_id=run_id,
+        )
+    finally:
+        tracker.close()
 
 
 def _display_judge_results(results: object) -> None:
@@ -1317,6 +1355,33 @@ def gate_cmd(
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if write_baseline:
+        import os
+
+        from soup_cli.utils.paths import check_report_output_path, quote_path
+
+        try:
+            check_report_output_path(write_baseline, "--write-baseline")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write --write-baseline:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
+
+        inputs = [("--suite", suite)]
+        for task in eval_suite.tasks:
+            if task.type == "custom" and task.tasks:
+                inputs.append((f"task {task.name!r} --tasks", task.tasks))
+            elif task.type == "judge" and task.prompts:
+                inputs.append((f"task {task.name!r} --prompts", task.prompts))
+        output_identity = os.path.normcase(os.path.realpath(write_baseline))
+        for field, input_path in inputs:
+            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+                message = (
+                    f"--write-baseline {quote_path(write_baseline)} aliases "
+                    f"{field} {quote_path(input_path)}; choose a different --write-baseline"
+                )
+                console.print(f"[red]{for_terminal(message)}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR)
 
     try:
         baseline_scores = resolve_baseline(

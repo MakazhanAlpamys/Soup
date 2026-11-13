@@ -14,12 +14,32 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from soup_cli.utils.code_revision import CodeRevision
 from soup_cli.utils.run_cost import format_cost_usd
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
+
+
+def _recorded_code_revision(run: dict) -> CodeRevision:
+    """Validate stored provenance too: a local database can be edited."""
+    dirty = run.get("code_dirty")
+    if type(dirty) is int and dirty in (0, 1):
+        dirty = bool(dirty)
+    try:
+        return CodeRevision(commit=run.get("code_commit"), dirty=dirty)
+    except ValueError:
+        return CodeRevision()
+
+
+def _code_state(run: dict) -> str:
+    """Do not mistake an older or malformed observation for a clean tree."""
+    dirty = _recorded_code_revision(run).dirty
+    if dirty is None:
+        return "unknown"
+    return "dirty" if dirty else "clean"
 
 
 def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
@@ -147,13 +167,13 @@ def show(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
 ):
     """Show detailed info about a specific run, including loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
@@ -203,6 +223,8 @@ def show(
         f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
+        f"Commit:     {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
+        f"State:      {_code_state(run)}",
         f"Task:       {for_terminal(run.get('task') or '-')}",
         f"Device:     {for_terminal(run.get('device_name') or '-')} "
         f"({for_terminal(run.get('device') or '-')})",
@@ -251,23 +273,31 @@ def show(
             _plot_loss_curve(metrics)
 
 
-@app.command()
+@app.command(short_help="Compare two local training runs side by side.")
 def compare(
     run_1: str = typer.Argument(..., help="First run ID (or prefix)"),
     run_2: str = typer.Argument(..., help="Second run ID (or prefix)"),
 ):
-    """Compare two training runs side by side."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    """Compare two local training runs side by side. The summary includes stored dataset
+    SHA-256 hashes and the Code commit and Code state startup observations. The
+    config table shows differing paths and labels fields absent
+    from one run as not stored. If either full config is unavailable, the command
+    identifies that run and skips the config table. The evaluation table uses the
+    latest stored score for each benchmark and shows the right-minus-left delta
+    when both runs have a score.
+    """
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+    from soup_cli.registry.diff import config_diff, eval_delta
 
     tracker = ExperimentTracker()
     r1 = tracker.get_run(run_1)
     r2 = tracker.get_run(run_2)
 
     if not r1:
-        console.print(f"[red]Run not found: {for_terminal(run_1)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_1)}[/]", emoji=False)
         raise typer.Exit(1)
     if not r2:
-        console.print(f"[red]Run not found: {for_terminal(run_2)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Run ids, names, models and config values are stored text: every cell is a
@@ -283,6 +313,11 @@ def compare(
         ("Task", r1.get("task") or "-", r2.get("task") or "-"),
         ("Device", r1.get("device_name") or "-", r2.get("device_name") or "-"),
         ("Status", r1.get("status") or "-", r2.get("status") or "-"),
+        ("Code commit", _recorded_code_revision(r1).commit or "unknown",
+         _recorded_code_revision(r2).commit or "unknown"),
+        ("Code state", _code_state(r1), _code_state(r2)),
+        ("Dataset SHA-256", r1.get("training_data_sha256") or "unknown",
+         r2.get("training_data_sha256") or "unknown"),
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
         ("Final Loss", _fmt_float(r1.get("final_loss")), _fmt_float(r2.get("final_loss"))),
         ("Steps", str(r1.get("total_steps") or "-"), str(r2.get("total_steps") or "-")),
@@ -290,19 +325,12 @@ def compare(
          _fmt_duration(r2.get("duration_secs"))),
     ]
 
-    # Add config comparison for key fields
-    for run_data in [r1, r2]:
-        if run_data.get("config_json"):
-            try:
-                run_data["_config"] = json.loads(run_data["config_json"])
-            except json.JSONDecodeError:
-                run_data["_config"] = {}
-
-    c1 = r1.get("_config", {})
-    c2 = r2.get("_config", {})
-
-    training1 = c1.get("training", {})
-    training2 = c2.get("training", {})
+    # Keep the familiar summary, then compare the complete stored config below.
+    c1, c2 = _stored_run_config(r1), _stored_run_config(r2)
+    training1 = (c1 or {}).get("training", {})
+    training2 = (c2 or {}).get("training", {})
+    training1 = training1 if isinstance(training1, dict) else {}
+    training2 = training2 if isinstance(training2, dict) else {}
     rows.extend([
         ("Epochs", str(training1.get("epochs", "-")), str(training2.get("epochs", "-"))),
         ("Learning Rate", str(training1.get("lr", "-")), str(training2.get("lr", "-"))),
@@ -314,6 +342,8 @@ def compare(
 
     lora1 = training1.get("lora", {})
     lora2 = training2.get("lora", {})
+    lora1 = lora1 if isinstance(lora1, dict) else {}
+    lora2 = lora2 if isinstance(lora2, dict) else {}
     rows.extend([
         ("LoRA r", str(lora1.get("r", "-")), str(lora2.get("r", "-"))),
         ("LoRA alpha", str(lora1.get("alpha", "-")), str(lora2.get("alpha", "-"))),
@@ -330,6 +360,64 @@ def compare(
 
     console.print(table)
 
+    if c1 is None or c2 is None:
+        for run, config in ((r1, c1), (r2, c2)):
+            if config is None:
+                run_id = strip_control(run["run_id"])
+                console.print(
+                    Text(f"Config comparison unavailable: config for {run_id} not stored.")
+                )
+    else:
+        changes = config_diff(c1, c2)
+        if not changes:
+            console.print("No config differences.")
+        else:
+            config_table = Table(title="Config Differences")
+            for heading in ("Path", "Kind", "Left", "Right"):
+                config_table.add_column(heading)
+            for change in changes:
+                config_table.add_row(
+                    Text(strip_control(change.path)),
+                    "changed" if change.kind == "changed" else "not stored",
+                    _config_cell(change.left, missing=change.kind == "added"),
+                    _config_cell(change.right, missing=change.kind == "removed"),
+                )
+            console.print(config_table)
+
+    deltas = eval_delta(
+        tracker.get_eval_results(run_id=r1["run_id"]),
+        tracker.get_eval_results(run_id=r2["run_id"]),
+    )
+    if not deltas:
+        console.print("No stored evaluation scores.")
+    else:
+        eval_table = Table(title="Evaluation Comparison")
+        eval_table.add_column("Benchmark")
+        for heading in ("Left", "Right", "Delta (right - left)"):
+            eval_table.add_column(heading, justify="right")
+        for row in deltas:
+            eval_table.add_row(
+                Text(strip_control(str(row["benchmark"]))),
+                f"{row['left']:.4f}" if row["left"] is not None else "-",
+                f"{row['right']:.4f}" if row["right"] is not None else "-",
+                f"{row['delta']:+.4f}" if row["delta"] is not None else "-",
+            )
+        console.print(eval_table)
+
+
+def _stored_run_config(run: dict) -> Optional[dict]:
+    """Read recorded JSON, without inventing defaults for historical runs."""
+    try:
+        config = json.loads(run.get("config_json"))
+    except (TypeError, ValueError):
+        return None
+    return config if isinstance(config, dict) else None
+
+
+def _config_cell(value: object, *, missing: bool) -> Text:
+    """Keep missing distinct from JSON null, and stored text literal."""
+    return Text("<not stored>" if missing else strip_control(json.dumps(value, ensure_ascii=False)))
+
 
 @app.command()
 def delete(
@@ -337,13 +425,13 @@ def delete(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a training run and its metrics."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if not force:
@@ -416,7 +504,7 @@ def clean(
     """
     import shutil
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
@@ -428,7 +516,7 @@ def clean(
     elif run_id:
         run = tracker.get_run(run_id)
         if not run:
-            console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
         runs_to_clean = [run]
     else:
@@ -559,13 +647,13 @@ def replay(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Render loss curve"),
 ):
     """Replay a completed run's metrics — re-renders summary + loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.replay import downsample, summarise
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     metrics = tracker.get_metrics(run["run_id"])
@@ -661,14 +749,14 @@ def curriculum_curve(
     import os
     import stat as _stat
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.curriculum_dynamic import parse_history_jsonl, render_curve
     from soup_cli.utils.paths import is_under_cwd
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if history_path is None:

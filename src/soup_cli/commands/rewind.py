@@ -97,7 +97,7 @@ def rewind(
     ranks the rows in the worst one by how much of that step's loss they
     carried.
     """
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.monitoring.rewind_log import RewindLog, RewindLogError, read_rewind_log
     from soup_cli.utils import rewind as rewind_utils
     from soup_cli.utils.paths import check_report_output_path
@@ -121,7 +121,7 @@ def rewind(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {for_terminal(run_id)}")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             raise typer.Exit(1)
 
     candidates = _log_candidates(target, RewindLog.FILENAME)
@@ -282,7 +282,9 @@ def _log_candidates(target: dict, filename: str) -> list[Path]:
     is exactly the one ``soup rewind`` exists for. So the recorded directory comes
     first, then the run's own config: ``output/experiment_name`` (the transformers
     layout) and ``output`` (MLX). A relative ``output`` resolves against the current
-    directory, as it did for ``soup train``.
+    directory, as it did for ``soup train``. The recorded directory is absolute for a
+    run finished since #2725; an older row may hold it relative, and it resolves
+    against the current directory the same way.
     """
     dirs: list[Path] = []
     if target.get("output_dir"):

@@ -1,0 +1,870 @@
+{
+ "framework": "soup",
+ "warmup": 5,
+ "n_profiled": 3,
+ "torch": "2.11.0+cu128",
+ "cuda": true,
+ "errors": [],
+ "device": "NVIDIA GeForce RTX 4090",
+ "capability": [
+  8,
+  9
+ ],
+ "tf32_matmul": false,
+ "after_load": {
+  "alloc_mib": 5379.3,
+  "peak_mib_since_process_start": 5459.2,
+  "reserved_mib": 5538.0
+ },
+ "params": {
+  "total_mib": 5367.0,
+  "groups": [
+   {
+    "group": "nf4_packed_weight [uint8]",
+    "tensors": 196,
+    "mib": 3111.5
+   },
+   {
+    "group": "embed_tokens [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "lm_head [bfloat16]",
+    "tensors": 1,
+    "mib": 1039.5
+   },
+   {
+    "group": "bnb_quant_state.absmax [uint8]",
+    "tensors": 196,
+    "mib": 97.2
+   },
+   {
+    "group": "lora_AB [bfloat16]",
+    "tensors": 392,
+    "mib": 77.0
+   },
+   {
+    "group": "bnb_quant_state.absmax [float32]",
+    "tensors": 196,
+    "mib": 1.5
+   },
+   {
+    "group": "norm [bfloat16]",
+    "tensors": 57,
+    "mib": 0.4
+   },
+   {
+    "group": "bnb_quant_state.code [float32]",
+    "tensors": 392,
+    "mib": 0.2
+   },
+   {
+    "group": "bias [bfloat16]",
+    "tensors": 84,
+    "mib": 0.2
+   },
+   {
+    "group": "bnb_quant_state.offset [float32]",
+    "tensors": 196,
+    "mib": 0.0
+   },
+   {
+    "group": "other [float32]",
+    "tensors": 2,
+    "mib": 0.0
+   }
+  ]
+ },
+ "body_found": true,
+ "n_layers": 28,
+ "soup_rewind_patched": true,
+ "steps": {
+  "1": {
+   "step": 1,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5379.4,
+     "cur_mib": 5379.4
+    },
+    "pre_fwd": {
+     "peak_mib": 5379.4,
+     "cur_mib": 5379.4
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5379.4,
+     "cur_mib": 5379.4
+    },
+    "fwd_body": {
+     "peak_mib": 6820.7,
+     "cur_mib": 6256.8
+    },
+    "head_ce": {
+     "peak_mib": 13352.9,
+     "cur_mib": 8604.8
+    },
+    "backward": {
+     "peak_mib": 13356.8,
+     "cur_mib": 5474.6
+    },
+    "clip": {
+     "peak_mib": 5474.8,
+     "cur_mib": 5474.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.9589,
+   "profiled": false,
+   "snapshot_step": false
+  },
+  "2": {
+   "step": 2,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.69455,
+   "profiled": false,
+   "snapshot_step": false
+  },
+  "3": {
+   "step": 3,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.69588,
+   "profiled": false,
+   "snapshot_step": false
+  },
+  "4": {
+   "step": 4,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.69542,
+   "profiled": false,
+   "snapshot_step": false
+  },
+  "5": {
+   "step": 5,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.69712,
+   "profiled": false,
+   "snapshot_step": false
+  },
+  "6": {
+   "step": 6,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.70693,
+   "profiled": true,
+   "snapshot_step": false
+  },
+  "7": {
+   "step": 7,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.70338,
+   "profiled": true,
+   "snapshot_step": false
+  },
+  "8": {
+   "step": 8,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.70492,
+   "profiled": true,
+   "snapshot_step": false
+  },
+  "9": {
+   "step": 9,
+   "mem": {
+    "pre_step": {
+     "peak_mib": 5551.7,
+     "cur_mib": 5551.6
+    },
+    "pre_fwd": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_pre_body": {
+     "peak_mib": 5551.6,
+     "cur_mib": 5551.6
+    },
+    "fwd_body": {
+     "peak_mib": 6983.9,
+     "cur_mib": 6419.9
+    },
+    "head_ce": {
+     "peak_mib": 13516.1,
+     "cur_mib": 8767.9
+    },
+    "backward": {
+     "peak_mib": 13519.9,
+     "cur_mib": 5628.6
+    },
+    "clip": {
+     "peak_mib": 5628.8,
+     "cur_mib": 5628.6
+    },
+    "optimizer": {
+     "peak_mib": 5705.6,
+     "cur_mib": 5628.6
+    },
+    "post": {
+     "peak_mib": 5628.6,
+     "cur_mib": 5551.6
+    }
+   },
+   "wall_s": 1.70376,
+   "profiled": false,
+   "snapshot_step": true
+  }
+ },
+ "range_counts": {
+  "TCO::step": 3,
+  "TCO::prep": 3,
+  "TCO::fwd_body": 3,
+  "TCO::fwd": 84,
+  "TCO::head_ce": 3,
+  "TCO::soup_rewind_row_losses": 3,
+  "TCO::backward": 3,
+  "TCO::recompute": 84,
+  "TCO::clip": 3,
+  "TCO::optimizer": 3,
+  "TCO::post": 3
+ },
+ "profile_started_at_step": 6,
+ "trace_raw_mb": 109.3,
+ "trace_gz_mb": 7.8,
+ "snapshot_summary": {
+  "events_in_trace": 28563,
+  "peak_new_mib_in_trace": 7968.3,
+  "peak_event_index": 9173,
+  "base_alloc_before_step_mib": 5551.6,
+  "peak_total_mib_estimate": 13519.9,
+  "live_blocks_at_peak": 39,
+  "by_stack_top3": [
+   {
+    "stack_top3": "(no python frame)",
+    "blocks": 2,
+    "mib": 4752.0
+   },
+   {
+    "stack_top3": "functional.py:3504:cross_entropy < loss_utils.py:40:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss",
+    "blocks": 1,
+    "mib": 2376.0
+   },
+   {
+    "stack_top3": "modeling_qwen2.py:297:forward < tco_profile.py:290:forward < module.py:1790:_call_impl",
+    "blocks": 27,
+    "mib": 756.0
+   },
+   {
+    "stack_top3": "modeling_qwen2.py:249:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+    "blocks": 1,
+    "mib": 56.0
+   },
+   {
+    "stack_top3": "functional.py:2567:embedding < sparse.py:189:forward < module.py:1833:inner",
+    "blocks": 1,
+    "mib": 28.0
+   },
+   {
+    "stack_top3": "modeling_qwen2.py:102:forward < modeling_rope_utils.py:128:wrapper < _contextlib.py:124:decorate_context",
+    "blocks": 2,
+    "mib": 0.2
+   },
+   {
+    "stack_top3": "modeling_qwen2.py:363:forward < output_capturing.py:286:wrapper < generic.py:1068:wrapper",
+    "blocks": 1,
+    "mib": 0.0
+   },
+   {
+    "stack_top3": "modeling_qwen2.py:251:forward < module.py:1790:_call_impl < module.py:1779:_wrapped_call_impl",
+    "blocks": 1,
+    "mib": 0.0
+   },
+   {
+    "stack_top3": "loss_utils.py:45:fixed_cross_entropy < loss_utils.py:70:ForCausalLMLoss < modeling_qwen2.py:469:forward",
+    "blocks": 1,
+    "mib": 0.0
+   },
+   {
+    "stack_top3": "accelerator.py:2851:backward < trainer.py:2044:training_step < sft_trainer.py:1338:training_step",
+    "blocks": 1,
+    "mib": 0.0
+   },
+   {
+    "stack_top3": "__init__.py:231:_make_grads < __init__.py:374:backward < _tensor.py:631:backward",
+    "blocks": 1,
+    "mib": 0.0
+   }
+  ],
+  "largest_blocks": [
+   {
+    "mib": 2376.0,
+    "frames": [
+     "functional.py:3504:cross_entropy",
+     "loss_utils.py:40:fixed_cross_entropy",
+     "loss_utils.py:70:ForCausalLMLoss",
+     "modeling_qwen2.py:469:forward",
+     "generic.py:939:wrapper",
+     "tuners_utils.py:333:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl"
+    ]
+   },
+   {
+    "mib": 2376.0,
+    "frames": []
+   },
+   {
+    "mib": 2376.0,
+    "frames": []
+   },
+   {
+    "mib": 56.0,
+    "frames": [
+     "modeling_qwen2.py:249:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "modeling_qwen2.py:398:forward",
+     "output_capturing.py:286:wrapper",
+     "generic.py:1068:wrapper",
+     "module.py:1833:inner",
+     "module.py:1885:_call_impl"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "functional.py:2567:embedding",
+     "sparse.py:189:forward",
+     "module.py:1833:inner",
+     "module.py:1885:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "modeling_qwen2.py:356:forward",
+     "output_capturing.py:286:wrapper",
+     "generic.py:1068:wrapper"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   },
+   {
+    "mib": 28.0,
+    "frames": [
+     "modeling_qwen2.py:297:forward",
+     "tco_profile.py:290:forward",
+     "module.py:1790:_call_impl",
+     "module.py:1779:_wrapped_call_impl",
+     "checkpoint.py:512:checkpoint",
+     "eval_frame.py:1263:_fn",
+     "_compile.py:54:inner",
+     "modeling_layers.py:108:__call__"
+    ]
+   }
+  ]
+ }
+}

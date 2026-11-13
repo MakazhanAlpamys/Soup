@@ -57,6 +57,11 @@ def _finite(value: Any) -> bool:
 
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     """Validate metadata before loading optional dependencies or allocating a model."""
+    if (path / "added_tokens.safetensors").exists():
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     config_path = path / "adapter_config.json"
     if not config_path.exists():
         if (path / "adapters.safetensors").exists():
@@ -76,6 +81,11 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Ambiguous or empty native MLX metadata model identity")
     if base is not None and not _same_base(base, config["model"]):
         raise ValueError("--base does not match the native MLX metadata model identity")
+    if config.get("vocab_expansion"):
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
     params = config.get("lora_parameters")
@@ -126,7 +136,8 @@ def reject_native_adapter(model: str) -> None:
 
 def load_native_model(
     model_path: str, base_model: str | None = None, *, trust_remote_code: bool = False,
-) -> tuple[Any, Any]:
+    return_config: bool = False,
+) -> tuple[Any, Any] | tuple[Any, Any, dict]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
     path = Path(model_path)
     config = read_native_adapter(path, base_model)
@@ -209,7 +220,7 @@ def load_native_model(
         model.load_weights(list(weights.items()), strict=False)
         mx.eval(model.parameters())
     model.eval()
-    return model, tokenizer
+    return (model, tokenizer, base_config) if return_config else (model, tokenizer)
 
 
 def generate_native(

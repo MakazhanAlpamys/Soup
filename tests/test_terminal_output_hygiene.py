@@ -367,3 +367,188 @@ class TestWhyTheOrderMatters:
             f"[yellow]backend {for_terminal(repr('[/]'))} refused[/]"
         )
         assert buffer.getvalue().strip() == "backend '[/]' refused"
+
+
+_TERMINAL_TEXT_SAMPLES = [
+    pytest.param(r"a\[b", r"a\[b", id="backslash-open-bracket"),
+    pytest.param(r"x\[", r"x\[", id="trailing-backslash-open-bracket"),
+    pytest.param("[1]", "[1]", id="digits-in-brackets"),
+    pytest.param("[/x]", "[/x]", id="closing-tag"),
+    pytest.param("pre\x07\x9b\u202epost", "prepost", id="control-bytes"),
+    pytest.param(":rocket:", ":rocket:", id="emoji-alias"),
+]
+
+_MIGRATED_SITES = [
+    "helper",
+    "env-status-missing-lock",
+    "env-check-missing-lock",
+    "env-fix-missing-lock",
+    "env-fix-wrote-requirements",
+    "init-link-refusal",
+    "init-saved-panel",
+    "shrink-registry-warning",
+    "shrink-invalid-heal-config",
+]
+
+
+def _collapse_cli_output(text: str) -> str:
+    from tests.conftest import strip_ansi
+
+    for ctrl in ("\x07", "\x9b", "\u202e"):
+        assert ctrl not in text, repr(text)
+    return " ".join(strip_ansi(text).split())
+
+
+def _run_migrated_site(site: str, raw: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import errno
+    import sys
+    from types import SimpleNamespace
+
+    import typer
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.commands import env as env_cmd
+    from soup_cli.commands import init as init_cmd
+    from soup_cli.commands import shrink as shrink_cmd
+    from soup_cli.utils.env_lock import EnvEntry, EnvLock
+    from soup_cli.utils.terminal import terminal_text
+
+    monkeypatch.chdir(tmp_path)
+    buf = StringIO()
+    con = Console(file=buf, width=300)
+
+    def _raise_fnf(_path: str) -> None:
+        raise FileNotFoundError("no lock")
+
+    if site == "helper":
+        con.print(terminal_text(raw, style="bold"))
+        return None, buf.getvalue()
+
+    if site == "env-status-missing-lock":
+        monkeypatch.setattr(env_cmd, "console", con)
+        monkeypatch.setattr(env_cmd, "read_lock", _raise_fnf)
+        res = CliRunner().invoke(app, ["env", "status", "--lock", raw])
+        return res.exit_code, buf.getvalue()
+
+    if site == "env-check-missing-lock":
+        monkeypatch.setattr(env_cmd, "console", con)
+        monkeypatch.setattr(env_cmd, "read_lock", _raise_fnf)
+        monkeypatch.setattr(
+            env_cmd, "current_declared_bounds_check", lambda: SimpleNamespace(ok=True)
+        )
+        res = CliRunner().invoke(app, ["env", "check", "--lock", raw])
+        return res.exit_code, buf.getvalue()
+
+    if site == "env-fix-missing-lock":
+        monkeypatch.setattr(env_cmd, "console", con)
+        monkeypatch.setattr(env_cmd, "read_lock", _raise_fnf)
+        res = CliRunner().invoke(app, ["env", "fix", "--lock", raw])
+        return res.exit_code, buf.getvalue()
+
+    if site == "env-fix-wrote-requirements":
+        lock = EnvLock(
+            soup_version="0.77.2",
+            python_version="3.11.0",
+            platform="linux",
+            cuda_version=None,
+            entries=(EnvEntry("torch", "2.5.1", "pip"),),
+            created_at="2026-11-10T00:00:00Z",
+        )
+        monkeypatch.setattr(env_cmd, "console", con)
+        monkeypatch.setattr(env_cmd, "read_lock", lambda _p: lock)
+        monkeypatch.setattr(env_cmd, "write_requirements_txt", lambda _l, _p: None)
+        res = CliRunner().invoke(app, ["env", "fix", "-o", raw])
+        return res.exit_code, buf.getvalue()
+
+    if site == "init-link-refusal":
+        def _raise_eloop(*_args, **_kwargs) -> None:
+            raise OSError(errno.ELOOP, "loop")
+
+        monkeypatch.setattr(init_cmd, "console", con)
+        monkeypatch.setattr(init_cmd, "refuse_linked_dirs", _raise_eloop)
+        res = CliRunner().invoke(app, ["init", "--template", "chat", "--output", raw])
+        return res.exit_code, buf.getvalue()
+
+    if site == "init-saved-panel":
+        monkeypatch.setattr(init_cmd, "console", con)
+        monkeypatch.setattr(init_cmd, "_refuse_link_at", lambda _out: None)
+        monkeypatch.setattr(init_cmd, "_write_config", lambda _out, _txt: None)
+        res = CliRunner().invoke(app, ["init", "--template", "chat", "--output", raw, "--force"])
+        return res.exit_code, buf.getvalue()
+
+    if site == "shrink-registry-warning":
+        def _fail_attach(*_args, **_kwargs) -> None:
+            raise RuntimeError(f"missing {raw}")
+
+        monkeypatch.setattr(shrink_cmd, "console", con)
+        monkeypatch.setitem(
+            sys.modules,
+            "soup_cli.registry.attach",
+            SimpleNamespace(attach_artifact=_fail_attach),
+        )
+        shrink_cmd._attach_to_registry("reg-1", "report.json")
+        return None, buf.getvalue()
+
+    if site == "shrink-invalid-heal-config":
+        def _bad_heal(_yaml: str) -> None:
+            raise ValueError(f"bad field {raw}")
+
+        monkeypatch.setattr(shrink_cmd, "console", con)
+        monkeypatch.setattr(shrink_cmd, "_build_heal_config_yaml", lambda **_kwargs: "stub: 1")
+        monkeypatch.setattr("soup_cli.config.loader.load_config_from_string", _bad_heal)
+        with pytest.raises(typer.Exit) as exc_info:
+            shrink_cmd._run_heal(
+                pruned_dir="p",
+                teacher="t",
+                heal_data="d",
+                steps=1,
+                out_dir="o",
+                heal_rows=1,
+                device=None,
+                trc=False,
+            )
+        return exc_info.value.exit_code, buf.getvalue()
+
+    raise AssertionError(f"unknown site: {site}")
+
+
+@pytest.mark.parametrize("site", _MIGRATED_SITES)
+@pytest.mark.parametrize(("raw", "expected"), _TERMINAL_TEXT_SAMPLES)
+def test_terminal_text_and_migrated_sites_preserve_literal_output(
+    site: str, raw: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exit_code, output = _run_migrated_site(site, raw, tmp_path, monkeypatch)
+    plain = _collapse_cli_output(output)
+    panel_expected = str(Path(expected))
+
+    expected_by_site = {
+        "helper": (None, [expected]),
+        "env-status-missing-lock": (1, [f"No lock file at {expected}; run `soup env lock` first."]),
+        "env-check-missing-lock": (1, [f"No lock file at {expected}; run `soup env lock` first."]),
+        "env-fix-missing-lock": (1, [f"No lock file at {expected}; run `soup env lock` first."]),
+        "env-fix-wrote-requirements": (0, [f"Wrote requirements to {expected}"]),
+        "init-link-refusal": (
+            1,
+            [f"{expected} is a symbolic link, junction or other reparse point;"],
+        ),
+        "init-saved-panel": (
+            0,
+            [
+                f"Config saved to {panel_expected}",
+                f"Next step: soup train --config {panel_expected}",
+            ],
+        ),
+        "shrink-registry-warning": (
+            None,
+            [f"Warning: could not attach to registry: missing {expected}"],
+        ),
+        "shrink-invalid-heal-config": (
+            1,
+            [f"Invalid rendered heal config: bad field {expected}"],
+        ),
+    }
+    want_code, want_substrings = expected_by_site[site]
+    assert exit_code == want_code, (site, plain)
+    for snippet in want_substrings:
+        assert snippet in plain, (site, snippet, plain)

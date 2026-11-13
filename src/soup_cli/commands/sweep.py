@@ -548,7 +548,18 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
+    from soup_cli.utils.gpu import (
+        apply_quantization_guard,
+        configure_mps_async_load,
+        detect_device,
+        get_gpu_info,
+    )
+    from soup_cli.utils.launcher import is_in_distributed
+    from soup_cli.utils.run_provenance import (
+        BaseRevision,
+        base_revision_scope,
+        write_run_provenance,
+    )
 
     cfg = SoupConfig(**config_dict)
 
@@ -556,6 +567,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     device, device_name = detect_device()
     configure_mps_async_load(device)
     gpu_info = get_gpu_info()
+
+    # The same quantization guard `soup train` applies (#423): bitsandbytes cannot run on a
+    # CPU, so an arm that asked for 4bit/8bit there trains with none and says so. Per arm,
+    # not per sweep -- `quantization` can itself be swept, so only some arms downgrade, and
+    # each arm's output then says what that arm ran. Before `start_run`, which stores `cfg`.
+    apply_quantization_guard(cfg, device, console)
 
     # Load data -- the same split `soup train` would use (#1223).
     val_notice = validation_notice(cfg)
@@ -586,12 +603,33 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         # be a second, shorter chain that never grew past v0.40.0, so ten task
         # values and every `backend: mlx` config were trained as plain SFT here
         # while the tracker recorded the configured task.
-        trainer_wrapper = build_trainer(cfg, device=device)
-        trainer_wrapper.setup(dataset)
-
+        base_identity = BaseRevision(
+            cfg.base,
+            binding_supported=(
+                cfg.backend == "transformers" and cfg.training.hub == "hf"
+                and not is_in_distributed()
+            ),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, device=device)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
         # Train
         display = TrainingDisplay(cfg, device_name=device_name)
-        result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        with base_revision_scope(base_identity):
+            result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        write_run_provenance(result["output_dir"], base_identity.metadata(run_id))
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
         tracker.finish_run(
             run_id=run_id,
             initial_loss=result["initial_loss"],

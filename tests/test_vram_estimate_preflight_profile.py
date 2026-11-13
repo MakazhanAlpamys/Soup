@@ -387,7 +387,9 @@ def test_a_model_over_1000b_parameters_is_named_as_the_reason(workdir, monkeypat
     )
     result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "size (over 1,000B parameters)" in " ".join(strip_ansi(result.output).split())
+    assert "the model in base has over 1,000B parameters" in " ".join(
+        strip_ansi(result.output).split()
+    )
     with pytest.raises(Exception, match=r"over 1,000B parameters"):
         tool_profile({"config": "soup.yaml"})
 

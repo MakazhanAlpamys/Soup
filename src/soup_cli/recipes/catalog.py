@@ -51,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (175 recipes)
+# Recipe catalog (178 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4271,6 +4271,45 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-122b-a10b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="grpo",
+        size="122B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 122B-A10B text MoE GRPO (Apache-2.0, 10B active). "
+            "Untuned multi-GPU starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "qwen3.5-397b-a17b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-397B-A17B",
         task="sft",
@@ -4303,6 +4342,45 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-397b-a17b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-397B-A17B",
+        task="grpo",
+        size="397B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 397B-A17B text MoE GRPO (Apache-2.0, 17B active). "
+            "Untuned multi-node starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-397B-A17B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
   gradient_checkpointing: true
 
 output: ./output
@@ -5134,6 +5212,48 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "minimax-m3-dpo": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M3",
+        task="dpo",
+        size="428B",
+        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
+            "- commercial use requires a separate agreement. Multi-GPU recommended. "
+            "Loads through the vision path, whose processor is custom code: run "
+            "soup train --trust-remote-code."
+        ),
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M3
+task: dpo
+# A vision-language checkpoint (minimax_m3_vl): DPO builds it through the
+# image-text class since #1393. target_modules: auto attaches to the language
+# tower alone (#1102), so the preference tune stays textual: rows are text-only
+# prompt / chosen / rejected, tokenized through the processor.
+modality: vision
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # as minimax-m3-sft; no moe_lora, the minimax experts take none (#1145)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
   gradient_checkpointing: true
 
 output: ./output
