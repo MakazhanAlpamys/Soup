@@ -51,7 +51,7 @@ are reported separately.
 
 ## Card and dependency provenance
 
-Physical GPU 2: H200, UUID `GPU-6b984734-8ed6-11dd-3b9a-0b6c36ba5e11`,
+Physical GPU 2: H200, UUID `<redacted>`,
 143771 MiB total. An unrelated idle process holds 49850 MiB. Available headroom
 is therefore about 90 GiB. OOM means this shared session did not have sufficient
 headroom, not that every H200 would fail. No other process, clocks or power

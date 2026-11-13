@@ -1,5 +1,5 @@
 {
-  "model": "/home/arman/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+  "model": "<workdir>/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
   "warmup": 5,
   "steps": 80,
   "repeats": 5,
@@ -21,7 +21,7 @@
   ],
   "worker_sha256": "fee82d6c806315468610332dc0febd85098c0bff5901e4d35080c90630edc2ee",
   "source_commit": "311962ced65176d9adb05a0a6c875b5785c1a2b8",
-  "gpu_selection": "GPU-6b984734-8ed6-11dd-3b9a-0b6c36ba5e11",
+  "gpu_selection": "<redacted>",
   "interleaving": "cyclic arm rotation by repetition, fixed before timing",
   "probe_steps": 8,
   "math_evidence_sha256": "1e62792c5cb89de4020087113578e000009fe4082f45ae5ff77ceededeeeb12e",
