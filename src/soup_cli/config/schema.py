@@ -46,6 +46,7 @@ from soup_cli.utils.config_bounds import (
 # The longrope refusal (#1239) lives with the runtime so config load and
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
+from soup_cli.utils.preference import resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
@@ -3765,10 +3766,11 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
-            "model larger than VRAM can be fine-tuned. sft + transformers + "
-            "text + quantization=none only; batch_size 1, no gradient "
-            "accumulation. Slower than resident training, but these models did "
-            "not run on the card at all."
+            "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
+            "simpo and kto, including task='preference' with a single "
+            "preference_loss of dpo, orpo or simpo. Requires transformers + "
+            "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
+            "IPO, BCO and preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -7582,12 +7584,26 @@ class SoupConfig(BaseModel):
                 f"depends on (one weight read per step, not per token), so this "
                 f"is a permanent exclusion rather than an unimplemented one."
             )
-        if self.task not in _STREAM_SUPPORTED_TASKS:
+        if self.task == "preference" and tcfg.preference_loss_weights is not None:
+            raise ValueError(
+                "training.stream_layers cannot be combined with "
+                "training.preference_loss_weights: weighted preference losses do not "
+                "stream yet. Use a single training.preference_loss of dpo, orpo or "
+                "simpo, or set stream_layers=false."
+            )
+        stream_task = resolve_preference_loss(self) or self.task
+        if self.task == "preference" and stream_task in ("ipo", "bco"):
+            raise ValueError(
+                f"training.stream_layers cannot use "
+                f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
+                "Use dpo, orpo or simpo, or set stream_layers=false."
+            )
+        if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
                 f"{sorted(_STREAM_SUPPORTED_TASKS)}; got task={self.task!r}."
             )
-        if tcfg.stream_vram_probe and self.task != "sft":
+        if tcfg.stream_vram_probe and stream_task != "sft":
             # v0.73.1 #349 — the probe runs a plain causal-LM forward+backward,
             # which IS the SFT step. A preference loss concatenates chosen and
             # rejected and reduces logits to per-token log-probs, so the probe is
@@ -7600,30 +7616,30 @@ class SoupConfig(BaseModel):
             # worse than no probe. Restricted until it is measured across shapes.
             raise ValueError(
                 f"training.stream_vram_probe supports task='sft' only; got "
-                f"task={self.task!r}. The probe measures a causal-LM step, which "
+                f"task={stream_task!r}. The probe measures a causal-LM step, which "
                 f"is the SFT step but not a preference loss — its agreement with "
                 f"DPO/ORPO/SimPO/KTO is measured at one shape only, so it is not "
                 f"offered for them yet. Use the predicted budget, or "
                 f"training.stream_vram_override if you have measured this "
                 f"configuration yourself."
             )
-        if tcfg.stream_loss_chunk is not None and self.task != "sft":
+        if tcfg.stream_loss_chunk is not None and stream_task != "sft":
             # #1693 — the chunked step rebuilds `ForCausalLMLoss`, the sft loss.
             raise ValueError(
                 f"training.stream_loss_chunk supports task='sft' only; got "
-                f"task={self.task!r}. It computes the causal-LM cross-entropy "
+                f"task={stream_task!r}. It computes the causal-LM cross-entropy "
                 f"chunk by chunk; a preference loss reduces the logits to "
                 f"per-token log-probs of chosen and rejected instead, and that "
                 f"reduction is not chunked. Remove training.stream_loss_chunk."
             )
-        if tcfg.stream_recompute != "on" and self.task != "sft":
+        if tcfg.stream_recompute != "on" and stream_task != "sft":
             # Only the SFT step is measured. A loss with two grad-enabled
             # forwards before one backward would unpack a layer's saved pool
             # tensors after its slot was refilled, which the owner check
             # refuses mid-step rather than training on stale weights.
             raise ValueError(
                 f"training.stream_recompute={tcfg.stream_recompute!r} supports "
-                f"task='sft' only; got task={self.task!r}. Keeping activations "
+                f"task='sft' only; got task={stream_task!r}. Keeping activations "
                 f"instead of the checkpoint recompute is measured on the SFT step "
                 f"only; a loss that runs more than one grad-enabled forward per "
                 f"backward is not supported yet. Remove training.stream_recompute "
