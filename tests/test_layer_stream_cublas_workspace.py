@@ -66,13 +66,57 @@ def test_estimator_rejects_invalid_workspace_bytes(value):
         )
 
 
+@pytest.mark.gpu(reason="the cuBLAS allocator reading requires CUDA")
+def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
+    """Set the cuBLAS config before torch initializes and read its retained allocation."""
+    import json
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import json
+        import os
+
+        import torch
+
+        assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:1"
+        torch.cuda.init()
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        left = torch.randn((128, 128), device="cuda")
+        right = torch.randn((128, 128), device="cuda")
+        output = torch.mm(left, right)
+        torch.cuda.synchronize()
+        del left, right, output
+        torch.cuda.synchronize()
+        retained = torch.cuda.memory_allocated() - baseline
+        print(json.dumps({"retained_workspace_bytes": retained}))
+        """
+    )
+    env = os.environ.copy()
+    env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:1"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=True,
+        env=env,
+        text=True,
+        timeout=120,
+    )
+    reading = json.loads(result.stdout.strip().splitlines()[-1])
+    assert reading["retained_workspace_bytes"] == 4 * 1024 * 1024, result.stdout
+
+
 @pytest.mark.gpu(reason="the streamed-step peak comparison needs CUDA")
 def test_real_streamed_step_peak_does_not_exceed_preflight(tmp_path, monkeypatch):
     import os
 
+    import test_v07204
     import torch
 
-    import test_v07204
     from soup_cli.utils import layer_stream
 
     estimates = []

@@ -1944,7 +1944,6 @@ class StreamingSetupMixin:
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
-            cublas_workspace_bytes as estimate_cublas_workspace_bytes,
             decide_packed_backward,
             decide_stream_fit,
             dense_weight_charge_elements,
@@ -1956,6 +1955,9 @@ class StreamingSetupMixin:
             forecast_stream_throughput,
             nf4_scale_cache_bytes,
             resolve_available_vram_bytes,
+        )
+        from soup_cli.utils.layer_stream import (
+            cublas_workspace_bytes as estimate_cublas_workspace_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 

@@ -176,16 +176,21 @@ class TestSecondStackDirectionProperty:
         """
         from soup_cli.utils.layer_stream import (
             LOGITS_LOSS_BYTES_PER_ELEMENT,
+            cublas_workspace_bytes,
             estimate_logits_bytes,
         )
 
+        # The A10G record's decomposition predates #1407. Remove the newly
+        # explicit charge from the modelled side to compare the same non-logit
+        # terms; the recorded allocator peaks remain the measured values.
+        workspace = cublas_workspace_bytes(compute_capability=(8, 6))
         ratios = []
         for row in SECOND_STACK_VRAM_GRID:
             elements = row["seq"] * row["vocab"] * row["batch"]
             logits_at_shipped = estimate_logits_bytes(
                 vocab_size=row["vocab"], seq_len=row["seq"], batch_size=row["batch"]
             )
-            non_logits_modelled = _predict(row) - logits_at_shipped
+            non_logits_modelled = _predict(row) - logits_at_shipped - workspace
             non_logits_true = row["peak"] - LOGITS_LOSS_BYTES_PER_ELEMENT * elements
             assert non_logits_true > 0, row["label"]
             ratios.append(non_logits_modelled / non_logits_true)
