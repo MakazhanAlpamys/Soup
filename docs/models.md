@@ -131,6 +131,20 @@ a tiny random native hybrid text MoE with expert LoRA. They do not qualify full
 122B weights, tokenizer/rollout behavior, full GRPO training, NF4 execution,
 distributed training, GPU memory fit or reward quality.
 
+`soup recipes use qwen3.5-397b-a17b-dpo` selects the 397B-A17B language
+decoder for `prompt`, `chosen`, `rejected` preference rows. It keeps the 397B
+SFT sibling's one epoch, batch size 1, 32 accumulation steps, LoRA rank 32 /
+alpha 64, 4-bit quantization and gradient checkpointing. The learning rate
+`5e-6`, `dpo_beta: 0.1` and preference layout follow the shipped MoE DPO
+recipes. Fused expert LoRA is enabled with zero dropout; the SFT-only
+auxiliary-loss setting is omitted because DPO does not apply it. These are
+inherited starting values, not tuned settings or a hardware recommendation.
+The pinned public configuration builds the full text architecture and attaches
+LoRA on meta; a tiny random native MoE with both attention block kinds passes
+a CPU forward/backward check, including fused expert gradients. Full 397B
+weights, NF4 execution, distributed training, GPU memory fit and model quality
+remain unverified.
+
 `soup recipes use qwen3.5-397b-a17b-grpo` selects the 397B-A17B language MoE
 for the same text reasoning rows: the reference answer is the final assistant
 message or an `answer` column. It inherits one epoch, batch size 1, 32

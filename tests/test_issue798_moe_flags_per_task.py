@@ -344,7 +344,7 @@ class TestShippedConfigs:
             load_catalog_config(recipe), name
 
     def test_the_moe_recipes_are_the_ones_this_issue_names(self):
-        """17 shipped preference/RL MoE recipes: 7 DPO and 10 GRPO."""
+        """18 shipped preference/RL MoE recipes: 8 DPO and 10 GRPO."""
         import yaml
 
         from soup_cli.recipes.catalog import RECIPES
@@ -357,7 +357,8 @@ class TestShippedConfigs:
                 tasks.append(cfg["task"])
         # #1145 removed mistral-large-3-dpo (its repo has no config.json) and
         # minimax-m3-dpo (DPO cannot build its VL wrapper): 9 -> 7 dpo.
-        assert sorted(tasks) == ["dpo"] * 7 + ["grpo"] * 10, sorted(tasks)
+        # qwen3.5-397b-a17b-dpo adds one MoE DPO recipe.
+        assert sorted(tasks) == ["dpo"] * 8 + ["grpo"] * 10, sorted(tasks)
 
 
 
