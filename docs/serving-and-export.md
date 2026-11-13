@@ -76,6 +76,43 @@ training output. Load or export that directory directly; `soup merge` is only
 for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
 
 
+### Native MLX adapter fusion
+
+On Apple Silicon, merge an ordinary native text LoRA into a standalone dense checkpoint:
+
+```bash
+soup merge --backend mlx --adapter ./mlx-adapter --output ./fused --dtype float32
+# Explicit opt-in for a genuinely 4-bit source; output remains dense:
+soup merge --backend mlx --adapter ./mlx-4bit-adapter --output ./fused --dequantize
+soup infer --backend mlx --model ./fused --input prompts.jsonl --output results.jsonl
+```
+
+The shared native loader resolves the saved base identity and validates all adapter
+keys/shapes before applying tensors. `--base`, if supplied, must match that identity.
+Fusion uses MLX-LM's linear LoRA fusion and dequantizes the whole model, including
+untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
+`--save-format fp16` names the standard dense format, independently of this dtype.
+`--dequantize` is a no-op for an already dense base. There is no automatic
+requantization. The saved weights, model configuration and
+tokenizer reload without the original base/adapter directories; quantization metadata
+and live adapter tensors are removed, while tied-weight configuration is preserved.
+Saving uses the local base snapshot already loaded, including for a Hub identifier,
+with the same file filters as the model loader; uncached README or repository
+metadata files are not required, including with MLX-LM 0.31.3. It does not fetch a
+Hub README. MLX-LM copies the base's top-level `*.py` files and
+`generation_config.json` when present and generates a local README. An `auto_map`
+entry still requires explicit `--trust-remote-code` when loading the result.
+
+Output must be new, contained under the current directory and disjoint from both
+inputs, including through symlinks. Writes are staged in its parent; failed or
+interrupted saves do not publish an incomplete checkpoint. Inputs remain unchanged.
+DoRA and other unqualified adapter variants, BNB save formats and explicit
+`--double-quant` controls, `--low-memory`, and non-HF hubs are refused on the native path.
+Native fusion loads the full model; it does not implement tensor-streaming merge.
+`--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
+tiny dense/affine 4-bit text fixtures, not general model quality or GGUF conversion.
+
+
 ## Export to GGUF
 
 Export models to GGUF format for use with [Ollama](https://ollama.com/) and [llama.cpp](https://github.com/ggerganov/llama.cpp):
@@ -310,6 +347,18 @@ soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output re
 soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
 ```
 
+Interactive chat uses the same component and artifact contract:
+
+```bash
+soup chat --backend mlx --model ./mlx-adapter --temperature 0
+soup chat --backend mlx --model ./mlx-base
+```
+
+Chat preserves conversation history, `/quit`, `/clear` and `/system`.
+Ctrl-C or end-of-input during native generation ends the session with `Goodbye!`;
+its in-memory conversation history is discarded.
+Native adapters passed to the default chat backend are refused with a backend hint.
+
 Inference uses a shared MLX loader and generation implementation. Native Soup
 adapters carry `model`, `num_layers` and resolved `lora_parameters` in
 `adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
@@ -451,7 +500,8 @@ ends. The chunk fields, final chunk, `[DONE]` and `finish_reason` are the same a
 reply generated in full. A request served with `--reasoning-parser`, a draft model
 (`--speculative-decoding`), n-gram lookup or MoLE routing is generated in full first and
 sent afterwards, and so is a request to a model whose generation config sets beam search
-(`num_beams` above 1) or several return sequences, and so is the `/v1/messages` stream.
+(`num_beams` above 1) or several return sequences. A `/v1/messages` request with
+`"stream": true` follows the same rules (see [Anthropic Messages Endpoint](#anthropic-messages-endpoint)).
 Use `--backend vllm` for token streaming with speculative decoding.
 
 Compatible with OpenAI SDK:
@@ -464,7 +514,16 @@ response = client.chat.completions.create(
 )
 ```
 
-On the default Transformers backend, including a MoLE runtime, `finish_reason` is `"length"` when generation used the whole `max_tokens` budget without an end token and `"stop"` otherwise, even when the end token is the last one the budget allows. `/v1/messages` reports the same as `stop_reason` `max_tokens` / `end_turn`, in the reply and in the final `message_delta` event.
+On the default Transformers backend, including a MoLE runtime, `finish_reason` is `"length"` when generation used the whole `max_tokens` budget without an end token and `"stop"` otherwise, even when the end token is the last one the budget allows. `/v1/messages` reports the same as `stop_reason` `max_tokens` / `end_turn`, or `stop_sequence` when a stop string ended the reply (and then `stop_sequence` carries the matched string, `null` otherwise), in the reply and in the final `message_delta` event.
+
+**Stop strings.** `/v1/chat/completions` takes the OpenAI `stop` field and `/v1/messages` the Anthropic `stop_sequences` field:
+
+- `stop` is a string, a list of at most 4 non-empty strings, or `null`. `stop_sequences` is a list only (a bare string is refused). Each string is at most 256 characters; an empty list means no stop string.
+- A value outside that is answered with a 400 whose message names the field (`stop` or `stop_sequences`) and the rule it broke; it never repeats the value.
+- The reply is cut before the first stop string to complete, and the stop string and everything after it are never returned, in a streamed reply as well. Whitespace left before the cut is dropped.
+- A match gives `finish_reason` `"stop"` (`stop_reason` `"stop_sequence"` on `/v1/messages`), even when the reply also used its whole `max_tokens` budget.
+- On the plain Transformers path generation ends at the match. With `--reasoning-parser`, a draft model, n-gram lookup, MoLE routing, or a model that sets beam search or several return sequences, the reply is generated in full and cut afterwards (with `--reasoning-parser`, after the reasoning block is removed).
+- Only the Transformers backend honours the field: the vLLM, SGLang and MII backends do not forward it, so their replies are not cut.
 
 ### KV Cache Quantization (`soup serve --kv-cache-type`)
 
@@ -842,7 +901,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 175 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 179 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -851,7 +910,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (179 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -1047,8 +1106,17 @@ curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
 ```
 
 Non-streaming requests return Anthropic-shaped envelopes. Streaming (`stream: true`)
-returns Anthropic event-shape SSE with `message_start` → `content_block_delta` →
-`message_delta` + `message_stop` events. Validation errors return a generic
+returns Anthropic event-shape SSE. On the Transformers backend the events follow the
+Anthropic SDK order and the text is sent as the model generates it: `message_start`,
+`content_block_start`, one `content_block_delta` per piece of text, `content_block_stop`,
+`message_delta` (carrying `stop_reason`, `stop_sequence` and the `output_tokens` count) and
+`message_stop`. A failure after the stream has started ends it with an `error` event. The
+requests that are generated in full first are the ones listed under
+[Inference Server](#inference-server). The vLLM backend generates in full and sends
+`message_start`, a `content_block_delta` per word, `message_delta` and `message_stop`.
+`stop_sequences` is read on the Transformers backend only (see Stop strings under
+[Inference Server](#inference-server)); a bad `stop_sequences` is a 400 that names the
+field. Other validation errors return a generic
 `"Invalid request"` 400 body with details logged server-side at DEBUG. CORS restricted
 to loopback-only (`localhost` / `127.0.0.1`) on both backends, and on both a request whose
 `Origin` names another site is refused with 403 (see

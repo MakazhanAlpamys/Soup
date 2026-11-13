@@ -1,0 +1,13 @@
+{
+  "what": "Forward-only check on the 8 GB laptop: the saved Banking77 adapter loaded into the streamed engine, cross-entropy of 32 probe items, compared item by item with the same adapter scored by the streamed engine on the cloud card (quality-banking77/STREAM.json is the base arm and the fine-tuned arm of that engine).",
+  "laptop_stream_ce_ft_run1.json_sha256": "9ea3751cc120e67c785f69c7d4f7233936e865b20ece3fad60d595e01ced4dd5",
+  "STREAM.json_sha256": "6732060ee627ee22c3d1fc9445c5b668473d3b501926a31d2df594a6b6b1224e",
+  "items": 32,
+  "laptop_mean_ce": 0.13946283886104355,
+  "cloud_card_streamed_mean_ce": 0.1401034389714348,
+  "mean_abs_ce_difference_per_item": 0.003512293892255116,
+  "max_abs_ce_difference_per_item": 0.019791293136211197,
+  "laptop_torch_peak_allocated_bytes": 2613421056,
+  "laptop_torch_peak_allocated_mib": 2492.3525390625,
+  "laptop_gpu": "NVIDIA GeForce RTX 5070 Laptop GPU"
+}

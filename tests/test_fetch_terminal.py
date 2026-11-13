@@ -2,7 +2,6 @@
 
 import os
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +9,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -17,15 +17,11 @@ runner = CliRunner()
 _ENTRY = "llama-3.1-8b-lora"
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 _FILE_NAMES = [
     "x[red]o.yaml",
     "x[bold]o.yaml",
-    pytest.param("o:warning:.yaml", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("o:warning:.yaml", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 

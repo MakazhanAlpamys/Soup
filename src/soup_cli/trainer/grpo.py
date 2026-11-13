@@ -12,6 +12,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils import final_answer
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -539,22 +540,6 @@ class GRPOTrainerWrapper:
             "max_completion_length": cfg.data.max_length,
         }
 
-        # v0.71.21 #124 — vLLM sleep mode: set TRL's GRPOConfig hook when the
-        # installed TRL exposes it; otherwise print a friendly advisory
-        # (Soup's own vLLM engine factory honors sleep_mode=True).
-        if tcfg.vllm_sleep_mode:
-            import inspect as _inspect
-
-            from soup_cli.utils.grpo_long_context import (
-                maybe_enable_trl_sleep_mode,
-            )
-
-            maybe_enable_trl_sleep_mode(
-                grpo_kwargs,
-                _inspect.signature(GRPOConfig).parameters,
-                console,
-            )
-
         # CPU support: set use_cpu and prevent empty generations
         if self.device == "cpu":
             import inspect as _inspect
@@ -838,7 +823,8 @@ class GRPOTrainerWrapper:
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:

@@ -610,43 +610,27 @@ class TestVllmSleepCycle:
         assert any("sleep" in rec.message for rec in caplog.records)
 
 
-class TestMaybeEnableTrlSleepMode:
-    def test_sets_kwarg_when_trl_exposes_it(self):
-        from soup_cli.utils.grpo_long_context import maybe_enable_trl_sleep_mode
-
-        kwargs: dict = {}
-        ok = maybe_enable_trl_sleep_mode(
-            kwargs, ("output_dir", "vllm_enable_sleep_mode"), None,
-        )
-        assert ok is True
-        assert kwargs["vllm_enable_sleep_mode"] is True
-
-    def test_advisory_when_trl_lacks_hook(self):
-        import io
-
-        from rich.console import Console
-
-        from soup_cli.utils.grpo_long_context import maybe_enable_trl_sleep_mode
-
-        buf = io.StringIO()
-        kwargs: dict = {}
-        ok = maybe_enable_trl_sleep_mode(
-            kwargs, ("output_dir",), Console(file=buf),
-        )
-        assert ok is False
-        assert kwargs == {}
-        assert "sleep" in buf.getvalue().lower()
-
-
 class TestSleepModeSourceWiring:
     def test_create_vllm_engine_accepts_sleep_mode(self):
         source = (_SRC / "utils" / "vllm.py").read_text(encoding="utf-8")
         assert "sleep_mode" in source
         assert "apply_vllm_sleep_mode" in source
 
-    def test_grpo_trainer_wires_sleep_mode(self):
+    def test_grpo_trainer_does_not_wire_sleep_mode(self):
+        """GRPO never starts a vLLM server (``use_vllm`` is not set), so the key is
+        refused at load and the trainer neither forwards it to TRL nor prints that
+        sleep mode is enabled (#2765)."""
         source = (_SRC / "trainer" / "grpo.py").read_text(encoding="utf-8")
-        assert "maybe_enable_trl_sleep_mode" in source
+        assert "vllm_sleep_mode" not in source
+        assert "maybe_enable_trl_sleep_mode" not in source
+        assert "vllm_enable_sleep_mode" not in source
+
+    def test_the_false_advisory_helper_is_gone(self):
+        import soup_cli.utils.grpo_long_context as module
+
+        assert not hasattr(module, "maybe_enable_trl_sleep_mode")
+        source = (_SRC / "utils" / "grpo_long_context.py").read_text(encoding="utf-8")
+        assert "custom rollout loops" not in source
 
 
 # ---------------------------------------------------------------------------

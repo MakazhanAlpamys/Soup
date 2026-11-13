@@ -1,19 +1,24 @@
 """The shared non-HF prefetch helper prints literal, relative advisories."""
 
 import os
-import sys
 from io import StringIO
 
 import pytest
 from rich.console import Console
 
 from soup_cli.utils import hubs
+from tests._windows_filenames import skip_colon_on_windows
 
 SPELLINGS = [
     ("x[red]n", "x[red]n"),
     ("x\\[n", "x\\[n"),
     ("x\x9b\u202en", "xn"),
     (":warning:", ":warning:"),
+]
+_FILENAME_SPELLINGS = [
+    pytest.param(value, shown, marks=skip_colon_on_windows)
+    if ":" in value else (value, shown)
+    for value, shown in SPELLINGS
 ]
 
 
@@ -50,10 +55,8 @@ def test_fetch_receipt_keeps_original_repo_and_returned_path(tmp_path, monkeypat
     )
 
 
-@pytest.mark.parametrize("value,shown", SPELLINGS)
+@pytest.mark.parametrize("value,shown", _FILENAME_SPELLINGS)
 def test_cache_hit_shows_literal_relative_path_without_fetch(tmp_path, monkeypatch, value, shown):
-    if sys.platform == "win32" and ":" in value:
-        pytest.skip("colon is not a valid Windows filename character")
     monkeypatch.chdir(tmp_path)
     cache = tmp_path / f"cache-{value}"
     snapshot = cache / "owner__model"
