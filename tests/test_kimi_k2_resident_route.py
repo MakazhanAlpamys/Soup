@@ -1779,6 +1779,7 @@ def test_resident_model_uses_cached_snapshot_on_hub_connection_failure(
 
 
 @pytest.mark.parametrize("outside_cache", [False, True])
+@pytest.mark.requires_symlink
 def test_resident_model_handles_hub_snapshot_links(
     monkeypatch, tmp_path, resident_checkpoints, outside_cache
 ):
@@ -1797,10 +1798,7 @@ def test_resident_model_handles_hub_snapshot_links(
     blob = (tmp_path if outside_cache else repo_cache / "blobs") / "checkpoint"
     blob.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source / "model.safetensors", blob)
-    try:
-        (snapshot / "model.safetensors").symlink_to(blob)
-    except (OSError, NotImplementedError):
-        pytest.skip("creating symlinks is unavailable on this host")
+    (snapshot / "model.safetensors").symlink_to(blob)
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", True)
     real_config_loader = kimi_k2.load_resident_model_config

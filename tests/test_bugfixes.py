@@ -130,21 +130,62 @@ class TestComputeDtype:
             assert dtype == torch.float16
 
 
-# --- BUG-005: diff load dtype spelling (#478) ---
+# --- BUG-005: diff load dtype handling (#478) ---
 
 
 class TestDiffModelLoading:
-    """Test diff command uses Transformers kwargs compatible with the floor."""
+    """Test diff command forwards the shared device and dtype settings."""
 
-    def test_load_model_uses_dtype(self):
-        """Both branches follow the Transformers 5.x model-load keyword policy."""
-        import inspect
+    @pytest.mark.parametrize("is_adapter", [False, True], ids=["plain", "base+adapter"])
+    def test_load_model_passes_resolved_dtype(self, tmp_path, monkeypatch, is_adapter):
+        import sys
+        from unittest.mock import MagicMock
 
-        from soup_cli.commands.diff import _load_model
+        from soup_cli.commands import diff
 
-        source = inspect.getsource(_load_model)
-        assert source.count("dtype=torch_dtype") == 2
-        assert "torch_dtype=" not in source
+        expected_dtype = object()
+        expected_device_map = {"": "cuda:1"}
+        tokenizer = MagicMock()
+        tokenizer.pad_token = "<pad>"
+        mock_transformers = MagicMock()
+        mock_transformers.AutoTokenizer.from_pretrained.return_value = tokenizer
+        monkeypatch.setitem(sys.modules, "transformers", mock_transformers)
+        model = MagicMock()
+        load_resident_model = MagicMock(return_value=model)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.gpu.resolve_inference_device_map_and_dtype",
+            lambda device: (expected_device_map, expected_dtype),
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.kimi_k2.load_resident_model", load_resident_model
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+            lambda path: False,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.resolve_trust_remote_code",
+            lambda *a, **k: False,
+        )
+
+        model_path = tmp_path / "model"
+        model_path.mkdir()
+        base_model = "org/base" if is_adapter else None
+        if is_adapter:
+            (model_path / "adapter_config.json").write_text(
+                '{"base_model_name_or_path": "org/base"}', encoding="utf-8"
+            )
+            mock_peft = MagicMock()
+            mock_peft.PeftModel.from_pretrained.return_value = model
+            monkeypatch.setitem(sys.modules, "peft", mock_peft)
+
+        diff._load_model(str(model_path), base_model, "cuda:1")
+
+        assert load_resident_model.call_count == 1
+        kwargs = load_resident_model.call_args.kwargs["model_kwargs"]
+        assert kwargs["dtype"] is expected_dtype
+        assert kwargs["device_map"] == expected_device_map
 
 
 # --- BUG-006: wandb version pin ---

@@ -86,16 +86,19 @@ def test_chat_load_model_full_model_escapes_markup(monkeypatch):
     buffer = io.StringIO()
     monkeypatch.setattr(chat, "console", Console(file=buffer, color_system=None, width=400))
     monkeypatch.setattr(MOCK_GPU_RESOLVE, lambda *a, **kw: ("cpu", None))
+    monkeypatch.setattr(
+        "soup_cli.utils.kimi_k2.load_resident_model",
+        lambda *a, **kw: MagicMock(),
+    )
 
     mock_tf = MagicMock()
     fake_tok = MagicMock()
     fake_tok.pad_token = None
     fake_tok.eos_token = "<eos>"
     mock_tf.AutoTokenizer.from_pretrained.return_value = fake_tok
-    mock_tf.AutoModelForCausalLM.from_pretrained.return_value = MagicMock()
     monkeypatch.setitem(sys.modules, "transformers", mock_tf)
 
-    evil_path = Path(f"evil[/x]-[red]{ESC}")
+    evil_path = f"evil[/x]-[red]{ESC}"
     chat._load_model(
         evil_path,
         is_adapter=False,
@@ -115,20 +118,23 @@ def test_chat_load_model_lora_adapter_escapes_markup(monkeypatch):
     buffer = io.StringIO()
     monkeypatch.setattr(chat, "console", Console(file=buffer, color_system=None, width=400))
     monkeypatch.setattr(MOCK_GPU_RESOLVE, lambda *a, **kw: ("cpu", None))
+    monkeypatch.setattr(
+        "soup_cli.utils.kimi_k2.load_resident_model",
+        lambda *a, **kw: MagicMock(),
+    )
 
     mock_tf = MagicMock()
     fake_tok = MagicMock()
     fake_tok.pad_token = None
     fake_tok.eos_token = "<eos>"
     mock_tf.AutoTokenizer.from_pretrained.return_value = fake_tok
-    mock_tf.AutoModelForCausalLM.from_pretrained.return_value = MagicMock()
     monkeypatch.setitem(sys.modules, "transformers", mock_tf)
 
     mock_peft = MagicMock()
     mock_peft.PeftModel.from_pretrained.return_value = MagicMock()
     monkeypatch.setitem(sys.modules, "peft", mock_peft)
 
-    evil_adapter_path = Path(f"evil_adapter[/lora]-[green]{ESC}")
+    evil_adapter_path = f"evil_adapter[/lora]-[green]{ESC}"
     chat._load_model(
         evil_adapter_path,
         is_adapter=True,
