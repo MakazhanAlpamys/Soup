@@ -69,6 +69,8 @@ the assert-based check is retained in `verification.json`.
   [floor environment](evidence/issue1992/floor/environment.json).
 - Each case JSON retains the fixture safetensors SHA-256, exact data/config,
   per-tensor maximum absolute deltas, actual moment dtype, counts and reload error.
+  Default-valued config fields are omitted from committed case records; exact
+  schema round-trip equality was asserted and each resolved config hash retained.
 
 ## Native observations
 

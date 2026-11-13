@@ -43,5 +43,6 @@
       "max_buffer_length": 9534832640,
       "resource_limit": 499000
     }
-  }
+  },
+  "case_config_serialization": "Default-valued config fields omitted after generation; exact round-trip to the resolved config asserted against source schema. The resolved-config SHA-256 uses sorted compact JSON."
 }
