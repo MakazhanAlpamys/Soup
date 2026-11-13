@@ -69,10 +69,6 @@ native `kimi_k25` registration and are outside this boundary.
 For a Hub checkpoint, the resident route checks available cache space against the
 files not already cached at the resolved revision before downloading. With
 `HF_HUB_OFFLINE=1`, it uses the local snapshot without requesting Hub metadata.
-Resident-trained K2 adapters use the same guarded base loader in Soup's `infer`,
-`chat`, `diff`, `serve` (including MoLE task-adapter serving), live evaluation,
-export, and regular merge paths. `soup merge --low-memory` refuses K2 because
-it reads source safetensors directly and does not dequantise FP8 blocks.
 
 For a 4-bit K2 base, use the guarded `training.stream_layers: true` route
 added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires

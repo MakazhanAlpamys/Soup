@@ -240,9 +240,7 @@ def load_model_and_tokenizer(
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
     import torch  # noqa: F401 — ensures torch present
-    from transformers import AutoTokenizer
-
-    from soup_cli.utils.kimi_k2 import load_resident_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dev = resolve_device(device)
     from soup_cli.utils.run_provenance import (
@@ -277,7 +275,7 @@ def load_model_and_tokenizer(
 
         model_kwargs["quantization_config"] = quant_config
         model_kwargs["device_map"] = _device_map_value(dev)
-    model = load_resident_model(model_id, model_kwargs=model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
             raise ValueError("adapter must be a non-empty string or None")

@@ -91,8 +91,36 @@ def diff(
         console.print(f"[red]Model B not found: {for_terminal(path_b)}[/]")
         raise typer.Exit(1)
 
+    # Validate prompts path before collecting prompts
+    prompts_path: Optional[Path] = None
+    if prompts is not None:
+        prompts_path = Path(prompts)
+        if not prompts_path.exists():
+            console.print(f"[red]Prompts file not found: {for_terminal(prompts_path)}[/]")
+            raise typer.Exit(1)
+        if not prompts_path.is_file():
+            console.print(f"[red]Prompts path is not a file: {for_terminal(prompts_path)}[/]")
+            raise typer.Exit(1)
+
     # Collect prompts
-    prompt_list = _collect_prompts(prompts, prompt)
+    try:
+        file_prompts = _collect_prompts(prompts, None) if prompts is not None else None
+    except (OSError, UnicodeDecodeError) as exc:
+        console.print(
+            f"[red]Cannot read prompts file {for_terminal(prompts_path)}: "
+            f"{for_terminal(exc)}[/]"
+        )
+        raise typer.Exit(1) from exc
+
+    if prompts is not None and not file_prompts:
+        console.print(f"[red]No prompts found in file: {for_terminal(prompts_path)}[/]")
+        raise typer.Exit(1)
+
+    prompt_list = (
+        [*file_prompts, *(prompt or [])]
+        if file_prompts is not None
+        else _collect_prompts(None, prompt)
+    )
     if not prompt_list:
         console.print("[red]No prompts provided. Use --prompts or --prompt.[/]")
         raise typer.Exit(1)
@@ -190,8 +218,8 @@ def _collect_prompts(prompts_file: Optional[str], prompt_args: Optional[list[str
 
     if prompts_file:
         path = Path(prompts_file)
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
+        if path.is_file():
+            with open(path, encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -220,10 +248,9 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load a model and tokenizer."""
-    from transformers import AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
-    from soup_cli.utils.kimi_k2 import load_resident_model
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -265,25 +292,19 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        base = load_resident_model(
+        base = AutoModelForCausalLM.from_pretrained(
             base_model,
-            model_kwargs={
-                "trust_remote_code": trc,
-                "device_map": device_map,
-                "dtype": torch_dtype,
-            },
-            console=console,
+            trust_remote_code=trc,
+            device_map=device_map,
+            dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
-        model_obj = load_resident_model(
+        model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
-            model_kwargs={
-                "trust_remote_code": trc,
-                "device_map": device_map,
-                "dtype": torch_dtype,
-            },
-            console=console,
+            trust_remote_code=trc,
+            device_map=device_map,
+            dtype=torch_dtype,
         )
 
     model_obj.eval()

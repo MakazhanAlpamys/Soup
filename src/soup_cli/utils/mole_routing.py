@@ -746,7 +746,6 @@ def load_mole_for_serve(
     base: Optional[str] = None,
     device: Optional[str] = None,
     trust_remote_code: bool = False,
-    console: Any = None,
 ):
     """Load a serve-time MoLE runtime from a trainer output dir (#259).
 
@@ -759,9 +758,8 @@ def load_mole_for_serve(
     """
     import torch
     from peft import PeftModel
-    from transformers import AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from soup_cli.utils.kimi_k2 import load_resident_model
     manifest = load_mole_manifest(directory)
     gate_path = os.path.join(directory, _GATE_FILENAME)
     enforce_under_cwd_and_no_symlink(gate_path, "mole gate")
@@ -779,14 +777,11 @@ def load_mole_for_serve(
         tokenizer.pad_token = tokenizer.eos_token
 
     load_dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    base_model = load_resident_model(
+    base_model = AutoModelForCausalLM.from_pretrained(
         resolved_base,
-        model_kwargs={
-            "trust_remote_code": trust_remote_code,
-            "device_map": "auto" if device == "cuda" else None,
-            "dtype": load_dtype,
-        },
-        console=console,
+        trust_remote_code=trust_remote_code,
+        device_map="auto" if device == "cuda" else None,
+        dtype=load_dtype,
     )
     # The gate is a Linear(hidden_dim, N); a base whose hidden size differs from
     # the manifest would shape-mismatch deep in decode. Fail loud at load

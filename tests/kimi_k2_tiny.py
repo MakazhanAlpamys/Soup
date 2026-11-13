@@ -186,7 +186,7 @@ def _fp8_harness():
 
 
 REFERENCE_CHECKPOINT = (
-    Path(__file__).parent / "fixtures" / "kimi_k2" / "resident_reference.safetensors.xz.b85"
+    Path(__file__).parent / "fixtures" / "kimi_k2" / "resident_reference.safetensors.xz"
 )
 REFERENCE_CHECKPOINT_SHA256 = (
     "6f05521e442a126c59b8ffee6ccd21865b334b53d271f5fabcf04e2d61597042"
@@ -195,11 +195,10 @@ REFERENCE_CHECKPOINT_SHA256 = (
 
 def reference_checkpoint_bytes():
     """Reconstructed x86 checkpoint whose logits reproduce the recorded reference."""
-    import base64
     import hashlib
     import lzma
 
-    data = lzma.decompress(base64.b85decode(REFERENCE_CHECKPOINT.read_bytes().strip()))
+    data = lzma.decompress(REFERENCE_CHECKPOINT.read_bytes())
     if hashlib.sha256(data).hexdigest() != REFERENCE_CHECKPOINT_SHA256:
         raise ValueError("resident reference checkpoint sha256 does not match its pin")
     return data

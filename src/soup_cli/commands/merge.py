@@ -222,9 +222,7 @@ def merge(
     try:
         import torch
         from peft import PeftModel
-        from transformers import AutoTokenizer
-
-        from soup_cli.utils.kimi_k2 import load_resident_model
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         dtype_map = {
             "float16": torch.float16,
@@ -246,6 +244,15 @@ def merge(
             requires_remote_code=requires,
         )
 
+        # The merged checkpoint takes its tokenizer from the adapter directory.
+        # Load it before the base model and before anything is written, so an
+        # adapter directory without usable tokenizer files fails here instead of
+        # leaving merged weights with no tokenizer in --output.
+        console.print("[dim]Loading tokenizer from the adapter...[/]")
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(adapter_path), trust_remote_code=trc
+        )
+
         console.print(f"[dim]Loading base model: {for_terminal(base)}...[/]")
         from soup_cli.utils.run_provenance import recorded_base_kwargs
 
@@ -254,15 +261,12 @@ def merge(
             console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
         else:
             console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
-        model = load_resident_model(
+        model = AutoModelForCausalLM.from_pretrained(
             base,
-            model_kwargs={
-                "dtype": model_dtype,
-                "trust_remote_code": trc,
-                "device_map": "cpu",
-                **revision_kwargs,
-            },
-            console=console,
+            dtype=model_dtype,
+            trust_remote_code=trc,
+            device_map="cpu",
+            **revision_kwargs,
         )
 
         console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
@@ -277,9 +281,6 @@ def merge(
             model.save_pretrained(str(output_path))
 
             console.print("[dim]Saving tokenizer...[/]")
-            tokenizer = AutoTokenizer.from_pretrained(
-                str(adapter_path), trust_remote_code=trc
-            )
             tokenizer.save_pretrained(str(output_path))
         else:
             # v0.53.1 #142 — 4bit / 4bit_forced merged checkpoint.
@@ -297,9 +298,6 @@ def merge(
                     f"[dim]Staging fp16 merge in {staged_path.name}...[/]"
                 )
                 model.save_pretrained(str(staged_path))
-                tokenizer = AutoTokenizer.from_pretrained(
-                    str(adapter_path), trust_remote_code=trc
-                )
                 tokenizer.save_pretrained(str(staged_path))
 
                 # Free the in-memory fp16 model before reloading 4bit
@@ -338,15 +336,7 @@ def _merge_low_memory(
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.kimi_k2 import uses_resident_kimi_k2_route
         from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
-
-        if uses_resident_kimi_k2_route(base):
-            raise LowMemoryMergeError(
-                "resident Kimi K2 weights must go through the guarded dequantising model "
-                "loader; --low-memory reads stored safetensors directly. Rerun without "
-                "--low-memory."
-            )
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,

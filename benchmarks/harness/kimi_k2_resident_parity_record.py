@@ -406,7 +406,7 @@ def _record() -> None:
             "sha256": config_sha256,
         },
         "reference_checkpoint": {
-            "path": "tests/fixtures/kimi_k2/resident_reference.safetensors.xz.b85",
+            "path": "tests/fixtures/kimi_k2/resident_reference.safetensors.xz",
             "sha256": helper.REFERENCE_CHECKPOINT_SHA256,
             "provenance": (
                 "Reconstructed on the original x86 software stack; its logits reproduce "
