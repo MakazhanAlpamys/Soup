@@ -87,12 +87,13 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
-It can also be installed with `[train]` when the same environment needs the
-PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
-streaming dataset still needs `datasets` because that data source owns the
-dependency; the local file path below does not.
+`[mlx]` is the standalone extra for all MLX tasks listed in the [optional extras
+table](models.md#optional-extras). For local data, it is sufficient on its own;
+MLX training does not require `[train]`. Add `[train]` only when the same
+environment also needs the PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or streaming
+dataset still needs `datasets` because that data source owns the dependency; the
+local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -189,7 +190,7 @@ training:
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
 - **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
-- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows), `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), DoRA, `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
 - **Not applied on MLX:** per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
 
 #### ORPO on MLX
@@ -255,7 +256,7 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `modality`, DoRA, LoRA+ and `data.chat_template`. `task: preference` with
   `training.preference_loss: orpo` uses this same native trainer and these
   same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -313,7 +314,7 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `modality`, DoRA, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -752,8 +753,18 @@ training:
 ## Cloud GPU Training
 
 No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
-from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
-the environment only when a live submission starts.
+from your `soup.yaml`. The **effective** config — the loaded object with every CLI override
+already applied — is base64-embedded as **data**; credentials are read from the environment only
+when a live submission starts.
+
+`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
+local HF repo, so a cloud run would silently ignore them.
+
+A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
+id (every built-in template sets one, so users hit this first). The same applies to local model
+paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
+time rather than silently shipped. Uploading local input files is tracked in
+[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -1014,6 +1025,8 @@ from step 0 regardless of how far the checkpoint got.
 
 `task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
+`task: ppo` refuses `--resume` / `--hf-resume` too, before it reads the dataset or loads a model: trl's PPO trainer cannot continue from a checkpoint, so a resumed run would start again from step 0 and write over the files already in `output`. `--hf-resume` is refused even when the Hub has no checkpoint branch, where it would have trained fresh. Remove the flag to start a new run, or point `output` at a new directory to keep the old one.
+
 
 ## Run Management & Cleanup
 
@@ -1035,6 +1048,18 @@ soup runs clean --all --dry-run
 ```
 
 By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+
+`soup runs compare` keeps the side-by-side run summary and lists all differences
+in the stored config, including nested settings such as `training.lora.dropout`
+and `training.seed`. Lists are compared as whole values. `<not stored>` means a key
+is absent; `null` is a recorded JSON null. Missing or invalid historical configs
+are reported as unavailable rather than identical. The summary also shows the
+recorded training-data SHA-256, or `unknown` when no hash was captured.
+Evaluation comparison uses the latest stored score for each benchmark and run,
+with the signed difference **right minus left**; `-` means that side has no score.
+This reads local experiment records without a registry push, rerunning evaluation
+or hashing the current dataset. It does not establish that two evaluation runs
+used the same scorer or data, and it adds no code-revision provenance.
 
 
 ## Alternative Model Hubs
@@ -1312,6 +1337,7 @@ field has been a hard error since v0.74:
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
 # sweep parameter does not match any config field: unknown config key 'lora_rank' - refused.
+# Check the spelling against the docs or a `soup init` template; a key from a newer Soup needs an upgrade (`pip install -U soup-cli`).
 echo $?   # 1
 ```
 
@@ -1403,6 +1429,15 @@ Loading a local adapter folder directly also reuses that commit when its
 `adapter_config.json` names the same base and has no conflicting explicit revision;
 the tokenizer still comes from the adapter folder.
 
+Single-process Hugging Face Transformers `soup sweep` arms use the same identity
+contract. Each arm resolves its own base once, immediately before its first base
+load, and pins that arm's model, tokenizer, config, processor and training-time
+base loads to that outcome. Arms may name different bases or record different
+commits if the Hub moves during a sweep; each arm's `runs` row shows which one it
+used. Each completed arm writes `soup_run.json` beside its final artifact, so a
+copied adapter retains the commit for `soup merge` and `soup export`. A sweep arm's
+training-data hash stays unknown in both its row and file.
+
 For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
 resolves the base once and broadcasts its nullable result before trainer setup.
 Soup initializes or reuses Accelerate's shared process group with Trainer's default
@@ -1421,8 +1456,8 @@ not established by those tests.
 
 **Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
-wrapper/sweep invocations do not automatically establish a run scope. Metadata is
-written for the final artifact, not each intermediate checkpoint. Other exporters
+wrapper invocations and distributed sweep launches do not gain a binding guarantee.
+Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
 and independent teacher/reward/scorer repositories do not gain a binding guarantee.
 Evaluation engines that bypass the shared live-eval loader (including lm-eval's

@@ -1,0 +1,151 @@
+{
+  "status": "passed",
+  "protocol": "stage35-full512-readonly-audit-v2",
+  "worker_protocol": "stage35-full512-boundary-trim-v2",
+  "cache_trim_counts": {
+    "train": 7,
+    "reload": 2
+  },
+  "cache_observations": {
+    "train": [
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1377828864,
+        "released_private_commit_bytes": 1138864128,
+        "global_commit_change_bytes": -1138679808
+      },
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1377828864,
+        "released_private_commit_bytes": 1145708544,
+        "global_commit_change_bytes": -1144401920
+      },
+      {
+        "boundary": "after_optimizer",
+        "released_reserved_bytes": 2569011200,
+        "released_private_commit_bytes": 2337157120,
+        "global_commit_change_bytes": -2335444992
+      },
+      {
+        "boundary": "after_optimizer",
+        "released_reserved_bytes": 2353004544,
+        "released_private_commit_bytes": 2119884800,
+        "global_commit_change_bytes": -2063237120
+      },
+      {
+        "boundary": "after_optimizer",
+        "released_reserved_bytes": 2353004544,
+        "released_private_commit_bytes": 2118049792,
+        "global_commit_change_bytes": -2116616192
+      },
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1346371584,
+        "released_private_commit_bytes": 1108336640,
+        "global_commit_change_bytes": -1106984960
+      },
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1012924416,
+        "released_private_commit_bytes": 773246976,
+        "global_commit_change_bytes": -772710400
+      }
+    ],
+    "reload": [
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1377828864,
+        "released_private_commit_bytes": 1138868224,
+        "global_commit_change_bytes": -1137684480
+      },
+      {
+        "boundary": "after_heldout_forward",
+        "released_reserved_bytes": 1377828864,
+        "released_private_commit_bytes": 1142407168,
+        "global_commit_change_bytes": -1142394880
+      }
+    ]
+  },
+  "control_initial_heldout_exact": true,
+  "control_first_step_exact": true,
+  "evidence_hashes": {
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\result.json": "25ee2707df2bae8299862ff8f028c4ac7713ec6671b69b7bd0349f751d362a68",
+    "<EXP>\\dense123_packed35\\results\\full512-reload-02\\result.json": "f8dc6a8f14cff282d0130ccd6159e33cf497467935154f53f3d1f9122fe618a2",
+    "<EXP>\\dense123_packed35\\full35_trim_v2.py": "6d33b47aa517c719ccdb5fed75a51178ac46342ecdea2e3630ddb92cb5a55da4",
+    "<EXP>\\dense123_packed35\\full35.py": "04b215a1b863ed721d0a1d57b7214b0d4b8bbb119bfe452598b9028d1fb57d1b",
+    "<EXP>\\dense123_packed35\\audit35.py": "71cdbda6ba56966c43357b48ab27198c238682db4d76afdea874941fae9d67b3",
+    "<EXP>\\dense123_train34\\audit34.py": "5b9da2ff6faf0f0bd8584d67f029bffd49e0ad73958a6a59bf6a1d9512741fb6",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02-guard\\summary.json": "2cc1bf0776d42f69aff11d1f45aa91f7dcf3533f54a6c8134a7d334aea98723f",
+    "<EXP>\\dense123_packed35\\results\\modules128-01\\result.json": "d6d2a48ad672f430ab6d0954bbd6f11e3a425586c47b4aeae4699de8f976c4b6",
+    "<EXP>\\dense123_packed35\\results\\modules512-01\\result.json": "c75834abb04097d9540a6a800ce642d00092a107739e2d39b95704f79e977845",
+    "<EXP>\\dense123_packed35\\results\\pooled512-01\\result.json": "79c175611c1181449a97afa49144580ef28a8a631e301633e572ddf2733cdca6",
+    "<EXP>\\dense123_packed35\\results\\modules128-01-guard\\summary.json": "5fe0b05a51eb953e527f6df7e6c2493989743feb58eff25acb7933a89c769856",
+    "<EXP>\\dense123_packed35\\results\\modules128-01-guard\\input_pins.json": "049e33a8e75367a1d245355f3b75c68a00ce1e69e8b3c30ba3598c6d82e7febb",
+    "<EXP>\\dense123_packed35\\results\\modules512-01-guard\\summary.json": "27f564d92238553a12b6609029d9c85a16c6040c3dec9e3f571836c446adce17",
+    "<EXP>\\dense123_packed35\\results\\modules512-01-guard\\input_pins.json": "049e33a8e75367a1d245355f3b75c68a00ce1e69e8b3c30ba3598c6d82e7febb",
+    "<EXP>\\dense123_packed35\\results\\pooled512-01-guard\\summary.json": "874e7604633dfaf3dfa5f86875ff8ccfbdacfbeefde2741f1d21326e0f8b28c6",
+    "<EXP>\\dense123_packed35\\results\\pooled512-01-guard\\input_pins.json": "049e33a8e75367a1d245355f3b75c68a00ce1e69e8b3c30ba3598c6d82e7febb",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\adapter\\adapter_config.json": "9b0c4283901fb949fe39f19002c79fa63d08ad882f2aa8515e1ba8ade1d09128",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\adapter\\adapter_model.safetensors": "ef5940b8bdb81b27d4acbf73e17f8a2f71246150b294d70afc90046b428ae735",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\adapter\\readme.md": "ae2cc136b10f488a1bea808bc286050b6eb0fd2daa018eabb8c42fb50b3bf8b7",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\adapter\\stage35_full512_trim_v2_provenance.json": "bece5169afa7909803208fbfeed57de8ef226b7c00dacd117fc04616e7643511",
+    "<EXP>\\dense123_packed35\\data_v1\\fixed_data.json": "9480376966b276cce7818b28769faf83bf14acfce9d1722973473d9508b32c15",
+    "<ASSETS>\\soup-runtime-f215941b.manifest.json": "dd429e47af337550e10f0b16a463a1a9ab1085e062a584a944b6f87430ac10e3",
+    "<EXP>\\dense123_packed35\\results\\full512-reload-02-guard\\summary.json": "595a1a0773ac74b04cf8ca29aec965fface0575faad5b7f1c6301e93434ebd72",
+    "<EXP>\\dense123_packed35\\gpu_full_pins_02.json": "f3ffdd635e76591d2b2e1a4ee30b787b32ebb98ec39ed67820a0f615b5857298",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02-guard\\input_pins.json": "f3ffdd635e76591d2b2e1a4ee30b787b32ebb98ec39ed67820a0f615b5857298",
+    "<EXP>\\dense123_packed35\\results\\full512-reload-02-guard\\input_pins.json": "5e313dbb487e6cbf62c050f8109acdfce840f4b443f5fd1e7b7e8cefdec8818e",
+    "<EXP>\\dense123_packed35\\results\\full512-train-01\\heldout_before.json": "9475385ff2e001ff7ce83b1e57224b4cc8cc96d8c7dbefc671b5be54939bb9aa",
+    "<EXP>\\dense123_packed35\\results\\full512-train-01\\steps.json": "61ecb134b69e68b6492b4af5e83b70997060c5f7f6ea3baa19c76ab367d8fad6",
+    "<EXP>\\dense123_packed35\\results\\full512-train-01\\result.json": "902fc960c49eff6ae85dd15c77731cd37ea1617680d98c43d6c1423de4a3228e",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02\\phases.jsonl": "2b54181af26cf0c5c119564495df495f41e5d136f176ecfa9acdaed061247cd4",
+    "<EXP>\\dense123_packed35\\results\\full512-reload-02\\phases.jsonl": "9417de9d06263a551a7104263322de7ddadbceb2cea3f866504f6ea6cee9f047",
+    "<EXP>\\dense123_packed35\\results\\full512-train-02-guard\\samples.jsonl": "599e204088c213033782d92d602c89b1cb466151dae60428b315a4eef2e1b950",
+    "<EXP>\\dense123_packed35\\results\\full512-reload-02-guard\\samples.jsonl": "14c25a6f93f147b7d3d4e5e297dfdb1b6865e52faa97ffc4889cec8149c929eb"
+  },
+  "base_logical_params": 122610069504,
+  "decoder_layers": 88,
+  "installed_projection_count": 616,
+  "adapter_tensors": 352,
+  "completed_updates": 3,
+  "gradient_rows_checked": 1056,
+  "update_rows_checked": 1056,
+  "first_step_a_zero": 176,
+  "later_nonzero_per_step": 352,
+  "protected_files_compared": 138,
+  "runtime_files_directly_pinned": 1575,
+  "heldout_full_logits_matches": 2,
+  "adapter_payload_bytes": 106692608,
+  "train_pid": 39232,
+  "reload_pid": 44284,
+  "resources": {
+    "train": {
+      "samples": 1588,
+      "whole_device_peak_mib": 5602.0,
+      "whole_device_final_mib": 0.0,
+      "last_gpu_sample_kind": "gpu",
+      "explicit_gpu_final_sample": false,
+      "minimum_host_available_bytes": 6959271936,
+      "minimum_system_commit_headroom_bytes": 2470391808,
+      "maximum_own_private_commit_bytes": 11238146048,
+      "maximum_own_rss_bytes": 4509986816,
+      "scope": "whole-device/global commit; final means last sampled GPU value"
+    },
+    "reload": {
+      "samples": 940,
+      "whole_device_peak_mib": 3764.0,
+      "whole_device_final_mib": 0.0,
+      "last_gpu_sample_kind": "gpu_final",
+      "explicit_gpu_final_sample": true,
+      "minimum_host_available_bytes": 7389999104,
+      "minimum_system_commit_headroom_bytes": 4791881728,
+      "maximum_own_private_commit_bytes": 9050439680,
+      "maximum_own_rss_bytes": 4220342272,
+      "scope": "whole-device/global commit; final means last sampled GPU value"
+    }
+  },
+  "base_payloads_rehashed_by_auditor": false,
+  "useful_training_claim": false,
+  "limitations": "Three capacity updates and exact adapter reload. No optimizer resume, quality or speed claim. Root base-payload rehash is separate.",
+  "audit_sha256": "96929a6c4dce215ec1769aa2876f74a9d2b9b5e95725f05ccca2c765ba016de0"
+}

@@ -1,0 +1,112 @@
+stack matches the recorded versions
+76.0 GB free under <RERUN>/assets
+== copying experiment code and data from the snapshot (results/ and logs/ excluded)
+verified 1575 runtime files in <RERUN>\assets\soup-runtime-f215941b
+== compatibility path exists; verifying it instead of replacing it
+verified 1575 runtime files in <ASSETS>\soup-runtime-f215941b
+== import: copy the serialized NF4 tensors into per-layer shards and read every payload back
+pinned 3253 files in <RERUN>\runs\q32-r1\prepare-pins.json
+{
+  "command": [
+    "<HOME>/AppData/Local/Programs/Python/Python312/python.exe",
+    "-B",
+    "<RERUN>/runs/q32-r1/experiments/nf4_stream32/stage32_prepare.py",
+    "<ASSETS>/qwen3-32b-nf4-7f721e74",
+    "<RERUN>/assets/qwen3-32b-soup-nf4-7f721e74",
+    "--info-path",
+    "<RERUN>/runs/q32-r1/experiments/large_model31/downloads/candidate-lora-info.json",
+    "--report-dir",
+    "<RERUN>/runs/q32-r1/prepare-reports"
+  ],
+  "outcome": "completed",
+  "failure": null,
+  "started_utc": "2026-11-07T08:12:03Z",
+  "sampler_sha256": "939daed44a78f892195d2533f024a1938816d61055a3ffc3a05b5c5b908d3beb",
+  "working_set_cap": null,
+  "worker_scope": "standalone Python worker; subprocess workers are forbidden",
+  "supervisor_sha256": "db5e30df1683f0e6916c648f16b48cd2ef3359ba6a5a1ee7cb9730f8d5b9ece4",
+  "limits": {
+    "device_mib": 7600,
+    "host_emergency_mib": 256,
+    "host_sustained_mib": 768,
+    "host_sustained_seconds": 5,
+    "commit_floor_mib": 512,
+    "timeout_seconds": 900.0,
+    "preflight_host_mib": 4096
+  },
+  "pid": 36768,
+  "pid_created": 1794039145.9665227,
+  "worker_returncode_before_cleanup": 0,
+  "cleanup": {
+    "tracked_children": {
+      "20844": 1794039145.9724538
+    },
+    "remaining_children": [],
+    "root_stopped": true,
+    "errors": []
+  },
+  "monitor_stopped": true,
+  "allowed_system_children": [
+    {
+      "pid": 20844,
+      "created": 1794039145.9724538,
+      "exe": "C:\\Windows\\System32\\conhost.exe",
+      "command": [
+        "\\??\\C:\\Windows\\system32\\conhost.exe",
+        "0x4"
+      ],
+      "reason": "direct Windows conhost"
+    }
+  ],
+  "elapsed_s": 193.1720000000205,
+  "worker_returncode": 0
+}
+== train: 3 updates, batch 1 x 128, all 64 layers
+pinned 3324 files in <RERUN>\runs\q32-r1\train-pins.json
+{
+  "command": [
+    "<HOME>/AppData/Local/Programs/Python/Python312/python.exe",
+    "-B",
+    "<RERUN>/runs/q32-r1/experiments/nf4_stream32/stage32_training_v1.py",
+    "train",
+    "--source",
+    "<ASSETS>/qwen3-32b-nf4-7f721e74",
+    "--store",
+    "<RERUN>/assets/qwen3-32b-soup-nf4-7f721e74",
+    "--data",
+    "<RERUN>/runs/q32-r1/experiments/nf4_stream32/data_v1/fixed_data.json",
+    "--device",
+    "cuda:0",
+    "--seq-len",
+    "128",
+    "--output",
+    "<RERUN>/runs/q32-r1/train"
+  ],
+  "outcome": "supervisor_error",
+  "failure": "RuntimeError: preflight resource failure: host_budget",
+  "started_utc": "2026-11-07T08:16:13Z",
+  "sampler_sha256": "939daed44a78f892195d2533f024a1938816d61055a3ffc3a05b5c5b908d3beb",
+  "working_set_cap": null,
+  "worker_scope": "standalone Python worker; subprocess workers are forbidden",
+  "supervisor_sha256": "db5e30df1683f0e6916c648f16b48cd2ef3359ba6a5a1ee7cb9730f8d5b9ece4",
+  "limits": {
+    "device_mib": 7600,
+    "host_emergency_mib": 256,
+    "host_sustained_mib": 768,
+    "host_sustained_seconds": 5,
+    "commit_floor_mib": 512,
+    "timeout_seconds": 1200.0,
+    "preflight_host_mib": 8192
+  },
+  "cleanup": {
+    "tracked_children": {},
+    "remaining_children": [],
+    "root_stopped": true,
+    "errors": []
+  },
+  "monitor_stopped": true,
+  "allowed_system_children": [],
+  "elapsed_s": 55.78200000000652,
+  "worker_returncode": null
+}
+exit=1

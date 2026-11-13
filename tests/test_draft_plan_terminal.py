@@ -1,7 +1,6 @@
 """The distill preview renders model names and copyable YAML literally."""
 
 import json
-import os
 
 import pytest
 import yaml
@@ -9,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.cli import app
 from soup_cli.commands import draft as draft_cmd
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 
@@ -23,7 +23,7 @@ from tests.conftest import make_cli_runner, strip_ansi
             ":warning:",
             ":warning:",
             id="emoji-alias",
-            marks=pytest.mark.skipif(os.name == "nt", reason="Colon is not a Windows filename"),
+            marks=skip_colon_on_windows,
         ),
     ],
 )

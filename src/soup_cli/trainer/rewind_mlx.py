@@ -328,7 +328,7 @@ def wrap_dataset(inner: Any, state: MlxRewindState) -> Any:
     return _recording_dataset_class()(inner, state)
 
 
-def make_rewind_loss(state: MlxRewindState, *, kind: Literal["masked", "span"]):
+def make_rewind_loss(state: MlxRewindState, *, kind: Literal["masked", "span", "labels"]):
     """Return ``loss(model, batch, third)`` with mlx-lm's ``(scalar, ntoks)`` contract.
 
     The reference body is reimplemented rather than wrapped: wrapping an inner
@@ -340,22 +340,24 @@ def make_rewind_loss(state: MlxRewindState, *, kind: Literal["masked", "span"]):
 
     ``third`` is the second element of whatever ``iterate_batches`` yields: a
     per-token mask for ``kind="masked"``, an ``(offset, length)`` pair for
-    ``kind="span"``.
+    ``kind="span"``, or explicit target IDs with -100 ignored for ``kind="labels"``.
     """
-    if kind not in ("masked", "span"):
-        raise ValueError(f"kind must be 'masked' or 'span', got {kind!r}")
+    if kind not in ("masked", "span", "labels"):
+        raise ValueError(f"kind must be 'masked', 'span' or 'labels', got {kind!r}")
 
     def loss(model, batch, third):
         import mlx.core as mx
         import mlx.nn as nn
 
         inputs = batch[:, :-1]
-        targets = batch[:, 1:]
+        targets = third[:, 1:] if kind == "labels" else batch[:, 1:]
         logits = model(inputs)
 
-        raw = nn.losses.cross_entropy(logits, targets)
-        if kind == "masked":
-            mask = third[:, 1:]
+        raw = nn.losses.cross_entropy(
+            logits, mx.maximum(targets, 0) if kind == "labels" else targets,
+        )
+        if kind in ("masked", "labels"):
+            mask = targets != -100 if kind == "labels" else third[:, 1:]
             ntoks = mask.sum()
             scalar = (raw * mask).astype(mx.float32).sum() / mx.maximum(ntoks, 1)
         else:
@@ -366,7 +368,9 @@ def make_rewind_loss(state: MlxRewindState, *, kind: Literal["masked", "span"]):
 
         # Validation reuses this callable; only training calls own an iteration.
         if getattr(model, "training", False) and not state.failed:
-            if kind == "masked":
+            if kind == "labels":
+                row_loss, row_tokens = _row_reduce(raw, mask)
+            elif kind == "masked":
                 row_loss, row_tokens = per_row_masked(raw, third)
             else:
                 row_loss, row_tokens = per_row_span(raw, third)

@@ -1,0 +1,218 @@
+[
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "normal",
+    "tag": "gate-native-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "repeat",
+    "tag": "gate-native-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "native",
+    "variant": "profile",
+    "tag": "gate-native-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "reduced",
+    "variant": "normal",
+    "tag": "gate-reduced-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "reduced",
+    "variant": "repeat",
+    "tag": "gate-reduced-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "reduced",
+    "variant": "profile",
+    "tag": "gate-reduced-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "combined",
+    "variant": "normal",
+    "tag": "gate-combined-normal",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "combined",
+    "variant": "repeat",
+    "tag": "gate-combined-repeat",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "gate",
+    "case": "combined",
+    "variant": "profile",
+    "tag": "gate-combined-profile",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 1,
+    "tag": "block1-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 1,
+    "tag": "block1-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 1,
+    "tag": "block1-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 2,
+    "tag": "block2-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 2,
+    "tag": "block2-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 2,
+    "tag": "block2-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 3,
+    "tag": "block3-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 3,
+    "tag": "block3-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 3,
+    "tag": "block3-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 4,
+    "tag": "block4-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 4,
+    "tag": "block4-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 4,
+    "tag": "block4-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 5,
+    "tag": "block5-native",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 5,
+    "tag": "block5-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 5,
+    "tag": "block5-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "combined",
+    "block": 6,
+    "tag": "block6-combined",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "reduced",
+    "block": 6,
+    "tag": "block6-reduced",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "stage": "timing",
+    "case": "native",
+    "block": 6,
+    "tag": "block6-native",
+    "returncode": 0,
+    "guard_failure": null
+  }
+]

@@ -533,8 +533,8 @@ class TestTheRatchet:
         independently: 113 bases, 23 MoE, 8 of them flagless, 13 model types.
         #1145 removed the Mistral-Large-3 recipes, whose base was unreadable
         (not MoE-counted), so 112 bases; and MiniMax-M3 became flagless (its SFT
-        recipe loads through the vision path without moe_lora, its DPO recipe was
-        removed), so 9 flagless."""
+        recipe loads through the vision path without moe_lora, and its DPO recipe,
+        restored after #1393, sets no moe_lora either), so 9 flagless."""
         moe = _moe_bases()
         flagged = _flagged_bases()
         flagless = [b for b in moe if b not in flagged]
