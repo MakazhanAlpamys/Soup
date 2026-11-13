@@ -641,24 +641,20 @@ def sanitize_run_output_dir(
     if not output_dir or not isinstance(output_dir, str):
         return output_dir
 
+    if os.name != "nt" and (
+        ntpath.splitdrive(output_dir)[0] or output_dir.startswith(("\\\\", "//"))
+    ):
+        return ntpath.basename(output_dir.rstrip("/\\"))
+
     if base is None:
         base = Path.cwd()
 
-    is_abs = os.path.isabs(output_dir) or ntpath.isabs(output_dir)
-    path_to_check = output_dir if is_abs else os.path.join(str(base), output_dir)
+    if is_under(output_dir, base):
+        return os.path.relpath(
+            os.path.realpath(output_dir), os.path.realpath(str(base))
+        )
 
-    if is_under(path_to_check, base):
-        try:
-            return os.path.relpath(
-                os.path.realpath(path_to_check), os.path.realpath(str(base))
-            )
-        except ValueError:
-            pass
-
-    clean = output_dir.replace("\\", "/").rstrip("/")
-    if not clean:
-        return output_dir
-    return clean.split("/")[-1]
+    return os.path.basename(output_dir.rstrip("/\\"))
 
 
 def sanitize_run_row(

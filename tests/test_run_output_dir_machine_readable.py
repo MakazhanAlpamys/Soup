@@ -83,6 +83,27 @@ class TestSanitizeRunOutputDir:
     def test_legacy_relative_output_dir(self, tmp_path: Path):
         assert sanitize_run_output_dir("output", base=tmp_path) == "output"
 
+    def test_windows_drive_path_on_posix(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # On POSIX without the upfront check, is_under treats this as a relative file under cwd
+        assert sanitize_run_output_dir(r"C:\Users\someone\out", base=tmp_path) == "out"
+
+    def test_windows_unc_path_on_posix(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert sanitize_run_output_dir(r"\\server\share\out", base=tmp_path) == "out"
+
+    def test_windows_path_trailing_slash_on_posix(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert sanitize_run_output_dir(r"C:\Users\someone\out\\", base=tmp_path) == "out"
+
+    def test_default_base_is_cwd(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        output = tmp_path / "output"
+        assert sanitize_run_output_dir(str(output)) == "output"
+
+    def test_output_dir_non_string(self, tmp_path: Path):
+        assert sanitize_run_output_dir(123, base=tmp_path) == 123  # type: ignore[arg-type]
+
     def test_sanitize_run_row(self, tmp_path: Path):
         row = {"run_id": "r1", "status": "completed", "output_dir": str(tmp_path / "output")}
         sanitized = sanitize_run_row(row, base=tmp_path)
