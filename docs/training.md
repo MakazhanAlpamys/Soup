@@ -139,13 +139,15 @@ weighted by supervised tokens. mlx-lm's own pass would evaluate before the
 update it is scheduled at and read at most 25 whole batches. An evaluation
 takes no step and leaves the training order and the model's mode as they were.
 Unset, MLX keeps mlx-lm's cadence (a quarter of the run). The MLX preference
-tasks (`dpo`, `orpo`) evaluate once per epoch and refuse the field.
+tasks (`dpo`, `orpo`, `simpo`, `kto`) keep their once-per-epoch evaluation
+cadence and refuse this field. MLX GRPO also refuses `training.eval_steps`; it
+reports its held-out reward once after training instead (see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx)).
 
-**Refused at config load.** `training.eval_steps` on the MLX preference tasks
-(see above), on `task: unlearn` (it trains on
-`forget_set` / `retain_set` and has no validation split), and with
-`val_split: 0` on local files or remote URIs, where there would be nothing to
-evaluate.
+**Refused at config load.** `training.eval_steps` on MLX preference tasks or
+GRPO (see above), on `task: unlearn` (it trains on `forget_set` / `retain_set`
+and has no validation split), and with `val_split: 0` on local files or remote
+URIs, where there would be nothing to evaluate.
 
 **Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
 training callback (#802), so their `eval_loss` reaches the trainer's log history
