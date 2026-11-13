@@ -26,7 +26,7 @@
     "gpu-tasks.jsonl": "b3c2d228e9c66f09d2af7f8afd05ff8a8a3c7709b17c16a53b70c44cdb4ffc6d",
     "cpu-tasks.jsonl": "bb3dd71852fd46ed5408464b8a98e95a786555cf68e5f458f23403d516756d1f"
   },
-  "gpu": "NVIDIA H200 / physical 2 / GPU-6b984734-8ed6-11dd-3b9a-0b6c36ba5e11",
+  "gpu": "NVIDIA H200 / physical 2 / <redacted>",
   "shared_card": "unrelated idle process retained 49850 MiB; torch per-process allocated peaks reported",
   "limitations": "functional toy-task validation only, not a quality or inference speedup benchmark"
 }
