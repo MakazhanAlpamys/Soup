@@ -699,7 +699,7 @@ full set runs. A push, the nightly run and a release branch are never docs-only.
 
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 60-minute step limit and a 75-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
