@@ -10,6 +10,12 @@ performance changes, Python 3.12.3, torch 2.14.1+cu130, Transformers 5.19.0,
 bitsandbytes 0.50.2. H200 physical GPU 2 selected by UUID; another idle process
 held 49850 MiB. Allocated memory belongs to this process, not to the whole card.
 
+These smokes and `validation.json` describe the earlier tree: its 12-test file
+was named `tests/test_issue2677_quant_performance.py`, later renamed to
+`tests/test_quant_performance.py` and extended, while CLI follow-ups and merges
+changed `src/soup_cli/commands/eval.py` afterwards; the retained hashes, counts
+and measurements are historical records, not hashes of the current head.
+
 ## What was exercised
 
 - CUDA: `Qwen/Qwen2.5-0.5B-Instruct` at revision

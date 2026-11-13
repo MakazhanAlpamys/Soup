@@ -7,6 +7,8 @@ from io import StringIO
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 def _fake_factories(monkeypatch, *, after_wrong=0, variable=False, fail=False):
     from soup_cli.eval import quant_performance
@@ -300,13 +302,37 @@ def test_performance_refuses_stub_measurements_before_model_loading(monkeypatch)
         "--tasks", "missing.jsonl", "--performance", "--allow-stub",
     ])
     assert result.exit_code == 3, (result.output, result.exception)
-    assert "--allow-stub" in result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert "--performance cannot measure deterministic --allow-stub generators." in output
+
+
+@pytest.mark.parametrize("device", ["tpu", "cuda:x", "cuda:"])
+def test_unknown_performance_device_is_named_before_model_loading(tmp_path, monkeypatch, device):
+    from soup_cli.cli import app
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner
+
+    monkeypatch.chdir(tmp_path)
+    for side in ("before", "after"):
+        (tmp_path / side).mkdir()
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text('{"prompt": "question", "expected": "ok"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        quant_check, "make_model_generator", lambda *a, **kw: pytest.fail("Must not load a model"),
+    )
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", str(tasks), "--performance", "--device", device,
+    ])
+    assert result.exit_code == 3, (result.output, result.exception)
+    output = " ".join(strip_ansi(result.output).split())
+    assert "--device must be auto, cpu, cuda, cuda:<index> or mps" in output
 
 
 def test_performance_runtime_failure_exits_one_and_releases_model(tmp_path, monkeypatch):
     from soup_cli.cli import app
     from soup_cli.eval import quant_check
-    from tests.conftest import make_cli_runner, strip_ansi
+    from tests.conftest import make_cli_runner
 
     monkeypatch.chdir(tmp_path)
     before, after, events = _fake_factories(monkeypatch, fail=True)
@@ -384,4 +410,5 @@ def test_explicit_performance_options_require_the_flag_even_at_default_values(
         "--tasks", str(tasks), *options,
     ])
     assert result.exit_code == 3, (result.output, result.exception)
-    assert "require --performance" in result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert "--device and performance budgets require --performance." in output
