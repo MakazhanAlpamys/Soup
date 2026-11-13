@@ -723,6 +723,7 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parq
 Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
 including Excel's CSV UTF-8 exports. The signature is removed before parsing;
 U+FEFF characters inside field values or document text are preserved.
+Quoted CSV fields also preserve their original LF, CRLF or CR line endings.
 
 The same leading-BOM handling applies to tokenizer corpora, inference benchmark
 prompts, Agent Forge predictions, draft JSONL inputs, edit covariance corpora,
@@ -1099,9 +1100,17 @@ data:
 resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
 `orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
 vision and audio paths whatever the backend (they run their transformers setup before the
-backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
-`mlx`, and `training.stream_layers` never add them, so a config setting them there is
-refused at load, naming which of those applies (#1358).
+backend is read). On `backend: mlx`, text SFT supports native vocabulary expansion
+when `training.quantization: none` on dense causal models (`mlx_lm.models.llama` layout)
+whose base embedding row count matches the tokenizer vocabulary length (#1994). Special tokens
+are registered first to ensure semantic precedence, whereas `backend: transformers`
+(`apply_vocab_expansion`) registers ordinary tokens first. New rows are
+initialized with a normal distribution matching the base embedding's std and dtype.
+Saved adapters include separate `added_tokens.safetensors` and `added_tokens_info.json`
+sidecar artifacts, while downstream consumers (`soup infer`, `soup chat`, `soup merge`)
+explicitly refuse expanded vocabulary MLX adapters until unified loader support lands.
+Any other task on MLX, quantized MLX models, `backend: unsloth` (text SFT and every other task),
+and `training.stream_layers` refuse vocabulary expansion at config load, naming which applies (#1358).
 
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the

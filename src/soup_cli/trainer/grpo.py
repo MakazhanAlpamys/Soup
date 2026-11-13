@@ -540,22 +540,6 @@ class GRPOTrainerWrapper:
             "max_completion_length": cfg.data.max_length,
         }
 
-        # v0.71.21 #124 — vLLM sleep mode: set TRL's GRPOConfig hook when the
-        # installed TRL exposes it; otherwise print a friendly advisory
-        # (Soup's own vLLM engine factory honors sleep_mode=True).
-        if tcfg.vllm_sleep_mode:
-            import inspect as _inspect
-
-            from soup_cli.utils.grpo_long_context import (
-                maybe_enable_trl_sleep_mode,
-            )
-
-            maybe_enable_trl_sleep_mode(
-                grpo_kwargs,
-                _inspect.signature(GRPOConfig).parameters,
-                console,
-            )
-
         # CPU support: set use_cpu and prevent empty generations
         if self.device == "cpu":
             import inspect as _inspect

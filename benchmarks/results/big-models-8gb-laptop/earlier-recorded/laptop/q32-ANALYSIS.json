@@ -1,0 +1,127 @@
+{
+  "stage": 32,
+  "accepted": "real32B_NF4_LoRA_three_updates_and_exact_cold_reload",
+  "total_parameters": 32762123264,
+  "trainable_parameters": 9961472,
+  "adapter_tensors": 256,
+  "sequence_length": 128,
+  "batch_size": 1,
+  "optimizer_steps": 3,
+  "heldout_sequences": 2,
+  "heldout_before_losses": [
+    4.3093791007995605,
+    4.310735702514648
+  ],
+  "heldout_after_losses": [
+    4.298623561859131,
+    4.307984352111816
+  ],
+  "step_seconds": [
+    10.139700699990499,
+    9.474364399997285,
+    9.265869399998337
+  ],
+  "median_step_seconds": 9.474364399997285,
+  "torch_peak_allocated_MiB": 2651.39794921875,
+  "torch_peak_reserved_MiB": 2828.0,
+  "fixed_data_sha256": "85c7b3903b135df04cb29e02a5be6f85385bacc9919b6eeafddc552a93f71ca9",
+  "adapter_sha256": "88aa4279ed57aa75b10c758810415441e22251ad71f8c0185783c40eb614b048",
+  "base_files_unchanged": 81,
+  "cold_reload_exact": true,
+  "phases": {
+    "prepare-01": {
+      "outcome": "completed",
+      "failure": null,
+      "pid": 33668,
+      "elapsed_seconds": 150.32799999999406,
+      "sampled_device_peak_MiB": 114.0,
+      "peak_process_RSS_MiB": 45.71484375,
+      "peak_private_commit_MiB": 37.87890625,
+      "min_host_available_MiB": 12808.5703125,
+      "min_commit_headroom_MiB": 14925.74609375,
+      "all_owned_processes_stopped": true
+    },
+    "modules-01-guard": {
+      "outcome": "worker_failed",
+      "failure": null,
+      "pid": 20256,
+      "elapsed_seconds": 8.0,
+      "sampled_device_peak_MiB": 0.0,
+      "peak_process_RSS_MiB": 539.4921875,
+      "peak_private_commit_MiB": 1009.6953125,
+      "min_host_available_MiB": 13786.375,
+      "min_commit_headroom_MiB": 16858.140625,
+      "all_owned_processes_stopped": true
+    },
+    "modules-02-guard": {
+      "outcome": "completed",
+      "failure": null,
+      "pid": 30440,
+      "elapsed_seconds": 42.85899999999674,
+      "sampled_device_peak_MiB": 590.0,
+      "peak_process_RSS_MiB": 1857.91015625,
+      "peak_private_commit_MiB": 4461.6640625,
+      "min_host_available_MiB": 12415.34765625,
+      "min_commit_headroom_MiB": 13466.92578125,
+      "all_owned_processes_stopped": true
+    },
+    "pooled-01-guard": {
+      "outcome": "worker_failed",
+      "failure": null,
+      "pid": 23160,
+      "elapsed_seconds": 31.98399999999674,
+      "sampled_device_peak_MiB": 114.0,
+      "peak_process_RSS_MiB": 1022.92578125,
+      "peak_private_commit_MiB": 1607.3984375,
+      "min_host_available_MiB": 13286.09765625,
+      "min_commit_headroom_MiB": 14936.9609375,
+      "all_owned_processes_stopped": true
+    },
+    "pooled-02-guard": {
+      "outcome": "completed",
+      "failure": null,
+      "pid": 26252,
+      "elapsed_seconds": 50.937999999994645,
+      "sampled_device_peak_MiB": 2072.0,
+      "peak_process_RSS_MiB": 2162.5,
+      "peak_private_commit_MiB": 5106.0078125,
+      "min_host_available_MiB": 10930.18359375,
+      "min_commit_headroom_MiB": 8451.93359375,
+      "all_owned_processes_stopped": true
+    },
+    "train-01-guard": {
+      "outcome": "completed",
+      "failure": null,
+      "pid": 41692,
+      "elapsed_seconds": 175.57800000000861,
+      "sampled_device_peak_MiB": 3002.0,
+      "peak_process_RSS_MiB": 6173.07421875,
+      "peak_private_commit_MiB": 9825.4453125,
+      "min_host_available_MiB": 6339.73828125,
+      "min_commit_headroom_MiB": 6457.4140625,
+      "all_owned_processes_stopped": true
+    },
+    "reload-01-guard": {
+      "outcome": "completed",
+      "failure": null,
+      "pid": 39296,
+      "elapsed_seconds": 129.4380000000092,
+      "sampled_device_peak_MiB": 2440.0,
+      "peak_process_RSS_MiB": 5874.1640625,
+      "peak_private_commit_MiB": 8994.96875,
+      "min_host_available_MiB": 5844.87890625,
+      "min_commit_headroom_MiB": 6629.8203125,
+      "all_owned_processes_stopped": true
+    }
+  },
+  "limits": [
+    "only3updateson381causaltargets",
+    "twoheldoutsequencesnotqualitybenchmark",
+    "exactreloadlossandlogitsslicesnotfullvocabularylogitstensors",
+    "LoRAfrozenbase_notfullweighttraining",
+    "devicepeakissampled_notahardglobalmemorybound",
+    "physical8GBGPU_doesnotprove4GBhardware",
+    "modelandfrozenruntimeexternalassets",
+    "70B123Bnotrun"
+  ]
+}

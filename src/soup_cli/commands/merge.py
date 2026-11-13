@@ -185,6 +185,21 @@ def merge(
         )
         raise typer.Exit(1)
 
+    if (adapter_path / "added_tokens.safetensors").exists():
+        console.print(
+            "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+        )
+        raise typer.Exit(1)
+    try:
+        cfg_data = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+        if isinstance(cfg_data, dict) and cfg_data.get("vocab_expansion"):
+            console.print(
+                "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+            )
+            raise typer.Exit(1)
+    except (OSError, ValueError):
+        pass
+
     # --- Resolve base model ---
     if not base:
         base = _detect_base_model(adapter_config_path)

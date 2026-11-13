@@ -80,6 +80,13 @@ class GateTask(BaseModel):
         default=None, description="Registered benchmark id (e.g. mini_mmlu)",
     )
 
+    @field_validator("threshold", mode="before")
+    @classmethod
+    def _numeric_threshold(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("threshold must be a number, not a boolean")
+        return value
+
     @field_validator("tasks", "prompts")
     @classmethod
     def _clean_path_fields(cls, value: Optional[str]) -> Optional[str]:

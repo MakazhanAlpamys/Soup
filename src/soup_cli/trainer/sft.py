@@ -1717,6 +1717,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
         lora_layers_to_transform = None
+        lora_freeze_plan = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
             from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
@@ -1735,6 +1736,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if plan is not None:
                 cutoff, total_layers = plan
+                lora_freeze_plan = plan
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
@@ -1860,21 +1862,44 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "adapter to attach to. Reduce freeze_layers/freeze_ratio."
                 )
 
-            # #1432: peft only applies layers_to_transform when
-            # target_modules is a list, never a string (a regex or
-            # all-linear), so refuse rather than silently ship the same bug
-            # for that shape.
+            # #1432 / #2201: peft applies layers_to_transform only to a LIST
+            # target_modules, never to a string (a regex or all-linear).
+            # Rather than refuse the combination, resolve the string to the
+            # explicit module names it reaches and keep the ones the freeze
+            # plan leaves trainable, so the adapter still respects the plan.
+            scoped_by_names = False
             if lora_layers_to_transform is not None and isinstance(target_modules, str):
-                raise ValueError(
-                    "training.freeze_layers / training.freeze_ratio cannot "
-                    "currently be combined with a string "
-                    f"training.lora.target_modules ({target_modules!r}, a regex "
-                    "or all-linear): peft only restricts layers_to_transform "
-                    "when target_modules is a list of module-name suffixes. "
-                    "Give an explicit training.lora.target_modules list (the "
-                    "module names are in model.named_modules()) instead, or "
-                    "drop freeze_layers/freeze_ratio."
+                from soup_cli.utils.peft_wiring import (
+                    expand_string_target_modules,
+                    restrict_target_modules_to_layers,
                 )
+
+                cutoff, total_layers = lora_freeze_plan
+                resolved_targets = restrict_target_modules_to_layers(
+                    self.model, target_modules, cutoff, total_layers
+                )
+                if not resolved_targets:
+                    reached = len(expand_string_target_modules(self.model, target_modules))
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio leaves "
+                        f"nothing for training.lora.target_modules "
+                        f"{target_modules!r} to attach to: the string reaches "
+                        f"{reached} module(s) in this model, and none of them "
+                        f"sits in the trainable layers {cutoff}.."
+                        f"{total_layers - 1}. Reduce freeze_layers/freeze_ratio, "
+                        "or name a target that reaches those layers."
+                    )
+                console.print(
+                    f"[green]Freeze-scoped targets:[/] "
+                    f"{len(resolved_targets)} module(s) resolved from "
+                    f"target_modules={for_terminal(repr(target_modules))} inside layers "
+                    f"{cutoff}..{total_layers - 1}"
+                )
+                target_modules = resolved_targets
+                # Keep lora_layers_to_transform set: the target_parameters and
+                # VeRA refusals below key off it, and a string target with a
+                # freeze plan must not slip past them (#2201 review, item 2).
+                scoped_by_names = True
 
             # #1432: peft only applies layers_to_transform to a list target
             # that lives inside a numbered decoder layer, or to an exact
@@ -1927,7 +1952,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
-                layers_to_transform=lora_layers_to_transform,
+                layers_to_transform=(
+                    None if scoped_by_names else lora_layers_to_transform
+                ),
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (

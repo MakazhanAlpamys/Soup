@@ -115,12 +115,27 @@ class BundleManifest:
     repro_receipt: Optional[dict] = None
 
 
-def _hash_file(path: str) -> tuple[int, str]:
+def _hash_file(path: str, max_bytes: int) -> tuple[int, str]:
+    """Stream ``path`` through SHA-256, refusing before any read if it alone
+    would blow ``max_bytes`` (the remaining bundle-size budget).
+
+    Without this stat-before-read check, a single file bigger than the
+    aggregate cap (e.g. a stray multi-GB checkpoint shard under a dataset
+    dir) was fully read and hashed before the cap was ever consulted at the
+    call site -- a slow hang ending in the exact error a quick stat could
+    have given instantly. Mirrors adapter_sign._hash_file's
+    stat-before-read "hostile device file" defense.
+    """
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):
         raise ValueError(f"{os.path.basename(path)!r}: must not be a symlink")
     if not stat.S_ISREG(st.st_mode):
         raise ValueError(f"{os.path.basename(path)!r}: must be a regular file")
+    if st.st_size > max_bytes:
+        raise ValueError(
+            f"bundle aggregate size would exceed the cap: {os.path.basename(path)!r} is "
+            f"{st.st_size} bytes but only {max_bytes} bytes of the cap remain"
+        )
     digest = hashlib.sha256()
     size = 0
     with open(path, "rb") as fh:
@@ -259,7 +274,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
             )
         )
     for full, rel_tar in members:
-        size, digest = _hash_file(full)
+        size, digest = _hash_file(full, plan.bundle_size_cap_bytes - total)
         total += size
         if total > plan.bundle_size_cap_bytes:
             raise ValueError(

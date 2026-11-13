@@ -2018,7 +2018,7 @@ class TestR1DistillLlamaAndDpoRecipes:
 
 
 class TestQwen35LargeMoeGrpoRecipe:
-    """The #275 122B reasoning row is discoverable through public catalog APIs."""
+    """The #275 122B and 397B reasoning rows are discoverable through public catalog APIs."""
 
     def test_122b_grpo_is_listed_and_searchable(self) -> None:
         from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
@@ -2027,3 +2027,11 @@ class TestQwen35LargeMoeGrpoRecipe:
         assert recipe is not None
         assert recipe in list_recipes()
         assert recipe in search_recipes(query="reasoning", task="grpo", size="122b")
+
+    def test_397b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-397b-a17b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="397b")
