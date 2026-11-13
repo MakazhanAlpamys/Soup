@@ -68,9 +68,17 @@ BYTES_PER_PARAM_BY_QUANT: dict[str, float] = {
 #: Bytes per quantized linear parameter, including the block scales.
 NF4_BYTES_PER_PARAM = 0.53
 INT8_BYTES_PER_PARAM = 1.02
-#: On the Transformers backend, embeddings and the output head are cast to fp32
-#: for k-bit training (peft ``prepare_model_for_kbit_training``).
-KBIT_UNQUANTIZED_BYTES = 4.0
+#: On the Transformers backend, a 4-bit or 8-bit run on a card with bf16 hardware keeps
+#: the embeddings, the norms and an untied output head in bf16: ``prepare_kbit_model``
+#: (``utils/kbit_prepare.py``, #2609) casts back what peft's
+#: ``prepare_model_for_kbit_training`` upcast. Qwen2.5-7B NF4 on an RTX 4090: those
+#: tensors were 4,158 MiB at fp32 and 2,079 MiB at bf16, and the allocator peak fell by
+#: 3,905 MiB (``benchmarks/gate-2609-kbit-fp32-ab.md``).
+KBIT_UNQUANTIZED_BYTES = 2.0
+#: The same tensors in fp32: peft's own preparation, which a card without bf16 hardware
+#: (``RunSpec.kbit_fp32``) and ``grpo_fp16`` keep, and what every resident row of
+#: ``benchmarks/evidence/vram-2049-resident.json`` was measured with.
+KBIT_UNQUANTIZED_FP32_BYTES = 4.0
 #: Both embedding and head stayed bf16 after a real 4-bit Unsloth load and LoRA
 #: injection on an RTX 5090 (Unsloth 2026.10.10). See the pinned model, dtypes and
 #: reproduction in ``benchmarks/unsloth-4bit-weight-dtypes.md``. No runtime probe.
@@ -137,8 +145,11 @@ BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
 
 # --- logits ----------------------------------------------------------------------
 
-#: Under 4-bit and 8-bit loading the output head is fp32 (``KBIT_UNQUANTIZED_BYTES``),
-#: so its logits cost 4 bytes an element, not 2.
+#: Under 4-bit and 8-bit loading the logits cost 2 bytes an element more than under
+#: bf16 loading. Originally the fp32 output head's logits (4 bytes, not 2). #2609 left it
+#: as it was: with the head back in bf16 the profile of the step still held three fp32
+#: ``[8, 512, 152064]`` logits tensors (7,128 MiB) at the peak, the same blocks as with
+#: the fp32 head, and it removed 0 MiB of them (``benchmarks/gate-2609-kbit-fp32-ab.md``).
 KBIT_LOGITS_EXTRA_BYTES = 2
 #: The logits a step that builds no loss over them holds at the end of its forward:
 #: the half-precision output autocast builds (2 bytes an element) and the fp32 copy
@@ -232,8 +243,14 @@ class RunSpec:
     activation_offloading: Optional[str] = None
     #: The loader whose default LoRA targets and weight dtypes are being estimated.
     backend: str = "transformers"
+    #: True when a 4-bit or 8-bit run holds its embeddings, norms and untied head in fp32:
+    #: a card without bf16 hardware, ``grpo_fp16``, or a run measured before #2609. False
+    #: is the bf16 default (``KBIT_UNQUANTIZED_BYTES``).
+    kbit_fp32: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.kbit_fp32, bool):
+            raise TypeError(f"kbit_fp32 must be bool, got {type(self.kbit_fp32).__name__}")
         if not isinstance(self.lm_head, bool):
             raise TypeError(f"lm_head must be bool, got {type(self.lm_head).__name__}")
         if not isinstance(self.logits_loss, bool):
@@ -308,7 +325,9 @@ def weights_bytes(shape: ModelShape, run: RunSpec) -> int:
         embed = _embedding_params(shape)
         linear = max(shape.params - embed, 0)
         per = NF4_BYTES_PER_PARAM if run.quant == "4bit" else INT8_BYTES_PER_PARAM
-        embedding_head_bytes = KBIT_UNQUANTIZED_BYTES
+        embedding_head_bytes = (
+            KBIT_UNQUANTIZED_FP32_BYTES if run.kbit_fp32 else KBIT_UNQUANTIZED_BYTES
+        )
         if run.backend == "unsloth" and run.quant == "4bit":
             embedding_head_bytes = UNSLOTH_4BIT_EMBEDDING_HEAD_BYTES
         return math.ceil(linear * per + embed * embedding_head_bytes)

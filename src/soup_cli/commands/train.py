@@ -393,25 +393,27 @@ def _refuse_over_judge_budget(cfg, dataset) -> None:
         raise typer.Exit(1) from exc
 
 
-def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
+def _build_hardware_fit_input(cfg, gpu_memory_gb=None, kbit_fp32=False):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_or_reason``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
-    printed before the model's details are read from the Hub, without the offline
-    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. ``kbit_fp32`` is
+    True on a CUDA card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's
+    fp32 embeddings, norms and head (#2609). A line is printed before the model's
+    details are read from the Hub, without the offline hint used by ``soup plan`` and
+    ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import FitUnavailable
 
-    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb)
+    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb, kbit_fp32=kbit_fp32)
     return None if isinstance(result, FitUnavailable) else result
 
 
 def _hardware_fit_input_or_reason(
-    cfg: SoupConfig, gpu_memory_gb: float | None = None
+    cfg: SoupConfig, gpu_memory_gb: float | None = None, kbit_fp32: bool = False
 ) -> HardwareFitInput | FitUnavailable:
     """Build the train fit input or its reason, announcing any Hub lookup once."""
     from soup_cli.utils.hardware_fit import hardware_fit_input_or_reason
@@ -421,6 +423,7 @@ def _hardware_fit_input_or_reason(
         cfg,
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+        kbit_fp32=kbit_fp32,
     )
 
 
@@ -524,10 +527,16 @@ def _hardware_fit_preflight(
         return
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
+    from soup_cli.utils.gpu import bf16_fp16_flags
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
-    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
-    inp = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=total_bytes / 1024**3)
+    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
+    # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    inp = _hardware_fit_input_or_reason(
+        cfg,
+        gpu_memory_gb=total_bytes / 1024**3,
+        kbit_fp32=bf16_fp16_flags("cuda")[1],
+    )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:

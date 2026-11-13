@@ -96,7 +96,22 @@ def test_auto_prints_one_dim_line(
     assert console.renderables == [f"[dim]{AUTO_LINE}[/]"]
 
 
-def test_explicit_batch_keeps_the_refusal_panel(model: str, console: RecordingConsole) -> None:
+@pytest.mark.parametrize(
+    ("flags", "peak"),
+    [
+        # (bf16, fp16) of the card: the fp32 embeddings, norms and head peft keeps on a CUDA
+        # card without bf16 hardware are priced in, bf16 ones are not (#2609).
+        ((True, False), "Predicted peak VRAM 12.2 GB (+10% margin = 13.4 GB)"),
+        ((False, True), "Predicted peak VRAM 14.4 GB (+10% margin = 15.8 GB)"),
+    ],
+    ids=["bf16-card", "fp16-only-card"],
+)
+def test_explicit_batch_keeps_the_refusal_panel(
+    model: str, console: RecordingConsole, monkeypatch: pytest.MonkeyPatch, flags, peak: str
+) -> None:
+    import soup_cli.utils.gpu as gpu
+
+    monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device, **kw: flags)
     with pytest.raises(typer.Exit) as error:
         train_mod._hardware_fit_preflight(
             config(model, batch_size=1), CARD, allow_oom_attempt=False
@@ -107,9 +122,7 @@ def test_explicit_batch_keeps_the_refusal_panel(model: str, console: RecordingCo
     assert isinstance(panel, Panel)
     assert Text.from_markup(panel.title).plain == "Hardware-fit gate"
     lines = Text.from_markup(panel.renderable).plain.splitlines()
-    assert lines[0] == (
-        "Predicted peak VRAM 14.4 GB (+10% margin = 15.8 GB) exceeds 6.4 GB available."
-    )
+    assert lines[0] == f"{peak} exceeds 6.4 GB available."
 
 
 @pytest.fixture
