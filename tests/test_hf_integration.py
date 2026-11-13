@@ -280,7 +280,7 @@ class TestHFPushCallback:
 
         # Private by default; see tests/test_push_as_visibility.py.
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=True, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
         assert fake_api.upload_folder.called
         kwargs = fake_api.upload_folder.call_args.kwargs
@@ -1114,7 +1114,7 @@ class TestCallbackLifecycle:
             control=types.SimpleNamespace(),
         )
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=True, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
 
     def test_on_train_begin_swallows_failure(self, monkeypatch):

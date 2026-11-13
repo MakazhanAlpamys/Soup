@@ -2208,7 +2208,11 @@ def train(
 
         # --- HF auto-push callback (Part B of v0.29.0) ---
         if push_as:
-            from soup_cli.monitoring.hf_push import build_push_callback, describe_push_repo
+            from soup_cli.monitoring.hf_push import (
+                build_push_callback,
+                describe_prepare_failure,
+                describe_push_repo,
+            )
 
             # A repository this run creates is private unless --push-public;
             # one that already exists is left exactly as it is (the visibility
@@ -2232,18 +2236,12 @@ def train(
             else:
                 # The repository is prepared here, once, so the line below is
                 # printed before training starts and the callback finds it ready.
-                repo_outcome = push_cb.prepare_repo()
-                if repo_outcome is None:
-                    console.print(
-                        f"[yellow]--push-as: could not prepare {for_terminal(push_as)} "
-                        "on the Hub; auto-push is disabled for this run[/]"
-                    )
+                repo_state = push_cb.prepare_repo()
+                if repo_state is None:
+                    failure = describe_prepare_failure(push_as, push_cb.prepare_error)
+                    console.print(f"[yellow]{for_terminal(failure)}[/]")
                 else:
-                    console.print(
-                        for_terminal(
-                            describe_push_repo(push_as, repo_outcome, private=push_private)
-                        )
-                    )
+                    console.print(for_terminal(describe_push_repo(push_as, repo_state)))
                     hf_trainer.add_callback(push_cb)
                     console.print(
                         f"[green]HF auto-push enabled[/] -> {push_as} "
