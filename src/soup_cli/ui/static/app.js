@@ -592,7 +592,7 @@ function renderCharts(metrics) {
     new Chart(spCtx, {
       type: 'line',
       data: { labels: steps, datasets: [makeDataset('Speed', speeds, 'rgb(120, 200, 130)')] },
-      options: chartOpts('Tokens/sec'),
+      options: chartOpts('Steps/sec'),
     });
   }
 

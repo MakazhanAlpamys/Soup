@@ -99,6 +99,21 @@ def test_panel_shows_the_speed_the_record_holds(clock, tracker):
     assert shown[-1] == pytest.approx(25 / 10.0)
 
 
+def test_a_new_training_run_measures_from_its_own_first_step(clock, tracker):
+    run_id = _start_run(tracker)
+    callback = SoupTrainerCallback(display=MagicMock(), tracker=tracker, run_id=run_id)
+    for step, now in ((10, 100.0), (20, 105.0)):
+        clock.now = now
+        _log(callback, step, dict(_TRAIN_LOG))
+    callback.on_train_begin(MagicMock(), MagicMock(max_steps=100), MagicMock())
+    clock.now = 110.0
+    _log(callback, 30, dict(_TRAIN_LOG))
+
+    # Without the reset in on_train_begin this row would be (30 - 10) / 10 = 2.0,
+    # measured from the previous run's first step.
+    assert _recorded_speeds(tracker, run_id)[-1] is None
+
+
 def test_final_summary_row_records_hugging_face_throughput(clock, tracker):
     run_id = _start_run(tracker)
     callback = SoupTrainerCallback(display=MagicMock(), tracker=tracker, run_id=run_id)
@@ -155,6 +170,16 @@ def test_web_speed_chart_keeps_null_as_a_gap():
         Path(__file__).parents[1] / "src" / "soup_cli" / "ui" / "static" / "app.js"
     ).read_text(encoding="utf-8")
     assert "const speeds = metrics.map(m => m.speed ?? null);" in source
+
+
+def test_web_speed_chart_axis_names_steps_not_tokens():
+    # Every writer of `speed` stores steps (iterations) per second: the
+    # transformers callback, MLX SFT's iterations_per_second and MLX DPO.
+    source = (
+        Path(__file__).parents[1] / "src" / "soup_cli" / "ui" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
+    assert "chartOpts('Steps/sec')" in source
+    assert "Tokens/sec" not in source
 
 
 # StepRate is imported inside each test so the regression tests above can run,
