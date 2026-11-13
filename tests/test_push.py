@@ -129,3 +129,36 @@ def test_push_no_token(tmp_path: Path, monkeypatch):
     )
     assert result.exit_code == 1
     assert "token" in result.output.lower()
+
+
+def test_push_invalid_collection_slug_rejected_before_upload(tmp_path, monkeypatch):
+    """An invalid --collection slug must fail before any Hub call (#2824)."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_TOKEN", "t1")
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "adapter_config.json").write_text("{}")
+    (model_dir / "adapter_model.safetensors").write_text("fake")
+
+    fake_api = MagicMock()
+    monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
+
+    result = runner.invoke(
+        app,
+        [
+            "push",
+            "--model",
+            str(model_dir),
+            "--repo",
+            "user/model",
+            "--collection",
+            "not a slug",
+        ],
+    )
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Invalid --collection slug" in result.output
+    fake_api.create_repo.assert_not_called()
+    fake_api.upload_folder.assert_not_called()
+    fake_api.upload_file.assert_not_called()

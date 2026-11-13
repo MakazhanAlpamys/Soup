@@ -138,13 +138,27 @@ def push(
         raise typer.Exit(1)
 
     # --- Resolve HF token (env > cached login, see utils.hf.resolve_token) ---
-    from soup_cli.utils.hf import resolve_endpoint, resolve_token, validate_repo_id
+    from soup_cli.utils.hf import (
+        resolve_endpoint,
+        resolve_token,
+        validate_collection_slug,
+        validate_repo_id,
+    )
 
     try:
         validate_repo_id(repo)
     except ValueError as exc:
         console.print(f"[red]Invalid --repo:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
+
+    # Validate the collection slug up front, before any network call:
+    # a bad slug must not leave a half-published model on the Hub.
+    if collection:
+        try:
+            validate_collection_slug(collection)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --collection slug:[/] {for_terminal(exc)}", emoji=False)
+            raise typer.Exit(1) from exc
 
     hub_token: Optional[str] = None
     hf_token: Optional[str] = None
@@ -305,17 +319,8 @@ def push(
     if collection:
         from soup_cli.utils.hf import (
             add_to_collection,
-            validate_collection_slug,
-        )
-        from soup_cli.utils.hf import (
             resolve_endpoint as _resolve_endpoint,
         )
-
-        try:
-            validate_collection_slug(collection)
-        except ValueError as exc:
-            console.print(f"[red]Invalid --collection slug:[/] {for_terminal(exc)}", emoji=False)
-            raise typer.Exit(1) from exc
 
         try:
             endpoint = _resolve_endpoint()
