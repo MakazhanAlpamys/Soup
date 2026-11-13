@@ -331,7 +331,7 @@ instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
 
 Requirements, each rejected at config load with the reason named:
-`task: sft`, `backend: transformers`, `modality: text`, and
+`task: sft`, `backend: transformers` (or the native MLX Llama path below), `modality: text`, and
 `quantization: none` (quantized weights cannot be trained directly — use LoRA
 on top of them, i.e. QLoRA). It is mutually exclusive with every LoRA feature
 (`use_dora` / `use_vera` / `use_olora` / `use_rslora` / `rank_pattern` /
@@ -369,6 +369,64 @@ Pick between the three "LoRA off" modes by how much you want to train:
 > a LoRA-shaped model, so on a full-FT run it errs optimistic — set
 > `batch_size` explicitly, or start low and raise it. (This is not new to
 > `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
+
+### Dense Llama training on MLX
+
+Native MLX text SFT supports `lora.r: 0` on unquantized Llama models loaded as
+`mlx_lm.models.llama.Model` (`model_type: llama`). Other architectures and quantized
+loaded modules are refused, even if the recipe says `quantization: none`.
+
+```yaml
+base: ./local-dense-llama
+backend: mlx
+task: sft
+output: ./llama-full
+data:
+  train: ./train.jsonl
+training:
+  quantization: none
+  batch_size: 1
+  freeze_ratio: 0.75      # optional; omit to train every base parameter
+  lora:
+    r: 0
+```
+
+Layers below `freeze_layers`, or `int(num_layers * freeze_ratio)`, remain frozen;
+`freeze_layers` takes priority when both are set. Embeddings, the final norm and
+the output head remain trainable. Tied embedding/head weights receive one update.
+An out-of-range layer count or a plan with nothing trainable is refused. Exact
+frozen/trainable parameter and tensor counts are printed before the first update.
+Frozen tensors receive no optimizer state. Accumulated gradients are weighted by
+the number of supervised tokens, then clipped once per optimizer update.
+
+Trainable weights are promoted to **float32**, including when the input checkpoint
+is bf16/fp16; frozen weights retain their input dtype. AdamW moments and gradients
+are therefore float32 on this path. This avoids fp16 moment/epsilon underflow.
+`gradient_checkpointing: true` is supported. No automatic batch-size estimate
+qualifies a dense model's memory use; choose an explicit small batch size.
+
+The final output and each `checkpoint-000000N/` contain complete weights (including
+frozen layers), config, tokenizer, and `training_config.json` with the effective
+freeze plan and completed update count. `save_steps` counts micro-batches; a save
+due within an accumulation group waits for its completed optimizer update. Load
+any saved directory with `mlx_lm.load("./llama-full")`, without the original base
+directory or `adapter_path`. Use a fresh output directory for each run.
+
+LoRA plus freeze settings, non-default LoRA controls, vocabulary expansion, LISA,
+Spectrum, distributed training, `--resume` and `--hf-resume` remain refused.
+Checkpoints contain model weights rather than exact optimizer/RNG training state
+(#1977); a saved standalone model can be the base of a new run.
+
+For a model with `P` total and `T` trainable parameters, the persistent memory
+projection is `4*T + frozen_weight_bytes + 4*T + 8*T` bytes: trainable weights,
+frozen weights, gradients, and two float32 AdamW moments. Activations, temporary
+buffers, accumulation, cache, and macOS need additional memory. With all 8 billion
+parameters trainable this is **128 GB before those extras**; with bf16 frozen
+weights it is `2*(P-T) + 16*T`. Freezing 75% of blocks does not freeze 75% of all
+parameters, because embeddings/norm/head stay trainable. Neither 96 GB nor 128 GB
+unified memory is a measured capacity guarantee. See the
+[native qualification record](../benchmarks/mlx-full-ft-1992.md) for tested shapes,
+peak memory, versions and reproducible checks.
 
 **Load dtype** (#339, #471, #492): a frozen base — LoRA, or QLoRA — loads at
 the checkpoint's own dtype (`dtype="auto"`) instead of always upcasting to fp32,

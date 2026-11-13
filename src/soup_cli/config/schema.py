@@ -3592,7 +3592,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3602,7 +3602,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -7235,7 +7235,8 @@ class SoupConfig(BaseModel):
         """#340 — ``lora.r: 0`` = full fine-tuning (no adapter).
 
         The third member of the "LoRA off" family, sharing Spectrum's and
-        LISA's gate: sft + transformers + text + ``quantization='none'``,
+        LISA's gate: sft + transformers + text + ``quantization='none'``.
+        Native MLX text SFT also qualifies dense Llama models (#1992). Both are
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
@@ -7279,7 +7280,8 @@ class SoupConfig(BaseModel):
             # on the meta device, so there is nothing to full fine-tune).
             # Let it speak rather than reporting a quantization mismatch.
             return self
-        if self.backend != "transformers":
+        mlx_full = self.backend == "mlx" and self.task == "sft"
+        if self.backend != "transformers" and not mlx_full:
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
@@ -7313,6 +7315,17 @@ class SoupConfig(BaseModel):
             )
         lcfg = tcfg.lora
         lora_conflicts = []
+        if mlx_full:
+            defaults = LoraConfig()
+            for field in ("alpha", "dropout", "target_modules"):
+                if getattr(lcfg, field) != getattr(defaults, field):
+                    lora_conflicts.append(f"lora.{field}")
+            for field in ("add_new_tokens", "new_special_tokens"):
+                if getattr(self.data, field):
+                    raise ValueError(
+                        f"MLX full fine-tuning does not support data.{field}; "
+                        "vocabulary expansion currently requires LoRA."
+                    )
         if lcfg.use_dora:
             lora_conflicts.append("lora.use_dora")
         if lcfg.use_vera:
@@ -9462,6 +9475,11 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, name) is not None
         ]
         if not fields:
+            return self
+        if (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and tcfg.lora.r == 0 and not tcfg.stream_layers
+        ):
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
