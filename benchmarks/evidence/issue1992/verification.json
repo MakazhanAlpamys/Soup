@@ -183,9 +183,11 @@
     "mypy": "Success: no issues found in 1 source file (mlx_full.py; follow-imports=silent)"
   },
   "publication": {
-    "published": false,
-    "fragment": "changelog.d/0.77.2/1992.added.md",
-    "fragment_note": "Provisional issue-number filename; replace with the actual PR number and append PR credit before publishing."
+    "published": true,
+    "pr_number": 2818,
+    "url": "https://github.com/MakazhanAlpamys/Soup/pull/2818",
+    "fragment": "changelog.d/0.77.2/2818.added.md",
+    "fragment_note": "Actual pull-request number assigned; fragment credits #1992 by @here-2007 in #2818."
   },
   "packaging": {
     "wheel_entries": 694,

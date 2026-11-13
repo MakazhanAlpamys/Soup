@@ -32,9 +32,9 @@ v0.78.0 release window is open; no broad schema or architecture support is impli
    implementation environment. No narrower version guard or dependency change is
    needed. Native tests are included in the existing `mlx-smoke` CI selection.
 4. **Release:** implementation targets the confirmed v0.78.0 window. The changelog
-   fragment lives under the latest released version, 0.77.2. Its provisional
-   filename is the issue number; replace it with the actual PR number and append
-   the PR credit when a PR exists. No PR number has been invented.
+   fragment is `changelog.d/0.77.2/2818.added.md`, under the latest released
+   version, with the issue and PR credits for
+   [PR #2818](https://github.com/MakazhanAlpamys/Soup/pull/2818).
 
 ## Implementation choices supported by the controls
 
