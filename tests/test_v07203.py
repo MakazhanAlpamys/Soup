@@ -1097,6 +1097,7 @@ class TestIssue617PanelDtype:
             "torch",
             SimpleNamespace(
                 cuda=SimpleNamespace(
+                    is_available=lambda: False,
                     mem_get_info=lambda: (4_000_000_000, 8_000_000_000)
                 )
             ),

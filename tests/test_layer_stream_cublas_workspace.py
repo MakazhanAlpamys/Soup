@@ -153,7 +153,10 @@ def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatc
     import sys
 
     fake_torch = SimpleNamespace(
-        cuda=SimpleNamespace(mem_get_info=lambda *_a, **_kw: (4_000_000_000, 8_000_000_000))
+        cuda=SimpleNamespace(
+            is_available=lambda: False,
+            mem_get_info=lambda *_a, **_kw: (4_000_000_000, 8_000_000_000),
+        )
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     seen = {}

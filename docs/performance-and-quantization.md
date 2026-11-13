@@ -876,6 +876,12 @@ or devices.
 The refusal names the two knobs that scale the model terms (`training.batch_size`,
 `data.max_length`).
 
+The `SIZE:COUNT` parsing follows PyTorch 2.14.0's `parseChosenWorkspaceSize` in
+`aten/src/ATen/cuda/CublasHandlePool.cpp`. `TORCH_CUBLAS_WORKSPACE_CACHE=1` retains
+ATen's workspace for each cuBLAS handle and CUDA stream; when unset, ATen allocates
+and releases its workspace for each operation. The pre-flight conservatively budgets
+the forward and backward handle/stream workspaces either way.
+
 Refusing rather than warning is deliberate. On Linux an over-budget step is a hard OOM.
 On Windows it is worse: WDDM silently spills to host memory and the run merely becomes an
 order of magnitude slower — measured here as a 9.27 GB peak on a 4.29 GB card with **no
