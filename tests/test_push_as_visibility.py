@@ -746,8 +746,13 @@ class TestMultiGpuReexecKeepsPushPublic:
         assert result.exit_code == 1, (result.output, repr(result.exception))
         printed = _plain(result.output)
         assert "Multi-GPU launch required" in printed, printed
-        # Rich may wrap the command anywhere, so compare without whitespace.
-        return printed.replace(" ", "")
+        # Rich may wrap the command anywhere inside the panel, and the wrap puts the
+        # panel's border characters between two halves of an argument, so compare
+        # without whitespace and without box-drawing characters (U+2500..U+257F).
+        return "".join(
+            char for char in printed
+            if not char.isspace() and not 0x2500 <= ord(char) <= 0x257F
+        )
 
     def test_the_train_command_hands_the_flag_to_the_launcher(self, tmp_path, monkeypatch):
         printed = self._printed_launch_command(
