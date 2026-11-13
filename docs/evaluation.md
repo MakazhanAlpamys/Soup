@@ -841,6 +841,12 @@ base run.
 `--write-baseline` refuses an output resolving to the suite, custom-task file,
 or judge-prompts file before model construction (exit 3), preserving those inputs.
 Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+
+A benchmark task with no successful generations fails the gate and supplies
+no baseline score. Other scored tasks can still be written. If no task was
+scored, no baseline is written and any existing baseline stays intact. A
+completed wrong answer or empty string still counts as a measured zero, and
+partially failed benchmarks retain the full denominator.
 Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
 
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,

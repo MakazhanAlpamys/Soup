@@ -613,10 +613,16 @@ def _run_benchmark_task(
         )
     from soup_cli.eval.forgetting import ForgettingDetector
 
-    score = ForgettingDetector(
+    detector = ForgettingDetector(
         generate_fn=generate_fn,
         benchmark=task.benchmark,
-    ).run_baseline()
+    )
+    score = detector.run_baseline()
+    if detector.failed_generations == len(detector.benchmark):
+        raise ValueError(
+            f"Task {task.name!r} has no successful generations for benchmark "
+            f"{task.benchmark!r} ({detector.failed_generations} failed)"
+        )
     return max(0.0, min(1.0, float(score)))
 
 

@@ -517,22 +517,25 @@ class ForgettingDetector:
         self.benchmark = MINI_BENCHMARKS[benchmark]
         self.threshold = threshold
         self._baseline_accuracy: Optional[float] = None
+        self.failed_generations = 0
 
     def _evaluate(self) -> float:
         correct = 0
+        self.failed_generations = 0
         outputs = iter_outputs(self.generate_fn, [
             build_mcq_prompt(item["question"], item.get("answer", ""))
             for item in self.benchmark
         ])
         for item, output in track(zip(self.benchmark, outputs), len(self.benchmark)):
             if output is None:
+                self.failed_generations += 1
                 continue
             if score_answer(output, item["answer"]):
                 correct += 1
         return correct / len(self.benchmark) if self.benchmark else 0.0
 
     def run_baseline(self) -> float:
-        """Compute the baseline accuracy before training starts."""
+        """Compute the baseline accuracy and record the failed generation count."""
         self._baseline_accuracy = self._evaluate()
         return self._baseline_accuracy
 
