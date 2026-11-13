@@ -1,0 +1,154 @@
+{
+  "note": "Every attempt listed has a guard summary.json. Two further attempts (a train call and reload c) were stopped by the operator before the worker started and have no summary; they are described in the record text only.",
+  "attempts": [
+    {
+      "attempt": "q32 train, first call",
+      "outcome": "supervisor_error",
+      "failure": "RuntimeError: preflight resource failure: host_budget",
+      "started_utc": "2026-11-07T08:16:13Z",
+      "elapsed_s": 55.78200000000652,
+      "worker_returncode": null,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "2222f2bda9ce3db44b671cb711f374710cbb5993ccb1cf887581851f95c15af6",
+      "samples.jsonl_sha256": "50d0fc8505b5725c07df84d128ccb7db3824a88d2d1464814fa8b640cdecc7c5"
+    },
+    {
+      "attempt": "q32 train (the completed run)",
+      "outcome": "completed",
+      "failure": null,
+      "started_utc": "2026-11-07T08:29:56Z",
+      "elapsed_s": 305.5469999999623,
+      "worker_returncode": 0,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "5a0920847ae6cfeb9bb3c3a3ee0f57d6f365ac29c3aff8713e4b038c3e3c4a2c",
+      "worker_result_status": "passed",
+      "worker_result.json_sha256": "28bdf98e1ff6574a12d607b375e9c3e4faa002a20c7e90028060aa91827762aa",
+      "device_fb_used_mib_max_sampled": 3002.0,
+      "samples.jsonl_sha256": "11476d362414aa1c2a1c4d5f138c5cac49f731c80d5500a49e51bf134646d830"
+    },
+    {
+      "attempt": "q32 reload a",
+      "outcome": "guard_stopped",
+      "failure": "host_emergency_floor",
+      "started_utc": "2026-11-07T08:35:03Z",
+      "elapsed_s": 170.7970000000205,
+      "worker_returncode": 1,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "27bc478554dfbcce10ccf92432f0259d226cff2423f2485c097e0f7a1d3c52f8",
+      "worker_result_status": "running",
+      "worker_result.json_sha256": "7e84449ffed760d97f8cd518cd8c4595ae7d07ee9faa0e8eb15656c9ad5ab462",
+      "device_fb_used_mib_max_sampled": 2593.0,
+      "samples.jsonl_sha256": "06c3bc786319c181969bc77f9e661453fd417a2b38051acde0c6a9ba302cba1a"
+    },
+    {
+      "attempt": "q32 reload b",
+      "outcome": "guard_stopped",
+      "failure": "device_fb_budget",
+      "started_utc": "2026-11-07T09:38:43Z",
+      "elapsed_s": 154.26600000000326,
+      "worker_returncode": 1,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "0c22f216b860a76877c833633463b3c851834200926538843faa14eb3a0725b4",
+      "worker_result_status": "running",
+      "worker_result.json_sha256": "473622c76811c6885efdac8bae9e3aceef54f430626abe3957950e82829b22f6",
+      "device_fb_used_mib_max_sampled": 7843.0,
+      "samples.jsonl_sha256": "80dcc2705cb4dc6d2d4bf41a0151f62e9e74e61ee5ad3204335a7557ef462648"
+    },
+    {
+      "attempt": "q32 reload d",
+      "outcome": "worker_failed",
+      "failure": null,
+      "started_utc": "2026-11-07T10:02:34Z",
+      "elapsed_s": 53.76600000000326,
+      "worker_returncode": 1,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "059d1ae757a84f927df4ea89d1a0176275bbdd9dd9419f86caf1e23f9fd395be",
+      "worker_result_status": "failed",
+      "worker_error": "MemoryError(\"host preflight failed: {'host_staging_bound': 4563402752, 'gpu_vocab_bytes': 1555824640, 'adapter_train_bytes': 159383552, 'decoder_pool_bytes': 503105080, 'host_required_available': 7784628224, 'gpu_required_free': 4365796920, 'host_available': 7428878336}\")",
+      "worker_result.json_sha256": "3ba60f388f939578e0670f10fb19d1a810624d3fea051b864dfe2b1a0748bd23",
+      "device_fb_used_mib_max_sampled": 4452.0,
+      "samples.jsonl_sha256": "3a8adb54cb841ae86bfc87ff1a65433791ed7aed9aa236a9261f1eb77d78f751"
+    },
+    {
+      "attempt": "q32 reload e",
+      "outcome": "guard_stopped",
+      "failure": "device_fb_budget",
+      "started_utc": "2026-11-07T10:04:08Z",
+      "elapsed_s": 122.81199999997625,
+      "worker_returncode": 1,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "335204f90ff35d6534494a8e3b869cdd0012f0ac47f3c8cefbf043a2ae1213f1",
+      "worker_result_status": "running",
+      "worker_result.json_sha256": "65710ebe888d8c27786f934c0f8fcbd76771fa7e19cee78fd28b356d85d64e90",
+      "device_fb_used_mib_max_sampled": 7863.0,
+      "samples.jsonl_sha256": "c2299a40709bfbcb65c06810245a1379dada63e1a287f1c6c93658cf55f75e9d"
+    },
+    {
+      "attempt": "q32 reload f",
+      "outcome": "supervisor_error",
+      "failure": "RuntimeError: preflight resource failure: host_budget",
+      "started_utc": "2026-11-07T10:10:47Z",
+      "elapsed_s": 48.57900000002701,
+      "worker_returncode": null,
+      "guard_limits": {
+        "device_mib": 7600,
+        "host_emergency_mib": 256,
+        "host_sustained_mib": 768,
+        "host_sustained_seconds": 5,
+        "commit_floor_mib": 512,
+        "timeout_seconds": 1200.0,
+        "preflight_host_mib": 8192
+      },
+      "summary.json_sha256": "08207e0a3c35acdcbe340f2087fce325a7c71d1ede8a37460664577df9969769",
+      "samples.jsonl_sha256": "e5bf365a2c56dde3ff62828e6a064964de43ed3852c16a5ef9285e0edc78ff6b"
+    }
+  ]
+}

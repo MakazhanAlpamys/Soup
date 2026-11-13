@@ -46,6 +46,29 @@ def test_load_csv(tmp_path: Path):
     assert data[1]["output"] == "ML is..."
 
 
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n", "\r"], ids=["lf", "crlf", "cr"])
+@pytest.mark.parametrize("bom", [False, True], ids=["plain", "bom"])
+def test_load_csv_preserves_quoted_line_endings(
+    tmp_path: Path, line_ending: str, bom: bool,
+) -> None:
+    path = tmp_path / "multiline.csv"
+    body = (
+        'instruction,input,output\r\n'
+        f'"Explain{line_ending}this",,"First,{line_ending}""quoted"" line"\r\n'
+        'Next question,,Next answer\r\n'
+    )
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + body.encode("utf-8"))
+
+    assert load_raw_data(path) == [
+        {
+            "instruction": f"Explain{line_ending}this",
+            "input": "",
+            "output": f'First,{line_ending}"quoted" line',
+        },
+        {"instruction": "Next question", "input": "", "output": "Next answer"},
+    ]
+
+
 @pytest.mark.parametrize("suffix", ["json", "jsonl", "csv", "txt"])
 @pytest.mark.parametrize("bom", [False, True], ids=["plain", "bom"])
 def test_utf8_bom_datasets_match_plain_utf8(tmp_path: Path, suffix: str, bom: bool) -> None:

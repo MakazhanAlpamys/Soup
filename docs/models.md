@@ -130,6 +130,44 @@ check with attention and expert adapter gradients. The visual tower is excluded.
 Full 122B weights, DPO training, NF4 execution, GPU memory fit and tuning quality
 remain unverified; meta tensors do not allocate the public checkpoint's weights.
 
+`soup recipes use qwen3.5-122b-a10b-grpo` selects the 122B-A10B language
+MoE for text reasoning rows whose final assistant message holds the reference
+answer. The shipped `format: auto` path is tested with that ChatML layout.
+It inherits one epoch, batch size 1, sixteen accumulation steps, LoRA rank 32 /
+alpha 64, zero dropout, a 4096-token limit, 4-bit quantization and checkpointing
+from the 122B SFT recipe. The 35B MoE GRPO sibling supplies learning rate 1e-5,
+four generations, beta 0.1 and the `accuracy` reward. `moe_lora: true` includes
+fused experts; the SFT-only auxiliary-loss option is omitted.
+These are untuned starting values. GRPO promotes the configured batch size of
+1 to at least 4 for four generations, so it is not a one-completion workload.
+Ten billion active parameters do not mean ten billion resident parameters:
+the whole 122B base, rollout state and reference-model requirements matter.
+No GPU count or memory-fit recommendation has been measured. The public config
+was verified at `dc4d348443bc740c68e2d77492492c11606384d5`; offline tests use
+a tiny random native hybrid text MoE with expert LoRA. They do not qualify full
+122B weights, tokenizer/rollout behavior, full GRPO training, NF4 execution,
+distributed training, GPU memory fit or reward quality.
+
+`soup recipes use qwen3.5-397b-a17b-grpo` selects the 397B-A17B language MoE
+for the same text reasoning rows: the reference answer is the final assistant
+message or an `answer` column. It inherits one epoch, batch size 1, 32
+accumulation steps, LoRA rank 32 / alpha 64, zero dropout, a 4096-token limit,
+4-bit quantization and checkpointing from the 397B SFT recipe. The Qwen3.5 MoE
+GRPO rows (35B-A3B, 122B-A10B) supply learning rate 1e-5, four generations,
+beta 0.1 and the `accuracy` reward. `moe_lora: true` includes fused experts; the
+SFT-only auxiliary-loss option is omitted. These are untuned starting values,
+and GRPO promotes the configured batch size of 1 to at least 4 for four
+generations. Seventeen billion active parameters do not mean seventeen billion
+resident parameters: the whole 397B base, rollout state and reference-model
+requirements matter, and the SFT sibling already needs multi-node DeepSpeed or
+FSDP. No GPU count or memory-fit recommendation has been measured. The public
+config was verified at `8472618112abcbd45acbcdc58436aff4233c23f7` (60 text
+layers, 512 experts, 10 active); offline tests use a tiny random native hybrid
+text MoE with the same three-linear-to-one-full attention pattern and expert
+LoRA. They do not qualify full 397B weights, tokenizer/rollout behavior, full
+GRPO training, NF4 execution, distributed training, GPU memory fit or reward
+quality.
+
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
 from the decoder-layer shard and can be served from the original safetensors
@@ -227,7 +265,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO, SimPO, KTO and GRPO backend for local data; `[train]` is not required |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon backend for SFT, DPO, ORPO, SimPO, KTO and GRPO with local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |

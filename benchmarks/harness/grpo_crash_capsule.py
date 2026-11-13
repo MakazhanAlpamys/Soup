@@ -388,6 +388,10 @@ class Issue342CrashCapsule:
         self._installed = False
         self._parameter_handles: list[Any] = []
         self._module_handles: list[Any] = []
+        self._accumulated_hook_count = 0
+        self._accumulated_unavailable_names: list[str] = []
+        self._norm_owner: Any | None = None
+        self._original_grad_norm: Callable[..., Any] | None = None
         self._original_loss: Callable[..., Any] | None = None
         self._loss_method_name: str | None = None
         self._capture_callback: Any | None = None
@@ -452,6 +456,20 @@ class Issue342CrashCapsule:
             "rank": self.rank,
             "world_size": self.world_size,
             "rank_cap_bytes": self.writer.max_bytes,
+            "accumulated_gradient_hook_count": self._accumulated_hook_count,
+            "accumulated_gradient_source": (
+                "torch.Tensor.register_post_accumulate_grad_hook"
+                if self._accumulated_hook_count else "unavailable"
+            ),
+            "accumulated_gradient_unavailable_parameter_names": list(
+                self._accumulated_unavailable_names
+            ),
+            "accumulated_gradient_phase": (
+                "after_accumulation_before_unscale"
+                if self._accumulated_hook_count else "unavailable"
+            ),
+            "accumulated_gradient_reduction_order": "unverified",
+            "gradient_norm_capture_available": self._norm_owner is not None,
         }
 
     def _synchronize(self, boundary: str) -> None:
@@ -547,8 +565,14 @@ class Issue342CrashCapsule:
                 "rng": self._rng_state(),
                 "pre_step_trainable": self._trainable_state(),
                 "microbatches": [],
+                "microbatch_loss_stats": [],
+                "first_nonfinite_loss": None,
                 "first_nonfinite_parameter": None,
                 "nonfinite_parameter_names_before_clip": [],
+                "first_nonfinite_accumulated_parameter": None,
+                "nonfinite_accumulated_parameter_names_before_clip": [],
+                "gradient_norm_observation": None,
+                "gradient_norm_source": "unavailable",
                 "first_nonfinite_scalar_grad": None,
                 "first_nonfinite_activation": None,
                 "lora_observations": {},
@@ -562,7 +586,14 @@ class Issue342CrashCapsule:
             return
         self._synchronize("after_loss")
         self._current["loss"] = _tensor_stats(loss, self.torch)
+        observation = {
+            "microbatch_index": len(self._current["microbatches"]) - 1,
+            "stats": self._current["loss"],
+        }
+        self._current["microbatch_loss_stats"].append(observation)
         if not self._current["loss"]["finite"]:
+            if self._current["first_nonfinite_loss"] is None:
+                self._current["first_nonfinite_loss"] = observation
             self._bad_seen = True
         if loss.requires_grad:
 
@@ -618,6 +649,58 @@ class Issue342CrashCapsule:
                 self._bad_seen = True
 
         return record
+
+    def _accumulated_parameter_hook(self, name: str) -> Callable[[Any], None]:
+        def record(parameter: Any) -> None:
+            if self._current is None or parameter.grad is None:
+                return
+            if bool(self.torch.isfinite(parameter.grad).all().item()):
+                return
+            with self._lock:
+                if self._current["first_nonfinite_accumulated_parameter"] is None:
+                    self._current["first_nonfinite_accumulated_parameter"] = {
+                        "name": name,
+                        "microbatch_index": len(self._current["microbatches"]) - 1,
+                        "stats": _tensor_stats(parameter.grad, self.torch),
+                    }
+                names = self._current["nonfinite_accumulated_parameter_names_before_clip"]
+                if name not in names:
+                    names.append(name)
+                self._bad_seen = True
+
+        return record
+
+    def _wrap_gradient_norm(self) -> None:
+        owner = getattr(self.trainer, "accelerator", None)
+        original = getattr(owner, "clip_grad_norm_", None)
+        if not callable(original):
+            return
+
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            result = original(*args, **kwargs)
+            if self._current is not None and result is not None:
+                value = result
+                if isinstance(value, self.torch.Tensor):
+                    if value.numel() != 1 or value.is_complex():
+                        return result
+                elif isinstance(value, (int, float)):
+                    try:
+                        value = self.torch.tensor(value, dtype=self.torch.float64)
+                    except OverflowError:
+                        return result
+                else:
+                    return result
+                stats = _tensor_stats(value, self.torch)
+                scalar = float(value.item())
+                stats["value"] = scalar if stats["finite"] else str(scalar)
+                self._current["gradient_norm_observation"] = stats
+                self._current["gradient_norm_source"] = "accelerator.clip_grad_norm_"
+                self._bad_seen = self._bad_seen or not stats["finite"]
+            return result
+
+        self._norm_owner = owner
+        self._original_grad_norm = original
+        owner.clip_grad_norm_ = wrapped
 
     def _lora_backward_hook(self, name: str) -> Callable[..., None]:
         def record(module: Any, grad_input: Any, grad_output: Any) -> None:
@@ -725,6 +808,22 @@ class Issue342CrashCapsule:
             "global_step": self._current["global_step"],
             "post_clip_nonfinite_gradient_names": post_clip_bad,
             "first_nonfinite_parameter": self._current["first_nonfinite_parameter"],
+            "first_nonfinite_loss": self._current["first_nonfinite_loss"],
+            "microbatch_loss_stats": self._current["microbatch_loss_stats"],
+            "first_nonfinite_accumulated_parameter": self._current[
+                "first_nonfinite_accumulated_parameter"
+            ],
+            "accumulated_gradient_source": self._current["environment"][
+                "accumulated_gradient_source"
+            ],
+            "accumulated_gradient_unavailable_parameter_names": self._current["environment"][
+                "accumulated_gradient_unavailable_parameter_names"
+            ],
+            "nonfinite_accumulated_parameter_names_before_clip": self._current[
+                "nonfinite_accumulated_parameter_names_before_clip"
+            ],
+            "gradient_norm_observation": self._current["gradient_norm_observation"],
+            "gradient_norm_source": self._current["gradient_norm_source"],
             "nonfinite_parameter_names_before_clip": self._current[
                 "nonfinite_parameter_names_before_clip"
             ],
@@ -812,7 +911,7 @@ class Issue342CrashCapsule:
             # trainer that cannot expose ordering is unsupported rather than a
             # source of partially attached instrumentation.
             callbacks = self._callback_list()
-            self.writer.write_json("manifest.json", self._environment())
+            self._wrap_gradient_norm()
             self.writer.write_json(
                 "capture_policy.json",
                 {
@@ -828,6 +927,14 @@ class Issue342CrashCapsule:
                     self._parameter_handles.append(
                         parameter.register_hook(self._parameter_hook(name))
                     )
+                    post_accumulate = getattr(parameter, "register_post_accumulate_grad_hook", None)
+                    if callable(post_accumulate) and parameter.is_leaf:
+                        self._parameter_handles.append(
+                            post_accumulate(self._accumulated_parameter_hook(name))
+                        )
+                        self._accumulated_hook_count += 1
+                    else:
+                        self._accumulated_unavailable_names.append(name)
             if self.instrument_lora_operands:
                 for name, module in self.model.named_modules():
                     if isinstance(module, self.torch.nn.Linear) and (
@@ -840,6 +947,7 @@ class Issue342CrashCapsule:
                             module.register_full_backward_hook(self._lora_backward_hook(name))
                         )
             self._wrap_loss()
+            self.writer.write_json("manifest.json", self._environment())
             callback = _callback(self)
             self._capture_callback = callback
             self.trainer.add_callback(callback)
@@ -870,6 +978,8 @@ class Issue342CrashCapsule:
         for handle in self._parameter_handles:
             handle.remove()
         self._parameter_handles.clear()
+        self._accumulated_hook_count = 0
+        self._accumulated_unavailable_names.clear()
         for handle in self._module_handles:
             handle.remove()
         self._module_handles.clear()
@@ -877,6 +987,10 @@ class Issue342CrashCapsule:
             setattr(self.trainer, self._loss_method_name, self._original_loss)
         self._loss_method_name = None
         self._original_loss = None
+        if self._norm_owner is not None and self._original_grad_norm is not None:
+            self._norm_owner.clip_grad_norm_ = self._original_grad_norm
+        self._norm_owner = None
+        self._original_grad_norm = None
         callbacks = getattr(getattr(self.trainer, "callback_handler", None), "callbacks", None)
         if isinstance(callbacks, list) and self._capture_callback in callbacks:
             callbacks.remove(self._capture_callback)

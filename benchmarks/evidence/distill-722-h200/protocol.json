@@ -1,0 +1,35 @@
+{
+  "source": "26ffea17461d0d14a0d3641b93435343b54c29e1",
+  "frozen_before_measured_runs": true,
+  "student": "Qwen/Qwen2.5-0.5B-Instruct@7ae557604adf67be50417f59c2c2f167def9a775",
+  "teacher": "Qwen/Qwen2.5-1.5B-Instruct@989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "shape": [
+    2,
+    2048,
+    151936
+  ],
+  "chunk": 128,
+  "warmup": 3,
+  "measured_steps": 8,
+  "order": [
+    "dense",
+    "chunked",
+    "chunked",
+    "dense",
+    "chunked",
+    "dense",
+    "dense",
+    "chunked"
+  ],
+  "seed": 722,
+  "numerical_thresholds": {
+    "first_step_relative_loss": 1e-05,
+    "first_step_gradient_relative_l2": 0.01,
+    "max_short_trajectory_relative_loss": 0.01
+  },
+  "limits": "BF16 training numerical agreement only; no model-quality conclusion. Thresholds set after 2-step pilots, before measured runs. Pilot first-step loss exact, gradient relative L2 0.00360; short trajectory difference 0.00278.",
+  "hashes": {
+    "benchmarks/harness/issue722_distill.py": "c811938673db58f595c5da0b6c52660750b6aa7ddc38f7920cf17a1c22780db9",
+    "benchmarks/harness/issue722_compare.py": "d3d65b6c5dcded9cee9c3c1ffb9b4bae3318463990d2c59abb76b0256e90cd31"
+  }
+}
