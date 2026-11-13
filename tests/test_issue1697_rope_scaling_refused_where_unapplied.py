@@ -115,9 +115,6 @@ class TestRefusedOutsideTheThreeTasks:
 # The paths of the issue's table that load today: (task, top-level keys, training
 # keys, the setting the message names, the change it asks for).
 _OFF_PATH = {
-    "sft-mlx": (
-        "sft", {"backend": "mlx"}, {}, "backend='mlx'", "backend: transformers",
-    ),
     "sft-vision": (
         "sft", {"modality": "vision"}, {}, "modality='vision'", "modality: text",
     ),
@@ -282,6 +279,16 @@ class TestTheReadingSetupsStillLoad:
 
         assert cfg.training.rope_scaling_type == "dynamic"
 
+    def test_on_mlx_sft_linear(self):
+        """#1995: MLX text SFT applies linear RoPE scaling under quantization: none."""
+        cfg = load_config_from_string(
+            _yaml("sft", {"backend": "mlx"}, rope_scaling_type="linear", quantization="none")
+        )
+
+        assert (cfg.task, cfg.backend) == ("sft", "mlx")
+        assert cfg.training.rope_scaling_type == "linear"
+        assert cfg.training.quantization == "none"
+
     def test_the_longcontext_template(self):
         cfg = load_config_from_string(TEMPLATES["longcontext"])
 
@@ -334,7 +341,7 @@ class TestSoupDoctorReportsIt:
             ("dpo", {}, "training.rope_scaling_type is not applied by task='dpo'"),
             (
                 "sft", {"backend": "mlx"},
-                "training.rope_scaling_type is not applied by task='sft' with backend='mlx'",
+                "training.rope_scaling_type is not applied on backend='mlx'",
             ),
         ],
     )
@@ -499,10 +506,9 @@ class TestThePathSplitFollowsTheSetups:
             "setting from the #1697 refusal in _validate_rope_scaling_is_applied"
         )
 
-    def test_the_mlx_trainer_does_not_read_it(self):
-        assert not _reads_rope(inspect.getsource(MLXSFTTrainerWrapper)), (
-            "MLXSFTTrainerWrapper now reads rope_scaling_type: drop backend='mlx' "
-            "from the #1697 refusal in _validate_rope_scaling_is_applied"
+    def test_the_mlx_trainer_reads_it(self):
+        assert _reads_rope(inspect.getsource(MLXSFTTrainerWrapper)), (
+            "MLXSFTTrainerWrapper now reads rope_scaling_type for native MLX RoPE scaling"
         )
 
     def test_the_sft_message_follows_the_dispatch_order(self):

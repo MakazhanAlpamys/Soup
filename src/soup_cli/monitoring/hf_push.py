@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -41,6 +42,125 @@ _CHECKPOINT_ALLOW_PATTERNS = [
     "training_args.bin",
     "README.md",
 ]
+
+#: Outcomes of :func:`ensure_hub_repo`.
+REPO_CREATED = "created"
+REPO_EXISTING = "existing"
+
+#: HTTP statuses the Hub answers to ``create_repo`` that this module acts on.
+_HTTP_CONFLICT = 409
+_HTTP_CREATE_REFUSED = (402, 403)  # plan limit / token without permission
+
+
+@dataclass(frozen=True)
+class RepoState:
+    """What :func:`ensure_hub_repo` found or did.
+
+    ``outcome`` is :data:`REPO_CREATED` or :data:`REPO_EXISTING`. ``private`` is
+    the visibility of the repository when it is known: the one this run asked
+    for when it was created (the create call succeeded), the one the Hub reports
+    when it already existed, ``None`` when that could not be read.
+    """
+
+    outcome: str
+    private: Optional[bool] = None
+
+
+class PrivateRepositoryRefusedError(RuntimeError):
+    """The Hub refused to create a PRIVATE repository (HTTP 402 or 403).
+
+    Raised instead of retrying public: ``--push-public`` is the only way a run
+    creates a public repository.
+    """
+
+    def __init__(self, repo_id: str) -> None:
+        super().__init__(f"the Hub refused to create the private repository {repo_id}")
+        self.repo_id = repo_id
+
+
+def _http_status(exc: BaseException) -> Optional[int]:
+    """HTTP status of a ``huggingface_hub`` HTTP error, or None for anything else."""
+    from huggingface_hub.utils import HfHubHTTPError
+
+    if not isinstance(exc, HfHubHTTPError):
+        return None
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _existing_visibility(api, repo_id: str) -> Optional[bool]:
+    """``repo_info(...).private`` of an existing repository; None when unreadable."""
+    try:
+        private = api.repo_info(repo_id=repo_id).private
+    except Exception as exc:  # noqa: BLE001 - visibility is reporting only
+        logger.debug("repo_info failed (%s); visibility not reported", exc)
+        return None
+    return private if isinstance(private, bool) else None
+
+
+def ensure_hub_repo(api, repo_id: str, *, private: bool) -> RepoState:
+    """Make sure ``repo_id`` exists on the Hub; create it with ``private`` only if absent.
+
+    The visibility is sent to the Hub on exactly one path: the repository was
+    just found missing. An existing repository gets no ``create_repo`` call at
+    all, so nothing that could change its visibility is ever sent. A probe that
+    fails (network, auth) raises and creates nothing; the caller decides what to
+    do.
+
+    The create uses ``exist_ok=False`` so the Hub's own answer says whether this
+    call made the repository: the probe cannot tell a missing repository from one
+    the token may not read, and another run can create it between the probe and
+    the create. A 409 (conflict) therefore means the repository exists, and is
+    reported as :data:`REPO_EXISTING`, never as created. :data:`REPO_CREATED` is
+    returned only when ``create_repo`` itself succeeded.
+
+    A 402 or 403 on a private create raises :class:`PrivateRepositoryRefusedError`;
+    it is never retried as a public create. Every other error propagates.
+    """
+    if api.repo_exists(repo_id=repo_id):
+        return RepoState(REPO_EXISTING, _existing_visibility(api, repo_id))
+    try:
+        api.create_repo(repo_id=repo_id, private=private, exist_ok=False)
+    except Exception as exc:
+        status = _http_status(exc)
+        if status == _HTTP_CONFLICT:
+            return RepoState(REPO_EXISTING, _existing_visibility(api, repo_id))
+        if private and status in _HTTP_CREATE_REFUSED:
+            raise PrivateRepositoryRefusedError(repo_id) from exc
+        raise
+    return RepoState(REPO_CREATED, private)
+
+
+def describe_push_repo(repo_id: str, state: RepoState) -> str:
+    """The one line ``soup train --push-as`` prints about the repository."""
+    if state.outcome == REPO_CREATED:
+        visibility = "private" if state.private else "public"
+        return f"Created {visibility} Hub repository {repo_id}."
+    if state.outcome == REPO_EXISTING:
+        if state.private is None:
+            known = ""
+        else:
+            known = " (private)" if state.private else " (public)"
+        return f"Using existing Hub repository {repo_id}{known}; its visibility is unchanged."
+    raise ValueError(f"unknown repository outcome: {state.outcome!r}")
+
+
+def describe_prepare_failure(repo_id: str, error: Optional[BaseException]) -> str:
+    """The line ``soup train --push-as`` prints when the repository could not be prepared.
+
+    Static text: the error itself goes to the log, never to the terminal.
+    """
+    if isinstance(error, PrivateRepositoryRefusedError):
+        return (
+            f"--push-as: the Hub refused to create the private repository {repo_id} "
+            "(HTTP 402 or 403: a plan limit, or a token without permission to create it). "
+            "Auto-push is disabled for this run. Pass --push-public to create a public "
+            f"repository instead, or create {repo_id} yourself first and run again."
+        )
+    return (
+        f"--push-as: could not prepare {repo_id} on the Hub; "
+        "auto-push is disabled for this run"
+    )
 
 
 def _try_import_callback_base():
@@ -76,7 +196,7 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
         token: Optional[str] = None,
         endpoint: Optional[str] = None,
         output_dir: str = "",
-        private: bool = False,
+        private: bool = True,
     ) -> None:
         validate_repo_id(repo_id)
         self.repo_id = repo_id
@@ -87,7 +207,11 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
         # construct a bare SimpleNamespace). Under real training the value
         # comes from ``args.output_dir``.
         self.output_dir = output_dir
+        # Visibility of a repository this callback CREATES. An existing
+        # repository is never sent a visibility (see ``ensure_hub_repo``).
         self.private = private
+        self.repo_state: Optional[RepoState] = None  # set once the repo is ready
+        self.prepare_error: Optional[BaseException] = None  # why it could not be
         self._repo_created = False
         self._repo_failed = False  # short-circuits retries after hard failure
 
@@ -118,21 +242,33 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
 
     # --- Helpers ---
 
+    def prepare_repo(self) -> Optional[RepoState]:
+        """Make the repo ready for uploads.
+
+        Returns what :func:`ensure_hub_repo` found or did, or ``None`` when the
+        repository could not be prepared (``prepare_error`` says why; auto-push is
+        then off for the run). Safe to call again: once the repo is ready no
+        further Hub call is made.
+        """
+        return self.repo_state if self._ensure_repo() else None
+
     def _ensure_repo(self) -> bool:
-        """Create the repo if needed. Returns True if ready for uploads."""
+        """Create the repo if it is missing. Returns True if ready for uploads."""
         if self._repo_created:
             return True
         if self._repo_failed:
             return False
         try:
             api = get_hf_api(token=self.token, endpoint=self.endpoint)
-            api.create_repo(repo_id=self.repo_id, private=self.private, exist_ok=True)
+            self.repo_state = ensure_hub_repo(api, self.repo_id, private=self.private)
             self._repo_created = True
             return True
         except Exception as exc:
             logger.warning(
-                "HFPushCallback: create_repo failed (%s); auto-push disabled", exc,
+                "HFPushCallback: could not prepare the repository (%s); auto-push disabled",
+                exc,
             )
+            self.prepare_error = exc
             self._repo_failed = True
             return False
 
@@ -329,7 +465,7 @@ def build_push_callback(
     repo_id: str,
     output_dir: str,
     explicit_token: Optional[str] = None,
-    private: bool = False,
+    private: bool = True,
 ) -> Optional["HFPushCallback"]:
     """Factory that resolves token/endpoint and builds the callback.
 

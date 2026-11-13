@@ -1137,12 +1137,24 @@ class EvalGateConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | 'previous' | file path - scores to compare against",
+        description="registry://<id> | file path - scores to compare against",
     )
     on_regression: Literal["stop", "warn", "continue"] = Field(
         default="stop",
         description="Action on regression: stop training | warn only | continue",
     )
+
+    @field_validator("baseline")
+    @classmethod
+    def _refuse_previous_baseline(cls, value: Optional[str]) -> Optional[str]:
+        # 'previous' was documented but never implemented: resolve_baseline read
+        # it as a file named 'previous' and the gate ran with no baseline (#2523).
+        if isinstance(value, str) and value.strip().lower() == "previous":
+            raise ValueError(
+                "training.eval_gate.baseline: 'previous' is not implemented; "
+                "use a path to a baseline results file"
+            )
+        return value
 
     @model_validator(mode="after")
     def _require_suite_when_enabled(self) -> "EvalGateConfig":
@@ -3265,8 +3277,9 @@ class TrainingConfig(BaseModel):
             "RoPE scaling method for long-context: linear, dynamic, yarn or llama3 "
             "(v0.49.0). 'longrope' is refused at config load (#1239). Applied by "
             "task sft, tts and pretrain on backend: transformers (sft: the text "
-            "path without layer streaming); refused at config load anywhere else "
-            "(#1697)."
+            "path without layer streaming); on backend: mlx, task sft text supports "
+            "rope_scaling_type: linear with quantization: none (#1995); refused at "
+            "config load anywhere else (#1697)."
         ),
     )
     # v0.49.0 Part A — YaRN-specific tunables (only meaningful when
@@ -9566,7 +9579,23 @@ class SoupConfig(BaseModel):
         # share SFTTrainerWrapper.setup.
         if self.task != "pretrain":
             if self.backend == "mlx":
-                off_path.append(("backend='mlx'", "backend: transformers"))
+                if self.task == "sft" and self.modality == "text":
+                    if tcfg.rope_scaling_type != "linear":
+                        raise ValueError(
+                            f"{named} {verb} not applied on backend='mlx': "
+                            "MLX text SFT currently supports rope_scaling_type='linear' only "
+                            f"(got {tcfg.rope_scaling_type!r}). Use rope_scaling_type: linear "
+                            "and training.quantization: none, or backend: transformers, "
+                            f"or remove {keys}."
+                        )
+                    if tcfg.quantization != "none":
+                        raise ValueError(
+                            f"{named} with backend='mlx' requires training.quantization='none' "
+                            f"(got {tcfg.quantization!r}). Use training.quantization: none, "
+                            f"or backend: transformers, or remove {keys}."
+                        )
+                else:
+                    off_path.append(("backend='mlx'", "backend: transformers"))
             if self.modality in ("vision", "audio"):
                 off_path.append((f"modality={self.modality!r}", "modality: text"))
             if tcfg.stream_layers:
