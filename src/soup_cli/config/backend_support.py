@@ -261,6 +261,7 @@ _TRANSFORMERS_SFT_MODULES = (
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_full.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/mlx_pretokenized.py",
