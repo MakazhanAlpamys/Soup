@@ -461,7 +461,17 @@ class ExperimentTracker:
 
         Also computes an informational per-run cost estimate based on the
         device_name captured at start_run() and the elapsed duration.
+
+        ``output_dir`` is stored as an absolute path, resolved against the
+        directory the run trained in (#2725). The default ``output: ./output``
+        arrives here as ``"output"``, and ``soup runs --cwd-only`` and
+        ``soup runs clean`` used to resolve that against whatever directory
+        they were run from. An empty or missing value is stored as given. A
+        row recorded before this change keeps its relative value, and the
+        readers still resolve it against the current directory, as before.
         """
+        if output_dir:
+            output_dir = os.path.abspath(output_dir)
         conn = self._get_conn()
         # Look up device name for cost estimate (best-effort).
         cost_usd: Optional[float] = None
