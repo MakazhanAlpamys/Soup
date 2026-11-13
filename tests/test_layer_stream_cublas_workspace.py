@@ -15,7 +15,7 @@ from soup_cli.utils.layer_stream import cublas_workspace_bytes, estimate_stream_
         ((8, 6), ":4096:2:16:8", 2 * 8320 * 1024),
         ((8, 6), ":4096:1", 2 * 4096 * 1024),
         ((8, 6), ":0:0", 0),
-        (None, None, 0),
+        (None, None, 2 * 32 * 1024 * 1024),
     ],
 )
 def test_workspace_charge_tracks_config_and_device_defaults(capability, config, expected):
@@ -26,6 +26,13 @@ def test_workspace_charge_tracks_config_and_device_defaults(capability, config, 
 
 @pytest.mark.parametrize("config", ["4096:8", ":4096", ":4096:x", ":4096:0", ":0:8"])
 def test_malformed_or_unsupported_workspace_config_is_refused(config):
+    with pytest.raises(ValueError, match="CUBLAS_WORKSPACE_CONFIG"):
+        cublas_workspace_bytes(compute_capability=(8, 6), workspace_config=config)
+
+
+@pytest.mark.parametrize("config", [":4096:0", ":0:8"])
+def test_workspace_config_requires_both_size_and_count_zero_to_disable(config):
+    """PyTorch documents :0:0 as the no-workspace setting, not either half-zero form."""
     with pytest.raises(ValueError, match="CUBLAS_WORKSPACE_CONFIG"):
         cublas_workspace_bytes(compute_capability=(8, 6), workspace_config=config)
 
@@ -66,6 +73,87 @@ def test_estimator_rejects_invalid_workspace_bytes(value):
         )
 
 
+def test_unreadable_capability_uses_largest_documented_default_charge():
+    assert cublas_workspace_bytes(compute_capability=None) == 64 * 1024 * 1024
+
+
+def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatch):
+    from types import SimpleNamespace
+
+    from soup_cli.trainer import stream_setup
+    from soup_cli.utils import layer_stream
+
+    class Setup(stream_setup.StreamingSetupMixin):
+        _STREAM_ROWS_PER_EXAMPLE = 1
+
+        @staticmethod
+        def _stream_shape_config(model_config):
+            return model_config
+
+        @staticmethod
+        def _stream_intermediate_size(model_config):
+            return model_config.intermediate_size
+
+        @staticmethod
+        def _estimate_adapter_params(*_args, **_kwargs):
+            return 0
+
+    setup = Setup()
+    setup.device = "cuda"
+    config = SimpleNamespace(data=SimpleNamespace(max_length=16))
+    train = SimpleNamespace(
+        batch_size=1,
+        stream_buffers=2,
+        stream_vram_probe=False,
+        stream_vram_override=4_000_000_000,
+        gradient_accumulation_steps=1,
+        lora=None,
+    )
+    model = SimpleNamespace(vocab_size=1000, hidden_size=64, intermediate_size=128)
+    index = SimpleNamespace(n_layers=2, total_params=0)
+    monkeypatch.setattr(stream_setup, "_stream_compute_capability_for_device", lambda *_: None)
+    monkeypatch.setattr(stream_setup, "console", SimpleNamespace(print=lambda *_a, **_k: None))
+    monkeypatch.setattr(
+        layer_stream,
+        "estimate_stream_peak_vram",
+        lambda **kwargs: seen.setdefault("charge", kwargs["cublas_workspace_bytes"]) or 1,
+    )
+    monkeypatch.setattr(
+        layer_stream,
+        "decide_stream_fit",
+        lambda **_kw: SimpleNamespace(fits=True, reason="fits"),
+    )
+    monkeypatch.setattr(
+        layer_stream,
+        "resolve_available_vram_bytes",
+        lambda *_a, **_kw: 4_000_000_000,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.measure_gemm_tflops",
+        lambda *_a, **_kw: None,
+    )
+    import sys
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(mem_get_info=lambda *_a, **_kw: (4_000_000_000, 8_000_000_000))
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    seen = {}
+    lines, _ = setup._stream_budget_lines(
+        config,
+        train,
+        model_config=model,
+        layer_bytes=1_000_000,
+        embed_bytes=1_000_000,
+        index=index,
+        on_cuda=True,
+        large_layer_bytes=0,
+    )
+    expected = cublas_workspace_bytes(compute_capability=None)
+    assert seen["charge"] == expected
+    assert any("cuBLAS" in line and "64.0 MiB" in line for line in lines)
+
+
 @pytest.mark.gpu(reason="the cuBLAS allocator reading requires CUDA")
 def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
     """Set the cuBLAS config before torch initializes and read its retained allocation."""
@@ -89,8 +177,10 @@ def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
         left = torch.randn((128, 128), device="cuda")
         right = torch.randn((128, 128), device="cuda")
         output = torch.mm(left, right)
+        loss = output.square().mean()
+        loss.backward()
         torch.cuda.synchronize()
-        del left, right, output
+        del left, right, output, loss
         torch.cuda.synchronize()
         retained = torch.cuda.memory_allocated() - baseline
         print(json.dumps({"retained_workspace_bytes": retained}))
@@ -107,17 +197,17 @@ def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
         timeout=120,
     )
     reading = json.loads(result.stdout.strip().splitlines()[-1])
-    assert reading["retained_workspace_bytes"] == 4 * 1024 * 1024, result.stdout
+    assert reading["retained_workspace_bytes"] == 8 * 1024 * 1024, result.stdout
 
 
 @pytest.mark.gpu(reason="the streamed-step peak comparison needs CUDA")
 def test_real_streamed_step_peak_does_not_exceed_preflight(tmp_path, monkeypatch):
     import os
 
-    import test_v07204
     import torch
 
     from soup_cli.utils import layer_stream
+    from tests.test_v07204 import _build_streamed_wrapper
 
     estimates = []
     estimate = layer_stream.estimate_stream_peak_vram
@@ -128,7 +218,7 @@ def test_real_streamed_step_peak_does_not_exceed_preflight(tmp_path, monkeypatch
         return result
 
     monkeypatch.setattr(layer_stream, "estimate_stream_peak_vram", record_estimate)
-    wrapper, _, _ = test_v07204._build_streamed_wrapper(
+    wrapper, _, _ = _build_streamed_wrapper(
         tmp_path, monkeypatch, task="sft", batch_size=1
     )
     assert estimates and estimates[0][1] == cublas_workspace_bytes(

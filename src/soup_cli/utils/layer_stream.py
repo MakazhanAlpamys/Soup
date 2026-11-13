@@ -181,6 +181,7 @@ STREAM_FIXED_SLACK_BYTES = 13_500_000
 # A streamed forward and its autograd backward use separate cuBLAS handles.
 # Each handle/stream pair retains its workspace in PyTorch's caching allocator.
 STREAM_CUBLAS_HANDLE_STREAM_PAIRS = 2
+STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES = 32 * 1024 * 1024
 
 
 def cublas_workspace_bytes(
@@ -189,13 +190,19 @@ def cublas_workspace_bytes(
     """Return the allocator-visible cuBLAS workspace charge for a streamed step.
 
     PyTorch's default is 8,320 KiB per handle below compute capability 9.0 and
-    32 MiB per handle on 9.0–12.x. ``CUBLAS_WORKSPACE_CONFIG`` is a sequence of
+    32 MiB per handle on 9.0+. ``CUBLAS_WORKSPACE_CONFIG`` is a sequence of
     ``SIZE:COUNT`` pairs in KiB; sum each pair and charge the two handle/stream
     pairs used by a streamed forward and backward. ``None`` means the variable
     is unset and selects the device default. ``:0:0`` explicitly disables it.
+    An unreadable capability uses the largest documented per-handle default.
     """
     if compute_capability is None:
-        return 0
+        # A failed capability query must not silently disable the safety charge.
+        # Use the largest currently documented per-handle default (Hopper/Blackwell).
+        workspace_kib = STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES // 1024
+        if workspace_config is not None and workspace_config.strip():
+            return _configured_cublas_workspace_bytes(workspace_config)
+        return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
     if (
         not isinstance(compute_capability, tuple)
         or len(compute_capability) != 2
@@ -210,22 +217,25 @@ def cublas_workspace_bytes(
         # PyTorch may grow this default before Soup updates its capability table.
         workspace_kib = 32 * 1024 if major >= 9 else 8_320
     else:
-        parts = workspace_config.split(":")
-        if parts[0] != "" or len(parts) < 3 or (len(parts) - 1) % 2:
-            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-        try:
-            values = [int(part) for part in parts[1:]]
-        except ValueError as exc:
-            raise ValueError(
-                f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}"
-            ) from exc
-        pairs = list(zip(values[::2], values[1::2]))
-        if any(size < 0 or count < 0 for size, count in pairs):
-            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-        if any((size == 0) != (count == 0) for size, count in pairs):
-            raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-        workspace_kib = sum(size * count for size, count in pairs)
+        return _configured_cublas_workspace_bytes(workspace_config)
 
+    return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
+
+
+def _configured_cublas_workspace_bytes(workspace_config: str) -> int:
+    parts = workspace_config.split(":")
+    if parts[0] != "" or len(parts) < 3 or (len(parts) - 1) % 2:
+        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+    try:
+        values = [int(part) for part in parts[1:]]
+    except ValueError as exc:
+        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}") from exc
+    pairs = list(zip(values[::2], values[1::2]))
+    if any(size < 0 or count < 0 for size, count in pairs):
+        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+    if any((size == 0) != (count == 0) for size, count in pairs):
+        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
+    workspace_kib = sum(size * count for size, count in pairs)
     return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
 
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed

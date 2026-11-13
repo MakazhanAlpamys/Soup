@@ -863,9 +863,14 @@ The prediction was fitted to ten real runs across two models, a 3.1× vocabulary
 batch 1–8 and sequence lengths 256 and 512. That grid was measured on an RTX 3050
 (compute capability 8.6). The estimate now explicitly charges two cuBLAS handle/stream
 workspaces: the device default is 8,320 KiB each on this card, or the summed sizes in
-`CUBLAS_WORKSPACE_CONFIG` when set. On the original grid, this makes the estimate
-1.04–6.57% higher than the recorded peaks; the former 0.85% accuracy bound no longer
-applies. This evidence does not promise a bound at other sequence lengths or devices.
+`CUBLAS_WORKSPACE_CONFIG` when set. On the original grid, the total prediction is
+101.04–106.57% of the recorded peak (the cuBLAS term adds 0.18–5.99% of that peak);
+the former 0.85% accuracy bound no longer
+applies. Because the 13.5 MB fixed allowance was measured before this charge was added,
+some configurations that passed the v0.77.2 pre-flight may now be refused; lower
+`training.batch_size` or `data.max_length`, or use the packed NF4 backward when Soup
+offers it for the run. This evidence does not promise a bound at other sequence lengths
+or devices.
 The refusal names the two knobs that scale the model terms (`training.batch_size`,
 `data.max_length`).
 
@@ -1210,7 +1215,7 @@ above); it does not make the reference free.
   streaming's own batch-1 restriction.)
 - **The VRAM pre-flight is deliberately conservative for paired losses.** DPO, ORPO and
   SimPO send chosen and rejected through the model as one tensor, so the budget charges
-  twice the rows — correct, and it never under-predicts. But it charges them at the
+  twice the rows. But it charges them at the
   *supervised* loss's measured per-element rate, and TRL's preference losses use a
   cheaper path, so the estimate is an upper bound rather than a tight one. Concretely,
   on a 4 GB card with a 128k-vocab 1B model: DPO at `max_length: 512` is allowed, and

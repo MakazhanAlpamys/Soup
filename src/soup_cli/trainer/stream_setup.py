@@ -10,11 +10,10 @@ The move is behaviour-preserving for SFT by design, so v0.72.0-.3's
 bit-exactness gates remain valid without being re-run. The ONE addition is
 ``_STREAM_ROWS_PER_EXAMPLE``: DPO, ORPO and SimPO build their forward through
 TRL's ``concatenated_inputs`` + ``torch.cat``, so 2 x ``batch_size`` rows reach
-the model in a single tensor. v0.72.3's VRAM estimator was validated on the
-property that it NEVER under-predicts, and budgeting those three at 1x rows
-would break exactly that — on Windows the consequence is not an exception but a
-silent WDDM spill to host memory that makes the run an order of magnitude
-slower with no error at all.
+the model in a single tensor. The VRAM estimator is calibrated against named
+hardware and sequence-length grids; it is not a universal upper bound. The
+RTX 3050 grid is now charged for two retained cuBLAS workspaces, but other
+devices and shapes still require measurement.
 
 NO top-level torch: this module is imported by five trainer modules.
 """
@@ -33,6 +32,27 @@ from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_R
 from soup_cli.utils.paths import quote_path
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
+
+
+def _stream_compute_capability(torch_module: Any, device: Any) -> Optional[tuple[int, int]]:
+    """Read CUDA capability when available; callers charge conservatively otherwise.
+
+    Some CPU CI tests simulate a CUDA path without a CUDA runtime. Keep this
+    capability query patchable and avoid making those checks depend on hardware.
+    """
+    try:
+        return tuple(torch_module.cuda.get_device_capability(device))
+    except Exception:
+        return None
+
+
+def _stream_compute_capability_for_device(device: Any) -> Optional[tuple[int, int]]:
+    """Import the optional CUDA runtime only when the streamed run targets CUDA."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    return _stream_compute_capability(torch, device)
 
 console = Console()
 
@@ -1963,12 +1983,8 @@ class StreamingSetupMixin:
 
         cublas_bytes = 0
         if on_cuda:
-            # Keep torch lazy at module scope: this mixin is imported by all five
-            # trainer wrappers, including CPU-only CLI startup paths.
-            import torch
-
             cublas_bytes = estimate_cublas_workspace_bytes(
-                compute_capability=torch.cuda.get_device_capability(self.device),
+                compute_capability=_stream_compute_capability_for_device(self.device),
                 workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
             )
 

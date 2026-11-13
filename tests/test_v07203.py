@@ -1084,12 +1084,22 @@ class TestIssue617PanelDtype:
             ),
         )
 
-        import torch
+        import sys
+        from types import SimpleNamespace
 
         monkeypatch.setattr(
-            torch.cuda,
-            "mem_get_info",
-            lambda: (4_000_000_000, 8_000_000_000),
+            stream_setup,
+            "_stream_compute_capability_for_device",
+            lambda _device: (8, 6),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "torch",
+            SimpleNamespace(
+                cuda=SimpleNamespace(
+                    mem_get_info=lambda: (4_000_000_000, 8_000_000_000)
+                )
+            ),
         )
 
         lines, plan = setup._stream_budget_lines(
