@@ -546,7 +546,7 @@ def _run_judge_task(
     provider, model, api_base = _parse_judge_url(task.judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
 
-    items: list[dict] = []
+    validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, start=1):
             line = line.strip()
@@ -569,15 +569,20 @@ def _run_judge_task(
                     f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
                     f"field 'prompt' must be a string, got {type(prompt).__name__}"
                 )
-            response = generate_fn(prompt)
-            items.append({
-                "prompt": prompt,
-                "response": response,
-                "category": row.get("category", "default"),
-            })
+            category = row.get("category", "default")
+            validated_rows.append((prompt, category))
 
-    if not items:
+    if not validated_rows:
         raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
+
+    items: list[dict] = [
+        {
+            "prompt": prompt,
+            "response": generate_fn(prompt),
+            "category": category,
+        }
+        for prompt, category in validated_rows
+    ]
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC

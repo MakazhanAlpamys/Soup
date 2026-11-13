@@ -1,4 +1,4 @@
-"""Judge JSONL validates row shape and prompt type before that row's generation."""
+"""Judge JSONL validates row shape and prompt type before any row reaches generation."""
 
 from __future__ import annotations
 
@@ -130,7 +130,17 @@ def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, li
     with pytest.raises(ValueError) as caught:
         gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
     assert str(caught.value) == expected_message("prompt", "int")
-    assert calls == {"generate": ["valid"], "judge": []}
+    assert calls == {"generate": [], "judge": []}
+
+
+def test_bad_row_at_end_of_longer_file_makes_zero_generations(calls: dict[str, list]) -> None:
+    lines = [f'{{"prompt":"valid_{i}"}}' for i in range(20)]
+    lines.append('{"prompt":17}')
+    Path("prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
+    assert str(caught.value) == expected_message("prompt", "int", line=21)
+    assert calls == {"generate": [], "judge": []}
 
 
 def test_cli_invalid_input_does_not_replace_baseline(calls: dict[str, list]) -> None:
