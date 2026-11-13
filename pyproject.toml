@@ -279,7 +279,7 @@ artifacts = [
   "src/soup_cli/data/_fixtures/gate/*.jsonl",
 ]
 
-# Package the 16 canonical reference guides from docs/ (outside src/soup_cli)
+# Package the 17 canonical reference guides from docs/ (outside src/soup_cli)
 # into the wheel at build time so offline search functions without git checkout.
 # Because docs/ is outside src/, packages = ["src/soup_cli"] never touches it,
 # so force-include cannot double-ship. Media assets (docs/assets/) are excluded.
@@ -294,6 +294,7 @@ artifacts = [
 "docs/data.md" = "soup_cli/docs/bundled/data.md"
 "docs/evaluation.md" = "soup_cli/docs/bundled/evaluation.md"
 "docs/issue-difficulty.md" = "soup_cli/docs/bundled/issue-difficulty.md"
+"docs/loop-formats.md" = "soup_cli/docs/bundled/loop-formats.md"
 "docs/models.md" = "soup_cli/docs/bundled/models.md"
 "docs/peft-and-efficiency.md" = "soup_cli/docs/bundled/peft-and-efficiency.md"
 "docs/performance-and-quantization.md" = "soup_cli/docs/bundled/performance-and-quantization.md"
