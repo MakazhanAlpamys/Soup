@@ -68,7 +68,7 @@ def _wide_console(monkeypatch):
 @pytest.fixture
 def fake_model(monkeypatch):
     """Replace the generator factory; ``state['profile']`` is correct-answers per task."""
-    from soup_cli.utils import live_eval
+    from soup_cli.utils import gpu, live_eval
 
     state = {
         "profile": {}, "loads": [], "on_load": None,
@@ -102,6 +102,11 @@ def fake_model(monkeypatch):
 
     monkeypatch.setattr(live_eval, "make_generator", factory)
     monkeypatch.setattr(live_eval, "resolve_device", lambda device=None: device or "cpu")
+    # This fixture models a BF16-capable CUDA card even on CPU-only CI. The
+    # requested-card capability policy itself is tested in test_ship_precision.
+    monkeypatch.setattr(
+        gpu, "bf16_fp16_flags", lambda device: (str(device).startswith("cuda"), False),
+    )
     return state
 
 
@@ -1235,6 +1240,51 @@ class TestNumericsInTheLedger:
         assert _read_ledger()["versions"][0]["numerics"] == {
             **_NUMERICS_CPU_DICT, "dtype": "bfloat16", "device": "cuda",
         }
+
+    def test_pre_ampere_float16_refuses_a_recorded_bfloat16_version(
+        self, fake_model: dict, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from soup_cli.utils import gpu
+
+        _write_task_file("alpha")
+        legacy = _valid_payload()
+        legacy["tasks"][0]["sha256"] = _sha("alpha.jsonl")
+        legacy["versions"][0]["numerics"] = {
+            **_NUMERICS_CPU_DICT, "dtype": "bfloat16", "device": "cuda",
+        }
+        Path("retention.json").write_text(json.dumps(legacy), encoding="utf-8")
+        original = Path("retention.json").read_bytes()
+        # The saved BF16 stamp predates the new default. Model the pre-Ampere
+        # precision flags on the same cuda:1; native-device probing is covered
+        # separately in test_ship_precision.
+        monkeypatch.setattr(
+            gpu, "bf16_fp16_flags", lambda device: (False, str(device).startswith("cuda")),
+        )
+
+        output = _check(_run(
+            fake_model, {"alpha": 18}, "fp16-baseline", "--ledger", "fp16.json",
+            "--add-task", "alpha=alpha.jsonl", "--record", "--output", "fp16-report.json",
+            device="cuda:1",
+        ), 0)
+        expected = {**_NUMERICS_CPU_DICT, "dtype": "float16", "device": "cuda"}
+        fresh = json.loads(Path("fp16.json").read_text(encoding="utf-8"))
+        report = json.loads(Path("fp16-report.json").read_text(encoding="utf-8"))
+        assert fresh["versions"][0]["numerics"] == report["numerics"] == expected
+        assert "Numerics: dtype float16, device cuda, quantization none" in output
+        assert [(kw["dtype"], kw["device"]) for _, kw in fake_model["loads"]] == [
+            ("float16", "cuda:1"),
+        ]
+
+        fake_model["loads"].clear()
+        refused = _check(_run(
+            fake_model, {"alpha": 18}, "v2", "--record", "--output", "blocked-report.json",
+            device="cuda:1",
+        ), 3)
+        assert "dtype 'float16' (this run) vs 'bfloat16' (version 'v1')" in refused
+        assert "start a new ledger (--ledger NEW.json)" in refused
+        assert fake_model["loads"] == []
+        assert Path("retention.json").read_bytes() == original
+        assert not Path("blocked-report.json").exists()
 
     def test_a_quantized_run_with_template_kwargs_stamps_both(self, fake_model):
         _write_task_file("alpha")
