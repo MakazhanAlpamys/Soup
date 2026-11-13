@@ -11,6 +11,7 @@ be read turns into a warning: the export itself has already succeeded.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 from pathlib import Path
@@ -92,6 +93,31 @@ class TestLookupEntryByOutputDir:
 
         target = str(out) if query == "absolute" else "./out"
         assert lookup_entry_by_output_dir(target) == eid
+
+    def test_a_row_stored_relative_before_2741_resolves_against_the_current_dir(
+        self, workdir, monkeypatch
+    ):
+        # Since #2741 `finish_run` stores an absolute path, so write the legacy form
+        # straight into the tracker database. Like every other reader of the column,
+        # the match resolves such a row against the current directory, as on v0.77.2:
+        # from the directory the run trained in it finds the run, and from another
+        # directory it reads that directory's ``out``.
+        out = workdir / "out"
+        out.mkdir()
+        run_id = _completed_run(str(out))
+        with contextlib.closing(sqlite3.connect(os.environ["SOUP_DB_PATH"])) as conn:
+            conn.execute("UPDATE runs SET output_dir = ? WHERE run_id = ?", ("out", run_id))
+            conn.commit()
+        eid = _register(run_id)
+
+        assert lookup_entry_by_output_dir("./out") == eid
+        assert lookup_entry_by_output_dir(str(out)) == eid
+
+        other = workdir / "other"
+        (other / "out").mkdir(parents=True)
+        monkeypatch.chdir(other)
+        assert lookup_entry_by_output_dir(str(other / "out")) == eid
+        assert lookup_entry_by_output_dir(str(out)) is None
 
     def test_matches_the_tracked_output_dir_not_the_config_output(self, workdir):
         # The trainer appends experiment_name to the config's ``output``; the tracker
