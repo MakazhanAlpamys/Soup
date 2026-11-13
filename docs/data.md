@@ -660,6 +660,10 @@ contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a t
 as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
 error is reported with its code cell and line.
 
+A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
+names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
+with a warning naming its keys, and the template is not carried over.
+
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
 The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
@@ -678,10 +682,6 @@ binding before that trainer (including annotated assignments).
 Earlier stages retain warnings but cannot supply settings, and unused configs are ignored.
 Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
 reports "Could not read the final trainer's args statically" and uses Soup defaults.
-
-A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
-names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
-with a warning naming its keys, and the template is not carried over.
 
 A migrated config trains what the source trained, using the source tool's defaults
 where a key is absent (#1807):
