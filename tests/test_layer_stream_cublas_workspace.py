@@ -151,7 +151,12 @@ def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatc
     )
     expected = cublas_workspace_bytes(compute_capability=None)
     assert seen["charge"] == expected
-    assert any("cuBLAS" in line and "64.0 MiB" in line for line in lines)
+    assert any(
+        "cuBLAS" in line
+        and "64.0 MiB" in line
+        and "PyTorch allocator workspace" in line
+        for line in lines
+    )
 
 
 @pytest.mark.gpu(reason="the cuBLAS allocator reading requires CUDA")

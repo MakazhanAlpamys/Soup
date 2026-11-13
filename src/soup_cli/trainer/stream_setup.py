@@ -2117,7 +2117,8 @@ class StreamingSetupMixin:
         lines = [peak_line(predicted)]
         if cublas_bytes:
             lines.append(
-                f"  cuBLAS       {cublas_bytes / (1024 * 1024):.1f} MiB workspace, included above"
+                f"  cuBLAS       {cublas_bytes / (1024 * 1024):.1f} MiB PyTorch allocator "
+                "workspace, included above"
             )
         if scale_cache_bytes:
             lines.append(

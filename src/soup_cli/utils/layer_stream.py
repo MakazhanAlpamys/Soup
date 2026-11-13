@@ -187,7 +187,7 @@ STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES = 32 * 1024 * 1024
 def cublas_workspace_bytes(
     *, compute_capability: Optional[tuple[int, int]], workspace_config: Optional[str] = None
 ) -> int:
-    """Return the allocator-visible cuBLAS workspace charge for a streamed step.
+    """Return PyTorch's allocator-visible cuBLAS workspace charge for a streamed step.
 
     PyTorch's default is 8,320 KiB per handle below compute capability 9.0 and
     32 MiB per handle on 9.0+. ``CUBLAS_WORKSPACE_CONFIG`` is a sequence of
@@ -195,6 +195,10 @@ def cublas_workspace_bytes(
     pairs used by a streamed forward and backward. ``None`` means the variable
     is unset and selects the device default. ``:0:0`` explicitly disables it.
     An unreadable capability uses the largest documented per-handle default.
+
+    This is the PyTorch caching-allocator workspace only. cuBLAS may also keep
+    a private handle-creation buffer outside the allocator; that memory is not
+    included in ``torch.cuda.max_memory_allocated()`` and is not estimated here.
     """
     if compute_capability is None:
         # A failed capability query must not silently disable the safety charge.

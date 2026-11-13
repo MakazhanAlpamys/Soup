@@ -862,8 +862,10 @@ forecast     5685-8361 tok/s — a compute-bound bound, not a promise
 The prediction was fitted to ten real runs across two models, a 3.1× vocabulary contrast,
 batch 1–8 and sequence lengths 256 and 512. That grid was measured on an RTX 3050
 (compute capability 8.6). The estimate now explicitly charges two cuBLAS handle/stream
-workspaces: the device default is 8,320 KiB each on this card, or the summed sizes in
-`CUBLAS_WORKSPACE_CONFIG` when set. On the original grid, the total prediction is
+PyTorch caching-allocator workspaces: the device default is 8,320 KiB each on this
+card, or the summed sizes in `CUBLAS_WORKSPACE_CONFIG` when set. This budget predicts
+`torch.cuda.max_memory_allocated()` and does not include cuBLAS-private buffers allocated
+outside PyTorch's caching allocator when handles are created. On the original grid, the total prediction is
 101.04–106.57% of the recorded peak (the cuBLAS term adds 0.18–5.99% of that peak);
 the former 0.85% accuracy bound no longer
 applies. Because the 13.5 MB fixed allowance was measured before this charge was added,
