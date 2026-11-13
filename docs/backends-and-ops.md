@@ -990,7 +990,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -1010,6 +1014,26 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
