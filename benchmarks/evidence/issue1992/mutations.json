@@ -8,7 +8,7 @@
       "E               assert 0.0 > 0"
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing0-False]",
@@ -26,7 +26,7 @@
       "E               assert False"
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
@@ -44,7 +44,7 @@
       "E           assert False"
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_accumulated_masked_update_matches_independent_reference[False-False]",
@@ -62,7 +62,7 @@
       "E             "
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
@@ -79,7 +79,7 @@
       "E                   FloatingPointError: MLX full fine-tuning: empty or non-finite supervised loss"
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_low_precision_updates_and_adam_moment_dtype[dtype0]",
@@ -97,7 +97,7 @@
       "E           assert False"
     ],
     "command": [
-      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "python",
       "-m",
       "pytest",
       "tests/test_mlx_full_finetune_native.py::test_accumulated_masked_update_matches_independent_reference[False-True]",

@@ -16,7 +16,7 @@
   "unified_memory_bytes": 17179869184,
   "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9",
   "command": [
-    "/tmp/soup-1992-floor/bin/python",
+    "python",
     "-m",
     "pytest",
     "tests/test_mlx_full_finetune.py",

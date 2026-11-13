@@ -257,6 +257,7 @@ def test_loaded_model_refusals(tmp_path, monkeypatch, problem, match):
     if problem == "all_frozen":
         from mlx_lm.models.llama import Model
 
+        # Exercise the defensive guard. A supported Llama cutoff cannot produce this state.
         monkeypatch.setattr(Model, "trainable_parameters", lambda self: {})
     with pytest.raises(ValueError, match=match):
         MLXSFTTrainerWrapper(config).setup(_rows())
@@ -312,8 +313,13 @@ def test_low_precision_updates_and_adam_moment_dtype(tmp_path, monkeypatch, dtyp
     for name in wrapper._full_model_metadata["frozen_names"]:
         assert updated[name].dtype == dtype
         assert mx.array_equal(updated[name], initial[name]).item(), name
+    saved = mx.load(str(tmp_path / "out" / "model.safetensors"))
+    assert {name: value.dtype for name, value in saved.items()} == {
+        name: value.dtype for name, value in updated.items()
+    }
     restored, _ = load(str(tmp_path / "out"))
     for name, value in tree_flatten(restored.parameters()):
+        assert value.dtype == updated[name].dtype, name
         assert mx.array_equal(value, updated[name]).item(), name
 
 

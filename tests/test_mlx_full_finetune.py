@@ -27,26 +27,53 @@ def test_public_dense_config_and_dispatch(freezing):
 
 @pytest.mark.parametrize("field,value", [("freeze_layers", 1), ("freeze_ratio", 0.5)])
 def test_freezing_with_lora_stays_refused(field, value):
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError) as exc:
         _config(lora={"r": 4}, **{field: value})
+    assert str(exc.value) == (
+        f": Value error, training.{field} is not applied by task='sft' with backend='mlx': "
+        "layers are frozen only on the text path with backend: transformers and no layer "
+        "streaming, so this run would train every layer. Use backend: transformers, "
+        "or remove the key."
+    )
 
 
-@pytest.mark.parametrize("training,match", [
-    ({"quantization": "4bit"}, "quantization"),
-    ({"lisa_enabled": True}, "lisa_enabled"),
-    ({"unfrozen_parameters": ["model.layers.0"]}, "unfrozen_parameters"),
-    ({"lora": {"r": 0, "use_dora": True}}, "use_dora"),
-    ({"lora": {"r": 0, "use_rslora": True}}, "use_rslora"),
-    ({"lora": {"r": 0, "rank_pattern": {"q_proj": 4}}}, "rank_pattern"),
-    ({"lora": {"r": 0, "alpha": 32}}, "alpha"),
-    ({"lora": {"r": 0, "dropout": 0.2}}, "dropout"),
-    ({"lora": {"r": 0, "target_modules": ["q_proj"]}}, "target_modules"),
-    ({"freeze_layers": 0}, "freeze_layers"),
-    ({"freeze_ratio": 1}, "freeze_ratio"),
+@pytest.mark.parametrize("training,message", [
+    (
+        {"quantization": "4bit"},
+        ": Value error, training.lora.r=0 (full fine-tuning) requires quantization='none' "
+        "(got '4bit'); quantized weights cannot be trained directly. For a quantized run "
+        "use LoRA (QLoRA) with lora.r >= 1.",
+    ),
+    (
+        {"lisa_enabled": True},
+        ": Value error, training.lisa_enabled requires backend='transformers'; got backend='mlx'",
+    ),
+    (
+        {"unfrozen_parameters": ["model.layers.0"]},
+        ": Value error, training.unfrozen_parameters requires backend='transformers'; "
+        "got backend='mlx'",
+    ),
+    ({"freeze_layers": 0}, "training -> freeze_layers: Input should be greater than or equal to 1"),
+    ({"freeze_ratio": 1}, "training -> freeze_ratio: Input should be less than 1"),
 ])
-def test_named_refusals(training, match):
-    with pytest.raises(ValueError, match=match):
+def test_named_refusals(training, message):
+    with pytest.raises(ValueError) as exc:
         _config(**training)
+    assert str(exc.value) == message
+
+
+@pytest.mark.parametrize("field,value", [
+    ("use_dora", True), ("use_rslora", True), ("rank_pattern", {"q_proj": 4}),
+    ("alpha_pattern", {"q_proj": 4}), ("alpha", 32), ("dropout", 0.2),
+    ("target_modules", ["q_proj"]),
+])
+def test_dense_lora_controls_are_refused_by_exact_name(field, value):
+    with pytest.raises(ValueError) as exc:
+        _config(lora={"r": 0, field: value})
+    assert str(exc.value) == (
+        ": Value error, training.lora.r=0 means full fine-tuning (no adapter), so it "
+        f"is mutually exclusive with LoRA features: lora.{field}. Set lora.r >= 1 to use them."
+    )
 
 
 def test_neighboring_lora_still_loads():
@@ -57,8 +84,12 @@ def test_neighboring_lora_still_loads():
 def test_dense_vocab_expansion_stays_refused(field):
     raw = _config().model_dump(mode="json")
     raw["data"][field] = ["<new>"]
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError) as exc:
         load_config_from_string(yaml.safe_dump(raw))
+    assert str(exc.value) == (
+        f": Value error, MLX full fine-tuning does not support data.{field}; "
+        "vocabulary expansion currently requires LoRA."
+    )
 
 
 @pytest.mark.parametrize("flag", ["--resume", "--hf-resume"])

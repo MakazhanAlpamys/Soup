@@ -397,8 +397,9 @@ training:
 Layers below `freeze_layers`, or `int(num_layers * freeze_ratio)`, remain frozen;
 `freeze_layers` takes priority when both are set. Embeddings, the final norm and
 the output head remain trainable. Tied embedding/head weights receive one update.
-An out-of-range layer count or a plan with nothing trainable is refused. Exact
-frozen/trainable parameter and tensor counts are printed before the first update.
+An out-of-range layer count is refused. Even when every decoder block is frozen,
+the embedding, final norm and output head remain trainable. Exact frozen/trainable
+parameter and tensor counts are printed before the first update.
 Frozen tensors receive no optimizer state. Accumulated gradients are weighted by
 the number of supervised tokens, then clipped once per optimizer update.
 
@@ -410,7 +411,12 @@ qualifies a dense model's memory use; choose an explicit small batch size.
 
 The final output and each `checkpoint-000000N/` contain complete weights (including
 frozen layers), config, tokenizer, and `training_config.json` with the effective
-freeze plan and completed update count. `save_steps` counts micro-batches; a save
+freeze plan and completed update count. Saved trainable tensors are float32 and
+saved frozen tensors keep their input dtype, so a checkpoint can contain both.
+`config.json` preserves the effective model configuration. Any dtype field it
+carries comes from that configuration. `mlx_lm.load` reads each tensor's dtype
+from the safetensors file. An all-trainable 8B model therefore writes about 32 GB
+of weights in decimal units. `save_steps` counts micro-batches; a save
 due within an accumulation group waits for its completed optimizer update. Load
 any saved directory with `mlx_lm.load("./llama-full")`, without the original base
 directory or `adapter_path`. Use a fresh output directory for each run.

@@ -5,7 +5,7 @@ Source: `345c1f6105b8bd3bf3004f9c575b1517075080e9`, based on upstream
 no large-model memory or throughput claim follows from this tiny fixture.
 The branch contains upstream `8b80c2db`, the helper-module registry fix, and
 publication integration with upstream `1f1a3aaf`. The measured native trainers,
-loader and native fixture remain byte-identical to the measured source. Later
+loader and native fixture were byte-identical through publication. Later
 upstream schema/CLI changes are covered by 442 publication integration checks;
 the earlier 432-check integration result is retained in the verification record.
 
@@ -69,10 +69,11 @@ the assert-based check is retained in `verification.json`.
 - Complete versions, source/test hashes, commands and exit codes:
   [current environment](evidence/issue1992/current/environment.json),
   [floor environment](evidence/issue1992/floor/environment.json).
-- Each case JSON retains the fixture safetensors SHA-256, exact data/config,
-  per-tensor maximum absolute deltas, actual moment dtype, counts and reload error.
-  Default-valued config fields are omitted from committed case records; exact
-  schema round-trip equality was asserted and each resolved config hash retained.
+- The twelve detailed case records live under `benchmarks/evidence/issue1992/current/`
+  and `benchmarks/evidence/issue1992/floor/` in the evidence follow-up. They retain
+  fixture hashes, data, config, per-tensor deltas and reload results. The follow-up
+  uses relative fixture and output paths and verifies the resolved config hashes.
+  [Evidence PR #2821](https://github.com/MakazhanAlpamys/Soup/pull/2821/files)
 
 ## Native observations
 
@@ -132,6 +133,10 @@ Neither a 96 GB nor a 128 GB device has been qualified here, nor has an 8B model
 - [Six mutation controls](evidence/issue1992/mutations.json) fail for the intended
   reason: last-block-only training, missing freezing, equal microbatch weighting,
   partial saving, disabled float32 masters, and duplicate tied updates.
+- The portable LoRA harness checks that `adapter_config.json` contains both
+  adapter parameters and the watchdog outcome. The native LoRA tests run in
+  `mlx-smoke`, which the ordinary hosted pull request run skips.
+  [Portable test](../tests/test_issue684_mlx_grad_accumulation.py)
 - Ruff, generated-reference structure, recipe snapshot regeneration and package
   listing checks pass. The recipe snapshot has no diff; no defaults/fields changed.
 - Pinned full non-smoke run: **56,771 passed, 391 skipped, 37 failed** in 1049.98 s.

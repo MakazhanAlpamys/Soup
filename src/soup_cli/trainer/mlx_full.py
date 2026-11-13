@@ -61,6 +61,7 @@ def prepare_full_model(model: Any, config: SoupConfig) -> dict:
                           model.trainable_parameters()))
     trainable = dict(tree_flatten(model.trainable_parameters()))
     trainable_count = sum(parameter.size for parameter in trainable.values())
+    # Defensive: a valid Llama cutoff always leaves the embedding and final norm trainable.
     if trainable_count == 0:
         raise ValueError("MLX full fine-tuning freeze plan leaves nothing trainable (all-frozen)")
     frozen = parameters.keys() - trainable.keys()
