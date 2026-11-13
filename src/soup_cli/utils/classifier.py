@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Hashable, Mapping, Optional, Sequence
+from typing import Any, Hashable, Mapping, Optional, Sequence
 
 CLASSIFIER_TASKS: frozenset[str] = frozenset(
     {"classifier", "reranker", "cross_encoder"}
@@ -223,7 +223,7 @@ def ranking_score_skip_reason(num_labels: int, multi_label: bool) -> Optional[st
 
 
 def _as_rows(values: object) -> list:
-    return values.tolist() if hasattr(values, "tolist") else list(values)  # type: ignore[arg-type]
+    return values.tolist() if hasattr(values, "tolist") else list(values)  # type: ignore[call-overload]
 
 
 def ranking_scores(logits: object, num_labels: int, multi_label: bool) -> list[float]:
@@ -336,6 +336,124 @@ def ranking_query_groups(
         "queries_split": len(split),
     }
     return groups, counts
+
+
+# ---------------------------------------------------------------------------
+# Classification metrics for ``classifier`` (#2638)
+# ---------------------------------------------------------------------------
+
+
+def classification_skip_reason(num_labels: int, multi_label: bool) -> Optional[str]:
+    """Why a head with this shape cannot be measured, or None.
+
+    ``num_labels: 1`` with the default single-label kind accepts only label 0,
+    so every row has the same label and the argmax of one logit is always 0.
+    """
+    if num_labels == 1 and not multi_label:
+        return (
+            "num_labels: 1 accepts only label 0 with the default single-label kind, "
+            "so every row has the same label and there is nothing to measure"
+        )
+    return None
+
+
+def _vector(row: object, num_labels: int, what: str) -> list[float]:
+    """One row of logits or multi-label targets as ``num_labels`` floats."""
+    values: list[Any] = list(row) if isinstance(row, (list, tuple)) else [row]
+    if len(values) != num_labels:
+        raise ValueError(f"expected {num_labels} {what} per row, got {len(values)}")
+    return [float(value) for value in values]
+
+
+def _argmax(row: Sequence[float]) -> int:
+    """Index of the largest value; the first one on a tie, never a NaN."""
+    best, best_value = 0, -math.inf
+    for index, value in enumerate(row):
+        if value > best_value:
+            best, best_value = index, value
+    return best
+
+
+def _f1(tp: int, fp: int, fn: int) -> Optional[float]:
+    """F1 from counts, or None when there is no true and no predicted row."""
+    denominator = 2 * tp + fp + fn
+    return None if denominator == 0 else 2 * tp / denominator
+
+
+def _with_f1(
+    result: dict[str, float], tp: list[int], fp: list[int], fn: list[int], *, micro: bool
+) -> dict[str, float]:
+    per_class = [score for score in map(_f1, tp, fp, fn) if score is not None]
+    if per_class:
+        result["f1_macro"] = sum(per_class) / len(per_class)
+    if micro:
+        score = _f1(sum(tp), sum(fp), sum(fn))
+        if score is not None:
+            result["f1_micro"] = score
+    return result
+
+
+def classification_metrics(
+    logits: object, labels: object, num_labels: int, multi_label: bool
+) -> dict[str, float]:
+    """Accuracy and F1 of a classifier head on the validation rows (#2638).
+
+    * Single-label (``num_labels >= 2``): ``accuracy`` and ``f1_macro``. The
+      prediction is the argmax of the logits (the first index on a tie).
+    * Multi-label: ``subset_accuracy`` (every label of a row correct),
+      ``f1_micro`` and ``f1_macro``. A label is predicted when its logit is
+      above 0, a sigmoid probability above 0.5, the threshold
+      ``BCEWithLogitsLoss`` training implies; a logit of exactly 0 is not
+      predicted. A label is true when its target is at least 0.5.
+
+    A class with no true and no predicted row has no F1 and is left out of the
+    macro average instead of counting as 0. When no class has one (a
+    multi-label set with nothing true and nothing predicted), the F1 keys are
+    left out. No rows give an empty result.
+    """
+    reason = classification_skip_reason(num_labels, multi_label)
+    if reason is not None:
+        raise ValueError(reason)
+    logit_rows = [_vector(row, num_labels, "logits") for row in _as_rows(logits)]
+    label_rows = _as_rows(labels)
+    if len(logit_rows) != len(label_rows):
+        raise ValueError(
+            f"got {len(logit_rows)} rows of logits for {len(label_rows)} labels"
+        )
+    if not logit_rows:
+        return {}
+
+    tp, fp, fn = [0] * num_labels, [0] * num_labels, [0] * num_labels
+    correct = 0
+    if multi_label:
+        for row, label in zip(logit_rows, label_rows):
+            targets = [value >= 0.5 for value in _vector(label, num_labels, "labels")]
+            predicted = [value > 0.0 for value in row]
+            if predicted == targets:
+                correct += 1
+            for c, (is_predicted, is_true) in enumerate(zip(predicted, targets)):
+                if is_predicted and is_true:
+                    tp[c] += 1
+                elif is_predicted:
+                    fp[c] += 1
+                elif is_true:
+                    fn[c] += 1
+        result = {"subset_accuracy": correct / len(logit_rows)}
+        return _with_f1(result, tp, fp, fn, micro=True)
+
+    for row, label in zip(logit_rows, label_rows):
+        true_class = int(label)
+        if not 0 <= true_class < num_labels:
+            raise ValueError(f"label index {true_class} out of range [0, {num_labels})")
+        predicted_class = _argmax(row)
+        if predicted_class == true_class:
+            correct += 1
+            tp[true_class] += 1
+        else:
+            fp[predicted_class] += 1
+            fn[true_class] += 1
+    result = {"accuracy": correct / len(logit_rows)}
+    return _with_f1(result, tp, fp, fn, micro=False)
 
 
 def build_classifier_trainer(
