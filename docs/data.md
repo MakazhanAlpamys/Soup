@@ -723,6 +723,7 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parq
 Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
 including Excel's CSV UTF-8 exports. The signature is removed before parsing;
 U+FEFF characters inside field values or document text are preserved.
+Quoted CSV fields also preserve their original LF, CRLF or CR line endings.
 
 The same leading-BOM handling applies to tokenizer corpora, inference benchmark
 prompts, Agent Forge predictions, draft JSONL inputs, edit covariance corpora,
@@ -1099,9 +1100,17 @@ data:
 resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
 `orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
 vision and audio paths whatever the backend (they run their transformers setup before the
-backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
-`mlx`, and `training.stream_layers` never add them, so a config setting them there is
-refused at load, naming which of those applies (#1358).
+backend is read). On `backend: mlx`, text SFT supports native vocabulary expansion
+when `training.quantization: none` on dense causal models (`mlx_lm.models.llama` layout)
+whose base embedding row count matches the tokenizer vocabulary length (#1994). Special tokens
+are registered first to ensure semantic precedence, whereas `backend: transformers`
+(`apply_vocab_expansion`) registers ordinary tokens first. New rows are
+initialized with a normal distribution matching the base embedding's std and dtype.
+Saved adapters include separate `added_tokens.safetensors` and `added_tokens_info.json`
+sidecar artifacts, while downstream consumers (`soup infer`, `soup chat`, `soup merge`)
+explicitly refuse expanded vocabulary MLX adapters until unified loader support lands.
+Any other task on MLX, quantized MLX models, `backend: unsloth` (text SFT and every other task),
+and `training.stream_layers` refuse vocabulary expansion at config load, naming which applies (#1358).
 
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
@@ -1476,6 +1485,35 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+**Native MLX text SFT** also consumes this cache with both
+`data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional
+Arrow reader with `pip install 'soup-cli[mlx]' datasets`. The consumer uses the
+same fingerprint gate and legacy missing-metadata advisory as Transformers,
+without importing Torch, PEFT or TRL. Corrupt metadata, changed key inputs
+and incomplete shards fail without a raw-data fallback. The CLI retains the
+existing source-availability contract; a cache does not make an unavailable
+configured source valid.
+
+Native cached batches use the stored IDs and explicit target labels exactly:
+no template render, retokenization, added BOS/EOS or regenerated response mask.
+Labels may differ from input IDs; `-100` ignores a target. Padding labels remain
+ignored even when PAD=EOS, and the causal shift applies to labels and tokens
+together. Every row is checked for integer IDs/labels (bools/floats are refused),
+vocabulary bounds, matching lengths, right-padding attention masks and at least
+one retained causal target after truncation. A single bad train/validation row
+stops the run. The native sampler retains its existing whole-batch behaviour;
+loading preserves the cache's split/row identity. Saved metadata records cache
+consumption, and rewind records the same stored-label objective.
+
+The producer's masking policy is frozen in its labels; raw native and Transformers
+template heuristics can differ, so cache consumption does not rewrite one into
+the other. Native qualification covers ordinary text LoRA with dense and genuine
+4-bit bases. The existing native custom-template override refusal remains;
+consuming a cache does not enable arbitrary raw template overrides or other tasks.
+Keys bind configured names/paths/settings, not source-file contents, shipped
+model-template contents or model-weight hashes. Unchanged names do not prove
+unchanged data/model contents; only use legacy metadata-free caches you trust.
 
 Rows are rendered with `data.chat_template` when it is set, the same as live
 training. The `pre_tokenized` training config must name the same template, since

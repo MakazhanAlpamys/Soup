@@ -76,6 +76,7 @@ class TestNumericsFamily:
 
     def test_full_precision_collapses(self):
         assert numerics_family("bfloat16") == NUMERICS_FAMILY_FULL
+        assert numerics_family("float16") == NUMERICS_FAMILY_FULL
         assert numerics_family("float32") == NUMERICS_FAMILY_FULL
 
     def test_unknown_raises_without_echoing_the_value(self):
@@ -86,7 +87,7 @@ class TestNumericsFamily:
 
 class TestParseNumerics:
     def test_accepts_known_stamps(self):
-        for value in ("4bit", "8bit", "bfloat16", "float32"):
+        for value in ("4bit", "8bit", "bfloat16", "float16", "float32"):
             assert parse_numerics(value) == value
 
     def test_rejects_non_string_without_echoing(self):
@@ -146,9 +147,11 @@ class TestLiveEvalNumericsHelper:
 
         assert _live_eval_numerics(None, "cpu") == "float32"
 
-    def test_indexed_cuda_stamps_bfloat16_without_torch(self):
+    def test_indexed_cuda_stamps_bfloat16_when_supported(self, monkeypatch):
         from soup_cli.commands.ship import _live_eval_numerics
+        from soup_cli.utils import gpu
 
+        monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device: (True, False))
         assert _live_eval_numerics(None, "cuda:0") == "bfloat16"
 
     def test_gptq_config_family_is_full(self):

@@ -106,6 +106,69 @@ def test_no_generator_reference_survives_into_the_second_load(monkeypatch):
     )
 
 
+def test_cuda_measurement_resets_after_warmup_and_releases_before_next_load(monkeypatch):
+    from contextlib import nullcontext
+
+    import torch
+
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    before, after, events = _fake_factories(monkeypatch)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: events.append(f"sync:{device}"))
+    monkeypatch.setattr(
+        torch.cuda, "reset_peak_memory_stats", lambda device: events.append(f"reset:{device}"),
+    )
+
+    def peak(device):
+        events.append(f"peak:{device}")
+        return 8 * 1024 ** 2
+
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", peak)
+    monkeypatch.setattr(torch.cuda, "device", lambda device: nullcontext())
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: events.append("release"))
+
+    def factory(create):
+        generator = create()
+        generator.device = "cuda:1"
+        return generator
+
+    result = run_performance_quant_check(
+        before_factory=lambda: factory(before), after_factory=lambda: factory(after),
+        tasks=_tasks(1), device="cuda:1", warmup=1, repeats=1,
+    )
+    assert result.performance.before.peak_gpu_memory_bytes == 8 * 1024 ** 2
+    assert result.performance.after.peak_gpu_memory_bytes == 8 * 1024 ** 2
+    assert result.performance.before.generated_tokens == 2
+    assert events == [
+        "load:before", "generate:before", "sync:cuda:1", "reset:cuda:1",
+        "sync:cuda:1", "generate:before", "sync:cuda:1", "peak:cuda:1",
+        "close:before", "release",
+        "load:after", "generate:after", "sync:cuda:1", "reset:cuda:1",
+        "sync:cuda:1", "generate:after", "sync:cuda:1", "peak:cuda:1",
+        "close:after", "release",
+    ]
+
+
+def test_failed_model_load_still_releases_memory_and_never_loads_second_model(monkeypatch):
+    from soup_cli.eval import quant_performance
+    from soup_cli.eval.quant_check import run_performance_quant_check
+
+    events = []
+    monkeypatch.setattr(
+        quant_performance._MemoryProbe, "release", lambda self: events.append("free"),
+    )
+
+    def fail():
+        raise OSError("bad checkpoint")
+
+    with pytest.raises(OSError, match="bad checkpoint"):
+        run_performance_quant_check(
+            before_factory=fail, after_factory=lambda: pytest.fail("Must not load second model"),
+            tasks=_tasks(1), device="cpu",
+        )
+    assert events == ["free"]
+
+
 def test_only_first_measured_answer_is_scored(monkeypatch):
     from soup_cli.eval.quant_check import run_performance_quant_check
 
@@ -222,6 +285,46 @@ def test_cli_quality_drop_still_exits_two_with_performance(tmp_path, monkeypatch
     payload = json.loads(result.output)
     assert payload["rows"][0]["verdict"] == "MAJOR"
     assert payload["performance"]["latency_change_pct"] == pytest.approx(-50.0)
+
+
+def test_performance_refuses_stub_measurements_before_model_loading(monkeypatch):
+    from soup_cli.cli import app
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner
+
+    monkeypatch.setattr(
+        quant_check, "make_model_generator", lambda *a, **kw: pytest.fail("Must not load a model"),
+    )
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", "missing.jsonl", "--performance", "--allow-stub",
+    ])
+    assert result.exit_code == 3, (result.output, result.exception)
+    assert "--allow-stub" in result.output
+
+
+def test_performance_runtime_failure_exits_one_and_releases_model(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+    from soup_cli.eval import quant_check
+    from tests.conftest import make_cli_runner, strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    before, after, events = _fake_factories(monkeypatch, fail=True)
+    monkeypatch.setattr(
+        quant_check, "make_model_generator",
+        lambda path, **kwargs: before() if path.endswith("before") else after(),
+    )
+    for side in ("before", "after"):
+        (tmp_path / side).mkdir()
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text('{"prompt": "0", "expected": "ok"}\n', encoding="utf-8")
+    result = make_cli_runner().invoke(app, [
+        "eval", "quant-check", "--before", "before", "--after", "after",
+        "--tasks", str(tasks), "--performance", "--device", "cpu", "--format", "json",
+    ])
+    assert result.exit_code == 1, (result.output, result.exception)
+    assert "generation failed" in strip_ansi(result.output)
+    assert events == ["load:before", "generate:before", "close:before"]
 
 
 @pytest.mark.parametrize("fmt", ["json", "markdown"])

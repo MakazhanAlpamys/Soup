@@ -1,0 +1,21 @@
+"""One tiny CUDA-profiler capability check; no model loaded."""
+import json
+import sys
+from pathlib import Path
+
+import torch
+
+assert torch.cuda.is_available()
+torch.cuda.set_per_process_memory_fraction(8*2**30/torch.cuda.get_device_properties(0).total_memory)
+matrix = torch.ones(256, 256, device='cuda')
+torch.cuda.synchronize()
+with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
+                                       torch.profiler.ProfilerActivity.CUDA]) as profile:
+    result = matrix @ matrix
+    torch.cuda.synchronize()
+events = [e for e in profile.events() if e.name == 'aten::mm']
+assert events and sum(e.device_time_total for e in events) > 0, 'CUDA profiling unavailable'
+assert torch.equal(result, torch.full_like(result, 256))
+with Path(sys.argv[1]).open('x') as handle:
+    json.dump(dict(verified=True, torch=torch.__version__, cuda=torch.version.cuda,
+                   device_us=sum(e.device_time_total for e in events), model_loaded=False), handle)

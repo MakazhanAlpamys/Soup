@@ -3,13 +3,13 @@
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -58,11 +58,15 @@ def _panel_body(result):
     )
 
 
-@pytest.mark.parametrize("value", VALUES)
-@pytest.mark.parametrize("field", ["teacher", "output", "provenance"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param(field, value, marks=skip_colon_on_windows)
+        if field != "teacher" and ":" in value else (field, value)
+        for field in ("teacher", "output", "provenance") for value in VALUES
+    ],
+)
 def test_receipt_names_real_outputs_and_original_teacher(value, field):
-    if sys.platform == "win32" and field != "teacher" and ":" in value:
-        pytest.skip("colon is not valid in a Windows filename")
     typed = value if field == "teacher" else f"out-{value}.jsonl"
     if field != "teacher":
         Path(typed).parent.mkdir(parents=True, exist_ok=True)

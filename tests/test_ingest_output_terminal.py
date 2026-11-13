@@ -1,7 +1,6 @@
 """Offline ingest displays output paths without changing the files."""
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.cli import app
 from soup_cli.commands import ingest
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 
@@ -22,7 +22,7 @@ from tests.conftest import make_cli_runner, strip_ansi
         pytest.param(
             ":warning:",
             ":warning:",
-            marks=pytest.mark.skipif(os.name == "nt", reason="colon filename on Windows"),
+            marks=skip_colon_on_windows,
         ),
     ],
 )
