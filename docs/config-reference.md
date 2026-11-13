@@ -302,7 +302,7 @@ Sections:
 | `training.convergence_detection` | `bool` | `false` |  | Watch for loss plateau / oscillation and surface advice (continue / early_stop / lower_lr) at the end of training. |
 | `training.convergence_window` | `int` | `50` | `>= 5`, `<= 10000` | Staged, not enforced during training: number of recent losses to inspect for plateau / oscillation. Refused at load when set away from its default (v0.77, #808). |
 | `training.convergence_rel_tol` | `float` | `0.005` | `> 0.0`, `<= 1.0` | Staged, not enforced during training: relative range threshold below which the window is a plateau. Refused at load when set away from its default (v0.77, #808). |
-| `training.warmup_auto` | `bool` | `false` |  | Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. Overrides any manual warmup_steps in the trainer. |
+| `training.warmup_auto` | `bool` | `false` |  | Deprecated, no effect: no trainer reads it, and warmup_ratio already sets the warmup over the real optimizer steps. Setting it to true warns at load; refused as of v0.79.0. |
 | `training.auto_mixed_precision` | `bool` | `false` |  | Pick bf16/fp16 based on model + GPU compute capability. Applied by task='sft' (and 'tts', which trains through the SFT trainer); refused on every other task, whose trainers pick their own precision. |
 | `training.grad_accum_auto_tune` | `bool` | `false` |  | Monitor VRAM each step; warn (and recommend new batch/accum) when memory pressure is high. Advisory only: it does not rebuild the DataLoader or change accumulation during a run. |
 | `training.grad_accum_pressure_threshold` | `float` | `0.92` | `> 0.05`, `< 0.99` | VRAM utilisation fraction that triggers a recommendation |
@@ -332,7 +332,7 @@ Sections:
 | `training.neftune_alpha` | `float \| null` | `null` | `>= 0.0`, `<= 50.0` | NEFTune noise alpha (0-50). Adds noise to embeddings for better chat quality. |
 | `training.forgetting_detection` | `bool` | `false` |  | Staged, not enforced during training: enable periodic general-knowledge eval to detect catastrophic forgetting |
 | `training.forgetting_eval_steps` | `int` | `100` | `>= 10`, `<= 10000` | Staged, not enforced during training: run forgetting eval every N steps. Refused at load when set away from its default (v0.77, #808). |
-| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Staged, not enforced during training: warn if accuracy drops beyond this threshold (0.01-0.50) |
+| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Deprecated, no effect: nothing reads it (soup ship reads eval.ship.forgetting_threshold). Setting it away from the default warns at load; refused as of v0.79.0. |
 | `training.forgetting_benchmark` | `str` | `"mini_mmlu"` | one of `"mini_mmlu"`, `"mini_common_sense"`, `"mini_instruction"` | Staged, not enforced during training: built-in mini benchmark for forgetting detection. Refused at load when set away from its default (v0.77, #808). |
 | `training.forgetting_stop` | `bool` | `false` |  | Staged, not enforced during training: stop on severe forgetting. Refused at load when set away from its default (v0.77, #808). |
 | `training.checkpoint_intelligence` | `bool` | `false` |  | Staged, not enforced during training: track best checkpoints by quality |

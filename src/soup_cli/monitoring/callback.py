@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
 
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.monitoring.reward_collapse import RewardCollapseMonitor
+from soup_cli.monitoring.step_rate import StepRate
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -194,6 +196,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         #: None until an evaluation runs. Not 0.0 -- an unmeasured
         #: validation loss must not read as a measured one.
         self._last_val_loss = None
+        #: Measures each step row's speed (#2791). The callback hands the same
+        #: value to the panel and the tracker, so screen and record agree.
+        self._step_rate = StepRate()
         # Loss watchdog state
         self._watchdog_enabled = loss_watchdog
         self._watchdog_threshold = loss_watchdog_threshold
@@ -238,6 +243,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
     ):
         self._reward_group_monitor = RewardCollapseMonitor()
         self.display.start(total_steps=state.max_steps)
+        self._step_rate.reset()
         # Prod wiring for the eval gate: load the suite + baseline and build a
         # live generate_fn from the training model. Before this, ``_gate_suite``
         # was only ever set by tests, so ``_run_eval_gate`` returned immediately
@@ -356,7 +362,15 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # here.
         display_val_loss = self._last_val_loss
         measured_val_loss = logs.get(val_key)
-        speed = logs.get("train_steps_per_second", 0.0)
+        # Hugging Face sets `train_steps_per_second` only in the final summary
+        # log; reading it on every step stored 0.0 on every step row (#2791).
+        # A step row records the run average since the first logged step -- the
+        # number the panel shows -- and None on the first row, where there is
+        # no interval yet. Not 0.0: an unmeasured speed must not read as a
+        # measured one, as for `loss` (#1225) and `val_loss`.
+        rate = self._step_rate.update(step, time.monotonic())
+        summary_speed = logs.get("train_steps_per_second")
+        speed = summary_speed if summary_speed is not None else rate
 
         reward_metrics = {}
         if (
@@ -422,8 +436,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # the field only when the data format is `tool-calling`.
         if "tool_calls" in (logs or {}):
             try:
-                import time
-
                 from soup_cli.utils.tool_outputs import get_global_tool_buffer
 
                 tool_count = logs.get("tool_calls")
