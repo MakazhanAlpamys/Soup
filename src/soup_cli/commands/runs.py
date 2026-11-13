@@ -559,19 +559,21 @@ def clean(
 
     # Every run recorded at a directory keeps its best checkpoint, including
     # runs that are not being cleaned: `runs clean B` must not prune A's best.
+    # Each directory's list starts from the runs being cleaned, so they are
+    # protected even when `list_runs` does not return them.
+    cleaned_ids = {run["run_id"] for runs in runs_by_dir.values() for run in runs}
+    runs_at_dir = {output_dir: list(runs) for output_dir, runs in runs_by_dir.items()}
     recorded_runs = runs_to_clean if all_runs else tracker.list_runs(limit=100000)
-    runs_at_dir: dict[Path, list[dict]] = {output_dir: [] for output_dir in runs_by_dir}
     for run in recorded_runs:
         output_dir = _resolved_output_dir(run)
-        if output_dir in runs_at_dir:
+        if output_dir in runs_at_dir and run["run_id"] not in cleaned_ids:
             runs_at_dir[output_dir].append(run)
 
-    for output_dir, cleaned_runs in runs_by_dir.items():
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        cleaned_ids = {run["run_id"] for run in cleaned_runs}
         keep_steps = set()
-        for run in runs_at_dir[output_dir] or cleaned_runs:
+        for run in runs_here:
             keep_step, fallback = _checkpoint_to_keep(tracker.get_metrics(run["run_id"]), steps)
             if keep_step is not None:
                 keep_steps.add(keep_step)
