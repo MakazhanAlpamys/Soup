@@ -3689,7 +3689,8 @@ Usage: `soup train [OPTIONS]`
 | `--master-port` | integer |  |  | Shared coordinator port for multiple nodes (default 29500) |
 | `--no-reexec` | flag | off |  | Print the distributed launch command instead of launching it |
 | `--gate` | text |  |  | Enable eval-gated training with a suite file (shortcut for training.eval_gate.enabled=true + suite=&lt;path>) |
-| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model) |
+| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model). A repository created by this flag is private unless --push-public is given; an existing repository is used as it is and its visibility is not changed. |
+| `--push-public` | flag | off |  | Create the --push-as repository public instead of private. Requires --push-as. It does not change the visibility of a repository that already exists. |
 | `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured. |
 | `--find-lr` | flag | off |  | LR range finder (v0.32.0): run a short geometric LR sweep, write a JSON report with the recommended LR, then exit without training. |
 | `--find-lr-start` | float | `1e-07` |  | LR range finder: starting LR (default 1e-7) |

@@ -24,7 +24,8 @@ soup train --config soup.yaml --gpus auto|N      Launch on local GPUs through Ac
 soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.0.0.10 --master-port 29500  Multi-node launch; run on each node with its own rank
 soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
-soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
+soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch (a repository it creates is private)
+soup train --config soup.yaml --push-as user/repo --push-public  Create that repository public (an existing one keeps its visibility)
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda|runpod --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)

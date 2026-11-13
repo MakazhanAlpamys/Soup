@@ -963,7 +963,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -983,6 +987,15 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given, and the run says so. One line before
+training starts names what happened: `Created private Hub repository <repo>.`,
+`Created public Hub repository <repo>.`, or `Using existing Hub repository <repo>; its
+visibility is unchanged.` `--hf-resume` only reads the repository; a repository it finds
+missing is created by the same rule when training starts.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF

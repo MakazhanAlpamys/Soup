@@ -42,6 +42,37 @@ _CHECKPOINT_ALLOW_PATTERNS = [
     "README.md",
 ]
 
+#: Outcomes of :func:`ensure_hub_repo`.
+REPO_CREATED = "created"
+REPO_EXISTING = "existing"
+
+
+def ensure_hub_repo(api, repo_id: str, *, private: bool) -> str:
+    """Make sure ``repo_id`` exists on the Hub; create it with ``private`` only if absent.
+
+    Returns :data:`REPO_CREATED` or :data:`REPO_EXISTING`.
+
+    The visibility is sent to the Hub on exactly one path: the repository was
+    just found missing. An existing repository gets no ``create_repo`` call at
+    all, so nothing that could change its visibility is ever sent. A probe that
+    fails (network, auth) raises and creates nothing; the caller decides what to
+    do. ``exist_ok=True`` on the create stays for the narrow race where the
+    repository appears between the probe and the create; the Hub client
+    documents that ``private`` is ignored for a repository that already exists.
+    """
+    if api.repo_exists(repo_id=repo_id):
+        return REPO_EXISTING
+    api.create_repo(repo_id=repo_id, private=private, exist_ok=True)
+    return REPO_CREATED
+
+
+def describe_push_repo(repo_id: str, outcome: str, *, private: bool) -> str:
+    """The one line ``soup train --push-as`` prints about the repository."""
+    if outcome == REPO_EXISTING:
+        return f"Using existing Hub repository {repo_id}; its visibility is unchanged."
+    visibility = "private" if private else "public"
+    return f"Created {visibility} Hub repository {repo_id}."
+
 
 def _try_import_callback_base():
     """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
@@ -76,7 +107,7 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
         token: Optional[str] = None,
         endpoint: Optional[str] = None,
         output_dir: str = "",
-        private: bool = False,
+        private: bool = True,
     ) -> None:
         validate_repo_id(repo_id)
         self.repo_id = repo_id
@@ -87,7 +118,10 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
         # construct a bare SimpleNamespace). Under real training the value
         # comes from ``args.output_dir``.
         self.output_dir = output_dir
+        # Visibility of a repository this callback CREATES. An existing
+        # repository is never sent a visibility (see ``ensure_hub_repo``).
         self.private = private
+        self.repo_outcome: Optional[str] = None  # REPO_CREATED / REPO_EXISTING
         self._repo_created = False
         self._repo_failed = False  # short-circuits retries after hard failure
 
@@ -118,20 +152,30 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
 
     # --- Helpers ---
 
+    def prepare_repo(self) -> Optional[str]:
+        """Make the repo ready for uploads.
+
+        Returns :data:`REPO_CREATED` or :data:`REPO_EXISTING`, or ``None`` when
+        the Hub could not be reached (auto-push is then off for the run). Safe to
+        call again: once the repo is ready no further Hub call is made.
+        """
+        return self.repo_outcome if self._ensure_repo() else None
+
     def _ensure_repo(self) -> bool:
-        """Create the repo if needed. Returns True if ready for uploads."""
+        """Create the repo if it is missing. Returns True if ready for uploads."""
         if self._repo_created:
             return True
         if self._repo_failed:
             return False
         try:
             api = get_hf_api(token=self.token, endpoint=self.endpoint)
-            api.create_repo(repo_id=self.repo_id, private=self.private, exist_ok=True)
+            self.repo_outcome = ensure_hub_repo(api, self.repo_id, private=self.private)
             self._repo_created = True
             return True
         except Exception as exc:
             logger.warning(
-                "HFPushCallback: create_repo failed (%s); auto-push disabled", exc,
+                "HFPushCallback: could not prepare the repository (%s); auto-push disabled",
+                exc,
             )
             self._repo_failed = True
             return False
@@ -329,7 +373,7 @@ def build_push_callback(
     repo_id: str,
     output_dir: str,
     explicit_token: Optional[str] = None,
-    private: bool = False,
+    private: bool = True,
 ) -> Optional["HFPushCallback"]:
     """Factory that resolves token/endpoint and builds the callback.
 
