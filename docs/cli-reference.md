@@ -1713,6 +1713,7 @@ Usage: `soup deploy hf-space [OPTIONS]`
 | `--space`, `-s` | text |  | yes | HuggingFace Space repo id to create (e.g. user/my-space) |
 | `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat |
 | `--template-dir` | text |  |  | Custom template directory (overrides --template). Must contain app.py + README.md, optionally requirements.txt. Use {MODEL_REPO} placeholder for substitution. |
+| `--hardware` | text |  |  | Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g) |
 | `--private` | flag | off |  | Create the Space as private |
 | `--yes`, `-y` | flag | off |  | Skip confirmation |
 
