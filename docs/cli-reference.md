@@ -2390,6 +2390,9 @@ Usage: `soup export [OPTIONS]`
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
+| `--validate-onnx` | flag | off |  | ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, 3=unusable validation. Other export option conflicts also use 2; inspect the diagnostic. |
+| `--prompts` | text |  |  | Explicit text/JSONL prompts for --validate-onnx (at most 32). |
+| `--atol` | float |  |  | Absolute logits tolerance for --validate-onnx. Default 1e-4 (FP32 smoke check, not a quality threshold). |
 | `--deploy` | text |  |  | Auto-deploy after export. Currently supported: ollama |
 | `--deploy-name` | text |  |  | Model name for deployment (used with --deploy) |
 | `--calibration-data` | text |  |  | Path to calibration JSONL for imatrix GGUF export. |
