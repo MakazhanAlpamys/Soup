@@ -169,3 +169,76 @@ def test_remote_error_is_shown_as_typed(monkeypatch, value):
     text = _plain(result)
     assert f"Space deploy failed: hub said {_shown(value)}" in text
     assert _not_shown(text)
+
+
+def test_streamlit_sdk_refusal_names_streamlit_and_gradio_chat(monkeypatch):
+    api = MagicMock()
+    api.create_repo.side_effect = RuntimeError(
+        "400 Bad Request: Invalid space_sdk 'streamlit'. Supported: gradio, docker, static."
+    )
+    _api(monkeypatch, api)
+
+    result = _deploy("--template", "streamlit-chat", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "no longer creates Streamlit Spaces" in text
+    assert "--template gradio-chat" in text
+    assert _not_shown(text)
+
+
+def test_unrelated_hub_error_is_not_remapped_for_streamlit(monkeypatch):
+    api = MagicMock()
+    api.create_repo.side_effect = RuntimeError("401 Unauthorized: bad token")
+    _api(monkeypatch, api)
+
+    result = _deploy("--template", "streamlit-chat", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Space deploy failed: 401 Unauthorized: bad token" in text
+    assert "no longer creates Streamlit Spaces" not in text
+
+
+def test_gradio_sdk_error_stays_generic(monkeypatch):
+    api = MagicMock()
+    api.create_repo.side_effect = RuntimeError("400 Bad Request: Invalid space_sdk value")
+    _api(monkeypatch, api)
+
+    result = _deploy("--template", "gradio-chat", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Space deploy failed: 400 Bad Request: Invalid space_sdk value" in text
+    assert "no longer creates Streamlit Spaces" not in text
+
+
+def test_streamlit_deprecation_warning_for_builtin_and_custom_dir_only(monkeypatch, tmp_path):
+    _api(monkeypatch, MagicMock())
+
+    st_res = _deploy("--template", "streamlit-chat", "--yes")
+    assert st_res.exit_code == 0
+    assert "deprecated in v0.78.0" in _plain(st_res)
+    assert "--template gradio-chat" in _plain(st_res)
+
+    gr_res = _deploy("--template", "gradio-chat", "--yes")
+    assert gr_res.exit_code == 0
+    assert "deprecated in v0.78.0" not in _plain(gr_res)
+
+    custom_st = Path("custom_st")
+    custom_st.mkdir()
+    (custom_st / "app.py").write_text("print('{MODEL_REPO}')\n", encoding="utf-8")
+    (custom_st / "README.md").write_text("# {MODEL_REPO}\n", encoding="utf-8")
+    (custom_st / "requirements.txt").write_text("streamlit>=1.30.0\n", encoding="utf-8")
+    cst_res = _deploy("--template-dir", "custom_st", "--yes")
+    assert cst_res.exit_code == 0
+    assert "deprecated in v0.78.0" in _plain(cst_res)
+
+    custom_gr = Path("custom_gr")
+    custom_gr.mkdir()
+    (custom_gr / "app.py").write_text("print('{MODEL_REPO}')\n", encoding="utf-8")
+    (custom_gr / "README.md").write_text("# {MODEL_REPO}\n", encoding="utf-8")
+    (custom_gr / "requirements.txt").write_text("gradio>=4.0.0\n", encoding="utf-8")
+    cgr_res = _deploy("--template-dir", "custom_gr", "--yes")
+    assert cgr_res.exit_code == 0
+    assert "deprecated in v0.78.0" not in _plain(cgr_res)

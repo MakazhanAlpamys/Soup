@@ -27,16 +27,26 @@ def _is_streamlit_sdk_refusal(exc: Exception, sdk: str) -> bool:
     """Match a Hub error whose server message names the SDK field and a value."""
     from huggingface_hub.errors import HfHubHTTPError
 
-    if sdk != "streamlit" or not isinstance(exc, HfHubHTTPError):
+    if sdk != "streamlit":
         return False
 
-    server_message = (getattr(exc, "server_message", None) or "").casefold()
-    names_sdk_field = "space_sdk" in server_message or re.search(r"\bsdk\b", server_message)
-    names_sdk_value = any(
-        re.search(rf"\b{value}\b", server_message)
-        for value in ("streamlit", "gradio", "docker", "static")
-    )
-    return bool(names_sdk_field and names_sdk_value)
+    if isinstance(exc, HfHubHTTPError):
+        server_message = (getattr(exc, "server_message", None) or "").casefold()
+        names_sdk_field = "space_sdk" in server_message or re.search(r"\bsdk\b", server_message)
+        names_sdk_value = any(
+            re.search(rf"\b{value}\b", server_message)
+            for value in ("streamlit", "gradio", "docker", "static")
+        )
+        return bool(names_sdk_field and names_sdk_value)
+
+    msg = str(exc).lower()
+    if "400 bad request" in msg and "space_sdk" in msg and "streamlit" in msg:
+        return True
+
+    return False
+
+
+_is_hf_streamlit_sdk_refusal = _is_streamlit_sdk_refusal
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -463,6 +473,25 @@ def ollama(
     )
 
 
+def _is_hf_streamlit_sdk_refusal(exc: Exception, sdk: str) -> bool:
+    """Return True when the HF Hub error refuses the streamlit Space SDK."""
+    if sdk != "streamlit":
+        return False
+    msg = str(exc).lower()
+    mentions_sdk = "streamlit" in msg or "space_sdk" in msg or "sdk" in msg
+    refusal_tokens = (
+        "invalid",
+        "unsupported",
+        "not supported",
+        "refused",
+        "allowed",
+        "bad request",
+        "400",
+        "422",
+    )
+    return mentions_sdk and any(tok in msg for tok in refusal_tokens)
+
+
 @app.command(name="hf-space")
 def hf_space(
     model: str = typer.Option(
@@ -484,7 +513,7 @@ def hf_space(
         help=(
             f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}. "
             "Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer "
-            "creates new Streamlit Spaces. Use gradio-chat."
+            "creates new Streamlit Spaces (deprecated in v0.78.0; use gradio-chat)."
         ),
     ),
     template_dir: Optional[str] = typer.Option(
@@ -511,9 +540,8 @@ def hf_space(
     """Create a HuggingFace Space wrapping a fine-tuned model.
 
     Uploads an app.py, requirements.txt, and README.md rendered from the
-    chosen template. Supports gradio-chat and streamlit-chat. Hugging Face no
-    longer creates new Streamlit Spaces; a deprecation warning is printed for
-    Streamlit templates in v0.78.0. Use gradio-chat for new deployments.
+    chosen template. Supports gradio-chat and streamlit-chat (deprecated in
+    v0.78.0; Hugging Face no longer creates new Streamlit Spaces. Use gradio-chat).
     """
     from rich.markup import escape
 
@@ -598,9 +626,9 @@ def hf_space(
 
     if sdk == "streamlit":
         console.print(
-            "[yellow]Deprecation warning (v0.78.0):[/] Hugging Face no longer creates "
-            "new Streamlit Spaces. Use the built-in [bold]gradio-chat[/] template or a "
-            "custom Gradio template.",
+            "[yellow]Deprecation warning (v0.78.0):[/] `streamlit-chat` / `streamlit` Space SDK "
+            "is deprecated in v0.78.0 because Hugging Face no longer creates new "
+            "Streamlit Spaces. Use `--template gradio-chat` instead.",
             emoji=False,
         )
 
@@ -656,11 +684,14 @@ def hf_space(
     except Exception as exc:
         if _is_streamlit_sdk_refusal(exc, sdk):
             console.print(
-                "[red]Hugging Face no longer creates new Streamlit Spaces.[/] "
-                "Use [bold]--template gradio-chat[/] instead.",
+                "[red]Hugging Face Hub refused the `streamlit` Space SDK:[/] "
+                "Hugging Face no longer creates Streamlit Spaces "
+                "(Hugging Face no longer creates new Streamlit Spaces; "
+                "accepted SDKs: gradio, docker, static). "
+                "Re-run with [bold]--template gradio-chat[/].",
                 emoji=False,
             )
-            response = getattr(exc, "server_message", None) or exc
+            response = getattr(exc, "server_message", None) or str(exc)
             console.print(f"[dim]Hub response:[/] {for_terminal(response)}", emoji=False)
         else:
             console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)

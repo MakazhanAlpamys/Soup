@@ -1155,7 +1155,7 @@ When you deploy a custom Space template directory, Soup now picks `space_sdk="st
 soup deploy hf-space --space my-org/my-app --model my-org/my-model --template-dir ./my-template
 ```
 
-If `requirements.txt` lists `streamlit`, the Space is created with the Streamlit SDK. Otherwise (no requirements, gradio listed, etc.), Soup falls back to the Gradio default. The HF Hub allows `docker` and `static` SDKs too, but those cannot be inferred from `requirements.txt` alone — use the built-in templates or supply a custom one with an explicit `--sdk` override.
+If `requirements.txt` lists `streamlit`, the Space selects the Streamlit SDK, which emits a `v0.78.0` deprecation warning recommending `--template gradio-chat` because Hugging Face no longer creates new Streamlit Spaces (if refused by the Hub, `soup deploy hf-space` reports this by name and suggests `--template gradio-chat`). Otherwise (no requirements, gradio listed, etc.), Soup falls back to the Gradio default. The HF Hub allows `docker` and `static` SDKs too, but those cannot be inferred from `requirements.txt` alone — use the built-in templates or supply a custom one with an explicit `--sdk` override.
 
 Hugging Face no longer creates new Spaces that use the Streamlit SDK. In v0.78.0, Soup prints a deprecation warning for the built-in `streamlit-chat` template and for custom template directories detected as Streamlit; Gradio templates have no warning. Existing Streamlit Spaces remain deployable. For a new deployment, use `--template gradio-chat` or a custom Gradio template. If the Hub response names the `sdk` field and an SDK value, Soup explains the Streamlit refusal, suggests the Gradio alternative, and includes the Hub response; unrelated Hub errors retain their original message.
 
