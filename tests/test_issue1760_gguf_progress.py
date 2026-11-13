@@ -171,6 +171,24 @@ def test_no_install_deps_present_never_runs_pip_and_reports_phases(monkeypatch, 
     assert not list(destination.parent.glob(".soup_gguf_*"))
 
 
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        (["--verbose"], "--verbose requires --format gguf."),
+        (["--no-install-deps"], "--no-install-deps requires --format gguf."),
+        (["--verbose", "--no-install-deps"],
+         "--verbose and --no-install-deps require --format gguf."),
+    ],
+)
+def test_gguf_only_flag_refusal_uses_matching_verb(monkeypatch, cli_inputs, flags, expected):
+    model, _, destination = cli_inputs
+    result = CliRunner().invoke(app, ["export", "--model", str(model), "--format", "onnx",
+                                    "--output", str(destination), *flags])
+    assert result.exit_code == 2, result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert expected in output
+
+
 @pytest.mark.parametrize("flag", ["--verbose", "--no-install-deps"])
 def test_gguf_only_flags_are_not_silently_ignored(monkeypatch, cli_inputs, flag):
     model, _, destination = cli_inputs
