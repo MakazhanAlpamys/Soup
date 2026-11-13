@@ -35,6 +35,14 @@ output: ./o
     [
         ("quantization=4bit,none", {"quantization": ["4bit", "none"]}),
         ("training.quantization=None", {"training.quantization": ["none"]}),
+        ("quantization=NONE", {"quantization": ["none"]}),
+        # Only none / None / NONE are null words in --param; these stay strings.
+        ("quantization=null,~", {"quantization": ["null", "~"]}),
+        # A two-level short name: lora_dropout resolves to training.lora.dropout.
+        ("lora_dropout=none", {"lora_dropout": ["none"]}),
+        # `scheduler` is a plain str, so its `none` now passes the config and is
+        # refused where the trainer builds TrainingArguments (see the PR body).
+        ("scheduler=none", {"scheduler": ["none"]}),
         # Optional fields keep null: it is how NEFTune and LoRA+ are switched off.
         ("neftune_alpha=none,5", {"neftune_alpha": [None, 5]}),
         ("loraplus_lr_ratio=none,16", {"loraplus_lr_ratio": [None, 16]}),
