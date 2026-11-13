@@ -2,15 +2,16 @@
 
 import copy
 import json
-import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 
 def _plain(text):
-    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
+    return " ".join(strip_ansi(text).split())
 
 
 def _check(train, evaluation, **kwargs):

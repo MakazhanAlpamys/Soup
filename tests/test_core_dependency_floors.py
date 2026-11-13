@@ -32,6 +32,8 @@ REQUIRED_TESTS = {
     "tests/test_cli.py",
     "tests/test_cli_subprocess.py",
     "tests/test_plotext_compat.py",
+    # #2366: config refusals must stay ValidationErrors on the Pydantic floor.
+    "tests/test_config_field_types.py",
 }
 # PyPI has no stable release at these declarations. Values are the first
 # non-yanked stable releases pip resolves (measured 2026-10-15; Hub 0.16.1 is yanked).

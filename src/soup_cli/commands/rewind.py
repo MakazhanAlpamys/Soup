@@ -282,7 +282,9 @@ def _log_candidates(target: dict, filename: str) -> list[Path]:
     is exactly the one ``soup rewind`` exists for. So the recorded directory comes
     first, then the run's own config: ``output/experiment_name`` (the transformers
     layout) and ``output`` (MLX). A relative ``output`` resolves against the current
-    directory, as it did for ``soup train``.
+    directory, as it did for ``soup train``. The recorded directory is absolute for a
+    run finished since #2725; an older row may hold it relative, and it resolves
+    against the current directory the same way.
     """
     dirs: list[Path] = []
     if target.get("output_dir"):
