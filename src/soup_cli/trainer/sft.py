@@ -1,6 +1,5 @@
 """SFT (Supervised Fine-Tuning) trainer — wraps HuggingFace transformers + peft + trl."""
 
-import json
 import logging
 import math
 import os
@@ -11,6 +10,7 @@ from typing import Any, Optional, Tuple
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -480,114 +480,10 @@ def _make_vision_trainer(
 def _maybe_load_pretokenized(
     dcfg, base: str, console_obj: Console, tcfg=None, *, task: str,
 ) -> Optional[Tuple[object, object]]:
-    """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
-    ``soup data preprocess``.
+    """Compatibility entry point for the shared persistent cache gate."""
+    from soup_cli.utils.pretokenized import maybe_load_pretokenized
 
-    Returns ``(train_ds, eval_ds)`` when the pre-tokenized path is configured
-    and valid, otherwise ``None`` (caller falls back to the normal tokenize
-    pipeline).
-
-    Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
-    ``cache_key`` is cross-checked against the current
-    ``(dataset, base, max_length, format, chat_template, mask_mode, task)``
-    config via :func:`make_preprocess_cache_key`: every input that changes which
-    rows are cached or what a cached row looks like (``PREPROCESS_KEY_FIELDS``).
-    Mismatch raises ``ValueError`` with
-    the keyword ``"cache hash mismatch"`` so users know to re-run
-    ``soup data preprocess``. Missing ``metadata.json`` falls back to
-    "trusted" mode with a yellow advisory.
-    """
-    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
-        return None
-
-    from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.data_pipeline import (
-        load_pretokenized_dataset,
-        make_preprocess_cache_key,
-        preprocess_dataset_key_diff,
-        preprocess_dataset_key_input,
-        preprocess_mask_mode,
-    )
-
-    tokenized_path = dcfg.tokenized_path
-    metadata_path = os.path.join(tokenized_path, "metadata.json")
-    if os.path.isfile(metadata_path):
-        try:
-            with open(metadata_path, encoding="utf-8") as f:
-                metadata = json.load(f)
-        except (OSError, ValueError) as exc:
-            raise ValueError(
-                f"pre_tokenized metadata.json is unreadable: {exc}"
-            ) from exc
-        stored_key = metadata.get("cache_key")
-        # #1038: preprocess hashed the SOURCE format (chatml, alpaca, ...), which a
-        # ``pre_tokenized`` config cannot restate -- ``dcfg.format`` is always
-        # ``pre_tokenized`` here, so hashing it rejected every real cache. Use the
-        # format preprocess recorded as an input to the recomputed key: it is not
-        # trusted on its own, since editing it without the key still mismatches.
-        # Metadata without the field (older hand-written caches) keeps the old input.
-        source_format = metadata.get("format")
-        if not isinstance(source_format, str) or not source_format:
-            source_format = dcfg.format
-        dataset_key = preprocess_dataset_key_input(dcfg)
-        current_key = make_preprocess_cache_key(
-            dataset_path=dataset_key,
-            tokenizer_name=base,
-            max_length=dcfg.max_length,
-            format_name=source_format,
-            # #1067: unlike the format, the template is restated in this config. It
-            # has to match, since training saves the tokenizer with this template.
-            chat_template=resolve_chat_template(dcfg.chat_template),
-            mask_mode=preprocess_mask_mode(dcfg, tcfg),
-            task=task,
-        )
-        if stored_key != current_key:
-            # A cache without the field was written before that input joined the
-            # key, so name the reason rather than leaving two hashes to compare
-            # by eye. Oldest gap first: a cache missing both predates #1067, and
-            # saying so places it further back than naming #1054 alone would.
-            if "chat_template" not in metadata:
-                predates = "the cache predates chat_template keying (#1067); "
-            elif "mask_mode" not in metadata:
-                predates = "the cache predates loss-mask keying (#1054); "
-            elif "key_schema" not in metadata:
-                predates = "the cache predates row-set keying (#1127); "
-            else:
-                changed = preprocess_dataset_key_diff(
-                    metadata.get("dataset_key"), dataset_key
-                )
-                predates = (
-                    "the cache was built with a different "
-                    + ", ".join(f"data.{name}" for name in changed)
-                    + "; "
-                    if changed
-                    else ""
-                )
-            raise ValueError(
-                "pre_tokenized cache hash mismatch: was generated with "
-                f"{stored_key!r}, current config implies {current_key!r}; "
-                f"{predates}re-run `soup data preprocess`"
-            )
-    else:
-        console_obj.print(
-            "[yellow]pre-tokenized cache has no metadata.json — assuming "
-            "compatible; consider re-running `soup data preprocess`[/]"
-        )
-
-    console_obj.print(
-        f"[dim]v0.53.7: skipping tokenization, loading pre-tokenized "
-        f"Arrow shards from {tokenized_path}[/dim]"
-    )
-    arrow_ds = load_pretokenized_dataset(tokenized_path)
-    # ``load_from_disk`` returns either a Dataset (single split) or a
-    # DatasetDict (multiple splits). Handle both shapes.
-    if hasattr(arrow_ds, "keys") and "train" in arrow_ds:
-        train_ds = arrow_ds["train"]
-        eval_ds = arrow_ds.get("val") or arrow_ds.get("validation")
-    else:
-        train_ds = arrow_ds
-        eval_ds = None
-    return train_ds, eval_ds
+    return maybe_load_pretokenized(dcfg, base, console_obj, tcfg, task=task)
 
 
 def is_full_finetune(tcfg) -> bool:
@@ -1771,6 +1667,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
         lora_layers_to_transform = None
+        lora_freeze_plan = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
             from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
@@ -1789,6 +1686,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if plan is not None:
                 cutoff, total_layers = plan
+                lora_freeze_plan = plan
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
@@ -1914,21 +1812,44 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "adapter to attach to. Reduce freeze_layers/freeze_ratio."
                 )
 
-            # #1432: peft only applies layers_to_transform when
-            # target_modules is a list, never a string (a regex or
-            # all-linear), so refuse rather than silently ship the same bug
-            # for that shape.
+            # #1432 / #2201: peft applies layers_to_transform only to a LIST
+            # target_modules, never to a string (a regex or all-linear).
+            # Rather than refuse the combination, resolve the string to the
+            # explicit module names it reaches and keep the ones the freeze
+            # plan leaves trainable, so the adapter still respects the plan.
+            scoped_by_names = False
             if lora_layers_to_transform is not None and isinstance(target_modules, str):
-                raise ValueError(
-                    "training.freeze_layers / training.freeze_ratio cannot "
-                    "currently be combined with a string "
-                    f"training.lora.target_modules ({target_modules!r}, a regex "
-                    "or all-linear): peft only restricts layers_to_transform "
-                    "when target_modules is a list of module-name suffixes. "
-                    "Give an explicit training.lora.target_modules list (the "
-                    "module names are in model.named_modules()) instead, or "
-                    "drop freeze_layers/freeze_ratio."
+                from soup_cli.utils.peft_wiring import (
+                    expand_string_target_modules,
+                    restrict_target_modules_to_layers,
                 )
+
+                cutoff, total_layers = lora_freeze_plan
+                resolved_targets = restrict_target_modules_to_layers(
+                    self.model, target_modules, cutoff, total_layers
+                )
+                if not resolved_targets:
+                    reached = len(expand_string_target_modules(self.model, target_modules))
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio leaves "
+                        f"nothing for training.lora.target_modules "
+                        f"{target_modules!r} to attach to: the string reaches "
+                        f"{reached} module(s) in this model, and none of them "
+                        f"sits in the trainable layers {cutoff}.."
+                        f"{total_layers - 1}. Reduce freeze_layers/freeze_ratio, "
+                        "or name a target that reaches those layers."
+                    )
+                console.print(
+                    f"[green]Freeze-scoped targets:[/] "
+                    f"{len(resolved_targets)} module(s) resolved from "
+                    f"target_modules={for_terminal(repr(target_modules))} inside layers "
+                    f"{cutoff}..{total_layers - 1}"
+                )
+                target_modules = resolved_targets
+                # Keep lora_layers_to_transform set: the target_parameters and
+                # VeRA refusals below key off it, and a string target with a
+                # freeze plan must not slip past them (#2201 review, item 2).
+                scoped_by_names = True
 
             # #1432: peft only applies layers_to_transform to a list target
             # that lives inside a numbered decoder layer, or to an exact
@@ -1981,7 +1902,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
-                layers_to_transform=lora_layers_to_transform,
+                layers_to_transform=(
+                    None if scoped_by_names else lora_layers_to_transform
+                ),
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
@@ -2539,7 +2462,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if resume_from_checkpoint is not None:
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()
 

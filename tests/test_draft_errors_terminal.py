@@ -1,13 +1,13 @@
 """Early draft refusals show typed text literally without terminal controls."""
 
 import builtins
-import os
 import socket
 
 import pytest
 from rich.console import Console
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -65,7 +65,7 @@ def _assert_refusal(result, expected):
         pytest.param("[/]n.jsonl", "[/]n.jsonl", id="closing-tag-control"),
         pytest.param(
             "x:warning:n.jsonl", "x:warning:n.jsonl", id="emoji-code",
-            marks=pytest.mark.skipif(os.name == "nt", reason="Colon is not a Windows filename"),
+            marks=skip_colon_on_windows,
         ),
         pytest.param("x[bold]n\x9b\u202e.jsonl", "x[bold]n.jsonl", id="c1-bidi-with-tag"),
     ],

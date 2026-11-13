@@ -96,12 +96,13 @@ def push_cmd(
         _fail(f"Invalid input: {exc}")
     data_path = _data_file(data) if data is not None else None
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     try:
         if tracker.get_run(run_id) is None:
-            _fail(f"Run not found: {run_id}")
+            # _fail escapes the whole line, so the helper only strips controls here.
+            _fail(run_lookup_failure(tracker, run_id, markup=False))
         with RegistryStore() as store:
             earlier = (
                 store.get_by_idempotency_key(idempotency_key)

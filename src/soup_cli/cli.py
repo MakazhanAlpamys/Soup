@@ -20,6 +20,7 @@ from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
     bench,
+    cache,
     can,
     card,
     chat,
@@ -120,6 +121,7 @@ app.add_typer(
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
 )
 app.command()(migrate.migrate)
+app.command(name="prune-layer-cache")(cache.prune_layer_cache)
 app.add_typer(
     adapters.app, name="adapters",
     help="Adapter management: list, info, compare LoRA adapters.",
@@ -586,6 +588,15 @@ app.add_typer(
         "Synthesize a deterministic reward verifier from reference outputs, with "
         "a calibration report that refuses degenerate verifiers (v0.71.40)."
     ),
+)
+
+# Documentation search & offline reference guides.
+from soup_cli.commands import docs as _docs_cmd  # noqa: E402
+
+app.add_typer(
+    _docs_cmd.app,
+    name="docs",
+    help="Documentation search & offline reference guides.",
 )
 
 

@@ -7,6 +7,7 @@ run and writes ``soup.tfstate`` for ``soup apply`` to consult.
 from __future__ import annotations
 
 import datetime as _dt
+from typing import TYPE_CHECKING, Tuple
 
 import typer
 from rich.console import Console
@@ -24,10 +25,20 @@ from soup_cli.utils.terraform_plan import (
 )
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
+if TYPE_CHECKING:
+    from soup_cli.config.schema import SoupConfig
+
 console = Console()
 
 
-def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
+def _load_yaml_config(
+    path: str, *, minillm_on_policy: bool = False
+) -> Tuple[dict, "SoupConfig"]:
+    """The config's mapping and the ``SoupConfig`` validated from it.
+
+    The plan's hashes come from the mapping; the peak-VRAM estimate prices the
+    ``SoupConfig``, so ``soup plan`` validates the config once (#2306).
+    """
     import os
     import stat as _stat
 
@@ -74,8 +85,7 @@ def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
         if not isinstance(training, dict):
             training = {}
         data = {**data, "training": {**training, "minillm_on_policy": True}}
-    validate_config_mapping(data)
-    return data
+    return data, validate_config_mapping(data)
 
 
 def plan_cmd(
@@ -93,8 +103,10 @@ def plan_cmd(
     ),
 ) -> None:
     """Render a pre-flight training plan + write ``soup.tfstate``."""
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE
+
     try:
-        cfg = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
+        cfg, soup_config = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None
@@ -105,10 +117,8 @@ def plan_cmd(
     try:
         plan = build_plan(
             cfg,
-            on_hub_request=lambda: console.print(
-                "[dim]Reading the model's config.json from the Hub to size the run "
-                "(HF_HUB_OFFLINE=1 skips this)...[/]"
-            ),
+            soup_config=soup_config,
+            on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE}[/]"),
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -184,7 +194,7 @@ def apply_cmd(
     from soup_cli.utils.terraform_plan import build_plan, detect_drift, read_state
 
     try:
-        cfg = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
+        cfg, _ = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None

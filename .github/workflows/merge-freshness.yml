@@ -15,6 +15,13 @@
 # stripped so a planted ruff/ package cannot run with GITHUB_TOKEN.
 # Do not add `pip install -e .` or pytest against that tree.
 #
+# Both jobs start the gate script the same way: main's copy is written to
+# $RUNNER_TEMP, outside the checked-out working tree, and run with `python -I`
+# (isolated mode: no script directory, no current directory and no PYTHON*
+# variables on the import path). The script is stdlib-only and finds ruff as an
+# installed tool, so it needs nothing from the tree. The two start lines are
+# pinned in tests/test_merge_freshness_isolated_start.py.
+#
 # Timeout-minutes on ci.yml's test matrix is #1025, not this PR.
 # The Checks API name is `merge-freshness`; the PR job id is `gate` so
 # the two check runs on one SHA are not the same required context.
@@ -71,10 +78,12 @@ jobs:
         # vendored main's 605-line copy into their PR to get a green mark.
         # The second is that this job holds checks:write on a same-repo
         # branch, so running the head's copy means running code the PR
-        # controls. merge-tree operates on commits, so overwriting the file
-        # in the working tree cannot change the verdict; a PR that edits the
-        # script is gated by main's version, which is what a gate should do.
-        run: git checkout origin/main -- scripts/merge_freshness.py
+        # controls. merge-tree operates on commits, so the working tree plays
+        # no part in the verdict; a PR that edits the script is gated by main's
+        # version, which is what a gate should do. The copy is written to
+        # $RUNNER_TEMP, outside the working tree, and the `Gate the live merge`
+        # step below starts it from there with `python -I`.
+        run: git show origin/main:scripts/merge_freshness.py > "$RUNNER_TEMP/merge_freshness.py"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -83,7 +92,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
-          python scripts/merge_freshness.py --max-behind 10 --repo-root .
+          python -I "$RUNNER_TEMP/merge_freshness.py" --max-behind 10 --repo-root .
           gate --base origin/main --head HEAD
           --head-sha ${{ github.event.pull_request.head.sha }}
           --post-check
@@ -98,6 +107,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Copy the gate script outside the checkout
+        # Same start as the `gate` job: main's copy in $RUNNER_TEMP, run with
+        # `python -I` below.
+        run: git show origin/main:scripts/merge_freshness.py > "$RUNNER_TEMP/merge_freshness.py"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -105,4 +118,4 @@ jobs:
       - name: Re-evaluate open PRs against live main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/merge_freshness.py --max-behind 10 --repo-root . reeval --base origin/main
+        run: python -I "$RUNNER_TEMP/merge_freshness.py" --max-behind 10 --repo-root . reeval --base origin/main

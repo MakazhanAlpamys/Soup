@@ -73,6 +73,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
+| [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
 | [`soup doctor`](#soup-doctor) | Check system dependencies, GPU, and compatibility. |
 | [`soup draft`](#soup-draft) | Train + measure a speculative-decoding draft model: distil your tuned model into a tiny draft, then serve it with --auto-spec (v0.71.33). |
 | [`soup drift-alarm`](#soup-drift-alarm) | Rolling-KL drift alarm on output-token distribution with optional Slack/Discord webhook (v0.63.0). |
@@ -101,6 +102,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup plugins`](#soup-plugins) | Discover, list, enable, and disable Soup plugins. |
 | [`soup probe`](#soup-probe) | Activation probes: sleeper-agent defection / honesty / misuse / pairwise interference / SAE feature diff / probe pack (v0.66.0, truth+harm v0.71.8). |
 | [`soup profile`](#soup-profile) | Estimate memory, speed, and GPU requirements BEFORE training. |
+| [`soup prune-layer-cache`](#soup-prune-layer-cache) | Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes. |
 | [`soup prune-prompt`](#soup-prune-prompt) | Detect + strip a shared system-prompt prefix across training data so the FT model internalises it (v0.63.0). |
 | [`soup push`](#soup-push) | Push a trained model to HuggingFace Hub (or alternate hub). |
 | [`soup quantize`](#soup-quantize) | Quantize a model - ergonomic alias for `soup export --format <to>`. |
@@ -836,6 +838,7 @@ Usage: `soup chat [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
@@ -865,7 +868,7 @@ Usage: `soup ci init [OPTIONS]`
 | `--data` | text | `./data/train.jsonl` |  | Training data path (repo-relative) |
 | `--suite` | text | `expectations.yaml` |  | Expectations suite YAML (repo-relative) |
 | `--evidence` | text | `ship_evidence.json` |  | Ship evidence JSON (repo-relative) |
-| `--python` | text | `3.11` |  | Python version for the CI runner (e.g. 3.11) |
+| `--python` | text | `3.11` |  | Python version for the CI runner (3.11 to 3.13, e.g. 3.11) |
 | `--branch` | text | `main` |  | Branch the workflow triggers on |
 | `--config` | text |  |  | Bind the ship gate to a committed soup.yaml (refuses stale evidence) |
 | `-o`, `--output` | text | `.github/workflows/soup-gate.yml` |  | Workflow output path |
@@ -1318,7 +1321,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -1792,6 +1795,28 @@ Usage: `soup distill-prompt [OPTIONS]`
 | `--max-rows` | integer |  |  | Cap the number of distilled rows. |
 | `--output`, `-o` | text | `distilled.jsonl` |  | Output JSONL path |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live preparation). |
+
+## `soup docs`
+
+Documentation search &amp; offline reference guides.
+
+Usage: `soup docs <command> [ARGS]...`
+
+Subcommands:
+
+- [`search`](#soup-docs-search)
+
+### `soup docs search`
+
+Search Soup documentation for flags, configs, training tasks, and guides.
+
+Usage: `soup docs search [OPTIONS] QUERY`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `QUERY` | text |  | yes | Search query (e.g. 'safetensors export') |
+| `--top-k`, `-k` | integer | `5` |  | Number of results to return |
+| `--format`, `-f` | text | `table` |  | Output format: 'table' (default) or 'json' |
 
 ## `soup doctor`
 
@@ -2365,6 +2390,9 @@ Usage: `soup export [OPTIONS]`
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
+| `--validate-onnx` | flag | off |  | ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, 3=unusable validation. Other export option conflicts also use 2; inspect the diagnostic. |
+| `--prompts` | text |  |  | Explicit text/JSONL prompts for --validate-onnx (at most 32). |
+| `--atol` | float |  |  | Absolute logits tolerance for --validate-onnx. Default 1e-4 (FP32 smoke check, not a quality threshold). |
 | `--deploy` | text |  |  | Auto-deploy after export. Currently supported: ollama |
 | `--deploy-name` | text |  |  | Model name for deployment (used with --deploy) |
 | `--calibration-data` | text |  |  | Path to calibration JSONL for imatrix GGUF export. |
@@ -2826,6 +2854,8 @@ Usage: `soup merge [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--adapter`, `-a` | text |  | yes | Path to the LoRA adapter directory |
+| `--backend` | text | `transformers` |  | Merge backend: transformers or mlx |
+| `--dequantize` | flag | off |  | Explicitly dequantize an MLX base for dense fused output |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--output`, `-o` | text | `./merged` |  | Output directory for the merged model |
 | `--dtype` | text | `float16` |  | Data type for the merged model: float16, bfloat16, float32 |
@@ -3049,6 +3079,18 @@ Usage: `soup profile [OPTIONS]`
 | `--lora-r` | integer, 1 to 4096 |  |  | With --model: LoRA rank (default 64) |
 | `--optimizer` | text |  |  | With --model: optimizer (default adamw_torch) |
 | `--gradient-checkpointing` | text |  |  | With --model: off (default), full, medium, selective or auto |
+
+## `soup prune-layer-cache`
+
+Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes.
+
+Usage: `soup prune-layer-cache [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup prune-prompt`
 
@@ -3385,7 +3427,7 @@ Usage: `soup runs clean [OPTIONS] [RUN_ID]`
 
 ### `soup runs compare`
 
-Compare two training runs side by side.
+Compare two local training runs side by side. The summary includes stored dataset SHA-256 hashes and the Code commit and Code state startup observations. The config table shows differing paths and labels fields absent from one run as not stored. If either full config is unavailable, the command identifies that run and skips the config table. The evaluation table uses the latest stored score for each benchmark and shows the right-minus-left delta when both runs have a score.
 
 Usage: `soup runs compare RUN_1 RUN_2`
 
@@ -3673,7 +3715,8 @@ Usage: `soup train [OPTIONS]`
 | `--master-port` | integer |  |  | Shared coordinator port for multiple nodes (default 29500) |
 | `--no-reexec` | flag | off |  | Print the distributed launch command instead of launching it |
 | `--gate` | text |  |  | Enable eval-gated training with a suite file (shortcut for training.eval_gate.enabled=true + suite=&lt;path>) |
-| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model) |
+| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model). A repository created by this flag is private unless --push-public is given; an existing repository is used as it is and its visibility is not changed. |
+| `--push-public` | flag | off |  | Create the --push-as repository public instead of private. Requires --push-as. It does not change the visibility of a repository that already exists. |
 | `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured. |
 | `--find-lr` | flag | off |  | LR range finder (v0.32.0): run a short geometric LR sweep, write a JSON report with the recommended LR, then exit without training. |
 | `--find-lr-start` | float | `1e-07` |  | LR range finder: starting LR (default 1e-7) |

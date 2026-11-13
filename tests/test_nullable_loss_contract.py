@@ -12,7 +12,9 @@ file holds the part of that contract that fits what ``main`` already promises:
   omitted ``loss`` / ``lr`` NULL rather than 0.0;
 * the completion panel and ``soup runs`` do not crash on, or hide, those values;
 * HF's final runtime-summary ``on_log`` event (``train_runtime``, ``train_loss``
-  mean, throughput) writes no tracker row and no SSE event;
+  mean, throughput) writes no row that carries a loss, and no SSE event. Its
+  throughput is kept (#2810) as one ``kind = "summary"`` row with ``loss``, ``lr`` and
+  ``grad_norm`` NULL;
 * every metric row has a positive, strictly increasing integer ``id``, the row
   identity Soup Zero's ``row_id`` / ``after_row_id`` metric API is built on;
 * two nullable, add-only ``kind`` columns say what a stored number is, so a reader
@@ -413,15 +415,58 @@ def session(tracker):
     reset_global_buffer()
 
 
-def test_the_final_runtime_summary_writes_no_metric_row(session):
+def test_the_final_runtime_summary_writes_no_row_that_carries_a_loss(session):
     callback, tracker, run_id, display = session
     _event(callback, 22, loss=3.6936, learning_rate=1e-5, grad_norm=2.5)
     _event(callback, 22, train_runtime=3.38, train_loss=3.828, train_steps_per_second=6.5)
     rows = tracker.get_metrics(run_id)
-    assert [(row["step"], row["loss"], row["lr"]) for row in rows] == [(22, 3.6936, 1e-5)]
+    # The only row with a loss is the training row: the summary's `train_loss` mean and
+    # the carried last values are stored nowhere (#2589). Its throughput is #2810's row.
+    assert [(row["step"], row["loss"], row["lr"]) for row in rows
+            if row["kind"] != "summary"] == [(22, 3.6936, 1e-5)]
+    assert [row["loss"] for row in rows if row["loss"] is not None] == [3.6936]
     # The panel still keeps the last real values (#541): only the sinks are quiet.
     assert display.update.call_args.kwargs["loss"] == 3.6936
     assert display.update.call_args.kwargs["lr"] == 1e-5
+
+
+def test_the_final_runtime_summary_throughput_is_its_own_row_with_no_loss(session):
+    """#2810 keeps HF's throughput; #2589 forbids a fabricated loss. Both hold: one row,
+    `kind = "summary"`, speed set, every per-step column NULL (not the carried values)."""
+    callback, tracker, run_id, _ = session
+    _event(callback, 22, loss=3.6936, learning_rate=1e-5, grad_norm=2.5)
+    _event(callback, 22, train_runtime=3.38, train_loss=3.828, train_steps_per_second=6.5)
+    rows = sorted(tracker.get_metrics(run_id), key=lambda row: row["id"])
+    assert [row["kind"] for row in rows] == ["train", "summary"]
+    summary = rows[-1]
+    assert summary["step"] == 22
+    assert summary["speed"] == 6.5
+    for column in ("loss", "lr", "grad_norm", "val_loss", "val_reward"):
+        assert summary[column] is None, column
+
+
+@pytest.mark.parametrize("throughput", [float("nan"), float("inf"), True, "6.5"])
+def test_a_summary_throughput_that_is_not_a_number_writes_no_row(session, throughput):
+    callback, tracker, run_id, _ = session
+    _event(callback, 22, train_runtime=3.38, train_steps_per_second=throughput)
+    assert tracker.get_metrics(run_id) == []
+
+
+def test_a_summary_with_throughput_before_any_measurement_still_carries_no_loss(session):
+    callback, tracker, run_id, display = session
+    _event(callback, 22, train_runtime=3.38, train_loss=3.828, train_steps_per_second=6.5)
+    rows = tracker.get_metrics(run_id)
+    assert [(row["kind"], row["loss"], row["lr"], row["speed"]) for row in rows] == [
+        ("summary", None, None, 6.5)
+    ]
+    assert display.update.call_args.kwargs["loss"] is None
+
+
+def test_a_summary_row_does_not_replace_a_measured_event_that_carries_throughput(session):
+    callback, tracker, run_id, _ = session
+    _event(callback, 5, loss=1.5, learning_rate=1e-5, train_steps_per_second=2.0)
+    rows = tracker.get_metrics(run_id)
+    assert [(row["kind"], row["loss"], row["speed"]) for row in rows] == [("train", 1.5, 2.0)]
 
 
 def test_a_summary_before_any_measurement_writes_no_row_and_the_panel_stays_empty(session):
@@ -436,7 +481,7 @@ def test_the_final_runtime_summary_pushes_no_sse_event(session):
 
     callback, _, _, _ = session
     _event(callback, 22, loss=3.6936, learning_rate=1e-5)
-    _event(callback, 22, train_runtime=3.38, train_loss=3.828)
+    _event(callback, 22, train_runtime=3.38, train_loss=3.828, train_steps_per_second=6.5)
     events = get_global_buffer().snapshot()
     assert len(events) == 1
     assert events[0].loss == 3.6936

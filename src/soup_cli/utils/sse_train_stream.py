@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from soup_cli.experiment.row_kinds import check_metric_row_kind
+from soup_cli.utils.finite_json import finite_json
 
 # Closed allowlist — drop any payload key not in this set.
 _ALLOWED_KEYS = frozenset(
@@ -125,8 +126,11 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
 def format_sse_frame(event: TrainEvent) -> str:
     """Serialise the event as a single Server-Sent-Events frame.
 
-    `data: {json}\\n\\n` — the standard W3C SSE wire format.
+    `data: {json}\\n\\n` — the standard W3C SSE wire format. A non-finite
+    float (an overflowed ``loss`` or ``grad_norm``) is sent as ``null``:
+    ``json.dumps`` would write a bare ``Infinity`` / ``NaN`` token, which the
+    browser's ``JSON.parse`` refuses (#2750).
     """
-    payload = to_payload(event)
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    payload = finite_json(to_payload(event))
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return f"data: {body}\n\n"

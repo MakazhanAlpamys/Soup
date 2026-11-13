@@ -23,9 +23,12 @@ is:
                   ``val_reward``), and ``loss`` / ``lr`` are the last measured training
                   values carried into it (tests/test_issue23_mlx_val_loss_producer.py),
                   not a measurement of the evaluation;
-* ``summary``     a run-level summary (HF's final runtime event: ``train_runtime``, the
-                  ``train_loss`` mean, throughput). The engine's own callback writes no
-                  row for that event, so it is reserved for callers that choose to.
+* ``summary``     a run-level summary: HF's final runtime event, which measures no
+                  per-step loss. The callback stores its throughput
+                  (``train_steps_per_second``) as ``speed`` and nothing else: ``loss``,
+                  ``lr``, ``grad_norm`` and the validation columns are NULL, never the
+                  last training values carried forward, and the ``train_loss`` mean is
+                  not stored. A reader of the training curve skips these rows.
 """
 
 from __future__ import annotations

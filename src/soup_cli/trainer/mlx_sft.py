@@ -146,6 +146,7 @@ def _start_rewind(
     batch_size: int,
     grad_accum: int,
     masked: bool,
+    labeled: bool = False,
 ):
     """Create the rewind log and recorder for an MLX run, or return None.
 
@@ -183,7 +184,7 @@ def _start_rewind(
             batch_size=batch_size,
             grad_accum=grad_accum,
         )
-        loss = make_rewind_loss(state, kind="masked" if masked else "span")
+        loss = make_rewind_loss(state, kind="labels" if labeled else "masked" if masked else "span")
     except Exception as exc:  # noqa: BLE001 — a recorder must never stop a run
         from rich.markup import escape
 
@@ -390,27 +391,11 @@ class MLXSFTTrainerWrapper:
     def _check_unsupported(self) -> None:
         tcfg = self.config.training
         dcfg = self.config.data
+        if self.config.task == "sft" and self.config.modality != "text" and (
+            dcfg.mask_history or dcfg.train_on_messages_with_train_field
+        ):
+            raise ValueError("Native selective message masks support text SFT only")
         unsupported = []
-        # #683 review: the per-message `train` field has no MLX equivalent --
-        # `MaskedChatDataset` supervises every assistant turn and reads no
-        # per-message flag. It looked rejected only because the mutual-
-        # exclusion validator fires while `train_on_responses_only` is at its
-        # `true` default; set that to false and the field was dropped in
-        # silence, which is the shape of the defect #683 reports.
-        if getattr(dcfg, "train_on_messages_with_train_field", False):
-            unsupported.append(
-                "data.train_on_messages_with_train_field (MLX supervises "
-                "every assistant turn; the per-message flag is not read)"
-            )
-        # #761: mask_history narrows the transformers label builder
-        # (data/loss_mask.py) to the last assistant turn. MLX SFT builds its own
-        # mask and never goes through it, so without this line the same soup.yaml
-        # trained the last turn on transformers and every turn here, in silence.
-        if getattr(dcfg, "mask_history", False):
-            unsupported.append(
-                "data.mask_history (MLX supervises every assistant turn, not "
-                "only the last)"
-            )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
                 "data.train_on_prompt (MLX masks the prompt or supervises the "
@@ -517,20 +502,172 @@ class MLXSFTTrainerWrapper:
         """Load MLX model, configure LoRA, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
+        if self.config.data.format == "pre_tokenized":
+            if self.config.task != "sft" or self.config.modality != "text":
+                raise ValueError("Native pre_tokenized consumption supports text SFT only")
+            from soup_cli.utils.pretokenized import maybe_load_pretokenized
+
+            train_rows, val_rows = maybe_load_pretokenized(
+                self.config.data, self.config.base, console, self.config.training,
+                task=self.config.task,
+            )
+            if isinstance(train_rows, dict):
+                raise ValueError("pre_tokenized cache requires a train split")
+            dataset = {"train": train_rows, "val": val_rows if val_rows is not None else []}
+            if not len(train_rows):
+                raise ValueError("pre_tokenized train split is empty")
         self._check_train_split_size(dataset)
         self._check_eval_steps_has_rows(dataset)
 
+        self._effective_rope_scaling = None
+        model_config_override = None
+        cfg = self.config
+        if cfg.training.rope_scaling_type is not None:
+            from soup_cli.utils.mlx_rope import resolve_mlx_rope_scaling
+
+            self._effective_rope_scaling, model_config_override = resolve_mlx_rope_scaling(
+                cfg.base, cfg.data.max_length, cfg.training.rope_scaling_type
+            )
+
         from soup_cli.utils.mlx import load_mlx_model
 
-        cfg = self.config
         console.print(f"[dim]Loading MLX model: {cfg.base}[/]")
         self.model, self.tokenizer = load_mlx_model(
-            cfg.base, quantization=cfg.training.quantization
+            cfg.base,
+            quantization=cfg.training.quantization,
+            model_config=model_config_override,
         )
+
+        if cfg.training.rope_scaling_type is not None:
+            import mlx.nn as nn
+
+            quantized_types = [
+                getattr(nn, "QuantizedLinear", ()),
+                getattr(nn, "QuantizedEmbedding", ()),
+            ]
+            try:
+                from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+                quantized_types.append(QuantizedSwitchLinear)
+            except ImportError:
+                pass
+            quantized_tuple = tuple(t for t in quantized_types if isinstance(t, type))
+            for name, mod in self.model.named_modules():
+                if isinstance(mod, quantized_tuple):
+                    raise ValueError(
+                        f"MLX RoPE scaling is not supported on a quantized base model: "
+                        f"layer {name!r} has quantized type {type(mod).__name__}. "
+                        "Use an unquantized base (training.quantization: none)."
+                    )
+
+            if self._effective_rope_scaling is not None:
+                expected_scale = 1.0 / self._effective_rope_scaling["factor"]
+                rope_scales = [
+                    float(module.scale)
+                    for _, module in self.model.named_modules()
+                    if isinstance(module, nn.RoPE)
+                ]
+                if not rope_scales:
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not contain rotary embedding "
+                        "(nn.RoPE) modules; cannot apply native MLX linear RoPE context extension."
+                    )
+                if any(abs(scale - expected_scale) > 1e-5 for scale in rope_scales):
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not apply native MLX RoPE scaling "
+                        f"(expected scale {expected_scale:.6g}, found {rope_scales}); "
+                        "model architecture may not support native linear RoPE scaling."
+                    )
+                console.print(
+                    f"[green]Long-context enabled:[/] RoPE {cfg.training.rope_scaling_type} "
+                    f"scaling to {cfg.data.max_length} tokens "
+                    f"(factor {self._effective_rope_scaling['factor']:.4g})"
+                )
+            else:
+                console.print(
+                    f"[dim]RoPE scaling ({cfg.training.rope_scaling_type}) requested but "
+                    f"data.max_length ({cfg.data.max_length}) <= base context length; "
+                    "unscaled native RoPE preserved.[/]"
+                )
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
         )
+        self._added_tokens = []
+        self._base_vocab_size = None
+        self._vocab_ext = None
+
+        has_new_tokens = bool(
+            getattr(cfg.data, "add_new_tokens", None)
+            or getattr(cfg.data, "new_special_tokens", None)
+        )
+        if has_new_tokens:
+            if cfg.training.quantization != "none":
+                raise ValueError(
+                    f"Vocabulary expansion is not supported with quantization="
+                    f"{cfg.training.quantization!r} on MLX: new tokens require unquantized "
+                    "embeddings (quantization='none')."
+                )
+            try:
+                import mlx.nn as nn
+
+                for mod in self.model.modules():
+                    if isinstance(
+                        mod,
+                        (
+                            getattr(nn, "QuantizedLinear", ()),
+                            getattr(nn, "QuantizedEmbedding", ()),
+                        ),
+                    ):
+                        raise ValueError(
+                            "Vocabulary expansion is not supported on a quantized MLX model: "
+                            "model contains quantized layers. Use an unquantized base model."
+                        )
+            except ImportError:
+                pass
+
+            inner = getattr(self.model, "model", self.model)
+            base_embed = getattr(inner, "embed_tokens", None)
+            hf_tok = getattr(self.tokenizer, "_tokenizer", self.tokenizer)
+            base_vocab_len = (
+                len(hf_tok)
+                if hasattr(hf_tok, "__len__")
+                else getattr(self.tokenizer, "vocab_size", 0)
+            )
+            if base_embed is not None and hasattr(base_embed, "weight"):
+                base_embed_rows = base_embed.weight.shape[0]
+                if base_vocab_len != base_embed_rows:
+                    raise ValueError(
+                        f"Tokenizer vocabulary size ({base_vocab_len}) does not match "
+                        f"base embedding table rows ({base_embed_rows}). MLX native vocabulary "
+                        "expansion requires unpadded embedding tables to maintain 1:1 token ID "
+                        "alignment."
+                    )
+            from soup_cli.utils.mlx_vocab import register_mlx_tokens
+
+            reg_result = register_mlx_tokens(self.tokenizer, cfg.data)
+            delta_v, added_list = reg_result
+            if delta_v > 0:
+                self._added_tokens = added_list
+                self._added_special_tokens = getattr(reg_result, "special_tokens", [])
+                self._added_regular_tokens = getattr(reg_result, "regular_tokens", [])
+                self._base_vocab_size = base_vocab_len
+                console.print(
+                    f"[green]MLX vocabulary expansion:[/] registered {delta_v} new token(s) "
+                    f"(base vocab: {base_vocab_len} -> {base_vocab_len + delta_v})"
+                )
+
+        if cfg.data.format == "pre_tokenized":
+            from soup_cli.trainer.mlx_pretokenized import PretokenizedDataset
+
+            vocab_size = getattr(getattr(self.model, "args", None), "vocab_size", None)
+            if vocab_size is None:
+                vocab_size = len(self.tokenizer)
+            dataset = {
+                name: PretokenizedDataset(rows, vocab_size=vocab_size,
+                                          max_length=cfg.data.max_length or 2048)
+                for name, rows in dataset.items()
+            }
         self._dataset = dataset
 
     def _apply_lora(self, model) -> None:
@@ -540,6 +677,10 @@ class MLXSFTTrainerWrapper:
         without it every parameter is trainable and the saved "adapter" is
         actually a full fine-tune (172 tensors instead of ~64 LoRA weights).
         """
+        if getattr(self, "_applied_lora", False):
+            return
+        self._applied_lora = True
+
         from mlx_lm.tuner.utils import linear_to_lora_layers
 
         cfg = self.config
@@ -595,6 +736,26 @@ class MLXSFTTrainerWrapper:
             },
             **({"use_dora": True} if use_dora else {}),
         )
+        if getattr(self, "_added_tokens", None):
+            import mlx.core as mx
+            from mlx.utils import tree_flatten
+
+            from soup_cli.utils.mlx_vocab import attach_mlx_vocab_extension
+            from soup_cli.utils.seeding import resolve_training_seed
+
+            seed = resolve_training_seed(cfg.training)
+            is_tied, ext_embed, ext_head = attach_mlx_vocab_extension(
+                model, delta_v=len(self._added_tokens), seed=seed
+            )
+            self._vocab_ext = (is_tied, ext_embed, ext_head)
+            self._initial_new_weights = mx.array(ext_embed.new_weights)
+            if ext_head is not None:
+                self._initial_new_head_weights = mx.array(ext_head.new_weights)
+            self._initial_lora_weights = {
+                k: mx.array(v)
+                for k, v in tree_flatten(model.trainable_parameters())
+                if "lora" in k
+            }
 
     def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
         """Warm-start LoRA weights from a saved MLX checkpoint (#634).
@@ -790,18 +951,31 @@ class MLXSFTTrainerWrapper:
         # drops the earlier ones -- a different wrong distribution, not a fix.
         # Chat rows therefore go through Soup's own per-token mask, injected
         # via `train(loss=..., iterate_batches=...)`.
-        from soup_cli.trainer.mlx_masking import plan_response_masking
+        from soup_cli.trainer.mlx_masking import MaskingPlan, plan_response_masking
 
+        cached_labels = cfg.data.format == "pre_tokenized"
         responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
-        plan = plan_response_masking(
-            responses_only, train_rows[0] if train_rows else {}
+        train_field = bool(getattr(cfg.data, "train_on_messages_with_train_field", False))
+        mask_history = bool(getattr(cfg.data, "mask_history", False))
+        plan = (
+            MaskingPlan(token_mask=True, mask_prompt=False) if cached_labels
+            else plan_response_masking(
+                responses_only, train_rows[0] if train_rows else {},
+                train_field=train_field, mask_history=mask_history,
+            )
         )
         use_token_mask = plan.token_mask
         args.mask_prompt = plan.mask_prompt
         if plan.warning:
             console.print(f"[yellow]MLX backend ignores: {plan.warning}[/]")
 
-        if use_token_mask:
+        if cached_labels:
+            from soup_cli.trainer.mlx_pretokenized import labeled_iterate_batches, labeled_loss
+
+            train_dataset = CacheDataset(self._dataset["train"])
+            val_dataset = CacheDataset(self._dataset["val"]) if val_rows else None
+            train_hooks = {"loss": labeled_loss, "iterate_batches": labeled_iterate_batches}
+        elif use_token_mask:
             from soup_cli.trainer.mlx_masking import (
                 MaskedChatDataset,
                 ResponseMaskError,
@@ -810,7 +984,8 @@ class MLXSFTTrainerWrapper:
             )
 
             masked_train = MaskedChatDataset(
-                train_rows, self.tokenizer, chat_key=_CHAT_KEY
+                train_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                train_field=train_field, mask_history=mask_history, max_length=max_seq_length,
             )
             # Probe row 0 now. `process` is otherwise called lazily by
             # `CacheDataset` from inside `train()`, so a template this cannot
@@ -823,16 +998,27 @@ class MLXSFTTrainerWrapper:
                 try:
                     masked_train.process(train_rows[0])
                 except ResponseMaskError as exc:
-                    raise ResponseMaskError(
-                        f"{exc}. Set `data.train_on_responses_only: false` to "
-                        "train on the full sequence on this model, or run the "
-                        "recipe on the transformers backend."
-                    ) from exc
+                    if train_field or mask_history:
+                        hint = (
+                            "Use a prefix-stable native chat template and keep selected "
+                            "targets within data.max_length, or disable selective masking "
+                            "and set data.train_on_responses_only: false for full-sequence loss."
+                        )
+                    else:
+                        hint = (
+                            "Set `data.train_on_responses_only: false` to train on the full "
+                            "sequence on this model, or run the recipe on the transformers backend."
+                        )
+                    raise ResponseMaskError(f"{exc}. {hint}") from exc
 
             train_dataset = CacheDataset(masked_train)
             val_dataset = (
                 CacheDataset(
-                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
+                    MaskedChatDataset(
+                        val_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                        train_field=train_field, mask_history=mask_history,
+                        max_length=max_seq_length,
+                    )
                 )
                 if val_rows
                 else None
@@ -1172,6 +1358,7 @@ class MLXSFTTrainerWrapper:
                 batch_size=batch_size,
                 grad_accum=grad_accumulation_steps,
                 masked=use_token_mask,
+                **({"labeled": True} if cached_labels else {}),
             )
             if rewind is not None:
                 train_dataset = rewind.wrap(train_dataset)
@@ -1250,13 +1437,18 @@ class MLXSFTTrainerWrapper:
                        if eval_every is not None else {}),
                     "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
+                    **({"rope_scaling": self._effective_rope_scaling}
+                       if getattr(self, "_effective_rope_scaling", None) is not None else {}),
                     # #683: the EFFECTIVE masking, not a hardcoded False.
                     # `mask_prompt` stays upstream's meaning (a single masked
                     # prefix); `response_token_mask` is Soup's per-token mask,
                     # which is what a multi-turn chat run actually used.
                     "mask_prompt": bool(args.mask_prompt),
                     "response_token_mask": use_token_mask,
+                    "pre_tokenized": cached_labels,
                     "train_on_responses_only": responses_only,
+                    "train_on_messages_with_train_field": train_field,
+                    "mask_history": mask_history,
                     "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
                     # #686: the EFFECTIVE optimizer and schedule, so an adapter
@@ -1272,6 +1464,23 @@ class MLXSFTTrainerWrapper:
                 indent=2,
             )
         )
+
+        if getattr(self, "_vocab_ext", None):
+            from soup_cli.utils.mlx_vocab import save_expanded_vocab_artifact
+
+            is_tied, ext_embed, ext_head = self._vocab_ext
+            save_expanded_vocab_artifact(
+                output_dir=output_dir,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                base_vocab_size=self._base_vocab_size,
+                is_tied=is_tied,
+                added_tokens=self._added_tokens,
+                extended_embed=ext_embed,
+                extended_head=ext_head,
+                added_special_tokens=getattr(self, "_added_special_tokens", None),
+                added_regular_tokens=getattr(self, "_added_regular_tokens", None),
+            )
 
         loss_summary = summarize_training_loss(
             [{"loss": loss} for loss in captured.get("losses", [])]

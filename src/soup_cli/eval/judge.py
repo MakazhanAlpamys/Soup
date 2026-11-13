@@ -9,7 +9,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
+from statistics import mean
 from typing import TYPE_CHECKING, Optional, Protocol
 from urllib.parse import urlparse
 
@@ -132,6 +134,24 @@ class JudgeScore:
     category: str = "default"
 
 
+def _finite_mean(values: list[float]) -> float:
+    """Return a finite mean, raising ValueError for an unrepresentable result."""
+    try:
+        result = sum(values) / len(values)
+    except OverflowError:
+        result = math.inf
+    if math.isfinite(result):
+        return result
+
+    try:
+        result = float(mean(values))
+    except OverflowError:
+        raise ValueError("Judge average must be finite") from None
+    if not math.isfinite(result):
+        raise ValueError("Judge average must be finite")
+    return result
+
+
 @dataclass
 class JudgeResults:
     """Aggregated results from judge evaluation."""
@@ -147,16 +167,14 @@ class JudgeResults:
             return
 
         # Overall average
-        self.overall_score = (
-            sum(s.weighted_score for s in self.scores) / len(self.scores)
-        )
+        overall_score = _finite_mean([s.weighted_score for s in self.scores])
 
         # Per-category averages
         cats: dict[str, list[float]] = {}
         for score in self.scores:
             cats.setdefault(score.category, []).append(score.weighted_score)
-        self.category_scores = {
-            cat: sum(vals) / len(vals) for cat, vals in sorted(cats.items())
+        category_scores = {
+            cat: _finite_mean(vals) for cat, vals in sorted(cats.items())
         }
 
         # Per-criteria averages
@@ -164,10 +182,13 @@ class JudgeResults:
         for score in self.scores:
             for crit, val in score.scores.items():
                 all_criteria.setdefault(crit, []).append(val)
-        self.criteria_averages = {
-            crit: sum(vals) / len(vals)
+        criteria_averages = {
+            crit: _finite_mean(vals)
             for crit, vals in sorted(all_criteria.items())
         }
+        self.overall_score = overall_score
+        self.category_scores = category_scores
+        self.criteria_averages = criteria_averages
 
 
 def load_rubric(path: Path) -> dict:
@@ -190,6 +211,7 @@ def load_rubric(path: Path) -> dict:
     if not isinstance(rubric["criteria"], list) or not rubric["criteria"]:
         raise ValueError("Rubric 'criteria' must be a non-empty list")
 
+    seen_names: dict[str, int] = {}
     for idx, crit in enumerate(rubric["criteria"]):
         if not isinstance(crit, dict):
             raise ValueError(f"Criterion {idx} must be a mapping")
@@ -197,6 +219,11 @@ def load_rubric(path: Path) -> dict:
             raise ValueError(
                 f"Criterion {idx} must have 'name' and 'description'"
             )
+        name = crit["name"]
+        key = str(name).strip().lower()
+        if key in seen_names:
+            raise ValueError(f"Criterion {idx} ({name!r}) duplicates criterion {seen_names[key]}")
+        seen_names[key] = idx
 
     return rubric
 
@@ -364,16 +391,59 @@ def _parse_judge_response(
     return validated_scores, reasoning
 
 
+def _require_finite_weights(rubric: dict) -> None:
+    """Reject invalid weights before the weighted evaluator sends a request."""
+    for index, criterion in enumerate(rubric["criteria"]):
+        weight = criterion.get("weight", 1.0)
+        # Integers stay finite even when conversion to a float would overflow.
+        if isinstance(weight, int):
+            continue
+        try:
+            finite = math.isfinite(weight)
+        except (TypeError, ValueError, OverflowError):
+            finite = False
+        if not finite:
+            raise ValueError(
+                f"Criterion {index} ({criterion.get('name')!r}) weight {weight!r} "
+                "is not a finite number. Use a number such as 1.0."
+            )
+
+
 def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
     """Compute weighted average score from criteria scores."""
+    _require_finite_weights(rubric)
+    inputs = [
+        (scores.get(crit["name"], 0.0), crit.get("weight", 1.0))
+        for crit in rubric["criteria"]
+    ]
+    for val, _ in inputs:
+        if not isinstance(val, int) and not math.isfinite(val):
+            raise ValueError("Weighted judge score must be finite")
     total_weight = 0.0
     weighted_sum = 0.0
-    for crit in rubric["criteria"]:
-        weight = crit.get("weight", 1.0)
-        val = scores.get(crit["name"], 0.0)
-        weighted_sum += val * weight
-        total_weight += weight
-    return weighted_sum / total_weight if total_weight > 0 else 0.0
+    try:
+        for val, weight in inputs:
+            weighted_sum += val * weight
+            total_weight += weight
+        result = weighted_sum / total_weight if total_weight > 0 else 0.0
+    except OverflowError:
+        result = math.nan
+    if (math.isfinite(weighted_sum) and math.isfinite(total_weight)
+            and math.isfinite(result)):
+        return result
+
+    # Preserve ordinary rounding; exact arithmetic is only the overflow fallback.
+    try:
+        weights = [Fraction(weight) for _, weight in inputs]
+        exact_total = sum(weights)
+        if exact_total <= 0:
+            return 0.0
+        exact_sum = sum(
+            Fraction(val) * weight for (val, _), weight in zip(inputs, weights)
+        )
+        return float(exact_sum / exact_total)
+    except OverflowError:
+        raise ValueError("Weighted judge score must be finite") from None
 
 
 class JudgeEvaluator:
@@ -399,6 +469,7 @@ class JudgeEvaluator:
         validate_judge_api_base(api_base)
 
         self.rubric = rubric or DEFAULT_RUBRIC
+        _require_finite_weights(self.rubric)
         self.provider = provider
         self.model = model
         self.api_base = api_base
@@ -415,6 +486,7 @@ class JudgeEvaluator:
         category: str = "default",
     ) -> JudgeScore:
         """Evaluate a single prompt-response pair."""
+        _require_finite_weights(self.rubric)
         judge_prompt = _build_judge_prompt(prompt, response, self.rubric)
         judge_response = self._call_llm(judge_prompt)
 
