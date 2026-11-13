@@ -1289,6 +1289,13 @@ remain") when `--format` names the format, and `3` without one, since nothing is
 left to detect a format from. A partially valid dataset still exits with code `0`
 when no minimum is specified.
 
+For converted conversations, `soup data validate` also reports empty assistant
+answers as an advisory issue. It counts affected rows and turns and shows the first
+three source positions, starting at 1. Empty strings, nulls, missing content and
+empty text blocks count as empty after removing control and zero-width characters.
+An assistant turn with a tool call or non-text media content counts as an answer.
+The advisory leaves the valid-row count and exit code unchanged.
+
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
 drop is reported: `soup train`, and every other command that loads a dataset,
@@ -1633,15 +1640,17 @@ soup data doctor ./data/train.jsonl --model meta-llama/Llama-3.1-8B-Instruct
 soup data doctor ./data/train.jsonl --model meta-llama/Llama-3.1-8B-Instruct --show-mask 5
 ```
 
-Eight checks, same OK/MINOR/MAJOR taxonomy as `soup diagnose` (exit 0 on OK/MINOR,
+Nine checks, same OK/MINOR/MAJOR taxonomy as `soup diagnose` (exit 0 on OK/MINOR,
 exit 2 on MAJOR): `chat_template` (tokenizer has one), `template_render` (renders
 cleanly on a sample), `generation_markers` (`{% generation %}` support),
 `eos_in_labels` — the **#1 "model never stops generating" bug**: every trained
 assistant turn must actually contain an EOS/EOT token, checked across the *whole*
 trained span, not just the last turn — `bos_duplication` (template + tokenizer both
 prepending BOS), `system_role` (Mistral-style templates that reject a leading system
-turn), `unknown_roles`, and `truncation_risk` (p95 rendered length vs
-`data.max_length`). `--train-on-responses-only` / `--train-on-messages-with-train-field`
+turn), `unknown_roles`, `empty_answers` (MINOR if more than 0% of the converted
+sampled rows contain an empty assistant turn), and `truncation_risk` (p95 rendered
+length vs `data.max_length`). `empty_answers` is advisory at every rate.
+`--train-on-responses-only` / `--train-on-messages-with-train-field`
 select the same masking strategy `soup train` would use, so the report and
 `--show-mask` preview can never disagree about what's actually trained.
 `--mask-history` (default off, matching `data.mask_history`) narrows the

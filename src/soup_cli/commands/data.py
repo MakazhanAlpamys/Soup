@@ -117,7 +117,8 @@ def validate(
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     load_issues = SkippedRows()
-    data = load_raw_data(file_path, issues=load_issues)
+    row_numbers: list[int] = []
+    data = load_raw_data(file_path, issues=load_issues, row_numbers=row_numbers)
     # #1887: every row the loader skipped (not an object, or not JSON) is an
     # invalid row for the N/M line, for --min-valid-fraction and for the exit
     # code. The statistics below still describe the retained objects.
@@ -138,7 +139,7 @@ def validate(
             console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
 
-    result = validate_and_stats(data, expected_format=fmt)
+    result = validate_and_stats(data, expected_format=fmt, row_numbers=row_numbers or None)
     if not data and skipped:
         result["issues"] = [none_remain if i == "Dataset is empty" else i
                             for i in result["issues"]]
