@@ -1,0 +1,109 @@
+[
+  {
+    "mutation": "last_block_only",
+    "test": "test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing0-False]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E               AssertionError: model.embed_tokens.weight",
+      "E               assert 0.0 > 0"
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing0-False]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  },
+  {
+    "mutation": "omit_freeze",
+    "test": "test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E               AssertionError: model.layers.0.self_attn.q_proj.weight",
+      "E               assert False"
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  },
+  {
+    "mutation": "unweighted_accumulation",
+    "test": "test_accumulated_masked_update_matches_independent_reference[False-False]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E           AssertionError: model.embed_tokens.weight",
+      "E           assert False"
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_accumulated_masked_update_matches_independent_reference[False-False]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  },
+  {
+    "mutation": "partial_checkpoint",
+    "test": "test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E           AssertionError: assert dict_keys(['m...head.weight']) == dict_keys(['m...head.weight'])",
+      "E             "
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_public_update_freeze_counts_complete_save_and_fresh_reload[freezing1-False]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  },
+  {
+    "mutation": "disable_fp32_master",
+    "test": "test_low_precision_updates_and_adam_moment_dtype[dtype0]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E                   FloatingPointError: MLX full fine-tuning: empty or non-finite supervised loss"
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_low_precision_updates_and_adam_moment_dtype[dtype0]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  },
+  {
+    "mutation": "duplicate_tied_update",
+    "test": "test_accumulated_masked_update_matches_independent_reference[False-True]",
+    "exit_code": 1,
+    "failure_lines": [
+      "E           AssertionError: model.embed_tokens.weight",
+      "E           assert False"
+    ],
+    "command": [
+      "/Users/pernavjain/Documents/Soup/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_mlx_full_finetune_native.py::test_accumulated_masked_update_matches_independent_reference[False-True]",
+      "-q",
+      "--no-cov"
+    ],
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9"
+  }
+]
