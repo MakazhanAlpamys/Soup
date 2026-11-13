@@ -513,8 +513,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         injected it, so unit tests that pre-set ``_gate_suite`` /
         ``_gate_generate_fn`` still control the harness. Malformed YAML,
         non-mapping roots and non-string top-level keys abort setup; other
-        loading failures are logged and leave the gate inert. The CLI (``soup train --gate``)
-        already validated the suite path up front.
+        suite loading failures are logged and leave the gate inert. The CLI
+        (``soup train --gate``) already validated the suite path up front. A
+        configured baseline that cannot be resolved aborts setup with a
+        ``ValueError`` naming ``training.eval_gate.baseline``; an unset
+        baseline is an empty map.
         """
         cfg = self.eval_gate_config
         if cfg is None or not getattr(cfg, "enabled", False):
@@ -537,13 +540,18 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 return
 
         if self._gate_baseline is None:
-            try:
-                from soup_cli.eval.gate import resolve_baseline
+            from soup_cli.eval.gate import resolve_baseline
 
-                self._gate_baseline = resolve_baseline(getattr(cfg, "baseline", None))
+            baseline_spec = getattr(cfg, "baseline", None)
+            try:
+                self._gate_baseline = resolve_baseline(baseline_spec)
             except (ValueError, FileNotFoundError, OSError) as exc:
-                logger.warning("eval gate: could not resolve baseline: %s", exc)
-                self._gate_baseline = {}
+                # A baseline the user asked for must not silently become "no
+                # baseline": with an empty map no task can ever regress (#2523).
+                raise ValueError(
+                    f"eval gate: could not resolve training.eval_gate.baseline "
+                    f"{baseline_spec!r}: {exc}"
+                ) from exc
 
         if self._gate_generate_fn is None and model is not None and tokenizer is not None:
             try:
