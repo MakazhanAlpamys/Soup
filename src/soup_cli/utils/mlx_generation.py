@@ -88,6 +88,11 @@ def _validate_adapter_rope_scaling(config: dict[str, Any]) -> None:
 
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     """Validate metadata before loading optional dependencies or allocating a model."""
+    if (path / "added_tokens.safetensors").exists():
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     config_path = path / "adapter_config.json"
     if not config_path.exists():
         if (path / "adapters.safetensors").exists():
@@ -107,6 +112,11 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Ambiguous or empty native MLX metadata model identity")
     if base is not None and not _same_base(base, config["model"]):
         raise ValueError("--base does not match the native MLX metadata model identity")
+    if config.get("vocab_expansion"):
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
     _validate_adapter_rope_scaling(config)

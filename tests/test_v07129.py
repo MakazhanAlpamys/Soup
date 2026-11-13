@@ -942,10 +942,11 @@ class TestRunHeal:
 
     def test_run_heal_reports_rendered_config_validation_error(self, tmp_path, monkeypatch):
         import typer
+        from rich.text import Span, Text
 
         import soup_cli.commands.shrink as sc
 
-        messages: list[str] = []
+        messages: list[Text] = []
         monkeypatch.setattr(
             "soup_cli.config.loader.load_config_from_string",
             lambda _yaml: (_ for _ in ()).throw(ValueError("invalid rendered config")),
@@ -963,14 +964,18 @@ class TestRunHeal:
             )
 
         assert exc_info.value.exit_code == 1
-        assert messages == ["[red]Invalid rendered heal config:[/] invalid rendered config"]
+        assert len(messages) == 1
+        assert isinstance(messages[0], Text)
+        assert messages[0].plain == "Invalid rendered heal config: invalid rendered config"
+        assert messages[0].spans == [Span(0, len("Invalid rendered heal config:"), "red")]
 
     def test_run_heal_sanitizes_rendered_config_validation_error(self, tmp_path, monkeypatch):
         import typer
+        from rich.text import Span, Text
 
         import soup_cli.commands.shrink as sc
 
-        messages: list[str] = []
+        messages: list[Text] = []
         monkeypatch.setattr(
             "soup_cli.config.loader.load_config_from_string",
             lambda _yaml: (_ for _ in ()).throw(
@@ -991,8 +996,10 @@ class TestRunHeal:
 
         assert exc_info.value.exit_code == 1
         assert len(messages) == 1
-        assert "\x1b" not in messages[0]
-        assert "bad [2J\\[bold red]field\\[/]" in messages[0]
+        assert isinstance(messages[0], Text)
+        assert "\x1b" not in messages[0].plain
+        assert "bad [2J[bold red]field[/]" in messages[0].plain
+        assert messages[0].spans == [Span(0, len("Invalid rendered heal config:"), "red")]
 
     def test_nonzero_tail_control_bytes_stripped(self, tmp_path, monkeypatch):
         import soup_cli.commands.shrink as sc

@@ -1,0 +1,25 @@
+# Scrubbed copy of the operator's wait log (times UTC). Removed: the list of programs using the GPU.
+# 'python of other jobs' counts python processes that belong to other GPU jobs.
+earlier-runner Qwen3-32B reload-only wait start UTC 14:49:55 (budget 15 min)
+UTC 14:49:57 | AC=True | GPU used=7068 MiB | free RAM=8,5 GB | python of this work=0
+UTC 14:50:29 | AC=True | GPU used=7068 MiB | free RAM=8,7 GB | python of this work=0
+UTC 14:51:01 | AC=True | GPU used=7068 MiB | free RAM=8,6 GB | python of this work=0
+UTC 14:51:32 | AC=True | GPU used=7068 MiB | free RAM=8,2 GB | python of this work=0
+UTC 14:52:04 | AC=True | GPU used=7068 MiB | free RAM=8,6 GB | python of this work=0
+UTC 14:52:36 | AC=True | GPU used=7068 MiB | free RAM=8,6 GB | python of this work=0
+UTC 14:53:08 | AC=True | GPU used=7068 MiB | free RAM=8,6 GB | python of this work=0
+UTC 14:53:40 | AC=True | GPU used=7068 MiB | free RAM=8,8 GB | python of this work=0
+UTC 14:54:12 | AC=True | GPU used=7068 MiB | free RAM=7,4 GB | python of this work=0
+UTC 14:54:44 | AC=True | GPU used=7068 MiB | free RAM=7,7 GB | python of this work=0
+UTC 14:55:16 | AC=True | GPU used=7068 MiB | free RAM=8,2 GB | python of this work=0
+UTC 14:55:48 | AC=True | GPU used=7068 MiB | free RAM=8,3 GB | python of this work=0
+UTC 14:56:20 | AC=True | GPU used=0 MiB | free RAM=9,7 GB | python of this work=0 | python of other jobs=1
+UTC 14:56:52 | AC=True | GPU used=6114 MiB | free RAM=8,8 GB | python of this work=0
+UTC 14:57:24 | AC=True | GPU used=6156 MiB | free RAM=8,7 GB | python of this work=0
+UTC 14:57:56 | AC=True | GPU used=6156 MiB | free RAM=8,6 GB | python of this work=0
+UTC 14:58:28 | AC=True | GPU used=6156 MiB | free RAM=8,7 GB | python of this work=0
+UTC 14:58:59 | AC=True | GPU used=6156 MiB | free RAM=8,9 GB | python of this work=0
+UTC 14:59:33 | AC=True | GPU used=0 MiB | free RAM=10,8 GB | python of this work=0 | python of other jobs=0
+UTC 15:00:07 | AC=True | GPU used=0 MiB | free RAM=10,7 GB | python of this work=0 | python of other jobs=0
+final precheck: PRECHECK: OK
+launching UTC 15:00:10

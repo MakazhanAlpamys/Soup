@@ -20,6 +20,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 def _fake_tokenizer():
     tok = MagicMock()
@@ -357,8 +359,12 @@ class TestResolveGeneratorsThreadsQuantization:
         assert "bf16" not in out
         assert calls_dtype == ["float32", "float32"]
 
-    def test_console_reports_the_resolved_dtype_on_cuda(self, monkeypatch, capsys):
+    @pytest.mark.parametrize(
+        "flags, dtype", [((True, False), "bfloat16"), ((False, True), "float16")],
+    )
+    def test_console_reports_the_resolved_dtype_on_cuda(self, monkeypatch, capsys, flags, dtype):
         from soup_cli.commands.ship import _resolve_generators
+        from soup_cli.utils import gpu
         from soup_cli.utils import live_eval as _live_eval_mod
 
         calls_dtype = []
@@ -369,19 +375,24 @@ class TestResolveGeneratorsThreadsQuantization:
 
         monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
         monkeypatch.setattr(_live_eval_mod, "resolve_device", lambda device=None: "cuda")
+        monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device: flags)
         _resolve_generators(base="b", tuned=None, adapter="a", device=None)
-        out = capsys.readouterr().out
-        assert "bfloat16" in out
-        assert calls_dtype == ["bfloat16", "bfloat16"]
+        out = " ".join(strip_ansi(capsys.readouterr().out).split())
+        assert f"Live eval: loading base/tuned at full precision ({dtype});" in out
+        assert calls_dtype == [dtype, dtype]
 
+    @pytest.mark.parametrize(
+        "flags, dtype", [((True, False), "bfloat16"), ((False, True), "float16")],
+    )
     def test_console_reports_the_resolved_dtype_on_indexed_cuda_device(
-        self, monkeypatch, capsys
+        self, monkeypatch, capsys, flags, dtype,
     ):
         """Regression for the OWNER review on #570: an explicit --device
         cuda:0 resolves verbatim (resolve_device returns it unchanged), so a
         bare `== "cuda"` check missed it and fell back to float32 on a real
         GPU. Must resolve the same as a bare "cuda"."""
         from soup_cli.commands.ship import _resolve_generators
+        from soup_cli.utils import gpu
         from soup_cli.utils import live_eval as _live_eval_mod
 
         calls_dtype = []
@@ -391,10 +402,11 @@ class TestResolveGeneratorsThreadsQuantization:
             return lambda prompt: ""
 
         monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
+        monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device: flags)
         _resolve_generators(base="b", tuned=None, adapter="a", device="cuda:0")
-        out = capsys.readouterr().out
-        assert "bfloat16" in out
-        assert calls_dtype == ["bfloat16", "bfloat16"]
+        out = " ".join(strip_ansi(capsys.readouterr().out).split())
+        assert f"Live eval: loading base/tuned at full precision ({dtype});" in out
+        assert calls_dtype == [dtype, dtype]
 
     def test_quantized_load_does_not_also_pin_a_dtype(self, monkeypatch):
         """When --config supplies 4bit/8bit, the BitsAndBytesConfig governs

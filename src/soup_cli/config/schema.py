@@ -1,10 +1,17 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
+import functools
 import math
 import re
 from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
@@ -35,6 +42,28 @@ from soup_cli.utils.long_context import LONGROPE_REFUSAL
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
+
+
+def _type_error_as_value_error(validator: Callable[..., Any]) -> Callable[..., Any]:
+    """#2366 — let a field validator's ``TypeError`` reach Pydantic as a ``ValueError``.
+
+    Pydantic turns a ``ValueError`` raised in a validator into a
+    ``ValidationError`` that names the field; it lets a ``TypeError`` escape
+    ``SoupConfig(...)`` unchanged. Several validators raise ``TypeError`` for a
+    wrong-typed value, directly or through a shared helper that keeps raising
+    it for its other callers, so the conversion happens here, on the schema
+    callback. ``functools.wraps`` keeps the signature Pydantic inspects to
+    decide whether the validator takes ``info``.
+    """
+
+    @functools.wraps(validator)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return validator(*args, **kwargs)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    return wrapper
 
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
@@ -1849,10 +1878,10 @@ class TrainingConfig(BaseModel):
     vllm_sleep_mode: bool = Field(
         default=False,
         description=(
-            "Enable vLLM sleep/standby between rollouts (memory savings "
-            "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
-            "runtimes by the GRPO trainer."
+            "vLLM sleep/standby between rollouts. Has no effect in this "
+            "version: GRPO does not use a vLLM server for rollouts, so there "
+            "is no engine to put to sleep. Refused at load as of v0.78.0 when set "
+            "to true."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -2658,12 +2687,13 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_reward_hack_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_reward_hack_bool_fields(cls, v, info: ValidationInfo):
         """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
         if v is None or isinstance(v, bool):
             return v
         raise TypeError(
-            f"reward-hack bool flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2718,6 +2748,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reward_hack_halt", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reward_hack_halt(cls, v):
         """v0.70.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
@@ -2737,14 +2768,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_echo_trap_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_echo_trap_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part F — bool guards for echo-trap toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 echo-trap flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2754,14 +2786,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_rl_checkpoint_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_rl_checkpoint_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part D — bool guards for RL-checkpoint toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 RL-checkpoint flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2771,14 +2804,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_minillm_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_minillm_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("minillm_pretrain_anchor_path")
@@ -2796,6 +2830,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("minillm_rollout_length", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_minillm_rollout_length(cls, v):
         """v0.71.18 #257 — reject bool before Pydantic coerces True->1."""
         if v is None:
@@ -2815,7 +2850,8 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_v053_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_v053_bool_fields(cls, v, info: ValidationInfo):
         """v0.53.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
 
@@ -2828,11 +2864,12 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.53.0 flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("kv_cache_type", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_kv_cache_type(cls, v):
         """v0.53.0 Part C — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -2861,6 +2898,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_divergence", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_distill_divergence(cls, v):
         """v0.52.0 Part C — canonicalise ``kl`` → ``forward_kl``.
 
@@ -2876,6 +2914,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_temperature(cls, v):
         """v0.52.0 Part C — bool/NaN-rejected float in [0.05, 100]."""
         if v is None:
@@ -2886,6 +2925,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_mode", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_mode(cls, v):
         """v0.71.12 #145 — canonicalise + reject unknown distill modes."""
         if v is None:
@@ -2926,6 +2966,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_mod_capacity_factor(cls, v):
         """v0.71.12 #84 — bool-before-float guard (bool subclasses int)."""
         if v is None:
@@ -2936,6 +2977,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ebft_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ebft_temperature(cls, v):
         """v0.52.0 Part E — bool/NaN-rejected float in [1e-4, 100]."""
         if v is None:
@@ -3048,6 +3090,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("num_labels", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_num_labels(cls, v):
         """v0.52.0 Part B (security review fix) — bool-before-int guard.
 
@@ -3064,6 +3107,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reasoning_effort", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reasoning_effort(cls, v):
         """v0.52.0 Part G (security review fix) — canonicalise case +
         bool/null-byte/oversize rejection via the shared helper.
@@ -3101,6 +3145,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("hub", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_hub(cls, v):
         """v0.51.0 Part E review fix — accept any case (HF / Modelscope /
         MODELERS) and normalise to lowercase before the Literal check.
@@ -4610,6 +4655,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_method", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_method(cls, v):
         """v0.61.0 Part A — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -4627,6 +4673,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_alpha", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_alpha(cls, v):
         """v0.61.0 Part A — bool/NaN/Inf-rejected float bounded [0.0, 10.0]."""
         if v is None:
@@ -4659,6 +4706,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_stage", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_stage(cls, v):
         """v0.62.0 Part B — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4669,6 +4717,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_retriever_model", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_retriever_model(cls, v):
         """v0.62.0 Part B — bool/null-byte/oversize rejection on retriever id."""
         if v is None:
@@ -4706,6 +4755,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_style", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_style(cls, v):
         """v0.62.0 Part D — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4716,6 +4766,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_recall_threshold", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_recall_threshold(cls, v):
         """v0.62.0 Part D — bool/NaN/Inf-rejected float bounded [0.0, 1.0]."""
         if v is None:
@@ -4752,6 +4803,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_size", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_size(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_SIZE."""
         if v is None:
@@ -4762,6 +4814,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_dim", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_dim(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_DIM."""
         if v is None:
@@ -4769,6 +4822,7 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
 
         return validate_grace_codebook_dim(v)
+
 
 
 class ShipConfig(BaseModel):
@@ -5900,6 +5954,15 @@ class SoupConfig(BaseModel):
         if (self.backend == "mlx"
                 and resolve_mlx_task(self.task, self.training.preference_loss) not in MLX_TASKS):
             return self  # _validate_mlx_task_support refuses the task itself
+        if self.backend == "mlx" and self.task == "sft" and self.modality == "text":
+            if self.training.quantization != "none":
+                raise ValueError(
+                    f"{field} is not applied on backend='mlx' with "
+                    f"training.quantization={self.training.quantization!r}: native MLX "
+                    "vocabulary expansion requires unquantized embeddings (quantization='none'). "
+                    "Use quantization: none, or remove it."
+                )
+            return self
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
             "no step that adds tokens",
@@ -8095,11 +8158,15 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_vllm_sleep_mode(self) -> "SoupConfig":
-        """v0.50.0 Part B — ``vllm_sleep_mode`` requires task='grpo' and a
-        vLLM-compatible backend (transformers/unsloth).
+        """``vllm_sleep_mode`` is refused: it never reached a vLLM engine.
 
-        Sleep mode is a between-rollouts feature; setting it on a non-RL
-        task is a probable footgun and silently no-ops, so reject loudly.
+        v0.50.0 Part B made it require task='grpo' and a vLLM-compatible
+        backend (transformers/unsloth); those two gates still run first and
+        keep their wording. A config that passes both used to load and do
+        nothing: the GRPO wrapper copies the flag into TRL's
+        ``vllm_enable_sleep_mode``, which TRL reads only under ``use_vllm``,
+        and Soup never sets ``use_vllm`` (GRPO generates with the model's own
+        ``generate``). The field is kept so this message can name it.
         """
         if not self.training.vllm_sleep_mode:
             return self
@@ -8115,7 +8182,11 @@ class SoupConfig(BaseModel):
             validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "training.vllm_sleep_mode has no effect: GRPO does not use a vLLM server "
+            "for rollouts in this version, so there is no vLLM engine to put to sleep "
+            "between rollouts. Refused as of v0.78.0. Delete the line."
+        )
 
     # ---- v0.53.0 Quant Menu II cross-validators ----------------------------
 

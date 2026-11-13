@@ -662,6 +662,8 @@ class TestMLXRoPELifecycleNative:
     ):
         """When data.max_length <= orig_ctx, native unscaled RoPE is preserved with a log line."""
         monkeypatch.chdir(tmp_path)
+        from unittest.mock import patch
+
         import mlx.nn as nn
 
         from soup_cli.config.schema import SoupConfig
@@ -684,9 +686,12 @@ class TestMLXRoPELifecycleNative:
             },
         )
         trainer = MLXSFTTrainerWrapper(cfg)
-        trainer.setup({"train": [{"text": "alpha beta gamma"}]})
+        with patch("soup_cli.trainer.mlx_sft.console.print") as mock_print:
+            trainer.setup({"train": [{"text": "alpha beta gamma"}]})
 
         assert trainer._effective_rope_scaling is None
+        printed = [str(call.args[0]) for call in mock_print.call_args_list if call.args]
+        assert any("unscaled native RoPE preserved" in line for line in printed)
         scales = {
             name: float(m.scale)
             for name, m in trainer.model.named_modules()
