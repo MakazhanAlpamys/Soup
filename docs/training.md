@@ -860,10 +860,11 @@ dtypes and finite values. Final native adapters support MLX-LM reload/fusion;
 metadata records the effective objective, teacher/student references, tokenizer
 fingerprint, dtypes, runtime and optimizer settings without teacher weights.
 
-Sequence/generated-label KD, ULD, MiniLLM, quantization, full fine-tuning,
-vision/audio, distributed/offloaded execution, other adapter families, mask
-history/per-message flags, template overrides, and specialized training modifiers
-are refused by name. `rewind_log` is an SFT-only option and creates no KD recorder.
+DoRA is refused by name. Sequence/generated-label KD, ULD, MiniLLM, quantization,
+full fine-tuning, vision/audio, distributed/offloaded execution, other adapter
+families, mask history/per-message flags, template overrides, and specialized
+training modifiers are also refused by name. `rewind_log` is an SFT-only option
+and creates no KD recorder.
 Native numerical/lifecycle qualification does not establish knowledge transfer,
 downstream quality, CUDA parity in performance, or a general speedup.
 
