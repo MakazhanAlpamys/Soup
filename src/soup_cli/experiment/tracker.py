@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS runs (
     base_revision   TEXT,
     base_revision_source TEXT,
     training_data_sha256 TEXT,
+    code_commit     TEXT,
+    code_dirty      INTEGER,
     task            TEXT,
     cost_usd        REAL,
     cost_gpu_label  TEXT,
@@ -225,6 +227,8 @@ class ExperimentTracker:
              "ALTER TABLE runs ADD COLUMN base_revision_source TEXT"),
             ("runs", "training_data_sha256",
              "ALTER TABLE runs ADD COLUMN training_data_sha256 TEXT"),
+            ("runs", "code_commit", "ALTER TABLE runs ADD COLUMN code_commit TEXT"),
+            ("runs", "code_dirty", "ALTER TABLE runs ADD COLUMN code_dirty INTEGER"),
             ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
             ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
             ("runs", "run_kind",
@@ -286,7 +290,8 @@ class ExperimentTracker:
             conn.execute(
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
-                   base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL
+                   base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL,
+                   code_commit = NULL, code_dirty = NULL
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
@@ -307,6 +312,20 @@ class ExperimentTracker:
         )
         conn.commit()
         return run_id
+
+    def record_code_revision(
+        self, run_id: str, *, commit: Optional[str], dirty: Optional[bool],
+    ) -> None:
+        """Save the startup observation; historical and unavailable values stay NULL."""
+        from soup_cli.utils.code_revision import CodeRevision
+
+        CodeRevision(commit=commit, dirty=dirty)
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE runs SET code_commit=?, code_dirty=? WHERE run_id=?",
+            (commit, dirty, run_id),
+        )
+        conn.commit()
 
     def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
         """Record startup source bytes, leaving unsupported/incomplete sources unknown."""
