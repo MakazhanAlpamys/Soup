@@ -6,6 +6,7 @@
 
 **Contents:**
 
+- [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
 - [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
@@ -76,6 +77,43 @@ The importance pass loads the model, so live-validated on ≤ 3 B; larger models
 work but are unvalidated on the reference hardware. Perplexity is an unweighted
 mean of per-example perplexities — valid for the before/after *ratio* the
 verdict uses, not directly comparable to `soup eval` absolute numbers.
+
+---
+
+## FlashAttention and Liger measurements
+
+The [H200 sequence/checkpointing sweep](../benchmarks/flash-liger-h200-2026-11-10.md)
+extends the [earlier single H100 point](../benchmarks/gate-h100-validation.md)
+with independently varied sequence length and model checkpointing.
+Llama-3.1-8B, BF16 resident LoRA r16, batch 4; five fresh
+interleaved processes per feasible arm, each with five warm-up and 80 measured
+updates. These are synchronized training-step throughput ratios to SDPA, not
+end-to-end CLI speedups. All arms use the same realized tokens and labels.
+
+| Sequence | Checkpointing | FA2 / SDPA | Liger / SDPA | Both / SDPA | SDPA / Liger peak GiB |
+|---:|:---:|---:|---:|---:|---:|
+| 1024 | off | 0.983x | 1.226x | 1.195x | 47.982 / 37.065 |
+| 2048 | off | 0.971x | 1.229x | 1.188x | 80.398 / 58.562 |
+| 4096 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 8192 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 1024 | on | 0.989x | 1.209x | 1.184x | 22.423 / 17.571 |
+| 2048 | on | 0.980x | 1.223x | 1.184x | 29.357 / 19.651 |
+| 4096 | on | 0.959x | 1.213x | 1.149x | 43.226 / 23.812 |
+| 8192 | on | 0.929x | 1.197x | 1.096x | 70.962 / 32.132 |
+
+Read exact peaks, run ranges, SM clocks and the full recipe in the record.
+The native SDPA baseline already executed cuDNN flash attention. On this stack
+(torch 2.14.1/CUDA 13.0, FA2 2.8.3.post2, Liger 0.8.5), standalone FA2 was slower;
+Liger alone was faster than either SDPA or the combined arm at every feasible
+point. Both observations are scoped to this workload. They do not establish
+held-out quality equivalence or a universal preference for either library.
+
+The H200 was shared with an idle process holding 49850 MiB, leaving about
+90 GiB headroom. Checkpoint-off long-sequence probes exhausted that headroom;
+those cells have no timing ratio. This is not a dedicated-card capacity limit.
+The record retains all eight probe OOMs and their 40 unrun timing slots, all
+120 successful timings and every activation probe. No model/config defaults
+were changed to obtain the curve.
 
 ---
 
