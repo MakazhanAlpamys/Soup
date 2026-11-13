@@ -10,18 +10,10 @@ from rich.live import Live
 from rich.panel import Panel
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.step_rate import StepRate
+from soup_cli.monitoring.step_rate import is_finite_number as _is_finite_number
 
 console = Console()
-
-
-def _is_finite_number(value: Any) -> bool:
-    """Accept measured numbers, excluding booleans and unrepresentable integers."""
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
 
 
 def format_eta(step: Any, total_steps: Any, speed: Any, now: datetime) -> str:
@@ -108,7 +100,7 @@ class TrainingDisplay:
         self.grad_norm: Optional[float] = None
         self.gpu_mem = ""
         self.speed = 0.0
-        self._speed_baseline: tuple[int, float] | None = None
+        self._step_rate = StepRate()
         #: None until an evaluation actually runs. Its own series --
         #: never folded into `self.loss`, which is the training curve.
         self.val_loss = None
@@ -120,7 +112,7 @@ class TrainingDisplay:
     def start(self, total_steps: int):
         """Start the live display."""
         self.total_steps = total_steps
-        self._speed_baseline = None
+        self._step_rate.reset()
         self._live = Live(self._render(), console=console, refresh_per_second=2)
         self._live.start()
 
@@ -133,13 +125,10 @@ class TrainingDisplay:
         self.grad_norm = kwargs.get("grad_norm")
         self.speed = kwargs.get("speed", 0.0)
         if _is_finite_number(step) and step >= 0:
-            now = time.monotonic()
-            if self._speed_baseline is None or step < self._speed_baseline[0]:
-                self._speed_baseline = (step, now)
-            first_step, first_time = self._speed_baseline
+            rate = self._step_rate.update(step, time.monotonic())
             if not _is_finite_number(self.speed) or self.speed <= 0:
-                if step > first_step and now > first_time:
-                    self.speed = (step - first_step) / (now - first_time)
+                if rate is not None:
+                    self.speed = rate
         self.gpu_mem = kwargs.get("gpu_mem", "")
         # Sticky: an evaluation happens every N steps, so the last
         # measured value stays on screen between evaluations rather
