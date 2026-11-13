@@ -18,6 +18,7 @@ stay resident.
 """
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
@@ -204,42 +205,40 @@ def cublas_workspace_bytes(
         # A failed capability query must not silently disable the safety charge.
         # Use the largest currently documented per-handle default (Hopper/Blackwell).
         workspace_kib = STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES // 1024
-        if workspace_config is not None and workspace_config.strip():
-            return _configured_cublas_workspace_bytes(workspace_config)
-        return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
-    if (
-        not isinstance(compute_capability, tuple)
-        or len(compute_capability) != 2
-        or any(isinstance(part, bool) or not isinstance(part, int) or part < 0
-               for part in compute_capability)
-    ):
-        raise ValueError(f"invalid compute capability: {compute_capability!r}")
+    else:
+        if (
+            not isinstance(compute_capability, tuple)
+            or len(compute_capability) != 2
+            or any(
+                isinstance(part, bool) or not isinstance(part, int) or part < 0
+                for part in compute_capability
+            )
+        ):
+            raise ValueError(f"invalid compute capability: {compute_capability!r}")
 
-    if workspace_config is None or not workspace_config.strip():
         major, _minor = compute_capability
         # Keep the known-safe newer-device size for future major versions too;
         # PyTorch may grow this default before Soup updates its capability table.
         workspace_kib = 32 * 1024 if major >= 9 else 8_320
-    else:
-        return _configured_cublas_workspace_bytes(workspace_config)
 
+    if workspace_config is not None and workspace_config.strip():
+        return _configured_cublas_workspace_bytes(
+            workspace_config, default_workspace_kib=workspace_kib
+        )
     return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
 
 
-def _configured_cublas_workspace_bytes(workspace_config: str) -> int:
-    parts = workspace_config.split(":")
-    if parts[0] != "" or len(parts) < 3 or (len(parts) - 1) % 2:
-        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-    try:
-        values = [int(part) for part in parts[1:]]
-    except ValueError as exc:
-        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}") from exc
-    pairs = list(zip(values[::2], values[1::2]))
-    if any(size < 0 or count < 0 for size, count in pairs):
-        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-    if any((size == 0) != (count == 0) for size, count in pairs):
-        raise ValueError(f"invalid CUBLAS_WORKSPACE_CONFIG: {workspace_config!r}")
-    workspace_kib = sum(size * count for size, count in pairs)
+def _configured_cublas_workspace_bytes(
+    workspace_config: str, *, default_workspace_kib: int
+) -> int:
+    # Match PyTorch's parseChosenWorkspaceSize: accept every SIZE:COUNT pair it
+    # can parse, including :4096:0 and :0:8 (both total zero). If there are no
+    # pairs, PyTorch warns and falls back to the device default rather than
+    # aborting training; keep the preflight's charge consistent with that.
+    pairs = re.findall(r":([0-9]+):([0-9]+)", workspace_config)
+    if not pairs:
+        return default_workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
+    workspace_kib = sum(int(size) * int(count) for size, count in pairs)
     return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
 
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed

@@ -50,7 +50,7 @@ def _stream_compute_capability_for_device(device: Any) -> Optional[tuple[int, in
     """Import the optional CUDA runtime only when the streamed run targets CUDA."""
     try:
         import torch
-    except ImportError:
+    except Exception:
         return None
     return _stream_compute_capability(torch, device)
 

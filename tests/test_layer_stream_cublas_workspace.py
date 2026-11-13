@@ -24,17 +24,21 @@ def test_workspace_charge_tracks_config_and_device_defaults(capability, config, 
     ) == expected
 
 
-@pytest.mark.parametrize("config", ["4096:8", ":4096", ":4096:x", ":4096:0", ":0:8"])
-def test_malformed_or_unsupported_workspace_config_is_refused(config):
-    with pytest.raises(ValueError, match="CUBLAS_WORKSPACE_CONFIG"):
-        cublas_workspace_bytes(compute_capability=(8, 6), workspace_config=config)
-
-
-@pytest.mark.parametrize("config", [":4096:0", ":0:8"])
-def test_workspace_config_requires_both_size_and_count_zero_to_disable(config):
-    """PyTorch documents :0:0 as the no-workspace setting, not either half-zero form."""
-    with pytest.raises(ValueError, match="CUBLAS_WORKSPACE_CONFIG"):
-        cublas_workspace_bytes(compute_capability=(8, 6), workspace_config=config)
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ("4096:8", 2 * 8_320 * 1024),
+        (":4096", 2 * 8_320 * 1024),
+        (":4096:x", 2 * 8_320 * 1024),
+        (":4096:0", 0),
+        (":0:8", 0),
+        ("prefix:4096:8suffix", 2 * 4096 * 8 * 1024),
+    ],
+)
+def test_workspace_config_matches_pytorch_parser_and_fallback(config, expected):
+    assert cublas_workspace_bytes(
+        compute_capability=(8, 6), workspace_config=config
+    ) == expected
 
 
 def test_estimator_adds_workspace_bytes_without_changing_other_terms():
@@ -77,6 +81,20 @@ def test_unreadable_capability_uses_largest_documented_default_charge():
     assert cublas_workspace_bytes(compute_capability=None) == 64 * 1024 * 1024
 
 
+def test_capability_query_failure_is_patchable_and_uses_conservative_charge():
+    from types import SimpleNamespace
+
+    from soup_cli.trainer.stream_setup import _stream_compute_capability
+
+    def unavailable(_device):
+        raise AssertionError("Torch not compiled with CUDA enabled")
+
+    torch_module = SimpleNamespace(cuda=SimpleNamespace(get_device_capability=unavailable))
+    capability = _stream_compute_capability(torch_module, "cuda")
+    assert capability is None
+    assert cublas_workspace_bytes(compute_capability=capability) == 64 * 1024 * 1024
+
+
 def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatch):
     from types import SimpleNamespace
 
@@ -111,7 +129,7 @@ def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatc
     )
     model = SimpleNamespace(vocab_size=1000, hidden_size=64, intermediate_size=128)
     index = SimpleNamespace(n_layers=2, total_params=0)
-    monkeypatch.setattr(stream_setup, "_stream_compute_capability_for_device", lambda *_: None)
+    monkeypatch.setattr(stream_setup, "_stream_compute_capability", lambda *_: (8, 6))
     monkeypatch.setattr(stream_setup, "console", SimpleNamespace(print=lambda *_a, **_k: None))
     monkeypatch.setattr(
         layer_stream,
@@ -149,11 +167,11 @@ def test_stream_setup_wires_workspace_charge_into_estimator_and_panel(monkeypatc
         on_cuda=True,
         large_layer_bytes=0,
     )
-    expected = cublas_workspace_bytes(compute_capability=None)
+    expected = cublas_workspace_bytes(compute_capability=(8, 6))
     assert seen["charge"] == expected
     assert any(
         "cuBLAS" in line
-        and "64.0 MiB" in line
+        and "16.2 MiB" in line
         and "PyTorch allocator workspace" in line
         for line in lines
     )
@@ -193,6 +211,7 @@ def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
     )
     env = os.environ.copy()
     env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:1"
+    env["TORCH_CUBLAS_WORKSPACE_CACHE"] = "1"
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
