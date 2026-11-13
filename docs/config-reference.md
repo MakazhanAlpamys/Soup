@@ -76,9 +76,9 @@ Sections:
 | `data.replay_seed` | `int \| null` | `null` | `>= 0`, `<= 2147483647` | Seed for the replay sample + interleave. None = seed 0. (v0.71.36) |
 | `data.video_dir` | `str \| null` | `null` |  | Base directory for resolving relative video paths in video datasets. Mirrors image_dir / audio_dir. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.tokenized_path` | `str \| null` | `null` |  | Path to a pre-tokenized cache produced by `soup data preprocess`. When set, the trainer skips the tokenize stage and reads tensors directly. Mirrors LF tokenized_path / Axolotl `empty` type. (v0.42.0) |
-| `data.streaming` | `bool` | `false` |  | Pass-through to HF datasets `streaming=True`. Use for datasets that don't fit on disk. Pairs with `buffer_size`. (v0.42.0) |
+| `data.streaming` | `bool` | `false` |  | Stream a Hub dataset, a remote URI, or interleaved local files or remote URIs. Soup materialises the rows before training. Pairs with `buffer_size`. |
 | `data.buffer_size` | `int \| null` | `null` |  | Shuffle buffer size for streaming datasets. None = HF default. Bounds \[1, 1_000_000]. (v0.42.0) |
-| `data.shards` | `int \| null` | `null` |  | Number of shards for HF dataset splits (axolotl `shards`). Bounds \[1, 1024]. (v0.42.0) |
+| `data.shards` | `int \| null` | `null` |  | Legacy dataset shard count. Non-null values are refused as of v0.78.0. |
 | `data.interleave` | `str \| dict \| null` | `null` |  | Multi-dataset interleave strategy: 'concat' / 'under' / 'over' / {strategy: 'probs', probs: \[...]}. (v0.42.0) |
 | `data.mask_history` | `bool` | `false` |  | LF mask_history — mask all but the last assistant turn during loss computation. (v0.42.0) |
 | `data.train_on_prompt` | `bool` | `false` |  | LF train_on_prompt — include the prompt tokens in the loss. Inverse of train_on_responses_only. (v0.42.0) |

@@ -591,8 +591,8 @@ class DataConfig(BaseModel):
     streaming: bool = Field(
         default=False,
         description=(
-            "Pass-through to HF datasets `streaming=True`. Use for datasets "
-            "that don't fit on disk. Pairs with `buffer_size`. (v0.42.0 Part B)"
+            "Stream a Hub dataset, a remote URI, or interleaved local files or remote URIs. "
+            "Soup materialises the rows before training. Pairs with `buffer_size`."
         ),
     )
     buffer_size: Optional[int] = Field(
@@ -604,10 +604,7 @@ class DataConfig(BaseModel):
     )
     shards: Optional[int] = Field(
         default=None,
-        description=(
-            "Number of shards for HF dataset splits (axolotl `shards`). "
-            "Bounds [1, 1024]. (v0.42.0 Part B)"
-        ),
+        description="Legacy dataset shard count. Non-null values are refused as of v0.78.0.",
     )
     interleave: Optional[Union[str, Dict]] = Field(
         default=None,
@@ -807,12 +804,15 @@ class DataConfig(BaseModel):
 
         return validate_buffer_size(value)
 
-    @field_validator("shards")
+    @field_validator("shards", mode="before")
     @classmethod
-    def _validate_shards_v042(cls, value: Optional[int]) -> Optional[int]:
-        from soup_cli.utils.data_pipeline import validate_shards
-
-        return validate_shards(value)
+    def _refuse_unused_shards(cls, value: Any) -> None:
+        if value is not None:
+            raise ValueError(
+                "data.shards is refused as of v0.78.0. A shard count alone does not select "
+                "which shard to keep. Remove data.shards."
+            )
+        return None
 
     @field_validator("image_min_pixels", "image_max_pixels")
     @classmethod
@@ -975,9 +975,24 @@ class DataConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_v042_streaming_buffer(self) -> "DataConfig":
-        # buffer_size only meaningful when streaming=True — surface the
-        # mismatch loudly (mirrors v0.32.0 spike-recovery / loss-watchdog
-        # cross-validator policy).
+        streaming_options = [
+            key
+            for key, enabled in (
+                ("data.streaming", self.streaming),
+                ("data.buffer_size", self.buffer_size is not None),
+            )
+            if enabled
+        ]
+        if (
+            streaming_options
+            and isinstance(self.train, str)
+            and _classify_data_train_entry(self.train) == "local"
+        ):
+            raise ValueError(
+                f"{' and '.join(streaming_options)} cannot be used with a single local file "
+                "in data.train. Streaming supports a Hugging Face Hub dataset name, a remote "
+                "URI, or a list of local files or remote URIs with data.interleave."
+            )
         if self.buffer_size is not None and not self.streaming:
             raise ValueError(
                 "buffer_size requires streaming=True (HF datasets only "

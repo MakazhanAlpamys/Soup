@@ -83,6 +83,7 @@ def _key(dcfg: DataConfig, task: str = "sft") -> str:
 
 
 _PAIR = ["./a.jsonl", "./b.jsonl"]
+_HUB = {"train": "org/dataset"}
 _NO_RESPONSES_ONLY = {"train_on_responses_only": False}
 
 # Two configs per key field that differ in that field only. Listed by hand rather
@@ -104,8 +105,8 @@ _ONE_FIELD_APART = {
         {"replay": "./old.jsonl"},
         {"replay": "./old.jsonl", "replay_seed": 7},
     ),
-    "streaming": ({}, {"streaming": True}),
-    "buffer_size": ({"streaming": True}, {"streaming": True, "buffer_size": 100}),
+    "streaming": (_HUB, {**_HUB, "streaming": True}),
+    "buffer_size": ({**_HUB, "streaming": True}, {**_HUB, "streaming": True, "buffer_size": 100}),
     "image_dir": ({}, {"image_dir": "./images"}),
     "audio_dir": ({}, {"audio_dir": "./audio"}),
     "format": ({}, {"format": "alpaca"}),
