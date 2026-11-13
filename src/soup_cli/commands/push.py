@@ -319,6 +319,8 @@ def push(
     if collection:
         from soup_cli.utils.hf import (
             add_to_collection,
+        )
+        from soup_cli.utils.hf import (
             resolve_endpoint as _resolve_endpoint,
         )
 
