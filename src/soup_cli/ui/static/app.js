@@ -537,7 +537,7 @@ function renderCharts(metrics) {
   const losses = metrics.map(m => m.loss);
   const lrs = metrics.map(m => m.lr);
   const gradNorms = metrics.map(m => m.grad_norm ?? null);
-  const speeds = metrics.map(m => m.speed || 0);
+  const speeds = metrics.map(m => m.speed ?? null);
 
   const chartOpts = (yLabel) => ({
     responsive: true,
