@@ -590,6 +590,15 @@ app.add_typer(
     ),
 )
 
+# Documentation search & offline reference guides.
+from soup_cli.commands import docs as _docs_cmd  # noqa: E402
+
+app.add_typer(
+    _docs_cmd.app,
+    name="docs",
+    help="Documentation search & offline reference guides.",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

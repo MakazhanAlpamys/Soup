@@ -315,7 +315,7 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
 - **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). Without the flag, `soup export` looks for the entry registered from the run that wrote `--model`: it compares each entry's run `output_dir` in the experiment tracker with `--model` (resolved paths, the newest 1000 entries). Entries without a run id never match, and when several match (one run registered twice, or several runs trained into the same directory) the most recently registered entry wins; the attach line names the entry it chose, and nothing is attached when no entry matches. A run whose output directory was recorded as a relative path (as the tracker stored the default `./output` until #2725) is resolved against the current directory, so it matches when you export from the directory it trained in. If the registry or the experiment tracker database cannot be read, the export still succeeds and prints a warning instead of attaching; pass `--registry-id` to attach explicitly. When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -371,8 +371,10 @@ to the default Transformers backend is refused with a backend hint.
 
 The initial native consumer supports ordinary linear text LoRA (including the saved
 rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
-DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
-adapter targets are refused. This does not add MLX serving or adapter fusion.
+Adapters trained with native linear RoPE scaling record `rope_scaling` in `adapter_config.json`,
+which is re-applied during generation and fusion for unquantized base models (quantized bases
+with RoPE scaling are refused). DoRA, full-finetune adapters, embedding/switch-layer targets
+and other quantized adapter targets are refused. This does not add MLX serving or adapter fusion.
 Use the base tokenizer's chat template; rendered special tokens are encoded once.
 Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
 with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
@@ -901,7 +903,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 178 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 179 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -910,7 +912,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (178 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (179 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false

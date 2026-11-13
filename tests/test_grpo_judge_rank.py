@@ -400,6 +400,23 @@ def test_a_rubric_contributes_names_and_descriptions_only(tmp_path, monkeypatch)
     assert "helpfulness" not in prompt  # the default criteria are replaced
 
 
+def test_ranking_rubric_refuses_duplicate_criteria(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = Path("rubric.yaml")
+    path.write_text(
+        yaml.safe_dump({
+            "criteria": [
+                {"name": "quality", "description": "Response quality"},
+                {"name": " Quality ", "description": "Another quality criterion"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicates criterion"):
+        gj.rubric_criteria(str(path))
+
+
 def test_max_tokens_reaches_the_judge(monkeypatch):
     judge = FakeJudge(default=by_content)
     reward = _reward(monkeypatch, judge, num_generations=2, grpo_judge_max_tokens=77)

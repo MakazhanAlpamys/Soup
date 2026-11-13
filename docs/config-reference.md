@@ -89,8 +89,8 @@ Sections:
 | `data.image_resize_algorithm` | `str \| null` | `null` | one of `"nearest"`, `"bilinear"`, `"bicubic"`, `"lanczos"` | Pillow resize algorithm for image preprocessing. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.video_fps` | `float \| null` | `null` |  | Target frames-per-second for video preprocessing. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.video_maxlen` | `int \| null` | `null` |  | Max number of frames per video clip. Bounds (0, 4096]. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
-| `data.add_new_tokens` | `list[str] \| null` | `null` |  | Add these tokens to the tokenizer vocab + resize embeddings. Cap 10_000 entries; per-token &lt;= 256 chars; no duplicates. (v0.42.0) |
-| `data.new_special_tokens` | `list[str] \| null` | `null` |  | Like add_new_tokens but registered as additional_special_tokens so they are not split by the tokenizer. (v0.42.0) |
+| `data.add_new_tokens` | `list[str] \| null` | `null` |  | Add these tokens to the tokenizer vocab + resize embeddings on transformers backend and MLX text SFT (`quantization: none`). Cap 10_000 entries; per-token &lt;= 256 chars; no duplicates. (v0.42.0, #1994) |
+| `data.new_special_tokens` | `list[str] \| null` | `null` |  | Like add_new_tokens but registered as additional_special_tokens so they are not split by the tokenizer. Supported on transformers backend and MLX text SFT (`quantization: none`). (v0.42.0, #1994) |
 | `data.resize_vocab` | `bool` | `false` |  | Resize the model's input/output embedding matrix when add_new_tokens / new_special_tokens grew the vocab. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.extend_conversation` | `bool` | `false` |  | Unsloth-style conversation extension — extend the last assistant turn with N more tokens for 'continue' prompts. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.skip_prepare_dataset` | `bool` | `false` |  | Axolotl skip_prepare_dataset — escape hatch when the input is already in the trainer's expected schema. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
@@ -164,7 +164,7 @@ Sections:
 | `training.grpo_delta` | `float \| null` | `null` | `> 0.0`, `<= 1.0` | Symmetric clipping radius for grpo_variant='two_sided' (required) or grpo_variant='gspo' (optional sequence clipping radius, defaults to 0.2). Rejected for all other variants. |
 | `training.grpo_fp16` | `bool` | `false` |  | Force FP16 mixed precision for GRPO/RL (unsloth parity). On CUDA, the GRPO trainer forwards fp16=True and bf16=False; on non-CUDA devices this flag does not enable FP16. |
 | `training.long_context_grpo` | `bool` | `false` |  | Enable long-context GRPO (unsloth: 380K B200 / 110K H100). Compatibility validation only: no trainer consumes this flag yet. Requires task='grpo' on a non-mlx backend and use_ring_attention=False. Refused at load when set away from its default (v0.77, #808). |
-| `training.vllm_sleep_mode` | `bool` | `false` |  | Enable vLLM sleep/standby between rollouts (memory savings during the optimisation step). Requires backend in {transformers, unsloth}; forwarded to compatible TRL and vLLM runtimes by the GRPO trainer. |
+| `training.vllm_sleep_mode` | `bool` | `false` |  | vLLM sleep/standby between rollouts. Has no effect in this version: GRPO does not use a vLLM server for rollouts, so there is no engine to put to sleep. Refused at load as of v0.78.0 when set to true. |
 | `training.rollout_backend` | `str \| null` | `null` | one of `"art"`, `"ruler"`, `"nemo_gym"`, `"openenv"` | Multi-turn agent rollout backend (unsloth / axolotl parity): art (OpenPipe ART) / ruler / nemo_gym / openenv. Requires task='grpo'. openenv runs live (v0.71.21 #125) via training.rollout_func; art/ruler/nemo_gym are lazy-import gated. |
 | `training.rollout_func` | `str \| null` | `null` |  | OpenEnv rollout function as 'module.path:function_name' (v0.71.21 #125). Requires rollout_backend='openenv'. The callable receives the seed prompts list and returns rollout rows ({'prompt': str\|messages, 'answer'?: str}) that replace the GRPO prompt dataset. Trusted-input policy: names operator-controlled code (mirrors data.prompt_strategy). |
 | `training.ref_model_ema_alpha` | `float \| null` | `null` | `> 0.0`, `<= 1.0` | Exponential moving average coefficient for ref-model sync (policy → reference). Must be in (0, 1]. None = disabled. Axolotl parity. |
@@ -266,7 +266,7 @@ Sections:
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
-| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); refused at config load anywhere else (#1697). |
+| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); on backend: mlx, task sft text supports rope_scaling_type: linear with quantization: none (#1995); refused at config load anywhere else (#1697). |
 | `training.yarn_factor` | `float \| null` | `null` | `> 1.0`, `<= 1024.0` | YaRN scaling factor (s). Optional — when omitted, the runtime falls back to ``target_length / original_length`` (HF default behaviour). |
 | `training.yarn_attn_factor` | `float \| null` | `null` | `>= 0.0`, `<= 10.0` | YaRN attention temperature multiplier (default 1.0 in HF). |
 | `training.yarn_beta_fast` | `int \| null` | `null` | `>= 1`, `<= 1024` | YaRN beta_fast cutoff (HF default 32). |
@@ -384,7 +384,7 @@ Sections:
 | `training.eval_gate.suite` | `str \| null` | `null` |  | Path to eval-suite YAML (evals/gate.yaml) |
 | `training.eval_gate.every_n_epochs` | `int` | `1` | `>= 1`, `<= 100` | Run gate every N epochs (1-100) |
 | `training.eval_gate.regression_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max absolute drop vs baseline before regression fires |
-| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| 'previous' \| file path - scores to compare against |
+| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| file path - scores to compare against |
 | `training.eval_gate.on_regression` | `str` | `"stop"` | one of `"stop"`, `"warn"`, `"continue"` | Action on regression: stop training \| warn only \| continue |
 
 ## `eval`

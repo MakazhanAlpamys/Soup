@@ -73,6 +73,8 @@ def merge_native_adapter(
         module for _, module in model.named_modules()
         if isinstance(module, quantized_types)
     ]
+    if "rope_scaling" in metadata and quantized:
+        raise ValueError("MLX merge with RoPE scaling does not support quantized bases")
     if quantized and not dequantize:
         raise ValueError("Quantized MLX fusion requires explicit --dequantize for dense output")
     if any(module.bits != 4 for module in quantized):
@@ -98,6 +100,10 @@ def merge_native_adapter(
     config.pop("quantization_config", None)
     config["torch_dtype"] = dtype
     config["dtype"] = dtype
+    if "rope_scaling" in metadata:
+        config["rope_scaling"] = metadata["rope_scaling"]
+        if "max_seq_length" in metadata:
+            config["max_position_embeddings"] = metadata["max_seq_length"]
 
     _validate_destination(destination, Path(adapter), str(base_path))
     destination.parent.mkdir(parents=True, exist_ok=True)

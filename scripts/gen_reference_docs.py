@@ -1287,6 +1287,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{rel} is stale.")
             for line in _first_difference(committed, pages[rel]):
                 print(line)
+        print(
+            "A page is rendered from the code: edit the command's docstring or help= (or the "
+            "field's description), not the page, so a sentence written by hand is not lost "
+            "at the next regeneration."
+        )
         print(f"Run `{_REGENERATE}` and commit the result.")
         return 1
     for rel in stale:

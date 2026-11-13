@@ -4,7 +4,7 @@ import itertools
 import math
 import random
 from pathlib import Path
-from typing import Optional
+from typing import Optional, get_args
 
 import typer
 import yaml
@@ -339,6 +339,9 @@ def _parse_sweep_params(params: list[str]) -> dict[str, list]:
             val = val.strip()
             values.append(_parse_value(val))
 
+        if None in values and _refuses_null(_PARAM_SHORTCUTS.get(key, key)):
+            values = ["none" if value is None else value for value in values]
+
         if values:
             result[key] = values
 
@@ -365,6 +368,39 @@ def _parse_value(val: str):
         pass
     # String
     return val
+
+
+def _refuses_null(full_key: str) -> bool:
+    """Whether the config field at ``full_key`` refuses null.
+
+    :func:`_parse_value` reads ``none`` as null, which an optional field takes
+    (``neftune_alpha=none`` leaves NEFTune off). ``training.quantization`` refuses
+    null: there ``none`` is one of its values, the one ``soup.yaml`` and
+    ``--sweep-config`` pass. A key that names no field is left to the unknown-key
+    check.
+    """
+    from pydantic import BaseModel, TypeAdapter, ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    model, field = SoupConfig, None
+    for part in full_key.split("."):
+        field = model.model_fields.get(part) if model is not None else None
+        if field is None:
+            return False
+        model = next(
+            (
+                kind
+                for kind in (field.annotation, *get_args(field.annotation))
+                if isinstance(kind, type) and issubclass(kind, BaseModel)
+            ),
+            None,
+        )
+    try:
+        TypeAdapter(field.annotation).validate_python(None)
+    except ValidationError:
+        return True
+    return False
 
 
 def _generate_combinations(
@@ -411,59 +447,60 @@ def _generate_combinations(
     return combos
 
 
+#: ``--param`` short names and the config path each one sets.
+_PARAM_SHORTCUTS = {
+    "lr": "training.lr",
+    "epochs": "training.epochs",
+    "batch_size": "training.batch_size",
+    "lora_r": "training.lora.r",
+    "lora_alpha": "training.lora.alpha",
+    "lora_dropout": "training.lora.dropout",
+    "quantization": "training.quantization",
+    "warmup_ratio": "training.warmup_ratio",
+    "weight_decay": "training.weight_decay",
+    "gradient_accumulation_steps": "training.gradient_accumulation_steps",
+    "max_grad_norm": "training.max_grad_norm",
+    "optimizer": "training.optimizer",
+    "scheduler": "training.scheduler",
+    "val_split": "data.val_split",
+    "max_length": "data.max_length",
+    "dpo_beta": "training.dpo_beta",
+    "kto_beta": "training.kto_beta",
+    "grpo_beta": "training.grpo_beta",
+    "num_generations": "training.num_generations",
+    "reward_fn": "training.reward_fn",
+    "ppo_epochs": "training.ppo_epochs",
+    "ppo_clip_ratio": "training.ppo_clip_ratio",
+    "ppo_kl_penalty": "training.ppo_kl_penalty",
+    "reward_model": "training.reward_model",
+    "orpo_beta": "training.orpo_beta",
+    "simpo_gamma": "training.simpo_gamma",
+    "cpo_alpha": "training.cpo_alpha",
+    "ipo_tau": "training.ipo_tau",
+    "bco_beta": "training.bco_beta",
+    "loraplus_lr_ratio": "training.loraplus_lr_ratio",
+    "use_dora": "training.lora.use_dora",
+    "use_galore": "training.use_galore",
+    "galore_rank": "training.galore_rank",
+    "moe_lora": "training.moe_lora",
+    "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
+    "embedding_loss": "training.embedding_loss",
+    "embedding_margin": "training.embedding_margin",
+    "embedding_pooling": "training.embedding_pooling",
+    "embedding_temperature": "training.embedding_temperature",
+    "neftune_alpha": "training.neftune_alpha",
+    "use_rslora": "training.lora.use_rslora",
+    "backend": "backend",
+}
+
+
 def _set_nested_param(config_dict: dict, key: str, value) -> dict:
     """Set a nested parameter in a config dict using dot notation.
 
     Supports keys like: lr, lora.r, training.epochs, etc.
     Maps common short names to their full paths.
     """
-    # Short name mappings
-    shortcuts = {
-        "lr": "training.lr",
-        "epochs": "training.epochs",
-        "batch_size": "training.batch_size",
-        "lora_r": "training.lora.r",
-        "lora_alpha": "training.lora.alpha",
-        "lora_dropout": "training.lora.dropout",
-        "quantization": "training.quantization",
-        "warmup_ratio": "training.warmup_ratio",
-        "weight_decay": "training.weight_decay",
-        "gradient_accumulation_steps": "training.gradient_accumulation_steps",
-        "max_grad_norm": "training.max_grad_norm",
-        "optimizer": "training.optimizer",
-        "scheduler": "training.scheduler",
-        "val_split": "data.val_split",
-        "max_length": "data.max_length",
-        "dpo_beta": "training.dpo_beta",
-        "kto_beta": "training.kto_beta",
-        "grpo_beta": "training.grpo_beta",
-        "num_generations": "training.num_generations",
-        "reward_fn": "training.reward_fn",
-        "ppo_epochs": "training.ppo_epochs",
-        "ppo_clip_ratio": "training.ppo_clip_ratio",
-        "ppo_kl_penalty": "training.ppo_kl_penalty",
-        "reward_model": "training.reward_model",
-        "orpo_beta": "training.orpo_beta",
-        "simpo_gamma": "training.simpo_gamma",
-        "cpo_alpha": "training.cpo_alpha",
-        "ipo_tau": "training.ipo_tau",
-        "bco_beta": "training.bco_beta",
-        "loraplus_lr_ratio": "training.loraplus_lr_ratio",
-        "use_dora": "training.lora.use_dora",
-        "use_galore": "training.use_galore",
-        "galore_rank": "training.galore_rank",
-        "moe_lora": "training.moe_lora",
-        "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
-        "embedding_loss": "training.embedding_loss",
-        "embedding_margin": "training.embedding_margin",
-        "embedding_pooling": "training.embedding_pooling",
-        "embedding_temperature": "training.embedding_temperature",
-        "neftune_alpha": "training.neftune_alpha",
-        "use_rslora": "training.lora.use_rslora",
-        "backend": "backend",
-    }
-
-    full_key = shortcuts.get(key, key)
+    full_key = _PARAM_SHORTCUTS.get(key, key)
     parts = full_key.split(".")
 
     obj = config_dict
@@ -554,6 +591,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         detect_device,
         get_gpu_info,
     )
+    from soup_cli.utils.launcher import is_in_distributed
+    from soup_cli.utils.run_provenance import (
+        BaseRevision,
+        base_revision_scope,
+        write_run_provenance,
+    )
 
     cfg = SoupConfig(**config_dict)
 
@@ -597,12 +640,33 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         # be a second, shorter chain that never grew past v0.40.0, so ten task
         # values and every `backend: mlx` config were trained as plain SFT here
         # while the tracker recorded the configured task.
-        trainer_wrapper = build_trainer(cfg, device=device)
-        trainer_wrapper.setup(dataset)
-
+        base_identity = BaseRevision(
+            cfg.base,
+            binding_supported=(
+                cfg.backend == "transformers" and cfg.training.hub == "hf"
+                and not is_in_distributed()
+            ),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, device=device)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
         # Train
         display = TrainingDisplay(cfg, device_name=device_name)
-        result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        with base_revision_scope(base_identity):
+            result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        write_run_provenance(result["output_dir"], base_identity.metadata(run_id))
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
         tracker.finish_run(
             run_id=run_id,
             initial_loss=result["initial_loss"],
