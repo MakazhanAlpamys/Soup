@@ -157,6 +157,33 @@ ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
+#### Vocabulary Expansion on MLX
+
+On `backend: mlx`, text SFT supports vocabulary expansion via `data.add_new_tokens` and
+`data.new_special_tokens` on dense models (`training.quantization: none`) with Llama-style
+architecture (`model.model.embed_tokens` and `model.lm_head`) matching tokenizer length ([#1994](https://github.com/MakazhanAlpamys/Soup/issues/1994)).
+
+The mechanism uses zero-allocation additive parameter slices rather than resizing the base
+embedding matrix in-place:
+- **Base weights frozen:** The base embedding table and LM head remain untouched and frozen.
+- **Registration order:** Special tokens are registered first to ensure semantic precedence,
+  whereas `backend: transformers` (`apply_vocab_expansion`) registers ordinary tokens first.
+- **Additive slice:** Only a new weight matrix $\Delta V \times D$ is allocated and registered
+  as trainable parameters with the optimizer, initialized with a normal distribution
+  matching the base embedding's standard deviation and dtype. The draw is always seeded via
+  `resolve_training_seed` (defaulting to 42 when unset), which reseeds `mx.random.seed`
+  before initialization.
+- **Zero-allocation gather:** The forward pass computes base and extended embeddings separately
+  and merges them via `mx.where(is_new, new_out, base_out)`, avoiding concatenation of large
+  weight tensors.
+- **Memory footprint:** Minimal additional memory during training and on disk:
+  $\Delta V \times D \times \text{sizeof(dtype)}$ bytes for tied embeddings (doubled for untied models).
+  For example, adding 100 tokens to a 4096-dim bf16 model takes only 800 KB of parameters.
+- **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
+  of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
+  Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
+
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
