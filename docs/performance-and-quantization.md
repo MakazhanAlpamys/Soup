@@ -1706,8 +1706,9 @@ pip install "soup-cli[ring-attn]" # Ring FlashAttention (sequence parallelism)
 Measured gains depend on sequence length, checkpointing and the native SDPA
 backend. The [H200 curve](peft-and-efficiency.md#flashattention-and-liger-measurements)
 records five repetitions per feasible arm, clocks, process peaks and the
-shared-card OOM boundary. It complements the older H100 single-point
-measurement; neither figure is a universal speedup.
+shared-card OOM boundary. It complements the
+[older H100 single-point measurement](../benchmarks/gate-h100-validation.md);
+neither figure is a universal speedup.
 
 
 ## Live CUDA Batch-Size Probe

@@ -6,8 +6,8 @@
 
 **Contents:**
 
-- [LongLoRA Forward Override](#longlora-forward-override)
 - [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
+- [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
 - [LLaMA Pro Block Expansion](#llama-pro-block-expansion)
@@ -83,8 +83,9 @@ verdict uses, not directly comparable to `soup eval` absolute numbers.
 ## FlashAttention and Liger measurements
 
 The [H200 sequence/checkpointing sweep](../benchmarks/flash-liger-h200-2026-11-10.md)
-extends the earlier single H100 point with independently varied sequence length
-and model checkpointing. Llama-3.1-8B, BF16 resident LoRA r16, batch4; five fresh
+extends the [earlier single H100 point](../benchmarks/gate-h100-validation.md)
+with independently varied sequence length and model checkpointing.
+Llama-3.1-8B, BF16 resident LoRA r16, batch 4; five fresh
 interleaved processes per feasible arm, each with five warm-up and 80 measured
 updates. These are synchronized training-step throughput ratios to SDPA, not
 end-to-end CLI speedups. All arms use the same realized tokens and labels.
@@ -102,7 +103,7 @@ end-to-end CLI speedups. All arms use the same realized tokens and labels.
 
 Read exact peaks, run ranges, SM clocks and the full recipe in the record.
 The native SDPA baseline already executed cuDNN flash attention. On this stack
-(torch2.14.1/CUDA13.0, FA2 2.8.3.post2, Liger0.8.5), standalone FA2 was slower;
+(torch 2.14.1/CUDA 13.0, FA2 2.8.3.post2, Liger 0.8.5), standalone FA2 was slower;
 Liger alone was faster than either SDPA or the combined arm at every feasible
 point. Both observations are scoped to this workload. They do not establish
 held-out quality equivalence or a universal preference for either library.
@@ -113,6 +114,8 @@ those cells have no timing ratio. This is not a dedicated-card capacity limit.
 The record retains all eight probe OOMs and their 40 unrun timing slots, all
 120 successful timings and every activation probe. No model/config defaults
 were changed to obtain the curve.
+
+---
 
 ## LongLoRA Forward Override
 
