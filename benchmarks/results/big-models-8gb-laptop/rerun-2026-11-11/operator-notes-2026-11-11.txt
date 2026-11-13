@@ -1,0 +1,70 @@
+Operator's notes of the 2026-11-11 window, excerpts. Times UTC unless a line says local time (local = UTC+5).
+These are the operator's statements, not instrument output: they are the facts that section 13 of the record
+states and that no other file in this folder shows. Wording is kept except that paths, program names and
+internal labels are replaced. Free-memory figures are Win32 kilobyte counts divided by 1,048,576 (GiB),
+printed with a decimal comma by the machine's locale in the wait files and with a point here.
+
+Pre-checks before the first run (14:10:53):
+  AC power: BatteryStatus true, PowerLineStatus Online.
+  nvidia-smi: RTX 5070 Laptop GPU, driver 616.92, memory.used 0 MiB, memory.total 8151 MiB.
+  Free RAM 13.3; free disk space on the data volume 768 GB.
+  No python process of this work was running; the python processes present belonged to other programs.
+  Environment: Windows 11 Pro 10.0.26200, base Python 3.12.10, torch 2.14.0+cu130, soup_cli 0.77.2 imported
+  from the integration tree, cuda_available True.
+  Tree: HEAD ee4cc5d208127bad7c50c4228516a033f36725dd on the local integration branch, git status --short empty.
+
+Shard stores at the start of the window:
+  Mistral Large: import summary of 2026-11-10 in import-summary-mistral123.json (import_verified true,
+  standalone_verified true, 2,645 tensors, 64,449,162,720 B).
+  Qwen3-32B: the store's summary says the verified flags are true, 2,053 tensors, 19,211,023,168 B (summary
+  not copied).
+
+Qwen3-32B, 128 tokens: start 14:12:34, end 14:14:01. Free RAM 11.5 before the run, 11.9 after.
+
+Mistral Large, 128 tokens, first attempt:
+  Pre-launch check 14:21:5x: AC True, GPU 0 MiB, free RAM 10.4 (waited from 8.3-9.4 until at least 10; another
+  process on the machine had taken about 3 while nothing of this work ran), no python process of this work.
+  Start 14:21:58. At 14:22:36 a python process of another GPU job was created; it appeared in the list of
+  compute processes next to the run's own process. Whole-device use: 2,732 MiB (19:22:40 local), 7,159
+  (19:22:50), 7,807 (19:23:01), 7,875 flat until the stop (see discarded-attempt-gpu-mistral123-128.csv).
+  Host free RAM fell to 0.8 in the operator's reading (the host-memory file of the attempt shows a lowest
+  sampled value of 0.37); the run's working set was 7.67 and the other job's python 4.47.
+  14:26:11: only the run's own process was stopped (checked: its command line, its parent was the driver).
+  The other job's process was not touched. After the stop, memory.used was 5,952 to 6,132 MiB with only the
+  other job's process listed.
+
+Mistral Large, 128 tokens, retry:
+  Pre-check 14:27:44: AC=True, GPU used=0 MiB, free RAM=11.4, no python process of this work, no python
+  process of another job; PRECHECK: OK. Start 14:27:57. A watcher reported any new GPU process that was not
+  the run's own; it printed nothing during the run.
+
+Mistral Large, 512 tokens:
+  First pre-check 14:34:17: AC=True, GPU used=114 MiB, free RAM=10.6, one python process of another job
+  (created 14:34:01, 0.75 in working set); PRECHECK: NOT OK; not launched. That job reached about 6.1 of GPU
+  memory by 14:34:36.
+  Waiting 14:34:52 to 14:39:46 (wait-checks-mistral123-512.txt): other jobs started at 14:34:01 and 14:37:57.
+  Launch only when GPU used < 300 MiB, no python of another job, AC online and free RAM at least 10 on two
+  consecutive checks 30 s apart. Pre-launch 14:39:4x: AC=True, GPU used=0 MiB, free RAM=12.4; PRECHECK: OK.
+  Start 14:39:46. The watcher printed no line for another GPU process after the launch; its interval is 10 s,
+  so a process shorter than that is not excluded.
+
+Other GPU jobs on the device around the window (each held about 6 to 7 GiB of GPU memory): process starts at
+  14:22:36, 14:34:01, 14:37:57, 14:45:38, about 14:57 and about 15:07.
+
+Earlier-runner Qwen3-32B reload-only run:
+  First attempt 14:46:16 refused by its pre-check (GPU used 6,102 MiB; a python process of another job
+  created 14:45:38). Waiting about 14:48 to 15:00 (wait-checks-earlier-runner-q32-reload.txt); launched
+  15:00:10 after a final pre-check OK.
+  Worker result file, as quoted in the notes: tolerance "bit-exact", result.fresh_process_exact true,
+  heldout_reloaded[0].loss 4.298623561859131, adapter SHA-256 printed as 88aa4279...eb614b048, elapsed_seconds
+  132.2.
+
+Earlier-runner Qwen3-32B repeat 2: waiting 15:05:48 to 15:15:48 and gave up (wait-checks-earlier-runner-q32-
+  repeat2.txt): from 15:09 another GPU job held 6.6 to 7.1 GiB for 12 consecutive checks and free
+  RAM fell to 5.9-6.5, below the wrapper's 8 stop line. Repeat 3: not run (same conditions).
+  Mistral 128 and 512 through the earlier wrappers: not run; the earlier harness's reproduction notes estimate
+  45 and 50 minutes.
+
+Between the runs another process on the machine consumed 3 to 6 GiB of RAM.
+
+Final state at 15:16: nothing of this work running; tree HEAD unchanged, git status --short empty.

@@ -1,5 +1,8 @@
 """Rich live training dashboard in the terminal."""
 
+import math
+import time
+from datetime import datetime, timedelta
 from typing import Any, Mapping, Optional
 
 from rich.console import Console
@@ -10,6 +13,42 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.monitoring.reward_collapse import reward_group_fraction
 
 console = Console()
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Accept measured numbers, excluding booleans and unrepresentable integers."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def format_eta(step: Any, total_steps: Any, speed: Any, now: datetime) -> str:
+    """Estimate remaining optimizer-step time at the latest measured iterations/s.
+
+    ``now`` is the caller's local wall clock. Unknown inputs and estimates beyond
+    datetime's range hide the row; this is a projection, not a completion promise.
+    """
+    if not all(_is_finite_number(value) for value in (step, total_steps, speed)):
+        return ""
+    if total_steps <= 0 or step < 0 or speed <= 0:
+        return ""
+    try:
+        seconds = math.ceil(max(0, total_steps - step) / speed)
+        finish = now + timedelta(seconds=seconds)
+    except (OverflowError, ValueError):
+        return ""
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        duration = f"{hours}h {minutes}m {seconds}s"
+    elif minutes:
+        duration = f"{minutes}m {seconds}s"
+    else:
+        duration = f"{seconds}s"
+    return f"Remaining: {duration} | Estimated finish (local): {finish:%Y-%m-%d %H:%M:%S}"
 
 
 def format_gate_row(state: Optional[Mapping[str, Any]]) -> str:
@@ -70,6 +109,7 @@ class TrainingDisplay:
         self.grad_norm: Optional[float] = None
         self.gpu_mem = ""
         self.speed = 0.0
+        self._speed_baseline: tuple[int, float] | None = None
         #: None until an evaluation actually runs. Its own series --
         #: never folded into `self.loss`, which is the training curve.
         self.val_loss = None
@@ -83,6 +123,7 @@ class TrainingDisplay:
         """Start the live display."""
         self.total_steps = total_steps
         self.frac_reward_zero_std = None
+        self._speed_baseline = None
         self._live = Live(self._render(), console=console, refresh_per_second=2)
         self._live.start()
 
@@ -94,6 +135,14 @@ class TrainingDisplay:
         self.lr = lr
         self.grad_norm = kwargs.get("grad_norm")
         self.speed = kwargs.get("speed", 0.0)
+        if _is_finite_number(step) and step >= 0:
+            now = time.monotonic()
+            if self._speed_baseline is None or step < self._speed_baseline[0]:
+                self._speed_baseline = (step, now)
+            first_step, first_time = self._speed_baseline
+            if not _is_finite_number(self.speed) or self.speed <= 0:
+                if step > first_step and now > first_time:
+                    self.speed = (step - first_step) / (now - first_time)
         self.gpu_mem = kwargs.get("gpu_mem", "")
         # Sticky: an evaluation happens every N steps, so the last
         # measured value stays on screen between evaluations rather
@@ -117,8 +166,9 @@ class TrainingDisplay:
 
     def _render(self) -> Panel:
         """Render the dashboard panel."""
-        if self.total_steps > 0:
-            progress_pct = self.current_step / self.total_steps * 100
+        if (_is_finite_number(self.total_steps) and self.total_steps > 0
+                and _is_finite_number(self.current_step)):
+            progress_pct = min(100, max(0, self.current_step / self.total_steps * 100))
         else:
             progress_pct = 0
         bar_width = 30
@@ -140,8 +190,11 @@ class TrainingDisplay:
             lines.append(f"Val reward: {self.val_reward:.4f}")
         if getattr(self.config, "task", None) == "grpo" and self.frac_reward_zero_std is not None:
             lines.append(f"Zero-spread groups: {self.frac_reward_zero_std:.1%}")
-        if self.speed > 0:
+        if _is_finite_number(self.speed) and self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
+        eta = format_eta(self.current_step, self.total_steps, self.speed, datetime.now())
+        if eta:
+            lines.append(eta)
         if self.gpu_mem:
             lines.append(f"GPU peak: {self.gpu_mem}")
         if self.grad_norm is not None:
