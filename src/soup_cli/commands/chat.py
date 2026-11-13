@@ -259,9 +259,10 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load model and tokenizer. Supports LoRA adapters and full models."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+    from soup_cli.utils.kimi_k2 import load_resident_model
 
     device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
@@ -276,21 +277,27 @@ def _load_model(
         from peft import PeftModel
 
         console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
-        base = AutoModelForCausalLM.from_pretrained(
+        base = load_resident_model(
             base_model,
-            trust_remote_code=trust_remote_code,
-            device_map=device_map,
-            dtype=torch_dtype,
+            model_kwargs={
+                "trust_remote_code": trust_remote_code,
+                "device_map": device_map,
+                "dtype": torch_dtype,
+            },
+            console=console,
         )
         console.print(f"[dim]Loading LoRA adapter: {for_terminal(model_path)}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
         console.print(f"[dim]Loading model: {for_terminal(model_path)}...[/]")
-        model_obj = AutoModelForCausalLM.from_pretrained(
+        model_obj = load_resident_model(
             model_path,
-            trust_remote_code=trust_remote_code,
-            device_map=device_map,
-            dtype=torch_dtype,
+            model_kwargs={
+                "trust_remote_code": trust_remote_code,
+                "device_map": device_map,
+                "dtype": torch_dtype,
+            },
+            console=console,
         )
 
     model_obj.eval()

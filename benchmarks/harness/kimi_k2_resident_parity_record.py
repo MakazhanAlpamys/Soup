@@ -311,7 +311,7 @@ def _download_pinned_code(destination: Path) -> dict:
 def _record() -> None:
     helper = _load_helper()
     work = Path(tempfile.mkdtemp(prefix="kimi-k2-resident-parity-"))
-    checkpoints = helper.build_tiny_k2_checkpoints(work / "checkpoints")
+    checkpoints = helper.build_tiny_k2_checkpoints(work / "checkpoints", use_reference_weights=True)
     k2_bf16 = Path(checkpoints["bf16"][0])
     config_sha256 = _sha256(k2_bf16 / "config.json")
 
@@ -405,6 +405,14 @@ def _record() -> None:
             "path": "<tiny k2-bf16 folder>/config.json (tests/kimi_k2_tiny.py _tiny_k2_raw())",
             "sha256": config_sha256,
         },
+        "reference_checkpoint": {
+            "path": "tests/fixtures/kimi_k2/resident_reference.safetensors.xz.b85",
+            "sha256": helper.REFERENCE_CHECKPOINT_SHA256,
+            "provenance": (
+                "Reconstructed on the original x86 software stack; its logits reproduce "
+                "the recorded fixtures. The original checkpoint hash was not recorded."
+            ),
+        },
         "recording_env": versions,
         "transformers_pin": transformers_pin,
         "inputs": {
@@ -436,6 +444,10 @@ def _check() -> None:
             "python benchmarks/harness/kimi_k2_resident_parity_record.py"
         )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    helper = _load_helper()
+    if manifest["reference_checkpoint"]["sha256"] != helper.REFERENCE_CHECKPOINT_SHA256:
+        raise SystemExit("reference checkpoint pin disagrees with the manifest")
+    helper.reference_checkpoint_bytes()
     failures = []
     fixtures_sha = _sha256(FIXTURES_NPZ)
     if manifest["fixtures"]["sha256"] != fixtures_sha:

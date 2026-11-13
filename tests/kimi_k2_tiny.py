@@ -185,8 +185,28 @@ def _fp8_harness():
     return module
 
 
-def build_tiny_k2_checkpoints(root):
-    """``{"bf16": (K2 folder, resident folder), "fp8": (...)}``: the same seeded weights.
+REFERENCE_CHECKPOINT = (
+    Path(__file__).parent / "fixtures" / "kimi_k2" / "resident_reference.safetensors.xz.b85"
+)
+REFERENCE_CHECKPOINT_SHA256 = (
+    "6f05521e442a126c59b8ffee6ccd21865b334b53d271f5fabcf04e2d61597042"
+)
+
+
+def reference_checkpoint_bytes():
+    """Reconstructed x86 checkpoint whose logits reproduce the recorded reference."""
+    import base64
+    import hashlib
+    import lzma
+
+    data = lzma.decompress(base64.b85decode(REFERENCE_CHECKPOINT.read_bytes().strip()))
+    if hashlib.sha256(data).hexdigest() != REFERENCE_CHECKPOINT_SHA256:
+        raise ValueError("resident reference checkpoint sha256 does not match its pin")
+    return data
+
+
+def build_tiny_k2_checkpoints(root, *, use_reference_weights=False):
+    """``{"bf16": (K2 folder, resident folder), "fp8": (...)}``: the same weights.
 
     Seeded ``torch.manual_seed(11)`` fp32 ``DeepseekV3ForCausalLM`` on
     :func:`_native_tiny_config`, ``e_score_correction_bias`` re-seeded with
@@ -196,9 +216,12 @@ def build_tiny_k2_checkpoints(root):
     ``.py`` file. The FP8 copy is written by ``fp8_block_quantize.py`` (block 16 x 32), and
     the fourth folder dequantises that copy through the independent block loop in
     ``tests/test_fp8_block_streaming.py``.
+
+    ``use_reference_weights`` replaces the seeded initialisation with the pinned
+    checkpoint for comparisons against recorded outputs across CPU architectures.
     """
     import torch
-    from safetensors.torch import load_file, save_file
+    from safetensors.torch import load, load_file, save_file
     from transformers import DeepseekV3ForCausalLM
 
     from tests.test_fp8_block_streaming import _reference_dequant
@@ -216,6 +239,12 @@ def build_tiny_k2_checkpoints(root):
     native = os.path.join(root, "native-bf16")
     model.save_pretrained(native)
     state = load_file(os.path.join(native, "model.safetensors"))
+    if use_reference_weights:
+        state = {
+            key: value for key, value in load(reference_checkpoint_bytes()).items()
+            if not key.endswith(_STALE_INV_FREQ)
+        }
+        save_file(state, os.path.join(native, "model.safetensors"), metadata={"format": "pt"})
     # The real index's per-expert spelling, which the sharder stacks.
     assert "model.layers.1.mlp.experts.0.gate_proj.weight" in state
     stale = {

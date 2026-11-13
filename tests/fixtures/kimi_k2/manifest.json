@@ -39,6 +39,11 @@
     "path": "<tiny k2-bf16 folder>/config.json (tests/kimi_k2_tiny.py _tiny_k2_raw())",
     "sha256": "21d64a11d303bcc86dfc744bfcd62485150f3779610f67b2cb121fb9488b1260"
   },
+  "reference_checkpoint": {
+    "path": "tests/fixtures/kimi_k2/resident_reference.safetensors.xz.b85",
+    "sha256": "6f05521e442a126c59b8ffee6ccd21865b334b53d271f5fabcf04e2d61597042",
+    "provenance": "Reconstructed on the original x86 software stack; its logits reproduce the recorded fixtures. The original checkpoint hash was not recorded."
+  },
   "recording_env": {
     "python": "3.12.3",
     "torch": "2.15.0+cpu",

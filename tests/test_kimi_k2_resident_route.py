@@ -299,24 +299,17 @@ def _reference_dequant(weight_fp8, scale_inv, block):
 
 @pytest.fixture(scope="module")
 def resident_checkpoints(tmp_path_factory):
-    """{"k2-bf16", "k2-fp8", "native"}: the same seeded weights, three spellings."""
+    """{"k2-bf16", "k2-fp8", "native"}: one committed checkpoint, three spellings."""
     torch = pytest.importorskip("torch")
-    from safetensors.torch import load_file, save_file
-    from transformers import DeepseekV3ForCausalLM
+    from safetensors.torch import load, save_file
+
+    from tests.kimi_k2_tiny import reference_checkpoint_bytes
 
     root = tmp_path_factory.mktemp("kimi-k2-resident")
-    torch.manual_seed(11)
-    model = DeepseekV3ForCausalLM(_native_tiny_config()).to(torch.float32).eval()
-    generator = torch.Generator().manual_seed(23)
-    with torch.no_grad():
-        for layer in model.model.layers[1:]:
-            bias = layer.mlp.gate.e_score_correction_bias
-            bias.copy_(torch.randn(bias.shape, generator=generator) * 2.0)
-        for parameter in model.parameters():
-            parameter.data = parameter.data.to(torch.bfloat16)
     native = root / "native"
-    model.save_pretrained(str(native))
-    state = load_file(str(native / "model.safetensors"))
+    _native_tiny_config().save_pretrained(str(native))
+    state = load(reference_checkpoint_bytes())
+    save_file(state, str(native / "model.safetensors"), metadata={"format": "pt"})
     stale = {
         f"model.layers.{idx}.{_STALE_INV_FREQ}": torch.full((7,), _STALE_VALUE).to(torch.bfloat16)
         for idx in range(_TINY["num_hidden_layers"])
@@ -427,6 +420,25 @@ def test_resident_model_of_the_fp8_copy_dequantises_like_the_independent_referen
     # FP8-block weight quantisation noise through three bf16 layers: measured max delta
     # 0.021 against logits of abs max ~0.58 (K2's sigmoid scoring keeps logits small).
     assert (got - want).abs().max() < 5e-2
+
+
+def test_dequantised_resident_model_saves_and_reloads_without_fp8_metadata(
+    tmp_path, resident_checkpoints
+):
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    model = load_resident_model(
+        resident_checkpoints["k2-fp8"], model_kwargs={"dtype": torch.float32}
+    )
+    model.save_pretrained(tmp_path)
+    config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert "quantization_config" not in config
+    loaded = AutoModelForCausalLM.from_pretrained(tmp_path, dtype=torch.float32)
+    for key, tensor in model.state_dict().items():
+        assert torch.equal(tensor, loaded.state_dict()[key]), key
 
 
 def test_resident_model_refuses_an_fp8_weight_missing_its_scale(tmp_path, resident_checkpoints):
@@ -669,8 +681,12 @@ def test_resident_model_keeps_float_buffers_at_their_stored_dtype(resident_check
     assert logits.shape == (2, 12, 128)
 
 
-@pytest.mark.parametrize("head_in_shards", [False, True], ids=["head-dropped", "head-shipped"])
-def test_resident_model_loads_a_tied_checkpoint(tmp_path, head_in_shards):
+@pytest.mark.parametrize(
+    ("head_in_shards", "mismatch"),
+    [(False, False), (True, False), (True, True)],
+    ids=["head-dropped", "head-shipped", "head-mismatched"],
+)
+def test_resident_model_loads_a_tied_checkpoint(tmp_path, head_in_shards, mismatch):
     import torch
     from safetensors.torch import load_file, save_file
     from transformers import DeepseekV3ForCausalLM
@@ -693,13 +709,18 @@ def test_resident_model_loads_a_tied_checkpoint(tmp_path, head_in_shards):
     if head_in_shards:
         # A copy, not the same storage: save_file refuses tensors that share memory.
         state["lm_head.weight"] = state["model.embed_tokens.weight"].clone()
+        if mismatch:
+            state["lm_head.weight"][0, 0] += 1
     save_file(state, str(tied / "model.safetensors"), metadata={"format": "pt"})
     (tied / "config.json").write_text(
         json.dumps(dict(_MINIMAL_K2, tie_word_embeddings=True)), encoding="utf-8"
     )
 
+    if mismatch:
+        with pytest.raises(ValueError, match="declares tie_word_embeddings"):
+            load_resident_model(str(tied), model_kwargs={"dtype": torch.float32})
+        return
     loaded = load_resident_model(str(tied), model_kwargs={"dtype": torch.float32})
-    assert loaded.lm_head.weight is loaded.model.embed_tokens.weight
     ids = _ids(torch)
     with torch.no_grad():
         logits = loaded(ids).logits
@@ -1646,17 +1667,18 @@ def test_resident_model_forwards_the_revision_on_the_hub_path(
     _stub_cache_free_bytes(monkeypatch, 10_000_000_000_000)
     monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
     monkeypatch.setattr(kimi_k2, "load_resident_model_config", fake_config_loader)
+    revision = "0123456789abcdef0123456789abcdef01234567"
     kimi_k2.load_resident_model(
         "moonshotai/Kimi-K2-Base",
-        model_kwargs={"dtype": torch.float32, "revision": "0123456789abcdef"},
+        model_kwargs={"dtype": torch.float32, "revision": revision},
     )
     assert seen["snapshot"][0] == "moonshotai/Kimi-K2-Base"
-    assert seen["snapshot"][1] == "0123456789abcdef"
+    assert seen["snapshot"][1] == revision
     assert "*.safetensors" in seen["snapshot"][2]
-    assert seen["config"] == ("moonshotai/Kimi-K2-Base", "0123456789abcdef")
+    assert seen["config"] == ("moonshotai/Kimi-K2-Base", revision)
 
 
-def _stub_hub_file_list(monkeypatch, files):
+def _stub_hub_file_list(monkeypatch, files, *, sha="0123456789abcdef0123456789abcdef01234567"):
     """``huggingface_hub.model_info`` stub: ``files`` maps repo filenames to byte sizes."""
     import huggingface_hub
 
@@ -1669,10 +1691,11 @@ def _stub_hub_file_list(monkeypatch, files):
         return type(
             "_Info",
             (),
-            {"siblings": [_Sibling(name, size) for name, size in files.items()]},
+            {"sha": sha, "siblings": [_Sibling(name, size) for name, size in files.items()]},
         )()
 
     monkeypatch.setattr(huggingface_hub, "model_info", fake_model_info)
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", False)
 
 
 def _stub_cache_free_bytes(monkeypatch, free_bytes):
@@ -1685,6 +1708,280 @@ def _stub_cache_free_bytes(monkeypatch, free_bytes):
         "disk_usage",
         lambda path: SimpleNamespace(total=free_bytes * 2, used=free_bytes, free=free_bytes),
     )
+
+
+def test_resident_model_uses_cached_snapshot_offline(monkeypatch, tmp_path, resident_checkpoints):
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--moonshotai--Kimi-K2-Base" / "snapshots" / revision
+    shutil.copytree(resident_checkpoints["k2-bf16"], snapshot)
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", True)
+
+    def no_metadata(*args, **kwargs):
+        raise AssertionError("offline load tried to fetch Hub metadata")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", no_metadata)
+    real_config_loader = kimi_k2.load_resident_model_config
+    monkeypatch.setattr(
+        kimi_k2,
+        "load_resident_model_config",
+        lambda *args, **kwargs: real_config_loader(resident_checkpoints["k2-bf16"]),
+    )
+    _stub_cache_free_bytes(monkeypatch, 0)
+
+    model = kimi_k2.load_resident_model(
+        "moonshotai/Kimi-K2-Base", model_kwargs={"dtype": torch.float32, "revision": revision}
+    )
+    assert model.config.model_type == "deepseek_v3"
+
+
+def test_resident_model_uses_cached_snapshot_on_hub_connection_failure(
+    monkeypatch, tmp_path, resident_checkpoints
+):
+    import huggingface_hub
+    import torch
+
+    try:
+        from httpx2 import ConnectError
+    except ImportError:
+        from httpx import ConnectError
+
+    from soup_cli.utils import kimi_k2
+
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--moonshotai--Kimi-K2-Base" / "snapshots" / revision
+    shutil.copytree(resident_checkpoints["k2-bf16"], snapshot)
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", False)
+
+    def disconnected(*args, **kwargs):
+        raise ConnectError("Hub unavailable")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", disconnected)
+    real_config_loader = kimi_k2.load_resident_model_config
+    monkeypatch.setattr(
+        kimi_k2,
+        "load_resident_model_config",
+        lambda *args, **kwargs: real_config_loader(resident_checkpoints["k2-bf16"]),
+    )
+    _stub_cache_free_bytes(monkeypatch, 0)
+    model = kimi_k2.load_resident_model(
+        "moonshotai/Kimi-K2-Base", model_kwargs={"dtype": torch.float32, "revision": revision}
+    )
+    assert model.config.model_type == "deepseek_v3"
+
+
+@pytest.mark.parametrize("outside_cache", [False, True])
+def test_resident_model_handles_hub_snapshot_links(
+    monkeypatch, tmp_path, resident_checkpoints, outside_cache
+):
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    cache = tmp_path / "hub"
+    repo_cache = cache / "models--moonshotai--Kimi-K2-Base"
+    snapshot = repo_cache / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    source = Path(resident_checkpoints["k2-bf16"])
+    shutil.copyfile(source / "config.json", snapshot / "config.json")
+    blob = (tmp_path if outside_cache else repo_cache / "blobs") / "checkpoint"
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / "model.safetensors", blob)
+    try:
+        (snapshot / "model.safetensors").symlink_to(blob)
+    except (OSError, NotImplementedError):
+        pytest.skip("creating symlinks is unavailable on this host")
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", True)
+    real_config_loader = kimi_k2.load_resident_model_config
+    monkeypatch.setattr(
+        kimi_k2,
+        "load_resident_model_config",
+        lambda *args, **kwargs: real_config_loader(str(source)),
+    )
+
+    if outside_cache:
+        with pytest.raises(ValueError, match="outside.*cache"):
+            kimi_k2.load_resident_model(
+                "moonshotai/Kimi-K2-Base", model_kwargs={"revision": revision}
+            )
+    else:
+        model = kimi_k2.load_resident_model(
+            "moonshotai/Kimi-K2-Base",
+            model_kwargs={"dtype": torch.float32, "revision": revision},
+        )
+        assert model.config.model_type == "deepseek_v3"
+
+
+@pytest.mark.parametrize(("free", "fits"), [(200, True), (199, False)])
+def test_resident_model_counts_only_missing_hub_files(
+    monkeypatch, tmp_path, resident_checkpoints, free, fits
+):
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--moonshotai--Kimi-K2-Base" / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model-00001-of-00002.safetensors").write_bytes(b"cached")
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    _stub_hub_file_list(
+        monkeypatch,
+        {
+            "config.json": 2,
+            "model-00001-of-00002.safetensors": 6,
+            "model-00002-of-00002.safetensors": 200,
+        },
+    )
+    _stub_cache_free_bytes(monkeypatch, free)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "snapshot_download",
+        lambda **kwargs: resident_checkpoints["k2-bf16"],
+    )
+    real_config_loader = kimi_k2.load_resident_model_config
+    monkeypatch.setattr(
+        kimi_k2,
+        "load_resident_model_config",
+        lambda *args, **kwargs: real_config_loader(resident_checkpoints["k2-bf16"]),
+    )
+
+    if not fits:
+        with pytest.raises(OSError, match="needs 200 bytes.*only 199 bytes"):
+            kimi_k2.load_resident_model(
+                "moonshotai/Kimi-K2-Base",
+                model_kwargs={"dtype": torch.float32, "revision": revision},
+            )
+    else:
+        model = kimi_k2.load_resident_model(
+            "moonshotai/Kimi-K2-Base", model_kwargs={"dtype": torch.float32, "revision": revision}
+        )
+        assert model.config.model_type == "deepseek_v3"
+
+
+@pytest.mark.parametrize("symlinks_supported", [False, True])
+def test_resident_model_counts_reusable_hub_blobs(
+    monkeypatch, tmp_path, resident_checkpoints, symlinks_supported
+):
+    from types import SimpleNamespace
+
+    import huggingface_hub
+    import huggingface_hub.file_download
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    cache = tmp_path / "hub"
+    blob_hash = "a" * 64
+    blob = cache / "models--moonshotai--Kimi-K2-Base" / "blobs" / blob_hash
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"x")
+    revision = "b" * 40
+    sibling = SimpleNamespace(
+        rfilename="model.safetensors", size=1, blob_id="c" * 40,
+        lfs=SimpleNamespace(sha256=blob_hash),
+    )
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "model_info",
+        lambda *a, **kw: SimpleNamespace(sha=revision, siblings=[sibling]),
+    )
+    monkeypatch.setattr(
+        huggingface_hub.file_download, "are_symlinks_supported", lambda *a, **kw: symlinks_supported
+    )
+    _stub_cache_free_bytes(monkeypatch, 0)
+    monkeypatch.setattr(
+        huggingface_hub, "snapshot_download", lambda **kw: resident_checkpoints["k2-bf16"]
+    )
+    real_config_loader = kimi_k2.load_resident_model_config
+    monkeypatch.setattr(
+        kimi_k2,
+        "load_resident_model_config",
+        lambda *a, **kw: real_config_loader(resident_checkpoints["k2-bf16"]),
+    )
+    if symlinks_supported:
+        model = kimi_k2.load_resident_model(
+            "moonshotai/Kimi-K2-Base", model_kwargs={"dtype": torch.float32, "revision": revision}
+        )
+        assert model.config.model_type == "deepseek_v3"
+    else:
+        with pytest.raises(OSError, match="needs 1 bytes.*only 0 bytes"):
+            kimi_k2.load_resident_model(
+                "moonshotai/Kimi-K2-Base", model_kwargs={"revision": revision}
+            )
+
+
+def test_resident_model_pins_config_and_weights_to_the_same_hub_commit(
+    monkeypatch, resident_checkpoints
+):
+    import huggingface_hub
+    import torch
+
+    from soup_cli.utils import kimi_k2
+
+    sha = "b" * 40
+    _stub_hub_file_list(monkeypatch, {"model.safetensors": 1}, sha=sha)
+    _stub_cache_free_bytes(monkeypatch, 10)
+    seen = {}
+    real_config_loader = kimi_k2.load_resident_model_config
+
+    def config_loader(model_id, *, revision=None):
+        seen["config"] = revision
+        return real_config_loader(resident_checkpoints["k2-bf16"])
+
+    def snapshot(*, repo_id, revision=None, allow_patterns=None):
+        seen["weights"] = revision
+        return resident_checkpoints["k2-bf16"]
+
+    monkeypatch.setattr(kimi_k2, "load_resident_model_config", config_loader)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    kimi_k2.load_resident_model(
+        "moonshotai/Kimi-K2-Base", model_kwargs={"dtype": torch.float32, "revision": "main"}
+    )
+    assert seen == {"config": sha, "weights": sha}
+
+
+def test_resident_model_does_not_count_stale_branch_cache(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    from soup_cli.utils import kimi_k2
+
+    cache = tmp_path / "hub"
+    repo_cache = cache / "models--moonshotai--Kimi-K2-Base"
+    old_sha = "a" * 40
+    new_sha = "b" * 40
+    old_snapshot = repo_cache / "snapshots" / old_sha
+    old_snapshot.mkdir(parents=True)
+    (old_snapshot / "model.safetensors").write_bytes(b"a")
+    (repo_cache / "refs").mkdir()
+    (repo_cache / "refs" / "main").write_text(old_sha, encoding="utf-8")
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    _stub_hub_file_list(monkeypatch, {"model.safetensors": 1}, sha=new_sha)
+    _stub_cache_free_bytes(monkeypatch, 0)
+    monkeypatch.setattr(kimi_k2, "load_resident_model_config", lambda *args, **kwargs: object())
+
+    def no_download(**kwargs):
+        raise AssertionError("snapshot_download ran without enough free space")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", no_download)
+    with pytest.raises(OSError, match="needs 1 bytes.*only 0 bytes"):
+        kimi_k2.load_resident_model("moonshotai/Kimi-K2-Base", model_kwargs={"revision": "main"})
 
 
 def test_resident_model_proceeds_when_the_hub_files_fit_the_cache(
@@ -1729,14 +2026,16 @@ def test_resident_model_proceeds_when_the_hub_files_fit_the_cache(
     assert seen["snapshot"][0] == "moonshotai/Kimi-K2-Base"
 
 
-def test_resident_model_refuses_when_the_hub_files_exceed_the_cache(monkeypatch):
+def test_resident_model_refuses_when_the_hub_files_exceed_the_cache(monkeypatch, tmp_path):
     """Ask A (b): the pinned revision's files outsize the cache volume, so the route
     refuses before the first byte, naming the required bytes, the free bytes, and the
     cache directory."""
     import huggingface_hub
-    from huggingface_hub.constants import HF_HUB_CACHE
 
     from soup_cli.utils import kimi_k2
+
+    cache = (tmp_path / "hub").resolve()
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
 
     required = 5_000_000_000_000
     _stub_hub_file_list(
@@ -1762,27 +2061,33 @@ def test_resident_model_refuses_when_the_hub_files_exceed_the_cache(monkeypatch)
     message = str(caught.value)
     assert str(required + 10_000) in message  # the json is part of the fetch too
     assert str(required - 1) in message
-    assert str(HF_HUB_CACHE) in message
+    normalized_cache = os.path.normcase(os.path.normpath(str(cache))).replace("\\", "/")
+    normalized_message = os.path.normcase(os.path.normpath(message)).replace("\\", "/")
+    assert normalized_cache in normalized_message
     assert "moonshotai/Kimi-K2-Base" in message
 
 
 def test_resident_model_says_trust_remote_code_is_ignored_on_a_local_dir(
     resident_checkpoints, capsys
 ):
-    """Ask B: on a local directory the flag is accepted but the model load never runs the
-    directory's own code — one line says so, so nobody assumes it did (the tokenizer load
-    still honours the flag)."""
+    from io import StringIO
+
+    from rich.console import Console
+
     from soup_cli.utils.kimi_k2 import load_resident_model
 
+    output = StringIO()
+    console = Console(file=output, width=400, force_terminal=False)
     load_resident_model(
-        resident_checkpoints["k2-bf16"], model_kwargs={"trust_remote_code": True}
+        resident_checkpoints["k2-bf16"],
+        model_kwargs={"trust_remote_code": True},
+        console=console,
     )
-    lines = [
-        line for line in capsys.readouterr().out.splitlines() if "trust_remote_code" in line
-    ]
+    lines = [line for line in output.getvalue().splitlines() if "trust_remote_code" in line]
     assert len(lines) == 1
     assert "tokenizer" in lines[0]
     assert "resident" in lines[0]
+    assert "trust_remote_code" not in capsys.readouterr().out
 
 
 def test_resident_model_finds_a_scale_in_another_shard(tmp_path, resident_checkpoints):

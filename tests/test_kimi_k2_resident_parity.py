@@ -43,7 +43,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.kimi_k2_tiny import build_tiny_k2_checkpoints
+from tests.kimi_k2_tiny import (
+    REFERENCE_CHECKPOINT_SHA256,
+    build_tiny_k2_checkpoints,
+    reference_checkpoint_bytes,
+)
 from tests.test_kimi_k2_streaming import _refuse_remote_code
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "kimi_k2"
@@ -61,7 +65,7 @@ ATOL = 1e-6
 
 def _fixtures():
     if not FIXTURES_NPZ.exists() or not MANIFEST.exists():
-        pytest.skip(
+        raise AssertionError(
             "resident parity fixtures missing; record them with: python "
             "benchmarks/harness/kimi_k2_resident_parity_record.py"
         )
@@ -109,6 +113,8 @@ def test_the_fixtures_match_their_manifest():
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert manifest["modeling_deepseek.py"]["sha256"] == MODELING_SHA256
     assert manifest["fixtures"]["sha256"] == _sha256(FIXTURES_NPZ)
+    assert manifest["reference_checkpoint"]["sha256"] == REFERENCE_CHECKPOINT_SHA256
+    assert hashlib.sha256(reference_checkpoint_bytes()).hexdigest() == REFERENCE_CHECKPOINT_SHA256
     # The manifest mirrors the exact ids; the npz must agree, and both reference sets
     # (pristine bf16 source; the FP8 round trip the gate's FP8 cell references) must be
     # present and must DIFFER — identical arrays would mean the round trip was never run.
@@ -133,7 +139,7 @@ def test_the_resident_fp8_load_matches_k2s_own_remote_code(tmp_path, monkeypatch
     fixtures, manifest = _fixtures()
     _refuse_remote_code(monkeypatch)
 
-    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints")
+    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints", use_reference_weights=True)
     model = _load_resident(built["fp8"][0], torch)
     assert manifest["transformers_pin"], "manifest must record the validated transformers pin"
     for index, ids in enumerate(manifest["inputs"]["ids"]):
@@ -161,7 +167,7 @@ def test_the_resident_bf16_load_matches_k2s_own_remote_code(tmp_path, monkeypatc
     fixtures, manifest = _fixtures()
     _refuse_remote_code(monkeypatch)
 
-    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints")
+    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints", use_reference_weights=True)
     model = _load_resident(built["bf16"][0], torch)
     for index, ids in enumerate(manifest["inputs"]["ids"]):
         got = _final_logits(model, torch, ids)
@@ -192,7 +198,7 @@ def test_the_gate_comparison_is_live(tmp_path, monkeypatch, control):
     fixtures, manifest = _fixtures()
     _refuse_remote_code(monkeypatch)
 
-    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints")
+    built = build_tiny_k2_checkpoints(tmp_path / "checkpoints", use_reference_weights=True)
     if control == "default-rope":
         folder = tmp_path / "default-rope"
         shutil.copytree(built["fp8"][0], folder)

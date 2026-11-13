@@ -489,8 +489,9 @@ def _merge_adapter(
     """Merge LoRA adapter with base model."""
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
+    from soup_cli.utils.kimi_k2 import load_resident_model
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -512,12 +513,15 @@ def _merge_adapter(
         console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
     else:
         console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
-    model = AutoModelForCausalLM.from_pretrained(
+    model = load_resident_model(
         base_model,
-        dtype=torch.float16,
-        trust_remote_code=trc,
-        device_map="cpu",
-        **revision_kwargs,
+        model_kwargs={
+            "dtype": torch.float16,
+            "trust_remote_code": trc,
+            "device_map": "cpu",
+            **revision_kwargs,
+        },
+        console=console,
     )
 
     console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")

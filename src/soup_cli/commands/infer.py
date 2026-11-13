@@ -758,9 +758,10 @@ def _load_model(
     is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+    from soup_cli.utils.kimi_k2 import load_resident_model
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -810,19 +811,25 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        base_obj = AutoModelForCausalLM.from_pretrained(
+        base_obj = load_resident_model(
             base_model,
-            trust_remote_code=trc,
-            device_map=device_map,
-            dtype=torch_dtype,
+            model_kwargs={
+                "trust_remote_code": trc,
+                "device_map": device_map,
+                "dtype": torch_dtype,
+            },
+            console=console,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
-        model_obj = AutoModelForCausalLM.from_pretrained(
+        model_obj = load_resident_model(
             model_path,
-            trust_remote_code=trc,
-            device_map=device_map,
-            dtype=torch_dtype,
+            model_kwargs={
+                "trust_remote_code": trc,
+                "device_map": device_map,
+                "dtype": torch_dtype,
+            },
+            console=console,
         )
 
     model_obj.eval()

@@ -175,6 +175,16 @@ fixtures (`logits_i`) at the same pinned tolerance: max abs diff 8.9e-08 / 8.9e-
 6.0e-08, loss exact (inputs 0/1/2). This cell commits the pristine fixtures to a test —
 they are no longer evidenced only by the integrity difference check.
 
+**Cross-platform checkpoint pin (2026-11-13).** The original recorder kept logits but did
+not record the checkpoint's weight hash. A checkpoint reconstructed on the recorded x86
+software stack reproduces those logits to a maximum absolute difference of 8.9e-08. Its
+weights are now committed compressed and pinned by sha256 in the manifest; the parity
+tests and recorder use them instead of regenerating weights on each host. The original
+checkpoint's byte identity cannot be proved retrospectively. With PyTorch's default
+scalar CPU dispatch, regenerating from the same seed produced a different checkpoint
+and a first-input difference of 7.83e-05; using the pinned checkpoint passes the same
+`rtol=1e-5, atol=1e-6` gate on that dispatch. This is not a macOS hardware result.
+
 **Pristine-reference evidence (recorded, not a test cell).** transformers' own native
 `DeepseekV3ForCausalLM` on the current stack (5.22.2), fp32 on the pristine bf16 tiny
 checkpoint, was run against the bf16-source fixtures (`logits_i`) during this gate and

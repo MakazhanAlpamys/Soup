@@ -695,31 +695,64 @@ def _resident_torch_dtype(key: str, raw_dtype: str, torch: Any):
     )
 
 
-def _check_resident_hub_cache_space(repo_id: str, revision: str | None) -> None:
-    """Refuse before the first downloaded byte when the pinned revision's files do not fit
-    the HF cache volume (#2104).
+def _hub_connection_error(error: Exception) -> bool:
+    """Recognise the connection failures used by supported Hub HTTP transports."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    for module_name, names in (
+        ("httpx2", ("ConnectError", "TimeoutException")),
+        ("httpx", ("ConnectError", "TimeoutException")),
+        ("requests.exceptions", ("ConnectionError", "Timeout")),
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if any(isinstance(error, getattr(module, name)) for name in names):
+            return True
+    return False
 
-    ``snapshot_download`` would start fetching and fail only when the disk actually fills,
-    hours into a multi-TB K2 repository. This reads the repository's file metadata at the
-    pinned revision (no weights are transferred) and compares the total size of the files
-    the ``*.safetensors``/``*.json`` allow-pattern would fetch with the free space of the
-    cache volume, resolved exactly the way ``snapshot_download`` resolves its default
-    cache dir (``HF_HUB_CACHE``, expanded and resolved). The cache dir may not exist yet,
-    so the free space is read at its nearest existing ancestor, the same anchor
-    ``trainer/stream_setup.py`` uses for a prospective write.
-    """
+
+def _check_resident_hub_cache_space(repo_id: str, revision: str | None) -> str:
+    """Check the uncached files against free space and return their resolved revision."""
     from fnmatch import fnmatch
 
-    from huggingface_hub import model_info
+    from huggingface_hub import model_info, try_to_load_from_cache
     from huggingface_hub.constants import HF_HUB_CACHE
+    from huggingface_hub.file_download import are_symlinks_supported, repo_folder_name
 
     info = model_info(repo_id, revision=revision, files_metadata=True)
+    resolved_revision = info.sha
+    if not resolved_revision:
+        raise ValueError(f"resident Kimi K2 route: no revision returned for {repo_id!r}")
+    cache_dir = str(Path(HF_HUB_CACHE).expanduser().resolve())
+    blobs = os.path.join(cache_dir, repo_folder_name(repo_id=repo_id, repo_type="model"), "blobs")
     required = 0
     for sibling in info.siblings:
         name = sibling.rfilename
-        if fnmatch(name, "*.safetensors") or fnmatch(name, "*.json"):
-            required += sibling.size or 0  # non-LFS entries may carry no size
-    cache_dir = str(Path(HF_HUB_CACHE).expanduser().resolve())
+        if not (fnmatch(name, "*.safetensors") or fnmatch(name, "*.json")):
+            continue
+        cached = try_to_load_from_cache(
+            repo_id, name, cache_dir=cache_dir, revision=resolved_revision
+        )
+        if isinstance(cached, str):
+            continue
+        lfs = getattr(sibling, "lfs", None)
+        oid = lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)
+        oid = oid or getattr(sibling, "blob_id", None)
+        if (
+            isinstance(oid, str)
+            and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid)
+            and os.path.isfile(os.path.join(blobs, oid))
+            and os.path.getsize(os.path.join(blobs, oid)) == sibling.size
+            and are_symlinks_supported(cache_dir)
+        ):
+            continue
+        if sibling.size is None:
+            raise ValueError(f"resident Kimi K2 route: no file size for {name!r} in {repo_id!r}")
+        required += sibling.size
+    if not required:
+        return resolved_revision
     anchor = cache_dir
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
@@ -735,6 +768,7 @@ def _check_resident_hub_cache_space(repo_id: str, revision: str | None) -> None:
             "refusing before the first byte. Free space on that volume or point "
             "HF_HOME / HF_HUB_CACHE at a larger one."
         )
+    return resolved_revision
 
 
 def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
@@ -775,12 +809,10 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     buffers keep their exact dtype.
 
     A hub id's weights resolve through ``huggingface_hub.snapshot_download`` with the
-    safetensors/json allow-pattern — normal cache behaviour, same as transformers would
-    use; on first real use that is the user's explicit request to train K2 and may fetch
-    the full multi-TB repository. Before the first byte, the total size of the files that
-    call would fetch at the pinned revision is compared with the free space of the cache
-    volume (resolved as ``snapshot_download`` resolves its default cache dir) and the load
-    refuses, naming both figures, when they do not fit.
+    safetensors/json allow-pattern. Online, the sizes of files missing from the cache at
+    the resolved revision are compared with free cache space before downloading; a
+    refusal names both numbers and the cache directory. Offline, the cached snapshot is
+    used without requesting Hub metadata.
 
     The model is returned on the requested device in the requested dtype; train/eval mode
     is the caller's to set. No layer streaming is involved on this route: nothing here
@@ -804,14 +836,16 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     dtype = model_kwargs.pop("dtype", torch.bfloat16)
     device_map = model_kwargs.pop("device_map", None)
     trust_remote_code = model_kwargs.pop("trust_remote_code", None)
-    if trust_remote_code and os.path.isdir(os.path.realpath(os.path.expanduser(base))):
-        # The flag is honoured by the tokenizer load on this route, but the model load
-        # never runs a repository's code — on a local directory, whose own modeling files
-        # make the wrong assumption likeliest, say so in one line (#2104).
-        print(
+    if (
+        trust_remote_code
+        and console is not None
+        and os.path.isdir(os.path.realpath(os.path.expanduser(base)))
+    ):
+        console.print(
             "resident Kimi K2 route: trust_remote_code is set, but this route's model "
             "load ignores it — the guarded native loader never runs the directory's own "
-            "model code (the tokenizer load still honours the flag)."
+            "model code (the tokenizer load still honours the flag).",
+            markup=False,
         )
     attn_implementation = model_kwargs.pop("attn_implementation", None)
     if model_kwargs.pop("config", None) is not None:
@@ -832,18 +866,43 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
         )
 
     device = _resolve_resident_device(device_map, torch)
-
-    config = load_resident_model_config(base, revision=revision)
-
+    allowed_symlink_root = None
     if os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        config = load_resident_model_config(base, revision=revision)
         weights_dir = os.path.realpath(os.path.expanduser(base))
     else:
         from huggingface_hub import snapshot_download
+        from huggingface_hub.constants import HF_HUB_CACHE, HF_HUB_OFFLINE
+        from huggingface_hub.errors import LocalEntryNotFoundError
 
-        _check_resident_hub_cache_space(base, revision)
-        weights_dir = snapshot_download(
-            repo_id=base, revision=revision, allow_patterns=["*.safetensors", "*.json"],
-        )
+        allowed_symlink_root = HF_HUB_CACHE
+        weights_dir = None
+        if HF_HUB_OFFLINE:
+            weights_dir = snapshot_download(
+                repo_id=base, revision=revision, allow_patterns=["*.safetensors", "*.json"],
+                local_files_only=True,
+            )
+            resolved_revision = os.path.basename(os.path.normpath(weights_dir))
+        else:
+            try:
+                resolved_revision = _check_resident_hub_cache_space(base, revision)
+            except Exception as exc:
+                if not _hub_connection_error(exc):
+                    raise
+                try:
+                    weights_dir = snapshot_download(
+                        repo_id=base, revision=revision,
+                        allow_patterns=["*.safetensors", "*.json"], local_files_only=True,
+                    )
+                except LocalEntryNotFoundError:
+                    raise exc
+                resolved_revision = os.path.basename(os.path.normpath(weights_dir))
+        config = load_resident_model_config(base, revision=resolved_revision)
+        if weights_dir is None:
+            weights_dir = snapshot_download(
+                repo_id=base, revision=resolved_revision,
+                allow_patterns=["*.safetensors", "*.json"],
+            )
 
     from soup_cli.utils.fp8_block import (
         SUPPORTED_FP8_FORMAT,
@@ -860,7 +919,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     )
     from soup_cli.utils.safetensors_reader import read_header, read_into
 
-    shard_paths = _discover_safetensors(weights_dir)
+    shard_paths = _discover_safetensors(weights_dir, allowed_symlink_root=allowed_symlink_root)
     tensors = _read_source_tensors(shard_paths)
     try:
         plan = plan_fp8_block(quantization_config_of(config), tensors, arch="deepseek_v3")
@@ -870,6 +929,9 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
         if message.endswith(SUPPORTED_FP8_FORMAT):
             message = message[: -len(SUPPORTED_FP8_FORMAT)] + _FP8_RESIDENT_SUPPORT
         raise ValueError(message) from exc
+    if plan is not None:
+        # The saved model contains dequantised weights, not an FP8 checkpoint.
+        delattr(config, "quantization_config")
 
     # Every tensor's (file, byte range), canonical key, so an FP8 weight's scale is found
     # whether or not it sits in the same shard.
