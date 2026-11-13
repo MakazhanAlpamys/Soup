@@ -1,0 +1,14 @@
+1559 samples; busy = power > 300 W inside the cell's start..end
+cell | busy samples | median SM clock MHz | median power W | share of busy samples with each throttle reason bit
+A-r1-T | 118 | 2715 | 413 | {'sw_power_cap': 0.03}
+B-r1-T | 89 | 2700 | 445 | {'sw_power_cap': 0.84}
+C-r1-T | 89 | 2700 | 445 | {'sw_power_cap': 0.89}
+D-r1-T | 117 | 2730 | 410 | none
+A-r2-T | 119 | 2730 | 410 | {'sw_power_cap': 0.05}
+B-r2-T | 89 | 2700 | 445 | {'sw_power_cap': 0.85}
+C-r2-T | 89 | 2700 | 445 | {'sw_power_cap': 0.84}
+D-r2-T | 117 | 2730 | 409 | none
+A-r3-T | 119 | 2730 | 411 | {'sw_power_cap': 0.02}
+B-r3-T | 89 | 2700 | 445 | {'sw_power_cap': 0.87}
+C-r3-T | 89 | 2700 | 444 | {'sw_power_cap': 0.76}
+D-r3-T | 117 | 2730 | 412 | {'sw_power_cap': 0.01}

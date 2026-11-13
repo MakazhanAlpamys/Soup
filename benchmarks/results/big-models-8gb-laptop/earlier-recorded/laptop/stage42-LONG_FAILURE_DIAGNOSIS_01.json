@@ -1,0 +1,139 @@
+{
+  "status": "reviewed_environment_interruption_no_new_checkpoint",
+  "utc": "2026-11-04T16:22:53.030199+00:00",
+  "cause": "Windows sleep attributed to Button or Lid; guard timeout after resumption",
+  "sleep_utc": "2026-11-04T15:16:49.9578093Z",
+  "wake_utc": "2026-11-04T16:18:05.909286Z",
+  "guard": {
+    "outcome": "guard_stopped",
+    "failure": "overall_timeout",
+    "elapsed_s": 3790.2189999999828,
+    "worker_created_epoch": 1793809144.804666,
+    "cleanup": {
+      "tracked_children": {
+        "21176": 1793809144.8108037
+      },
+      "remaining_children": [],
+      "root_stopped": true,
+      "errors": []
+    },
+    "monitor_stopped": true
+  },
+  "observed_worker_outputs": {
+    "worker_directory_exists": false,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "new_step20_checkpoint_found": false
+  },
+  "canonical": {
+    "path": "<EXP>\\context_quality42\\results\\long-01\\001-train-015\\worker\\arm\\checkpoint-019",
+    "completed_steps": 19,
+    "manifest_sha256": "88c6e1192cd4348837c698cf455835e3512a2a2071b3896666754dbc1aea9034",
+    "state_sha256": "aaee1cfcbab6832840fe14da1475e8678e78c21282b66758205f76b8a949c764",
+    "state_bytes": 320495125,
+    "data_row_cursor": 24
+  },
+  "canonical_payload_rehashed": true,
+  "process_closure": [
+    {
+      "pid": 45272,
+      "created": 1793809144.804666,
+      "original_identity_alive": false
+    },
+    {
+      "pid": 21176,
+      "created": 1793809144.8108037,
+      "original_identity_alive": false
+    }
+  ],
+  "coordinator_and_wrapper_absent": [
+    9180,
+    47096
+  ],
+  "earlier_accepted_operation": {
+    "report": "<EXP>\\context_quality42\\results\\long-01\\001-train-015\\worker\\result.json",
+    "guard": "<EXP>\\context_quality42\\results\\long-01\\001-train-015\\guard",
+    "operation": {
+      "command": "train",
+      "start_step": 15,
+      "updates": 5
+    }
+  },
+  "power_now": {
+    "percent": 18,
+    "AC": false
+  },
+  "frozen_files": [
+    {
+      "path": "<EXP>\\context_quality42\\results\\recovery-02\\state.json",
+      "bytes": 385382,
+      "sha256": "c7b1b48cad2bfd33be87f5a683043bea08317895c34b470890db76707091eecc"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\state.json",
+      "bytes": 382556,
+      "sha256": "c2802145fa42529cb1e7cc37b69121937ca2557715be791bebc61fac24219627"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\recovery-02\\long-plan.json",
+      "bytes": 1191565,
+      "sha256": "b7df3f937c8684de3d965383f7d727c1cd25d97fae963df9bd444400e55273fa"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\ROOT_REFERENCE_RECOVERY_EXIT_01.json",
+      "bytes": 123,
+      "sha256": "e006180dfd03c947a29fe6194c553881a9b15fed3574e2bada67d7ecc716f3b8"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\LONG_FAILURE_POWER_EVENTS_01.json",
+      "bytes": 3912,
+      "sha256": "e79ae6c53564c423d584b8738d3809ecd4823903a45e3c85a5e13270183b7c1c"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\FIRST_LONG_CHUNK_REVIEW_01.json",
+      "bytes": 21886,
+      "sha256": "e41ca61cbd6d9f89415d57bdc1abf6b9cb77884db76ddb70dd23c83c286ca25e"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard-console.log",
+      "bytes": 3460,
+      "sha256": "e75ff108dce20d548316015f9d9de143747e447617104770dc5649d539c581f1"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\operation.json",
+      "bytes": 5994,
+      "sha256": "1f6ea2270c891b032c209843fa6c621d97dea3a8d7e6327612d396fb02dfa164"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\pins.json",
+      "bytes": 463351,
+      "sha256": "cb829115b71a710f595e34942c6ada67ab00b922c511e974c5e0de0f774201ea"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard\\input_pins.json",
+      "bytes": 463351,
+      "sha256": "cb829115b71a710f595e34942c6ada67ab00b922c511e974c5e0de0f774201ea"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard\\samples.jsonl",
+      "bytes": 1827,
+      "sha256": "ca7a2631067af1c6b8fb9a42a441f566dca527311821dfeca52584545a73ad8b"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "<EXP>\\context_quality42\\results\\long-01\\002-train-019\\guard\\summary.json",
+      "bytes": 3460,
+      "sha256": "e75ff108dce20d548316015f9d9de143747e447617104770dc5649d539c581f1"
+    }
+  ],
+  "next": "Preserve failed states and attempt. Prepare separately validated new continuation seeded only from accepted checkpoint19/cursor24; no automatic reset or promotion. Native tiny CPU window owned by stage33_import until closure confirmed."
+}
