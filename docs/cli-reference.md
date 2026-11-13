@@ -73,6 +73,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
+| [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
 | [`soup doctor`](#soup-doctor) | Check system dependencies, GPU, and compatibility. |
 | [`soup draft`](#soup-draft) | Train + measure a speculative-decoding draft model: distil your tuned model into a tiny draft, then serve it with --auto-spec (v0.71.33). |
 | [`soup drift-alarm`](#soup-drift-alarm) | Rolling-KL drift alarm on output-token distribution with optional Slack/Discord webhook (v0.63.0). |
@@ -1795,6 +1796,28 @@ Usage: `soup distill-prompt [OPTIONS]`
 | `--output`, `-o` | text | `distilled.jsonl` |  | Output JSONL path |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live preparation). |
 
+## `soup docs`
+
+Documentation search &amp; offline reference guides.
+
+Usage: `soup docs <command> [ARGS]...`
+
+Subcommands:
+
+- [`search`](#soup-docs-search)
+
+### `soup docs search`
+
+Search Soup documentation for flags, configs, training tasks, and guides.
+
+Usage: `soup docs search [OPTIONS] QUERY`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `QUERY` | text |  | yes | Search query (e.g. 'safetensors export') |
+| `--top-k`, `-k` | integer | `5` |  | Number of results to return |
+| `--format`, `-f` | text | `table` |  | Output format: 'table' (default) or 'json' |
+
 ## `soup doctor`
 
 Check system dependencies, GPU, and compatibility.
@@ -3432,12 +3455,7 @@ Usage: `soup runs clean [OPTIONS] [RUN_ID]`
 
 ### `soup runs compare`
 
-Compare two local training runs side by side. The summary includes stored dataset
-SHA-256 hashes. The config table shows differing paths and labels fields absent
-from one run as not stored. If either full config is unavailable, the command
-identifies that run and skips the config table. The evaluation table uses the
-latest stored score for each benchmark and shows the right-minus-left delta
-when both runs have a score.
+Compare two local training runs side by side. The summary includes stored dataset SHA-256 hashes and the Code commit and Code state startup observations. The config table shows differing paths and labels fields absent from one run as not stored. If either full config is unavailable, the command identifies that run and skips the config table. The evaluation table uses the latest stored score for each benchmark and shows the right-minus-left delta when both runs have a score.
 
 Usage: `soup runs compare RUN_1 RUN_2`
 

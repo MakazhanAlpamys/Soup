@@ -519,17 +519,144 @@ class MLXSFTTrainerWrapper:
         self._check_train_split_size(dataset)
         self._check_eval_steps_has_rows(dataset)
 
+        self._effective_rope_scaling = None
+        model_config_override = None
+        cfg = self.config
+        if cfg.training.rope_scaling_type is not None:
+            from soup_cli.utils.mlx_rope import resolve_mlx_rope_scaling
+
+            self._effective_rope_scaling, model_config_override = resolve_mlx_rope_scaling(
+                cfg.base, cfg.data.max_length, cfg.training.rope_scaling_type
+            )
+
         from soup_cli.utils.mlx import load_mlx_model
 
-        cfg = self.config
         console.print(f"[dim]Loading MLX model: {cfg.base}[/]")
         self.model, self.tokenizer = load_mlx_model(
-            cfg.base, quantization=cfg.training.quantization
+            cfg.base,
+            quantization=cfg.training.quantization,
+            model_config=model_config_override,
         )
+
+        if cfg.training.rope_scaling_type is not None:
+            import mlx.nn as nn
+
+            quantized_types = [
+                getattr(nn, "QuantizedLinear", ()),
+                getattr(nn, "QuantizedEmbedding", ()),
+            ]
+            try:
+                from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+                quantized_types.append(QuantizedSwitchLinear)
+            except ImportError:
+                pass
+            quantized_tuple = tuple(t for t in quantized_types if isinstance(t, type))
+            for name, mod in self.model.named_modules():
+                if isinstance(mod, quantized_tuple):
+                    raise ValueError(
+                        f"MLX RoPE scaling is not supported on a quantized base model: "
+                        f"layer {name!r} has quantized type {type(mod).__name__}. "
+                        "Use an unquantized base (training.quantization: none)."
+                    )
+
+            if self._effective_rope_scaling is not None:
+                expected_scale = 1.0 / self._effective_rope_scaling["factor"]
+                rope_scales = [
+                    float(module.scale)
+                    for _, module in self.model.named_modules()
+                    if isinstance(module, nn.RoPE)
+                ]
+                if not rope_scales:
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not contain rotary embedding "
+                        "(nn.RoPE) modules; cannot apply native MLX linear RoPE context extension."
+                    )
+                if any(abs(scale - expected_scale) > 1e-5 for scale in rope_scales):
+                    raise ValueError(
+                        f"Base checkpoint {cfg.base!r} does not apply native MLX RoPE scaling "
+                        f"(expected scale {expected_scale:.6g}, found {rope_scales}); "
+                        "model architecture may not support native linear RoPE scaling."
+                    )
+                console.print(
+                    f"[green]Long-context enabled:[/] RoPE {cfg.training.rope_scaling_type} "
+                    f"scaling to {cfg.data.max_length} tokens "
+                    f"(factor {self._effective_rope_scaling['factor']:.4g})"
+                )
+            else:
+                console.print(
+                    f"[dim]RoPE scaling ({cfg.training.rope_scaling_type}) requested but "
+                    f"data.max_length ({cfg.data.max_length}) <= base context length; "
+                    "unscaled native RoPE preserved.[/]"
+                )
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
         )
+        self._added_tokens = []
+        self._base_vocab_size = None
+        self._vocab_ext = None
+
+        has_new_tokens = bool(
+            getattr(cfg.data, "add_new_tokens", None)
+            or getattr(cfg.data, "new_special_tokens", None)
+        )
+        if has_new_tokens:
+            if cfg.training.quantization != "none":
+                raise ValueError(
+                    f"Vocabulary expansion is not supported with quantization="
+                    f"{cfg.training.quantization!r} on MLX: new tokens require unquantized "
+                    "embeddings (quantization='none')."
+                )
+            try:
+                import mlx.nn as nn
+
+                for mod in self.model.modules():
+                    if isinstance(
+                        mod,
+                        (
+                            getattr(nn, "QuantizedLinear", ()),
+                            getattr(nn, "QuantizedEmbedding", ()),
+                        ),
+                    ):
+                        raise ValueError(
+                            "Vocabulary expansion is not supported on a quantized MLX model: "
+                            "model contains quantized layers. Use an unquantized base model."
+                        )
+            except ImportError:
+                pass
+
+            inner = getattr(self.model, "model", self.model)
+            base_embed = getattr(inner, "embed_tokens", None)
+            hf_tok = getattr(self.tokenizer, "_tokenizer", self.tokenizer)
+            base_vocab_len = (
+                len(hf_tok)
+                if hasattr(hf_tok, "__len__")
+                else getattr(self.tokenizer, "vocab_size", 0)
+            )
+            if base_embed is not None and hasattr(base_embed, "weight"):
+                base_embed_rows = base_embed.weight.shape[0]
+                if base_vocab_len != base_embed_rows:
+                    raise ValueError(
+                        f"Tokenizer vocabulary size ({base_vocab_len}) does not match "
+                        f"base embedding table rows ({base_embed_rows}). MLX native vocabulary "
+                        "expansion requires unpadded embedding tables to maintain 1:1 token ID "
+                        "alignment."
+                    )
+            from soup_cli.utils.mlx_vocab import register_mlx_tokens
+
+            reg_result = register_mlx_tokens(self.tokenizer, cfg.data)
+            delta_v, added_list = reg_result
+            if delta_v > 0:
+                self._added_tokens = added_list
+                self._added_special_tokens = getattr(reg_result, "special_tokens", [])
+                self._added_regular_tokens = getattr(reg_result, "regular_tokens", [])
+                self._base_vocab_size = base_vocab_len
+                console.print(
+                    f"[green]MLX vocabulary expansion:[/] registered {delta_v} new token(s) "
+                    f"(base vocab: {base_vocab_len} -> {base_vocab_len + delta_v})"
+                )
+
         if cfg.data.format == "pre_tokenized":
             from soup_cli.trainer.mlx_pretokenized import PretokenizedDataset
 
@@ -550,6 +677,10 @@ class MLXSFTTrainerWrapper:
         without it every parameter is trainable and the saved "adapter" is
         actually a full fine-tune (172 tensors instead of ~64 LoRA weights).
         """
+        if getattr(self, "_applied_lora", False):
+            return
+        self._applied_lora = True
+
         from mlx_lm.tuner.utils import linear_to_lora_layers
 
         cfg = self.config
@@ -605,6 +736,26 @@ class MLXSFTTrainerWrapper:
             },
             **({"use_dora": True} if use_dora else {}),
         )
+        if getattr(self, "_added_tokens", None):
+            import mlx.core as mx
+            from mlx.utils import tree_flatten
+
+            from soup_cli.utils.mlx_vocab import attach_mlx_vocab_extension
+            from soup_cli.utils.seeding import resolve_training_seed
+
+            seed = resolve_training_seed(cfg.training)
+            is_tied, ext_embed, ext_head = attach_mlx_vocab_extension(
+                model, delta_v=len(self._added_tokens), seed=seed
+            )
+            self._vocab_ext = (is_tied, ext_embed, ext_head)
+            self._initial_new_weights = mx.array(ext_embed.new_weights)
+            if ext_head is not None:
+                self._initial_new_head_weights = mx.array(ext_head.new_weights)
+            self._initial_lora_weights = {
+                k: mx.array(v)
+                for k, v in tree_flatten(model.trainable_parameters())
+                if "lora" in k
+            }
 
     def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
         """Warm-start LoRA weights from a saved MLX checkpoint (#634).
@@ -1286,6 +1437,8 @@ class MLXSFTTrainerWrapper:
                        if eval_every is not None else {}),
                     "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
+                    **({"rope_scaling": self._effective_rope_scaling}
+                       if getattr(self, "_effective_rope_scaling", None) is not None else {}),
                     # #683: the EFFECTIVE masking, not a hardcoded False.
                     # `mask_prompt` stays upstream's meaning (a single masked
                     # prefix); `response_token_mask` is Soup's per-token mask,
@@ -1311,6 +1464,23 @@ class MLXSFTTrainerWrapper:
                 indent=2,
             )
         )
+
+        if getattr(self, "_vocab_ext", None):
+            from soup_cli.utils.mlx_vocab import save_expanded_vocab_artifact
+
+            is_tied, ext_embed, ext_head = self._vocab_ext
+            save_expanded_vocab_artifact(
+                output_dir=output_dir,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                base_vocab_size=self._base_vocab_size,
+                is_tied=is_tied,
+                added_tokens=self._added_tokens,
+                extended_embed=ext_embed,
+                extended_head=ext_head,
+                added_special_tokens=getattr(self, "_added_special_tokens", None),
+                added_regular_tokens=getattr(self, "_added_regular_tokens", None),
+            )
 
         loss_summary = summarize_training_loss(
             [{"loss": loss} for loss in captured.get("losses", [])]

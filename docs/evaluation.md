@@ -1247,6 +1247,17 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
+With `--rubric`, `soup eval judge` exits `1` before sending a request if a weight
+is non-finite or non-numeric. The error names the rubric, criterion and value.
+Weighted and aggregate means use an overflow-safe fallback when intermediate totals
+overflow; calculations whose totals stay finite retain their existing rounding.
+Zero or negative total weights keep the existing zero result. If a signed-weight
+mean is unrepresentable, the command skips that row with
+`Warning: judge failed for prompt: Weighted judge score must be finite`.
+It exits `1` if every row fails. In the SDK, `JudgeResults.compute()` raises
+`ValueError` for non-finite aggregate input. Ranking rubrics still ignore weights.
+Re-evaluate any previously saved scores affected by overflow before reusing them.
+
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
 `soup eval compare` reads results for the full run IDs resolved from its arguments.

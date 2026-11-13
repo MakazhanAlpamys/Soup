@@ -1133,6 +1133,12 @@ def train(
         console.print(f"[green]LR finder report written to:[/] {find_lr_output}")
         raise typer.Exit(0)
 
+    # Observe the launching directory before data/model setup can write artifacts.
+    # The config file's directory and Soup's installation may be other repositories.
+    from soup_cli.utils.code_revision import CodeRevision, capture_code_revision
+
+    code_revision = capture_code_revision() if not dry_run else CodeRevision()
+
     # Load & validate config
     console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
     cfg = load_config(
@@ -2050,6 +2056,9 @@ def train(
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
     tracker.record_training_data_hash(run_id, training_data_sha256)
+    tracker.record_code_revision(
+        run_id, commit=code_revision.commit, dirty=code_revision.dirty,
+    )
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
