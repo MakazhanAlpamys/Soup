@@ -50,24 +50,22 @@ IGNORE_INDEX = -100
 #: Keeps a batch from being "every question that starts with the same two words".
 DEFAULT_MIN_GROUP_TOKENS = 16
 
-#: Largest difference :func:`verify_prefix_tree_model` accepts between a
-#: prefix-tree row's logits and the ordinary batch's, as a fraction of the
-#: largest ordinary logit, by the model's floating dtype. The two layouts run
-#: the same arithmetic through kernels of different shapes, which are not
-#: bit-reproducible in half precision. Measured on an RTX 3050 with a random
-#: 12-layer Llama: 1.5e-2 to 1.9e-2 in bf16, 2.1e-3 to 2.3e-3 in fp16, 1.9e-6
-#: to 2.2e-6 in fp32, against 0.23 to 0.31 for positions left wrong on purpose.
-#: These are backstops; the comparison against that control decides first.
-VERIFY_NOISE_BY_DTYPE = {
-    "bfloat16": 8e-2,
-    "float16": 1e-2,
-    "float32": 1e-4,
-    "float64": 1e-9,
+#: A prefix-tree row's logits may differ from the ordinary batch's by this
+#: many times the model's own layout noise (the ordinary batch against the same
+#: examples run one at a time). See :func:`verify_prefix_tree_model`.
+VERIFY_NOISE_FACTOR = 4.0
+
+#: The smallest accepted difference, as a fraction of the largest logit, for a
+#: model whose layout noise measures as zero (CPU kernels often are exact).
+VERIFY_FLOOR_BY_DTYPE = {
+    "bfloat16": 4e-3,
+    "float16": 1e-3,
+    "float32": 1e-6,
+    "float64": 1e-12,
 }
 
-#: A row's error must be at most this fraction of each control's (positions left
-#: at the row index; the tree mask replaced by a plain causal one) to count as
-#: exact, whenever that control is itself above the noise.
+#: A row's error must be at most this fraction of what a deliberately wrong row
+#: produces (a plain causal mask; positions left at the row index).
 VERIFY_CONTROL_FRACTION = 0.25
 
 
@@ -593,16 +591,17 @@ class PrefixTreeCollator:
 class PrefixTreeVerdict:
     """:func:`verify_prefix_tree_model`'s measurement.
 
-    ``error``: largest absolute difference between the prefix-tree row's logits
-    and the ordinary batch's at the same tokens. ``scale``: largest ordinary
-    logit. ``control``: the same difference with every position left at its row
-    index (wrong on purpose); ``mask_control``: with the tree mask replaced by a
-    plain causal one, so branches see each other (wrong on purpose); each is
-    ``None`` if that run failed. ``mask``: the mask form that was checked
-    (``"bool"`` or ``"additive"``). ``noise``: the largest error accepted for
-    the model's dtype. ``decisive``: both controls stood clear of the noise, so
-    "exact" means the model told the right row from both wrong ones; when
-    False, only the noise bound was applied for the control that did not.
+    All differences are the largest absolute difference in logits, at the same
+    tokens, against the ordinary batch.
+
+    ``error``: the prefix-tree row. ``noise``: the same examples run one at a
+    time, i.e. two ORDINARY layouts of one computation, which is what this
+    model's arithmetic disagrees with itself by in its dtype. ``bound``: the
+    largest ``error`` accepted. ``control``: the row with every position left at
+    its row index; ``mask_control``: the row with a plain causal mask, so
+    branches see each other. Both wrong on purpose; ``None`` if the run failed.
+    ``scale``: the largest ordinary logit. ``mask``: the mask form checked.
+    ``reason``: empty when exact, else why not.
     """
 
     exact: bool
@@ -611,8 +610,9 @@ class PrefixTreeVerdict:
     control: Optional[float]
     mask: str
     noise: float = 0.0
-    decisive: bool = False
+    bound: float = 0.0
     mask_control: Optional[float] = None
+    reason: str = ""
 
     @property
     def relative_error(self) -> float:
@@ -633,7 +633,6 @@ def _verification_examples(vocab_size: int, seed: int) -> List[Tuple[List[int], 
         (system + document, 4),
         (system + document, 6),
         (system + tokens(3), 5),
-        (tokens(4), 3),
     ]:
         ids = prefix + tokens(answer)
         examples.append((ids, [IGNORE_INDEX] * len(prefix) + ids[len(prefix) :]))
@@ -644,12 +643,12 @@ def verify_prefix_tree_model(
     model: Any,
     *,
     pad_token_id: int,
+    examples: Optional[Sequence[Tuple[Sequence[int], Sequence[int]]]] = None,
     vocab_size: Optional[int] = None,
     additive_dtype: Any = None,
     seed: int = 0,
-    tolerance: Optional[float] = None,
 ) -> PrefixTreeVerdict:
-    """Run four short examples through ``model`` as an ordinary batch and as one
+    """Run a few examples through ``model`` as an ordinary batch and as one
     prefix-tree row, and compare the logits token by token.
 
     Nothing about the architecture is assumed by the trainer: a model that
@@ -657,23 +656,38 @@ def verify_prefix_tree_model(
     attention by row distance fails here, before a step is taken. No gradient
     is computed and the model's training mode is restored.
 
-    Exact means: the difference is within the dtype's noise
-    (``VERIFY_NOISE_BY_DTYPE``, or ``tolerance``, as a fraction of the largest
-    logit), and it is at most ``VERIFY_CONTROL_FRACTION`` of what each
-    deliberately wrong row produces, whenever that control is itself above the
-    noise. A model that handles the row wrongly lands near one of its own
-    controls, whatever the size of its logits.
+    ``examples`` should be real training examples (two or three that the
+    sampler put in one row). Half-precision arithmetic is not reproducible
+    across batch shapes, and on tokens a model was never trained on it can be
+    unstable enough to hide any difference: measured on an RTX 3050, a
+    pretrained Qwen2.5-0.5B given random tokens disagreed with itself by 0.10
+    to 1.05 of its logit range in bf16, against 1e-5 in fp32. Without
+    ``examples``, random tokens are used (fine in fp32 / fp64 and for tests).
+
+    Nothing is taken from a table. The model's own noise is measured (the
+    ordinary batch against the same examples one at a time) and the row must:
+
+    1. differ from the ordinary batch by no more than ``VERIFY_NOISE_FACTOR``
+       times that noise (or the dtype's floor, when the noise is zero);
+    2. differ by no more than ``VERIFY_CONTROL_FRACTION`` of what the plain
+       causal mask does, and that control must itself stand clear of the noise:
+       a model whose arithmetic cannot tell isolated examples from mixed ones
+       cannot be verified in this dtype and is refused;
+    3. likewise for wrong positions, when that control stands clear of the
+       noise (a model without positional information has nothing to get wrong).
     """
     import torch
 
-    if vocab_size is None:
-        vocab_size = int(getattr(getattr(model, "config", None), "vocab_size", 0) or 0)
-    if vocab_size <= 0:
-        raise ValueError("vocab_size is needed to build the verification tokens")
-    examples = _verification_examples(vocab_size, seed)
+    if examples is None:
+        if vocab_size is None:
+            vocab_size = int(getattr(getattr(model, "config", None), "vocab_size", 0) or 0)
+        if vocab_size <= 0:
+            raise ValueError("vocab_size is needed to build the verification tokens")
+        examples = _verification_examples(vocab_size, seed)
+    examples = [(list(ids), list(labels)) for ids, labels in examples]
+    if len(examples) < 2:
+        raise ValueError("at least two examples are needed to verify a prefix-tree row")
     rows = pack_prefix_tree(examples, max_tokens=sum(len(ids) for ids, _ in examples))
-    if len(rows) != 1 or len(rows[0]) >= rows[0].source_tokens:
-        raise RuntimeError("the verification examples did not form one shared tree")
     row = rows[0]
     packed = collate_prefix_tree(rows, pad_token_id=pad_token_id, additive_dtype=additive_dtype)
 
@@ -686,7 +700,7 @@ def verify_prefix_tree_model(
 
     # A streamed model's base weights are meta placeholders; its adapters are real.
     device = torch.device("cpu")
-    dtype_name = ""
+    dtype_name = "float32"
     found = False
     for candidate in model.parameters():
         if getattr(candidate, "is_meta", False):
@@ -697,8 +711,6 @@ def verify_prefix_tree_model(
         if candidate.is_floating_point():
             dtype_name = str(candidate.dtype).replace("torch.", "")
             break
-    if tolerance is None:
-        tolerance = VERIFY_NOISE_BY_DTYPE.get(dtype_name, VERIFY_NOISE_BY_DTYPE["float32"])
 
     def logits(**inputs: Any) -> Any:
         moved = {key: value.to(device) for key, value in inputs.items()}
@@ -717,12 +729,17 @@ def verify_prefix_tree_model(
     try:
         with torch.no_grad():
             plain = logits(input_ids=plain_ids, attention_mask=plain_mask)
-            tree = logits(
-                input_ids=packed["input_ids"],
-                attention_mask=packed["attention_mask"],
-                position_ids=packed["position_ids"],
+            noise = 0.0
+            for index, (ids, _labels) in enumerate(examples):
+                alone = logits(input_ids=torch.tensor([ids]))
+                noise = max(noise, float((alone[0] - plain[index, : len(ids)]).abs().max()))
+            error = difference(
+                logits(
+                    input_ids=packed["input_ids"],
+                    attention_mask=packed["attention_mask"],
+                    position_ids=packed["position_ids"],
+                )
             )
-            error = difference(tree)
 
             def wrong(**changed: Any) -> Optional[float]:
                 inputs = {
@@ -749,22 +766,44 @@ def verify_prefix_tree_model(
     scale = max(
         float(plain[index, : len(ids)].abs().max()) for index, (ids, _l) in enumerate(examples)
     )
-    noise = tolerance * scale
-    exact = bool(error == error and error <= noise)
-    decisive = True
-    for wrong_row in (control, mask_control):
-        speaks = wrong_row is not None and wrong_row == wrong_row and wrong_row > noise
-        if not speaks:
-            decisive = False
-        elif error > VERIFY_CONTROL_FRACTION * wrong_row:
-            exact = False
+    floor = VERIFY_FLOOR_BY_DTYPE.get(dtype_name, VERIFY_FLOOR_BY_DTYPE["float32"]) * scale
+    bound = max(VERIFY_NOISE_FACTOR * noise, floor)
+
+    def speaks(value: Optional[float]) -> bool:
+        return value is not None and value == value and value > bound
+
+    reason = ""
+    if not (error == error and error <= bound):
+        reason = (
+            f"its logits differ from the ordinary batch's by {error:.3g}, more than "
+            f"{bound:.3g} (this model's own layout noise is {noise:.3g})"
+        )
+    elif len(row) >= row.source_tokens and len(row.members) < 2:
+        reason = "the verification examples did not form a row with two members"
+    elif not speaks(mask_control):
+        reason = (
+            f"a plain causal mask, which lets the examples see each other, moves the "
+            f"logits by only {mask_control}, within this model's own layout noise "
+            f"({noise:.3g}) in {dtype_name}: nothing can be verified in this dtype"
+        )
+    elif error > VERIFY_CONTROL_FRACTION * mask_control:
+        reason = (
+            f"its logits are off by {error:.3g}, too close to what a plain causal "
+            f"mask produces ({mask_control:.3g}): the 4D mask is not honoured"
+        )
+    elif speaks(control) and error > VERIFY_CONTROL_FRACTION * control:
+        reason = (
+            f"its logits are off by {error:.3g}, too close to what wrong positions "
+            f"produce ({control:.3g}): position_ids are not honoured"
+        )
     return PrefixTreeVerdict(
-        exact=exact,
+        exact=not reason,
         error=error,
         scale=scale,
         control=control,
         mask="bool" if additive_dtype is None else "additive",
         noise=noise,
-        decisive=bool(exact and decisive),
+        bound=bound,
         mask_control=mask_control,
+        reason=reason,
     )

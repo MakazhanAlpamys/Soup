@@ -10,8 +10,12 @@ every arm sees the same weights and the losses are comparable):
   tree    the group as prefix-tree rows    training.prefix_tree
 
 A "group" is one planned prefix-tree row: the examples the sampler put together
-under ``max_length`` tokens. ``batch`` and ``tree`` hold the same examples, so
-their losses must agree; the harness refuses to print a table if they do not.
+under ``max_length`` tokens. All three arms hold the same examples, so their
+losses are the same number computed three ways. ``one`` against ``batch`` (two
+ORDINARY layouts, the per-example losses weighted by their trained tokens) is
+what the model's arithmetic disagrees with itself by in its dtype; ``tree``
+against ``batch`` is reported next to it and the harness exits non-zero when
+the tree's disagreement is more than four times that noise.
 Arms are interleaved per round and their order rotates. Peak VRAM is the
 allocator's, reset per arm.
 
@@ -129,6 +133,8 @@ def run_ab(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
     )
     groups = [list(group) for group in state.sampler.rows][: args.groups or None]
     cuda = torch.cuda.is_available()
+    # training_step reads this; Trainer.train() sets it, and train() is not run here.
+    trainer.current_gradient_accumulation_steps = 1
 
     def step(batch: Dict[str, Any]) -> float:
         model.zero_grad(set_to_none=True)
@@ -156,11 +162,15 @@ def run_ab(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
             else:
                 batches = [tree(features)]
             group_losses = []
+            weights = []
             for batch in batches:
                 tokens += int(batch["input_ids"].numel())
                 steps += 1
+                # Trained tokens: the stock loss is their mean.
+                weights.append(int((batch["labels"][:, 1:] != -100).sum()))
                 group_losses.append(step(batch))
-            losses.append(statistics.fmean(group_losses) if name == "one" else group_losses[0])
+            total = max(sum(weights), 1)
+            losses.append(sum(loss * weight for loss, weight in zip(group_losses, weights)) / total)
         sync()
         seconds = time.perf_counter() - start
         return {
@@ -202,10 +212,19 @@ def run_ab(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
             "peak_gb": max(run["peak_gb"] or 0.0 for run in runs) or None,
             "spread": (max(r["seconds"] for r in runs) - min(r["seconds"] for r in runs)) / seconds,
         }
-    worst = None
-    if rounds[0].get("batch") and rounds[0].get("tree"):
-        pairs = zip(rounds[0]["batch"]["losses"], rounds[0]["tree"]["losses"])
-        worst = max(abs(a - b) / max(abs(a), 1e-9) for a, b in pairs)
+    def disagreement(left: str, right: str) -> Any:
+        worst_seen = None
+        for results in rounds:
+            if not (results.get(left) and results.get(right)):
+                continue
+            pairs = zip(results[left]["losses"], results[right]["losses"])
+            value = max(abs(a - b) / max(abs(a), 1e-9) for a, b in pairs)
+            worst_seen = value if worst_seen is None else max(worst_seen, value)
+        return worst_seen
+
+    worst = disagreement("batch", "tree")
+    noise = disagreement("one", "batch")
+    tree_vs_one = disagreement("one", "tree")
     stats = state.sampler.stats
     return {
         "model": args.model,
@@ -226,6 +245,12 @@ def run_ab(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
         },
         "arms": summary,
         "worst_relative_loss_difference_batch_vs_tree": worst,
+        "worst_relative_loss_difference_one_vs_batch": noise,
+        "worst_relative_loss_difference_one_vs_tree": tree_vs_one,
+        "losses_first_round": {
+            name: None if rounds[0].get(name) is None else rounds[0][name]["losses"]
+            for name in names
+        },
     }
 
 
@@ -286,8 +311,12 @@ def main() -> int:
     sys.stdout.write(json.dumps(result, indent=2) + "\n")
     if not args.train:
         worst = result["worst_relative_loss_difference_batch_vs_tree"]
-        if worst is not None and worst > 5e-2:
-            sys.stderr.write(f"batch and tree losses disagree by {worst:.3g}\n")
+        noise = result["worst_relative_loss_difference_one_vs_batch"]
+        if worst is not None and noise is not None and worst > max(4 * noise, 1e-4):
+            sys.stderr.write(
+                f"batch and tree losses disagree by {worst:.3g}, over four times the "
+                f"ordinary layouts' own {noise:.3g}\n"
+            )
             return 1
     return 0
 

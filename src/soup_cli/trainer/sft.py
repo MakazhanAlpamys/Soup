@@ -1507,15 +1507,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
 
     def _attach_prefix_tree(self, *, batch_size: int, max_length: int, seed: int) -> None:
-        """``training.prefix_tree``: check the model, plan the rows, say what it saves.
+        """``training.prefix_tree``: plan the rows, check the model, say what it saves.
 
-        The model check runs first and raises before any step when the model
-        does not compute a prefix-tree row as it computes the ordinary batch.
+        The model check raises before any step when the model does not compute
+        a prefix-tree row as it computes the ordinary batch.
         """
         from soup_cli.utils.prefix_tree_trainer import (
+            _model_float_dtype,
             attach_prefix_tree_state,
             check_prefix_tree_model,
             examples_from_dataset,
+            verification_examples,
         )
 
         trainer = self.trainer
@@ -1525,13 +1527,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
         if pad_token_id is None:
             pad_token_id = getattr(self.tokenizer, "eos_token_id", None) or 0
-        verdict = check_prefix_tree_model(self.model, pad_token_id=int(pad_token_id))
         examples = examples_from_dataset(trainer.train_dataset, collator)
-        additive_dtype = None
-        if verdict.mask == "additive":
-            from soup_cli.utils.prefix_tree_trainer import _model_float_dtype
-
-            additive_dtype = _model_float_dtype(self.model)
         state = attach_prefix_tree_state(
             trainer,
             examples=examples,
@@ -1540,24 +1536,30 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             pad_token_id=int(pad_token_id),
             seed=int(seed),
             drop_last=bool(getattr(trainer.args, "dataloader_drop_last", False)),
-            additive_dtype=additive_dtype,
         )
+        # Checked on real training examples, the ones the first planned row holds:
+        # half-precision arithmetic on tokens a model never saw is too unstable
+        # to verify anything (see verify_prefix_tree_model).
+        verdict = check_prefix_tree_model(
+            self.model,
+            pad_token_id=int(pad_token_id),
+            examples=verification_examples(examples, state.sampler.rows),
+        )
+        if verdict.mask == "additive":
+            state.additive_dtype = _model_float_dtype(self.model)
         stats = state.sampler.stats
         console.print(
             f"[green]Prefix-tree batches enabled:[/] {stats.examples} examples in "
             f"{stats.rows} rows, {stats.tree_tokens:,} tokens per epoch instead of "
-            f"{stats.source_tokens:,} ({stats.ratio:.2f}x fewer); model check: largest "
-            f"logit difference {verdict.error:.3g} of a range of {verdict.scale:.3g} "
-            f"({verdict.mask} mask)"
+            f"{stats.source_tokens:,} ({stats.ratio:.2f}x fewer)"
         )
-        if not verdict.decisive:
-            console.print(
-                "[yellow]Prefix-tree batches:[/] on this model the check could not tell "
-                "a correct row from a deliberately wrong one beyond numerical noise "
-                f"(wrong positions move the logits by {verdict.control}, a plain causal "
-                f"mask by {verdict.mask_control}, noise bound {verdict.noise:.3g}); the "
-                "row was accepted on the noise bound alone."
-            )
+        console.print(
+            f"[dim]Prefix-tree model check ({verdict.mask} mask): logits differ from the "
+            f"ordinary batch by {verdict.error:.3g} of a range of {verdict.scale:.3g}; "
+            f"this model's own layout noise {verdict.noise:.3g}; a plain causal mask "
+            f"moves them by {verdict.mask_control:.3g}, wrong positions by "
+            f"{0.0 if verdict.control is None else verdict.control:.3g}[/]"
+        )
         if stats.ratio < 1.02:
             console.print(
                 "[yellow]Prefix-tree batches:[/] these examples share almost no "

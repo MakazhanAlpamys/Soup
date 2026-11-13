@@ -197,8 +197,31 @@ def _model_float_dtype(model: Any) -> Any:
     return torch.float32
 
 
+def verification_examples(
+    examples: Sequence[Tuple[Sequence[int], Sequence[int]]],
+    rows: Sequence[Sequence[int]],
+    *,
+    limit: int = 3,
+) -> List[Tuple[List[int], List[int]]]:
+    """Real examples to check the model on: the first planned row that holds at
+    least two, else the first two of the dataset (packed together they are two
+    trees in one row, which exercises the mask and the positions as well)."""
+    chosen: List[int] = []
+    for row in rows:
+        if len(row) >= 2:
+            chosen = list(row[:limit])
+            break
+    if not chosen:
+        chosen = list(range(min(2, len(examples))))
+    return [(list(examples[index][0]), list(examples[index][1])) for index in chosen]
+
+
 def check_prefix_tree_model(
-    model: Any, *, pad_token_id: int, vocab_size: Optional[int] = None
+    model: Any,
+    *,
+    pad_token_id: int,
+    examples: Optional[Sequence[Tuple[Sequence[int], Sequence[int]]]] = None,
+    vocab_size: Optional[int] = None,
 ) -> PrefixTreeVerdict:
     """Decide HOW this model takes a prefix-tree row, or refuse.
 
@@ -208,14 +231,19 @@ def check_prefix_tree_model(
     reproduced the ordinary batch's logits; raises ``ValueError`` naming both
     measurements when neither did, so the run stops before its first step
     instead of training on rows the model does not compute faithfully.
+    ``examples``: real training examples to check on (see
+    :func:`verification_examples`); random tokens without them.
     """
-    boolean = verify_prefix_tree_model(model, pad_token_id=pad_token_id, vocab_size=vocab_size)
+    boolean = verify_prefix_tree_model(
+        model, pad_token_id=pad_token_id, examples=examples, vocab_size=vocab_size
+    )
     if boolean.exact:
         return boolean
     try:
         additive: Optional[PrefixTreeVerdict] = verify_prefix_tree_model(
             model,
             pad_token_id=pad_token_id,
+            examples=examples,
             vocab_size=vocab_size,
             additive_dtype=_model_float_dtype(model),
         )
@@ -223,12 +251,12 @@ def check_prefix_tree_model(
         additive = None
     if additive is not None and additive.exact:
         return additive
-    tried = f"boolean mask off by {boolean.relative_error:.3g} of the logit range"
+    tried = f"with a boolean mask {boolean.reason}"
     if additive is not None:
-        tried += f", additive mask off by {additive.relative_error:.3g}"
+        tried += f"; with an additive mask {additive.reason}"
     raise ValueError(
         "training.prefix_tree: this model does not compute a prefix-tree row as it "
-        f"computes the same examples in an ordinary batch ({tried}). It needs a "
+        f"computes the same examples in an ordinary batch: {tried}. It needs a "
         "causal decoder that honours a 4D attention_mask and position_ids. Set "
         "training.prefix_tree: false."
     )

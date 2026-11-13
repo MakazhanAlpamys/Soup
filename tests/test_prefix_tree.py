@@ -633,9 +633,21 @@ class TestExactness:
 
         model = _tiny_model(arch)
         verdict = verify_prefix_tree_model(model, pad_token_id=0)
-        assert verdict.exact and verdict.error < 1e-6 and verdict.mask == "bool"
+        assert verdict.exact and verdict.reason == "" and verdict.mask == "bool"
+        assert verdict.error <= verdict.bound < 1e-6
+        assert verdict.mask_control > 100 * verdict.bound, "the mask control says nothing"
         assert verdict.scale > 0
         assert model.training, "the check left the model in eval mode"
+
+    def test_the_model_check_on_real_examples(self, arch):
+        from soup_cli.utils.prefix_tree import verify_prefix_tree_model
+
+        model = _tiny_model(arch)
+        verdict = verify_prefix_tree_model(model, pad_token_id=0, examples=_model_examples()[:3])
+        assert verdict.exact, verdict
+        unrelated = [_model_examples(seed=7)[4], _model_examples(seed=8)[4]]
+        forest = verify_prefix_tree_model(model, pad_token_id=0, examples=unrelated)
+        assert forest.exact, forest
 
 
 class TestTheModelCheckRefuses:
@@ -654,13 +666,41 @@ class TestTheModelCheckRefuses:
         verdict = verify_prefix_tree_model(model, pad_token_id=0)
         assert not verdict.exact
         assert verdict.error > 0.05 * verdict.scale
+        assert "more than" in verdict.reason
+
+    def test_a_model_that_ignores_the_4d_mask(self):
+        """Every token sees every earlier token of the row: branches mix."""
+        import torch
+
+        from soup_cli.utils.prefix_tree import verify_prefix_tree_model
+
+        model = _tiny_model("llama")
+        real = model.forward
+
+        def forward(input_ids=None, attention_mask=None, **kwargs):
+            if attention_mask is not None and attention_mask.dim() == 4:
+                attention_mask = torch.ones(input_ids.shape, dtype=torch.long)
+            return real(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+        model.forward = forward
+        verdict = verify_prefix_tree_model(model, pad_token_id=0)
+        assert not verdict.exact and verdict.reason
+
+    def test_one_example_is_not_enough(self):
+        from soup_cli.utils.prefix_tree import verify_prefix_tree_model
+
+        with pytest.raises(ValueError, match="at least two examples"):
+            verify_prefix_tree_model(
+                _tiny_model("llama"), pad_token_id=0, examples=[_example([1, 2], [3])]
+            )
 
     def test_the_control_differs_on_a_position_sensitive_model(self):
         from soup_cli.utils.prefix_tree import verify_prefix_tree_model
 
         verdict = verify_prefix_tree_model(_tiny_model("gpt2"), pad_token_id=0)
         assert verdict.exact
-        assert verdict.control is not None and verdict.control > verdict.error
+        assert verdict.control is not None and verdict.control > 100 * verdict.bound
+        assert verdict.mask_control is not None and verdict.mask_control > 100 * verdict.bound
 
     def test_a_model_without_a_vocabulary_size(self):
         torch = pytest.importorskip("torch")
@@ -730,3 +770,4 @@ class TestThroughLayerStreaming:
         verdict = verify_prefix_tree_model(model, pad_token_id=0, vocab_size=64)
         assert verdict.exact, verdict
         assert verdict.relative_error < 1e-4
+        assert verdict.mask_control > 10 * verdict.bound

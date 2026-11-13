@@ -293,7 +293,20 @@ class TestModelCheck:
         with pytest.raises(ValueError, match="does not compute a prefix-tree row") as exc:
             check_prefix_tree_model(model, pad_token_id=0)
         assert "prefix_tree: false" in str(exc.value)
-        assert "boolean mask off by" in str(exc.value)
+        assert "with a boolean mask" in str(exc.value)
+        assert "with an additive mask" in str(exc.value)
+
+    def test_real_examples_come_from_the_first_shared_row(self):
+        from soup_cli.utils.prefix_tree_trainer import verification_examples
+
+        examples = [_example([n], [n + 1]) for n in range(1, 11, 2)]
+        assert verification_examples(examples, [(4,), (1, 3, 0, 2), (2,)]) == [
+            (list(examples[i][0]), list(examples[i][1])) for i in (1, 3, 0)
+        ]
+        # No row with two members: the first two examples, packed as two trees.
+        assert verification_examples(examples, [(3,), (0,)]) == [
+            (list(examples[i][0]), list(examples[i][1])) for i in (0, 1)
+        ]
 
 
 def test_the_rewind_notice_names_prefix_tree():
