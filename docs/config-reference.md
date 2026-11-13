@@ -384,7 +384,7 @@ Sections:
 | `training.eval_gate.suite` | `str \| null` | `null` |  | Path to eval-suite YAML (evals/gate.yaml) |
 | `training.eval_gate.every_n_epochs` | `int` | `1` | `>= 1`, `<= 100` | Run gate every N epochs (1-100) |
 | `training.eval_gate.regression_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max absolute drop vs baseline before regression fires |
-| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| 'previous' \| file path - scores to compare against |
+| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| file path - scores to compare against |
 | `training.eval_gate.on_regression` | `str` | `"stop"` | one of `"stop"`, `"warn"`, `"continue"` | Action on regression: stop training \| warn only \| continue |
 
 ## `eval`
