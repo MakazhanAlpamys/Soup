@@ -113,6 +113,23 @@ have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
 forward/backward check. This does not validate full 27B weights, GRPO rollouts,
 NF4 execution, GPU memory fit or training quality.
 
+`soup recipes use qwen3.5-122b-a10b-dpo` selects the 122B-A10B language decoder
+for `prompt`, `chosen` and `rejected` text preferences in
+`./data/preference_train.jsonl`. It inherits the 122B SFT recipe's one epoch,
+batch size 1, 16 accumulation steps, LoRA rank 32 / alpha 64, gradient
+checkpointing, 4-bit quantization and 4096-token limit, with the 35B MoE DPO
+recipe's `lr: 5e-6` and `dpo_beta: 0.1`. These are starting settings, not measured
+122B tuning recommendations. `moe_lora: true` includes the routed experts and
+`lora.dropout: 0.0` permits PEFT's fused-expert adapters. Model quantization is
+distinct from the SFT-only `moe_expert_quant` and `train_router_only` options;
+DPO does not apply Soup's `moe_aux_loss_coeff` setting.
+The pinned public configuration builds the complete native text MoE on the meta
+device with the recipe's LoRA attached, and a tiny random decoder retaining
+linear attention, full attention and expert routing passes a CPU forward/backward
+check with attention and expert adapter gradients. The visual tower is excluded.
+Full 122B weights, DPO training, NF4 execution, GPU memory fit and tuning quality
+remain unverified; meta tensors do not allocate the public checkpoint's weights.
+
 `soup recipes use qwen3.5-122b-a10b-grpo` selects the 122B-A10B language
 MoE for text reasoning rows whose final assistant message holds the reference
 answer. The shipped `format: auto` path is tested with that ChatML layout.
