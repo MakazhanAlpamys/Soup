@@ -221,5 +221,27 @@
       "src/soup_cli/utils/mlx.py",
       "tests/test_mlx_full_finetune_native.py"
     ]
+  },
+  "publication_integration": {
+    "source_sha": "6c365edf3670f8f4443ea19c281e287fa537c321",
+    "upstream_sha": "1f1a3aafe5124504c4b751e11cfa6783b791e98d",
+    "passed": 442,
+    "seconds": 72.68,
+    "command": "PYTHONPATH=src pytest tests/test_mlx_full_finetune.py tests/test_mlx_full_finetune_native.py tests/test_issue755_backend_support_registry.py tests/test_push_as_visibility.py tests/test_freeze_string_target_modules.py tests/test_freeze_lora_layers.py tests/test_eval_gate_baseline.py tests/test_issue621_recipe_snapshot.py tests/test_ci_mlx_smoke_files.py -q --no-cov",
+    "measured_source_files_identical": [
+      "src/soup_cli/trainer/mlx_full.py",
+      "src/soup_cli/trainer/mlx_sft.py",
+      "src/soup_cli/utils/mlx.py",
+      "tests/test_mlx_full_finetune_native.py"
+    ],
+    "upstream_adjusted_files": [
+      "src/soup_cli/config/schema.py",
+      "src/soup_cli/commands/train.py"
+    ],
+    "checks": [
+      "ruff check src/soup_cli/ scripts/ tests/ benchmarks/",
+      "generated-reference --check-structure",
+      "recipe snapshot regenerated with no diff"
+    ]
   }
 }

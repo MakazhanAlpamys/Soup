@@ -3,9 +3,11 @@
 Source: `345c1f6105b8bd3bf3004f9c575b1517075080e9`, based on upstream
 `9a8a5f39a632742f5abce7f9209d91223ba7638a`. This is a local qualification record;
 no large-model memory or throughput claim follows from this tiny fixture.
-The delivered branch also merges upstream `8b80c2db` and fixes the helper-module
-registry declaration. The measured trainer, schema, CLI and loader files are
-byte-identical to the measured source; 432 post-integration checks pass.
+The branch contains upstream `8b80c2db`, the helper-module registry fix, and
+publication integration with upstream `1f1a3aaf`. The measured native trainers,
+loader and native fixture remain byte-identical to the measured source. Later
+upstream schema/CLI changes are covered by 442 publication integration checks;
+the earlier 432-check integration result is retained in the verification record.
 
 ## Agreed scope and the four plan corrections
 
