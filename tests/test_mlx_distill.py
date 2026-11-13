@@ -1,0 +1,180 @@
+"""Portable native-distillation configuration and public routing contracts."""
+
+import pytest
+
+from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.mlx_routing import resolve_trainer
+from tests.conftest import strip_ansi
+
+
+def recipe(**training):
+    return {
+        "base": "org/student",
+        "backend": "mlx",
+        "task": "distill",
+        "modality": "text",
+        "data": {"train": "./train.jsonl", "max_length": 64},
+        "training": {
+            "teacher_model": "org/teacher",
+            "quantization": "none",
+            "lora": {"r": 4, "alpha": 8},
+            **training,
+        },
+    }
+
+
+@pytest.mark.parametrize("divergence", [None, "forward_kl", "kl", "reverse_kl", "js"])
+def test_supported_token_configuration_routes_to_native_trainer(divergence):
+    raw = recipe(**({"distill_divergence": divergence} if divergence is not None else {}))
+    # The Transformers control isolates the current missing-MLX-support refusal.
+    control = SoupConfig.model_validate({**raw, "backend": "transformers"})
+    assert control.task == "distill"
+    cfg = SoupConfig.model_validate(raw)
+    assert cfg.training.distill_mode == "token"
+    cls, kwargs = resolve_trainer(cfg)
+    assert cls.__name__ == "MLXDistillTrainerWrapper"
+    assert cls.__module__ == "soup_cli.trainer.mlx_distill"
+    assert kwargs == {}
+
+
+@pytest.mark.parametrize("field,value,diagnostic", [
+    ("distill_mode", "sequence", "distill_mode"),
+    ("optimizer", "lion", "optimizer"),
+    ("scheduler", "polynomial", "scheduler"),
+    ("gradient_checkpointing", "full", "gradient_checkpointing"),
+    ("neftune_alpha", 0.2, "neftune_alpha"),
+    ("use_liger", True, "use_liger"),
+    ("lora", {"r": 0}, "lora.r"),
+    ("lora", {"r": 4, "use_dora": True}, "[Dd][Oo][Rr][Aa]|use_dora"),
+    ("lora", {"r": 4, "rank_pattern": {"q_proj": 2}}, "rank_pattern"),
+])
+def test_unsupported_native_modifiers_refuse_by_name_with_valid_control(field, value, diagnostic):
+    assert SoupConfig.model_validate(recipe()).task == "distill"
+    with pytest.raises(ValueError, match=diagnostic):
+        SoupConfig.model_validate(recipe(**{field: value}))
+
+
+def test_native_distillation_is_a_reviewed_backend_combination():
+    from soup_cli.config.backend_support import REGISTRY, TRAINER_MODULES, check_config
+
+    cfg = SoupConfig.model_validate(recipe())
+    pair = ("distill", "mlx", "text")
+    assert REGISTRY[pair] == ()
+    assert "soup_cli/trainer/mlx_distill.py" in TRAINER_MODULES[pair]
+    assert "soup_cli/utils/mlx_distill.py" in TRAINER_MODULES[pair]
+    assert check_config(cfg) == []
+
+
+@pytest.mark.parametrize("field", ["neftune_alpha", "use_galore"])
+def test_settings_refused_at_load_have_no_doctor_row(field):
+    from soup_cli.config.backend_support import unsupported_for
+
+    assert SoupConfig.model_validate(recipe()).task == "distill"
+    with pytest.raises(ValueError, match=field):
+        SoupConfig.model_validate(recipe(**{field: 0.2 if field == "neftune_alpha" else True}))
+    assert f"training.{field}" not in {
+        entry.field for entry in unsupported_for("distill", "mlx")
+    }
+
+
+@pytest.mark.parametrize("value", ["4bit", "8bit"])
+def test_quantization_refusal_names_the_supplied_value(value):
+    assert SoupConfig.model_validate(recipe()).training.quantization == "none"
+    raw = recipe()
+    del raw["training"]["quantization"]
+    assert SoupConfig.model_validate(raw).training.quantization == "none"
+    with pytest.raises(ValueError, match=rf"training.quantization='{value}'"):
+        SoupConfig.model_validate(recipe(quantization=value))
+
+
+@pytest.mark.parametrize("quantization", [None, "none", "8bit"], ids=["unset", "none", "8bit"])
+def test_load_in_8bit_refusal_names_alias_and_gives_working_recovery(quantization):
+    raw = recipe(load_in_8bit=True)
+    if quantization is None:
+        del raw["training"]["quantization"]
+    else:
+        raw["training"]["quantization"] = quantization
+
+    with pytest.raises(ValueError) as caught:
+        SoupConfig.model_validate(raw)
+    message = str(caught.value)
+    assert "training.quantization='8bit'" in message
+    assert "task='distill' on backend='mlx'" in message
+    assert "Delete training.load_in_8bit: true" in message
+    assert "any training.quantization line" in message
+
+    # Follow the diagnostic rather than only checking that validation refuses.
+    del raw["training"]["load_in_8bit"]
+    raw["training"].pop("quantization", None)
+    fixed = SoupConfig.model_validate(raw)
+    assert fixed.training.quantization == "none"
+    assert fixed.training.load_in_8bit is not True
+    assert SoupConfig.model_validate_json(fixed.model_dump_json()).training.quantization == "none"
+
+
+def test_false_load_in_8bit_keeps_the_explicit_quantization_recovery_hint():
+    assert SoupConfig.model_validate(recipe()).training.quantization == "none"
+    with pytest.raises(ValueError, match="training.quantization='8bit'") as caught:
+        SoupConfig.model_validate(recipe(load_in_8bit=False, quantization="8bit"))
+    assert "set training.quantization: none" in str(caught.value)
+    assert "Delete training.load_in_8bit" not in str(caught.value)
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf"), 0.049, 100.01])
+def test_bad_temperatures_never_coerce_to_supported_runtime(value):
+    with pytest.raises((ValueError, TypeError), match="temperature"):
+        SoupConfig.model_validate(recipe(distill_temperature=value))
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "2"])
+def test_bad_chunk_sizes_refuse_before_loading(value):
+    with pytest.raises((ValueError, TypeError), match="chunk_size"):
+        SoupConfig.model_validate(recipe(distill_chunk_size=value))
+
+
+def test_public_offline_dry_run_with_real_data_does_not_require_mlx(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    data = tmp_path / "train.jsonl"
+    data.write_text('{"text": "alpha beta gamma"}\n' * 4)
+    raw = recipe()
+    raw["data"].update(train=str(data), val_split=0)
+    cfg = SoupConfig.model_validate(raw)
+    path = tmp_path / "soup.json"
+    path.write_text(cfg.model_dump_json())
+    outcome = CliRunner().invoke(app, ["train", "--config", str(path), "--dry-run"])
+    assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
+    output = " ".join(strip_ansi(outcome.output).split())
+    assert "Config valid" in output
+
+
+@pytest.mark.parametrize("option", ["deepspeed_config", "fsdp_config", "trust_remote_code"])
+def test_native_setup_refuses_distributed_or_remote_code_before_backend_import(option):
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    cfg = SoupConfig.model_validate(recipe())
+    trainer = MLXDistillTrainerWrapper(cfg, **{option: True})
+    with pytest.raises(ValueError, match="distributed or remote-code"):
+        trainer.setup({"train": [{"text": "alpha beta"}]})
+
+
+def test_missing_native_dependency_has_actionable_error(monkeypatch):
+    import builtins
+
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    original = builtins.__import__
+
+    def without_mlx(name, *args, **kwargs):
+        if name == "mlx" or name.startswith("mlx."):
+            raise ImportError("unavailable backend boundary")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_mlx)
+    trainer = MLXDistillTrainerWrapper(SoupConfig.model_validate(recipe()))
+    with pytest.raises(ImportError, match=r'soup-cli\[mlx\]'):
+        trainer.setup({"train": [{"text": "alpha beta"}]})
