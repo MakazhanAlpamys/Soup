@@ -26,6 +26,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -498,7 +499,7 @@ class MLXSFTTrainerWrapper:
             )
 
     def setup(self, dataset: dict) -> None:
-        """Load MLX model, configure LoRA, prepare dataset."""
+        """Load MLX model, configure trainable parameters, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
         if self.config.data.format == "pre_tokenized":
@@ -530,12 +531,29 @@ class MLXSFTTrainerWrapper:
 
         from soup_cli.utils.mlx import load_mlx_model
 
-        console.print(f"[dim]Loading MLX model: {cfg.base}[/]")
-        self.model, self.tokenizer = load_mlx_model(
+        console.print(f"[dim]Loading MLX model: {for_terminal(cfg.base)}[/]")
+        loaded = load_mlx_model(
             cfg.base,
             quantization=cfg.training.quantization,
             model_config=model_config_override,
+            **({"return_config": True} if cfg.training.lora.r == 0 else {}),
         )
+        if cfg.training.lora.r == 0:
+            from soup_cli.trainer.mlx_full import prepare_full_model
+
+            self.model, self.tokenizer, self._full_model_config = loaded
+            self._full_model_metadata = prepare_full_model(self.model, cfg)
+            console.print(
+                "[green]MLX full fine-tuning:[/] "
+                f"{self._full_model_metadata['trainable_parameters']:,} trainable parameters "
+                f"({self._full_model_metadata['trainable_tensors']} tensors); "
+                f"{self._full_model_metadata['frozen_parameters']:,} frozen parameters "
+                f"({self._full_model_metadata['frozen_tensors']} tensors); "
+                f"bottom {self._full_model_metadata['freeze_cutoff']} layers frozen; "
+                "trainable weights use float32"
+            )
+        else:
+            self.model, self.tokenizer = loaded
 
         if cfg.training.rope_scaling_type is not None:
             import mlx.nn as nn
@@ -589,7 +607,7 @@ class MLXSFTTrainerWrapper:
                     "unscaled native RoPE preserved.[/]"
                 )
         console.print(
-            f"[green]MLX model loaded:[/] {cfg.base} "
+            f"[green]MLX model loaded:[/] {for_terminal(cfg.base)} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
         )
         self._added_tokens = []
@@ -825,6 +843,11 @@ class MLXSFTTrainerWrapper:
         bridging through it would couple this path to HF trainer internals.
         """
 
+        full_finetune = self.config.training.lora.r == 0
+        if full_finetune and resume_from_checkpoint is not None:
+            from soup_cli.trainer.mlx_full import RESUME_REFUSAL
+
+            raise ValueError(RESUME_REFUSAL)
         self._require_mlx()
 
         from mlx_lm.tuner.callbacks import TrainingCallback
@@ -833,6 +856,14 @@ class MLXSFTTrainerWrapper:
 
         cfg = self.config
         output_dir = Path(cfg.output)
+        if full_finetune and (
+            list(output_dir.glob("*.safetensors"))
+            or (output_dir / "adapter_config.json").exists()
+            or next(output_dir.glob("checkpoint-*"), None) is not None
+        ):
+            raise ValueError(
+                "MLX full fine-tuning output already contains model or adapter artifacts"
+            )
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.model is None or self.tokenizer is None:
@@ -857,7 +888,8 @@ class MLXSFTTrainerWrapper:
         )
         mx.random.seed(seed)
 
-        self._apply_lora(self.model)
+        if not full_finetune:
+            self._apply_lora(self.model)
 
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)
@@ -1363,19 +1395,78 @@ class MLXSFTTrainerWrapper:
 
         import numpy as np
 
+        training_metadata = {
+            **(self._full_model_metadata if full_finetune else
+               build_mlx_adapter_config(cfg.training.lora, adapter_path=str(output_dir))),
+            "model": str(cfg.base),
+            "num_layers": len(getattr(self.model, "layers", [])),
+            "batch_size": batch_size,
+            "iters": iters,
+            "learning_rate": float(cfg.training.lr),
+            "steps_per_report": steps_per_report,
+            "steps_per_eval": steps_per_eval,
+            # #1990: an explicit interval, in completed optimizer updates.
+            **({"eval_steps": int(eval_every), "eval_unit": "optimizer updates"}
+               if eval_every is not None else {}),
+            "steps_per_save": steps_per_save,
+            "max_seq_length": max_seq_length,
+            **({"rope_scaling": self._effective_rope_scaling}
+               if getattr(self, "_effective_rope_scaling", None) is not None else {}),
+            # #683: the EFFECTIVE masking, not a hardcoded False.
+            # `mask_prompt` stays upstream's meaning (a single masked
+            # prefix); `response_token_mask` is Soup's per-token mask,
+            # which is what a multi-turn chat run actually used.
+            "mask_prompt": bool(args.mask_prompt),
+            "response_token_mask": use_token_mask,
+            "pre_tokenized": cached_labels,
+            "train_on_responses_only": responses_only,
+            "train_on_messages_with_train_field": train_field,
+            "mask_history": mask_history,
+            "grad_checkpoint": grad_checkpoint,
+            "grad_accumulation_steps": grad_accumulation_steps,
+            # #686: the EFFECTIVE optimizer and schedule, so an adapter
+            # records the recipe that ran rather than the one requested.
+            **optimizer_plan.as_metadata(),
+            # #749: the norm gradients were actually clipped at.
+            # Recorded because MLX honours it through a Soup-side
+            # wrapper rather than through anything mlx-lm writes, so
+            # the output dir is the only place a finished run says
+            # whether it clipped.
+            "max_grad_norm": float(cfg.training.max_grad_norm),
+        }
+        if full_finetune:
+            from soup_cli.trainer.mlx_full import save_full_model
+
+            training_metadata["resume_training_state"] = False
+            training_metadata["accumulation_weighting"] = "supervised_tokens"
+
+            def save_full_checkpoint(iteration: int) -> None:
+                save_full_model(
+                    output_dir / f"checkpoint-{iteration:07d}", self.model, self.tokenizer,
+                    self._full_model_config,
+                    {**training_metadata, "completed_iterations": iteration,
+                     "completed_updates": iteration // grad_accumulation_steps},
+                )
+
         np.random.seed(data_seed)
         t0 = time.time()
         completed_iterations = iters
         stopped = False
         try:
             try:
-                train(
+                train_loop = train
+                if full_finetune:
+                    from soup_cli.trainer.mlx_full import train_full
+
+                    train_loop = train_full
+                train_loop(
                     model=self.model,
                     optimizer=optimizer,
                     train_dataset=train_dataset,
                     val_dataset=val_dataset,
                     args=args,
                     training_callback=callback,
+                    **({"save_checkpoint": save_full_checkpoint} if full_finetune else {}),
                     **train_hooks,
                 )
             except _LossWatchdogStop:
@@ -1386,7 +1477,7 @@ class MLXSFTTrainerWrapper:
                 completed_iterations = captured["completed_iterations"]
                 # Raising out of mlx-lm bypasses its trailing final save. Save
                 # precisely the completed state; a save error remains an error.
-                if mx.distributed.init().rank() == 0:
+                if not full_finetune and mx.distributed.init().rank() == 0:
                     mx.save_safetensors(
                         args.adapter_file, dict(tree_flatten(self.model.trainable_parameters()))
                     )
@@ -1413,54 +1504,17 @@ class MLXSFTTrainerWrapper:
             "watchdog_report_unit": "optimizer updates",
         } if watchdog is not None else {})
 
-        # mlx-lm's tuner only saves adapters.safetensors; write the
-        # adapter_config.json so the output dir is directly loadable with
-        # mlx_lm.load(..., adapter_path=output).
-        lora_cfg = cfg.training.lora
-        (output_dir / "adapter_config.json").write_text(
-            json.dumps(
-                {
-                    **build_mlx_adapter_config(lora_cfg, adapter_path=str(output_dir)),
-                    "model": str(cfg.base),
-                    "num_layers": len(getattr(self.model, "layers", [])),
-                    "batch_size": batch_size,
-                    "iters": iters,
-                    **outcome,
-                    "learning_rate": float(cfg.training.lr),
-                    "steps_per_report": steps_per_report,
-                    "steps_per_eval": steps_per_eval,
-                    # #1990: an explicit interval, in completed optimizer updates.
-                    **({"eval_steps": int(eval_every), "eval_unit": "optimizer updates"}
-                       if eval_every is not None else {}),
-                    "steps_per_save": steps_per_save,
-                    "max_seq_length": max_seq_length,
-                    **({"rope_scaling": self._effective_rope_scaling}
-                       if getattr(self, "_effective_rope_scaling", None) is not None else {}),
-                    # #683: the EFFECTIVE masking, not a hardcoded False.
-                    # `mask_prompt` stays upstream's meaning (a single masked
-                    # prefix); `response_token_mask` is Soup's per-token mask,
-                    # which is what a multi-turn chat run actually used.
-                    "mask_prompt": bool(args.mask_prompt),
-                    "response_token_mask": use_token_mask,
-                    "pre_tokenized": cached_labels,
-                    "train_on_responses_only": responses_only,
-                    "train_on_messages_with_train_field": train_field,
-                    "mask_history": mask_history,
-                    "grad_checkpoint": grad_checkpoint,
-                    "grad_accumulation_steps": grad_accumulation_steps,
-                    # #686: the EFFECTIVE optimizer and schedule, so an adapter
-                    # records the recipe that ran rather than the one requested.
-                    **optimizer_plan.as_metadata(),
-                    # #749: the norm gradients were actually clipped at.
-                    # Recorded because MLX honours it through a Soup-side
-                    # wrapper rather than through anything mlx-lm writes, so
-                    # the output dir is the only place a finished run says
-                    # whether it clipped.
-                    "max_grad_norm": float(cfg.training.max_grad_norm),
-                },
-                indent=2,
+        if full_finetune:
+            save_full_model(
+                output_dir, self.model, self.tokenizer,
+                self._full_model_config,
+                {**training_metadata, **outcome, "completed_iterations": completed_iterations,
+                 "completed_updates": last_update},
             )
-        )
+        else:
+            (output_dir / "adapter_config.json").write_text(
+                json.dumps({**training_metadata, **outcome}, indent=2)
+            )
 
         if getattr(self, "_vocab_ext", None):
             from soup_cli.utils.mlx_vocab import save_expanded_vocab_artifact
@@ -1498,8 +1552,9 @@ class MLXSFTTrainerWrapper:
                 f"[yellow]Loss watchdog stopped MLX training after {last_update} "
                 f"optimizer updates ({completed_iterations} iterations); "
                 f"loss exceeded {watchdog.threshold} for {watchdog.patience} "
-                f"consecutive reports. Last adapter saved:[/] {output_dir}"
+                f"consecutive reports. Last {'model' if full_finetune else 'adapter'} "
+                f"saved:[/] {for_terminal(output_dir)}"
             )
         else:
-            console.print(f"[green]MLX training complete:[/] {output_dir}")
+            console.print(f"[green]MLX training complete:[/] {for_terminal(output_dir)}")
         return result

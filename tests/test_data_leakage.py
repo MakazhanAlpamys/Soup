@@ -103,25 +103,30 @@ def test_exact_matching_preserves_case_and_internal_whitespace():
 
 
 @pytest.mark.parametrize(
-    "train,evaluation",
+    "train,evaluation,reason",
     [
-        ([], [{"text": "q"}]),
-        ([{"text": "q"}], []),
-        ([{}], [{"text": "q"}]),
-        ([{"prompt": ""}], [{"text": "q"}]),
-        ([{"text": "q"}], [42]),
-        ([{"output": "response only"}], [{"text": "q"}]),
+        ([], [{"text": "q"}], "train and eval must both contain records"),
+        ([{"text": "q"}], [], "train and eval must both contain records"),
+        ([{}], [{"text": "q"}], "train record 1: record has no usable input text"),
+        ([{"prompt": ""}], [{"text": "q"}], "train record 1: record has no usable input text"),
+        ([{"text": "q"}], [42], "eval record 1: record must be a JSON object"),
+        (
+            [{"output": "response only"}], [{"text": "q"}],
+            "train record 1: record has no usable input text",
+        ),
     ],
 )
-def test_unusable_input_is_refused(train, evaluation):
-    with pytest.raises((ValueError, TypeError)):
+def test_unusable_input_is_refused(train, evaluation, reason):
+    with pytest.raises(ValueError) as error:
         _check(train, evaluation)
+    assert _plain(str(error.value)) == reason
 
 
 @pytest.mark.parametrize("samples", [-1, 21, True, 1.5])
 def test_sample_bound_is_validated(samples):
-    with pytest.raises((ValueError, TypeError)):
+    with pytest.raises(ValueError) as error:
         _check([{"text": "q"}], [{"text": "q"}], samples=samples)
+    assert _plain(str(error.value)) == "samples must be an integer in [0, 20]"
 
 
 def test_examples_are_capped_and_ordered_by_eval_record():
@@ -157,8 +162,16 @@ def test_cli_table_includes_percentage(tmp_path, monkeypatch):
     assert "50.00%" in _plain(result.output)
 
 
-@pytest.mark.parametrize("broken", ['{"text":', "42\n", "{}\n", "\n"])
-def test_bad_input_cli_returns_three(tmp_path, monkeypatch, broken):
+@pytest.mark.parametrize(
+    "broken,reason",
+    [
+        ('{"text":', "line 1 is not valid JSON"),
+        ("42\n", "line 1 must be a JSON object"),
+        ("{}\n", "train record 1: record has no usable input text"),
+        ("\n", "train and eval must both contain records"),
+    ],
+)
+def test_bad_input_cli_returns_three(tmp_path, monkeypatch, broken, reason):
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
@@ -168,12 +181,16 @@ def test_bad_input_cli_returns_three(tmp_path, monkeypatch, broken):
         app, ["data", "leakage", "--train", "train.jsonl", "--eval", "eval.jsonl", "--json"]
     )
     assert result.exit_code == 3, result.output
-    assert "Leakage input error" in result.output
+    assert _plain(result.output) == f"Leakage input error: {reason}"
 
 
 def test_sample_option_misuse_uses_gate_exit_three(tmp_path, monkeypatch):
     result = _cli(tmp_path, monkeypatch, [{"text": "a"}], [{"text": "b"}], "--samples", "-1")
     assert result.exit_code == 3, result.output
+    assert (
+        "Invalid value for '--samples': -1 is not in the range 0<=x<=20."
+        in _plain(result.output)
+    )
 
 
 def test_cli_refuses_a_file_outside_cwd(tmp_path, monkeypatch):
@@ -187,7 +204,7 @@ def test_cli_refuses_a_file_outside_cwd(tmp_path, monkeypatch):
         app, ["data", "leakage", "--train", "../outside.jsonl", "--eval", "eval.jsonl"]
     )
     assert result.exit_code == 3
-    assert "under cwd" in result.output
+    assert _plain(result.output) == "Leakage input error: input path must stay under cwd"
 
 
 def test_mismatched_preference_prompts_are_not_silently_compared():
@@ -195,8 +212,11 @@ def test_mismatched_preference_prompts_are_not_silently_compared():
         "chosen": [{"role": "user", "content": "one"}],
         "rejected": [{"role": "user", "content": "two"}],
     }
-    with pytest.raises(ValueError, match="same prompt"):
+    with pytest.raises(ValueError) as error:
         _check([row], [{"text": "one"}])
+    assert _plain(str(error.value)) == (
+        "train record 1: chosen/rejected conversations do not have the same prompt"
+    )
 
 
 def test_json_remains_parseable_with_long_rich_like_text(tmp_path, monkeypatch):

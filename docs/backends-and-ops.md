@@ -127,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -1034,6 +1042,8 @@ permission to create one), the run says so, names the repository and turns auto-
 it does not create a public repository on its own. Pass `--push-public` to create a public
 one, or create the repository yourself first and run again. `--hf-resume` only reads the
 repository; a repository it finds missing is created by the same rule when training starts.
+
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
