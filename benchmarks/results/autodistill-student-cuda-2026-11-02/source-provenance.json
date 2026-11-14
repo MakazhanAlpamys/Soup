@@ -1,0 +1,17 @@
+{
+  "archive_hashes_match_remote": true,
+  "git_content_matches_after_crlf_normalization": true,
+  "source_identity": {
+    "src/soup_cli/autodistill/student_loss.py": {
+      "git_blob_sha256": "20434a12776b3719295cf04b87a2c9c7bffa716a12212d6022d5dc2c0e5099af",
+      "transferred_sha256": "f489f735439c55b9e2118a7b8c083d7a1fdcf24a7e7c97aea6278204bd6facf4",
+      "only_difference": "LF to CRLF in Windows git archive"
+    },
+    "tests/test_autodistill_student_loss.py": {
+      "git_blob_sha256": "d81c107fb116ff993e799aec20238cf775728d04718854f244afe31748c1a8b2",
+      "transferred_sha256": "da6fee12ff5cb66b3324f2fb215f60769c87c1e1e359716fa0344454557e54e4",
+      "only_difference": "LF to CRLF in Windows git archive"
+    }
+  },
+  "archive_sha256": "855bc75a6c4e3f5077f94d19bc1c9174ddff50d8ff9ba9c7613b48ab51ddf39f"
+}
