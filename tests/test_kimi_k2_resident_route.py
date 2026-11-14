@@ -667,18 +667,25 @@ def test_resident_model_keeps_float_buffers_at_their_stored_dtype(resident_check
 
     from soup_cli.utils.kimi_k2 import load_resident_model
 
-    model = load_resident_model(
-        resident_checkpoints["k2-bf16"], model_kwargs={"dtype": torch.bfloat16}
-    )
-    # e_score_correction_bias is float32 in the checkpoint and in from_pretrained's own
-    # load (_keep_in_fp32_modules); only parameters take the requested dtype.
-    bias = model.model.layers[1].mlp.gate.e_score_correction_bias
-    assert bias.dtype == torch.float32
-    assert model.model.embed_tokens.weight.dtype == torch.bfloat16
-    ids = _ids(torch)
-    with torch.no_grad():
-        logits = model(ids).logits
-    assert logits.shape == (2, 12, 128)
+    previous_threads = torch.get_num_threads()
+    try:
+        # Tiny CPU kernels become dramatically slower when PyTorch fans each op out
+        # across the Windows runner's full thread pool.
+        torch.set_num_threads(1)
+        model = load_resident_model(
+            resident_checkpoints["k2-bf16"], model_kwargs={"dtype": torch.bfloat16}
+        )
+        # e_score_correction_bias is float32 in the checkpoint and in from_pretrained's own
+        # load (_keep_in_fp32_modules); only parameters take the requested dtype.
+        bias = model.model.layers[1].mlp.gate.e_score_correction_bias
+        assert bias.dtype == torch.float32
+        assert model.model.embed_tokens.weight.dtype == torch.bfloat16
+        ids = _ids(torch)
+        with torch.no_grad():
+            logits = model(ids).logits
+        assert logits.shape == (2, 12, 128)
+    finally:
+        torch.set_num_threads(previous_threads)
 
 
 @pytest.mark.parametrize(
