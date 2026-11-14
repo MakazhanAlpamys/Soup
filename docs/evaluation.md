@@ -494,10 +494,11 @@ missing or empty file is "no rows", not an error.
 punctuation stripped, stop words removed; negations and numbers are content) that the answer it
 corrected lacked; with fewer than two of them, all of its content words. An answer is a *hit* when
 at least half of the added words are in it, with its `<think>` block removed first. The tokenizer,
-the stop list and the threshold are the Soup Zero reference implementation's, word for word.
+the stop list and the threshold are those of the consuming application's reference
+implementation, word for word.
 
 **Generation.** Both versions answer the corrections and held-out questions greedily with up to
-512 new tokens, as Soup Zero does: the 256 that `--task-eval` and the suites use can cut a verbose
+512 new tokens, as the consuming application does: the 256 that `--task-eval` and the suites use can cut a verbose
 answer before it reaches the corrected fact and score a miss the model did not earn. `--task-eval`
 and the suites keep their 256. The gate rebuilds its generators on the models already loaded for
 the verdict (nothing is loaded twice), so `--base-adapter` and `--chat-template-kwargs` apply to

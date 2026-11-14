@@ -55,7 +55,7 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[a-z0-9][a-z0-9_.-]*$",
-      "description": "Which program wrote the line (e.g. soup-loop, or the Soup Zero surface)."
+      "description": "Which program wrote the line (e.g. soup-loop, or the surface of a consuming application)."
     }
   },
   "allOf": [

@@ -31,7 +31,7 @@
       "minLength": 1,
       "maxLength": 32,
       "pattern": "^[a-z][a-z0-9_]*$",
-      "description": "Open vocabulary. soup loop writes harvest, train, verdict, deploy, canary, promote, rollback; Soup Zero writes data, merge, train, ship, export, deploy. Other lowercase names are accepted."
+      "description": "Open vocabulary. soup loop writes harvest, train, verdict, deploy, canary, promote, rollback; a consuming application writes data, merge, train, ship, export, deploy. Other lowercase names are accepted."
     },
     "event": {"enum": ["start", "progress", "end", "error"]},
     "done": {

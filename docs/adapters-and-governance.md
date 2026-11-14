@@ -270,7 +270,7 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         (parameter count unknown)".
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
-# built-in recipe is the one the Soup Zero fit runs of 2026-11-06 chose (candidate B in bf16):
+# built-in recipe is the one the fit runs of 2026-11-06 chose (candidate B in bf16):
 # all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, micro-batch 2 x accumulation 4, seed
 # 42, quantization auto, where the loop used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16
 # on the schema's default modules. A loop that must not move if a later release changes the
@@ -332,7 +332,8 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # edits and written atomically under .soup-loops/verdicts/ (<run>.corrections.jsonl,
 # <run>.held-out.jsonl; both are passed even when empty); the evidence soup ship measures goes
 # into the iteration line (verdict.gate, .corrections, .held_out; docs/loop-formats.md). The
-# rules are Soup Zero's, so both programs split the same edits:
+# rules are shared with the consuming application, so both programs split the same
+# edits:
 #   the holdout split  the key of a corrected answer is the content of the last user message of
 #                      its conversation, text.strip().casefold(); the edit is held out iff
 #                      int(sha256(key), 16) % 100 < 30 ("How do I reset my password?" is 87,

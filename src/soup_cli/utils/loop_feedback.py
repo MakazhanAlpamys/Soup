@@ -12,7 +12,7 @@ Two kinds of append-only JSONL log feed the loop:
   ``ts``, ``kind`` (``thumb``, ``rating``, ``edit``, ``comment``), ``value``,
   ``edited_text``, ``comment``.
 
-Soup Zero and ``soup serve`` both write these files, so this module reads them by the
+Consuming applications and ``soup serve`` both write these files, so this module reads them by the
 rules of the contract, not by one producer's code:
 
 - for ``thumb``, ``rating`` and ``edit`` the latest line per ``(response_id, kind)`` wins

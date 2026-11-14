@@ -34,7 +34,7 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 > and, before it trains, `paraphrases.jsonl` (see [Who writes it](#who-writes-it)).
 > The `verdict.corrections` / `verdict.held_out` evidence is measured by
 > `soup ship --gate loop-v2` and written into the iteration line by `soup loop` (see
-> [The loop-v2 verdict](#the-loop-v2-verdict)); Soup Zero writes the same objects.
+> [The loop-v2 verdict](#the-loop-v2-verdict)); an application built on `soup loop` writes the same objects.
 > **One active loop per project:** the files take no lock, and two `soup loop watch`
 > processes on one `.soup/loop.yaml` would race on the version counter. Other programs may
 > append to the same files; Soup never assumes it is the only writer.
@@ -61,7 +61,8 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 - **No invented numbers.** A count, latency or progress total that was not measured is
   `null`, never `0` or `100`.
 - **`source`** names the surface that wrote the line, as a lowercase name. Known values:
-  `soup-serve`, `soup-loop`, and the Soup Zero surfaces `playground`, `try_it`, `proxy`.
+  `soup-serve`, `soup-loop`, and the surfaces of consuming applications `playground`,
+  `try_it`, `proxy`.
 
 ## conversation
 
@@ -115,7 +116,7 @@ One line per feedback action on one answer.
 ## paraphrase
 
 One line per edited answer: stable paraphrases of the prompt of an answer a person
-corrected. The loop and the Zero desktop app use them to check whether a new model
+corrected. The loop and a desktop app that drives it use them to check whether a new model
 version learned the correction (the version is asked the paraphrases, not the original
 prompt). They are generated once per answer and reused, so every version is checked
 against the same questions. **They are never training data.**
@@ -152,7 +153,7 @@ items than were requested, but never none: if nothing survives, **no line is wri
 `soup loop`'s pre-wired train stage, before it trains, for every edit in the training set that
 has no current line: current means the last line for its `response_id` has the `prompt_hash` of
 the edit's prompt, so an edit is generated once and every later iteration reuses it. It
-follows [Soup Zero](https://github.com/SoupTeam/SoupZero)'s method: the prompt that is
+follows the method of the consuming application: the prompt that is
 paraphrased is the last user message; one request asks for two paraphrases as a numbered list
 (template `loop-paraphrase`, version `1`, temperature 0.7); a paraphrase is dropped when it
 equals the prompt after case-folding and removing punctuation and spacing (`same_as_prompt`) or
@@ -287,7 +288,7 @@ One line per progress event. The shape is that of `soup ship --progress jsonl` (
 |---|---|---|
 | `iteration_id` | string or null | null for a job run outside an iteration. Required (may be null). |
 | `ts` | time | Required. |
-| `stage` | lowercase name | Open vocabulary. `soup loop`: `harvest`, `train`, `verdict`, `deploy`, `canary`, `promote`, `rollback`. Soup Zero: `data`, `merge`, `train`, `ship`, `export`, `deploy`. Required. |
+| `stage` | lowercase name | Open vocabulary. `soup loop`: `harvest`, `train`, `verdict`, `deploy`, `canary`, `promote`, `rollback`. A consuming application: `data`, `merge`, `train`, `ship`, `export`, `deploy`. Required. |
 | `event` | `start`, `progress`, `end`, `error` | Required. |
 | `done` / `total` | integer or null | null when the stage cannot count. |
 | `message` | string or null | Short status text for a person. |
@@ -422,8 +423,8 @@ the verdict asks whether the new version **learned the corrections** people made
 the edits held out of training**. `verdict.gate` is `loop-v2`, `verdict.corrections` and
 `verdict.held_out` are what `soup ship` measured (`--output` writes them in these exact
 shapes; a field that does not follow this page is left out of the line, never trusted), and a
-`DON'T SHIP` carries the gate's reason in `verdict.reason`. The rules are Soup Zero's
-(`zero_server/loop/harvest.py`), so both programs split the same edits:
+`DON'T SHIP` carries the gate's reason in `verdict.reason`. The rules are shared with the
+consuming application, so both programs split the same edits:
 
 - **The split.** The key of an edit is the content of the last user message of the corrected
   answer's conversation, `text.strip().casefold()`; the edit is held out iff

@@ -130,7 +130,7 @@ class TestAppendWriter:
     def test_the_file_is_opened_in_append_mode_and_earlier_lines_survive(self, cwd):
         # Another writer (a desktop app) already wrote two lines: never rewritten, never
         # overwritten from offset 0.
-        existing = b'{"from": "zero", "n": 1}\n{"from": "zero", "n": 2}\n'
+        existing = b'{"from": "app", "n": 1}\n{"from": "app", "n": 2}\n'
         (cwd / "log.jsonl").write_bytes(existing)
 
         append_json_line("log.jsonl", {"from": "soup"})
@@ -138,7 +138,7 @@ class TestAppendWriter:
         raw = (cwd / "log.jsonl").read_bytes()
         assert raw.startswith(existing)
         assert [record["from"] for record in _lines(cwd / "log.jsonl")] == [
-            "zero", "zero", "soup"
+            "app", "app", "soup"
         ]
 
     def test_a_line_another_writer_appends_just_before_our_write_is_not_overwritten(
@@ -154,7 +154,7 @@ class TestAppendWriter:
             if not done:
                 done.append(True)
                 with open(cwd / "log.jsonl", "ab") as other:
-                    other.write(b'{"from": "zero", "n": 1}\n')
+                    other.write(b'{"from": "app", "n": 1}\n')
             return real_write(fd, data)
 
         monkeypatch.setattr(os, "write", racing_write)
@@ -162,17 +162,17 @@ class TestAppendWriter:
         append_json_line("log.jsonl", {"from": "soup", "n": 2})
 
         assert [(r["from"], r["n"]) for r in _lines(cwd / "log.jsonl")] == [
-            ("soup", 0), ("zero", 1), ("soup", 2)
+            ("soup", 0), ("app", 1), ("soup", 2)
         ]
 
     def test_another_writer_between_two_appends_loses_nothing(self, cwd):
         append_json_line("log.jsonl", {"from": "soup", "n": 1})
         with open(cwd / "log.jsonl", "ab") as other:
-            other.write(b'{"from": "zero", "n": 2}\n')
+            other.write(b'{"from": "app", "n": 2}\n')
         append_json_line("log.jsonl", {"from": "soup", "n": 3})
 
         assert [(r["from"], r["n"]) for r in _lines(cwd / "log.jsonl")] == [
-            ("soup", 1), ("zero", 2), ("soup", 3)
+            ("soup", 1), ("app", 2), ("soup", 3)
         ]
 
     def test_a_torn_last_line_does_not_swallow_the_next_record(self, cwd):

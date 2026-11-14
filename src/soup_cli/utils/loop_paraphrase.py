@@ -17,7 +17,7 @@ instead of the prompt it was trained on. This module creates and stores those pa
 
 Paraphrases are never training data: nothing here touches the datasets.
 
-The method mirrors Soup Zero's (``zero_server/loop/corrections.py``): same template text,
+The method mirrors the consuming application's: same template text,
 same filters, same added-words rule, one retry request, two paraphrases per edit.
 
 Who answers: ``loop.yaml``'s ``paraphraser_endpoint`` / ``paraphraser_model`` (an
@@ -51,7 +51,8 @@ PARAPHRASE_LOG = DEFAULT_LAYOUT["paraphrase"]
 
 #: The instruction template the paraphrases are written with; recorded as ``generator.template``.
 TEMPLATE = MappingProxyType({"id": "loop-paraphrase", "version": "1"})
-#: Text of the template ``loop-paraphrase`` version ``1`` (Soup Zero's ``zero-paraphrase`` 1).
+#: Text of the template ``loop-paraphrase`` version ``1`` (the consuming application ships the
+#: same text).
 TEMPLATE_TEXT = (
     "Rewrite the question below in {n} different ways. Keep its meaning exactly and do not "
     "answer it. Reply with a numbered list only, one rewrite per line, like:\n1. ...\n2. ...\n\n"
@@ -86,7 +87,7 @@ MOSTLY_DROPPED = (
 )
 
 # ---------------------------------------------------------------------------
-# Words: what a correction added, and whether a text holds it (Soup Zero's rules)
+# Words: what a correction added, and whether a text holds it (the consuming application's rules)
 # ---------------------------------------------------------------------------
 
 #: The share of the added words a text must hold to count as holding the answer.

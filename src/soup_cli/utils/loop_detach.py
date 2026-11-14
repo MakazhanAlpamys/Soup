@@ -5,7 +5,7 @@ next to the state file (``.soup/loop.yaml`` by default):
 
 * ``.soup/loop.pid`` -- a JSON object ``{"pid": <int>, "started_at": <UTC ISO 8601>,
   "log": <path of the log, relative to the project directory>}``. JSON rather than a bare
-  pid so a reader (the Soup Zero desktop app, a script) gets the start time and the log
+  pid so a reader (a desktop app, a script) gets the start time and the log
   location from one file; ``jq .pid .soup/loop.pid`` is the one-liner.
 * ``.soup/loop.log`` -- the child's stdout and stderr, appended to across runs. It is
   rotated at :data:`MAX_LOG_BYTES` (10 MB), keeping one old file, ``.soup/loop.log.1``:

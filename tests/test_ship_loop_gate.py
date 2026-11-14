@@ -3,9 +3,8 @@
 Three layers, none of which loads a model or touches a GPU:
 
 * the scoring and statistics as pure functions (``added_recall_hit``, ``sign_test``, the two
-  checks, the gate truth table), pinned with the values of the Soup Zero reference
-  implementation (``zero_server/loop/corrections.py`` and its tests, branch
-  ``SoupTeam/SoupZero@feat/loop-corrections``, commit d1d37601);
+  checks, the gate truth table), pinned with the values of the reference
+  implementation of the consuming application (its corrections module and tests);
 * the two JSONL inputs, refused at the boundary with exit 3 and a message that names the file,
   the line and the problem;
 * the CLI, with ``live_eval.make_generator`` replaced by a recorder so the real
@@ -70,7 +69,8 @@ SCORING = {"method": "added_recall", "threshold": 0.5, "template": None}
 # added_recall: content words, added words, the hit
 # ---------------------------------------------------------------------------
 
-# Pinned from Zero: one small fixed English list. Negations and numbers are NOT on it.
+# Pinned from the reference implementation: one small fixed English list. Negations and numbers
+# are NOT on it.
 PINNED_STOP_WORDS = """
 a an the and or but if so as of at by for in on to up with from into onto than then that
 this these those is are was were be been being am do does did doing have has had having will
@@ -173,7 +173,7 @@ def test_strip_think_closed_lone_closing_and_unclosed():
     assert strip_think(None) == ""  # type: ignore[arg-type]
 
 
-# Zero's own fixtures (the coordinator's, from corrections.py's review): (expected, original,
+# The reference implementation's own fixtures (from its review): (expected, original,
 # answer) -> the added set, the words present, hit or miss.
 REFUND_ADDED = {
     "14", "account", "ask", "billing", "days", "purchase", "request", "settings", "within",
@@ -485,7 +485,7 @@ def test_the_style_note_is_information_only():
     assert without == plain.to_dict()  # it never decides the outcome
 
 
-def test_style_from_a_pairwise_win_rate_matches_zero():
+def test_style_from_a_pairwise_win_rate_matches_the_reference():
     won = style_from_win_rate(0.75, 4)
     assert (won.preferred_new, won.preferred_old, won.n) == (3, 1, 4)
     assert won.p_value == 0.625  # the two-sided sign test of 3:1

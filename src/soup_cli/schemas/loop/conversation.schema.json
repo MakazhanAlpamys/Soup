@@ -100,7 +100,7 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[a-z0-9][a-z0-9_.-]*$",
-      "description": "Which surface produced the record. Known values: soup-serve (soup serve), playground, try_it, proxy (Soup Zero). Other lowercase names are accepted."
+      "description": "Which surface produced the record. Known values: soup-serve (soup serve), playground, try_it, proxy (consuming applications). Other lowercase names are accepted."
     }
   }
 }

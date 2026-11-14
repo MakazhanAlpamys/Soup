@@ -1,6 +1,6 @@
 """``quantization: auto`` in the loop's sft recipe picks ``none`` when the base fits in VRAM.
 
-The recipe constant is final (candidate B in bf16, Soup Zero fit runs, 2026-11-06) and its
+The recipe constant is final (candidate B in bf16, fit runs, 2026-11-06) and its
 ``quantization`` is ``auto``. ``auto`` used to write no line, so ``soup train``'s own default
 (``4bit``) applied. Now the train stage measures, right before it writes the soup.yaml:
 

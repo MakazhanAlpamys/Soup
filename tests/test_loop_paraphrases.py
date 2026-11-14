@@ -14,7 +14,7 @@ made by asking it paraphrases of each corrected prompt. This PR creates and stor
   answers the call without recording it when it carries ``X-Soup-Internal: loop-check`` and the
   tool token. Paraphrases are never training data.
 
-The method is Soup Zero's (``zero_server/loop/corrections.py``); the filter cases below are its.
+The method is the consuming application's; the filter cases below are its.
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ class TestTemplate:
     def test_the_template_is_loop_paraphrase_version_1(self):
         assert dict(lp.TEMPLATE) == {"id": "loop-paraphrase", "version": "1"}
 
-    def test_the_template_text_is_soup_zeros(self):
+    def test_the_template_text_is_the_consuming_applications(self):
         assert lp.TEMPLATE_TEXT == (
             "Rewrite the question below in {n} different ways. Keep its meaning exactly and do "
             "not answer it. Reply with a numbered list only, one rewrite per line, like:\n"
@@ -247,7 +247,7 @@ class TestAddedWords:
 
 
 # ---------------------------------------------------------------------------
-# The sanity filter, with Soup Zero's cases
+# The sanity filter, with the consuming application's cases
 # ---------------------------------------------------------------------------
 
 

@@ -4,7 +4,7 @@ configurable in ``loop.yaml``.
 The recipe used to be five hard-coded numbers in ``_render_train_yaml``. Now:
 
 - ``DEFAULT_SFT_RECIPE`` (loop_state.py) holds the defaults, final (candidate B in bf16, the
-  Soup Zero fit runs of 2026-11-06); one test below pins its numbers (TestConstant), the rest
+  fit runs of 2026-11-06); one test below pins its numbers (TestConstant), the rest
   read the constant;
 - the keys are ``target_modules``, ``lora_r``, ``lora_alpha``, ``lr``, ``epochs``,
   ``batch_size``, ``gradient_accumulation_steps``, ``seed`` (the last three are pinned:
@@ -53,7 +53,7 @@ from soup_cli.utils.loop_state import (
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
-#: The two candidate recipes of the Soup Zero A/B, spelled as loop.yaml keys.
+#: The two candidate recipes of the A/B fit runs, spelled as loop.yaml keys.
 RECIPE_A = {
     "target_modules": "all-linear", "lora_r": 16, "lora_alpha": 32, "lr": 2e-4, "epochs": 5,
 }
@@ -172,7 +172,7 @@ class TestConstant:
         with open(loop_state.__file__, encoding="utf-8") as handle:
             source = handle.read()
 
-        assert "# Soup Zero fit runs, 2026-11-06: candidate B in bf16" in source
+        assert "# Fit runs, 2026-11-06: candidate B in bf16" in source
         assert "provisional" not in source.lower()
 
 

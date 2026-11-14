@@ -1,7 +1,7 @@
 """``soup loop watch --detach`` leaves a PID file and a log next to ``loop.yaml``.
 
 The detached child used to write to ``/dev/null`` and nothing recorded that it ran, so a
-user (or the Soup Zero desktop app) could neither tell whether the daemon was alive nor
+user (or a desktop app) could neither tell whether the daemon was alive nor
 read what it printed, and a second ``--detach`` started a second daemon on the same
 ``loop.yaml``. Now:
 

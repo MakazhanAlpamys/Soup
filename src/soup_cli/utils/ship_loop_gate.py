@@ -16,9 +16,9 @@ them decide:
   original question and the share of the added words each answer holds is compared (the recall
   value, not the hit). A one-sided exact sign test over worse vs better.
 
-The rule is the Soup Zero reference implementation's (``zero_server/loop/corrections.py``), word for
-word: the tokenizer, ``lower()`` (not ``casefold``), the stop list and the 0.5 threshold. Zero only
-records the two checks; here they decide (see ``decide_loop_gate``).
+The rule is that of the consuming application's reference implementation, word for word:
+the tokenizer, ``lower()`` (not ``casefold``), the stop list and the 0.5 threshold. That
+application only records the two checks; here they decide (see ``decide_loop_gate``).
 
 This module is pure python and light: no torch, no model. Model loading and the live run stay in
 ``commands/ship.py``; the verdict, panel and JSON live in ``utils/ship_verdict.py``.
@@ -47,9 +47,10 @@ FAILED_NO_CORRECTIONS = "no_corrections"  # check 1: there is nothing to check
 # ---------------------------------------------------------------------------
 
 THRESHOLD = 0.5  # the share of the added words an answer must hold to be a hit
-# New tokens an answer to a corrections or held-out question may run to, as Soup Zero's
-# ``ANSWER_TOKENS``. The live eval's 256 (``BEHAVIOURAL_MAX_NEW_TOKENS``) can cut a verbose answer
-# before it reaches the corrected fact, which scores as a miss the model did not earn.
+# New tokens an answer to a corrections or held-out question may run to, as the consuming
+# application's ``ANSWER_TOKENS``. The live eval's 256 (``BEHAVIOURAL_MAX_NEW_TOKENS``) can cut a
+# verbose answer before it reaches the corrected fact, which scores as a miss the model did not
+# earn.
 ANSWER_MAX_NEW_TOKENS = 512
 MIN_ADDED = 2  # an edit that adds fewer content words than this is scored on all of them
 MIN_DISCORDANT = 5  # check 1: fewer edits than this that changed either way is not enough evidence
@@ -59,7 +60,7 @@ SIGNIFICANT = 0.05
 
 # One small fixed English stop list. Negations (not, no, never) and numbers are not on it: they can
 # be the whole correction. There are no stop words for other languages: "в" in a Russian answer
-# counts as a content word (a known limitation, shared with Zero).
+# counts as a content word (a known limitation, shared with the consuming application).
 STOP_WORDS = frozenset("""
 a an the and or but if so as of at by for in on to up with from into onto than then that
 this these those is are was were be been being am do does did doing have has had having will

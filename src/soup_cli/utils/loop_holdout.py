@@ -2,7 +2,7 @@
 
 The loop's verdict (``soup ship --gate loop-v2``, ``utils/loop_gate.py``) asks whether a new
 version learned the corrections people made and kept the edits held out of training. Two rules,
-shared with Soup Zero (``zero_server/loop/harvest.py``), decide which edits those are:
+shared with the consuming application, decide which edits those are:
 
 - **The holdout split.** The key of an edit is the last user message of the corrected answer's
   conversation, ``text.strip().casefold()``. The edit is held out iff
@@ -88,8 +88,8 @@ def is_held_out(text: str) -> bool:
 def last_user_text(messages: object) -> Optional[str]:
     """The text of the last user message of a prompt, or ``None`` when it has none.
 
-    The last user message decides, as in Soup Zero: if it holds no text the prompt has no key,
-    whatever an earlier user message said.
+    The last user message decides, as in the consuming application: if it holds no text the
+    prompt has no key, whatever an earlier user message said.
     """
     if not isinstance(messages, (list, tuple)):
         return None

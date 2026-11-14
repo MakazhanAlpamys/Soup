@@ -54,7 +54,7 @@ SFT_QUANTIZATIONS: tuple = ("4bit", "none", "auto")
 # The sft recipe of a loop whose loop.yaml names none (or only some) of the keys.
 # target_modules None would write no line, so the config schema's default ("auto", peft decides)
 # applies.
-# Soup Zero fit runs, 2026-11-06: candidate B in bf16.
+# Fit runs, 2026-11-06: candidate B in bf16.
 # batch_size, gradient_accumulation_steps and seed are the config's own fields, pinned so a
 # run inherits nothing: a live run on the same rows inherited batch 1 and no seed, made 152
 # optimizer steps instead of 80 at lr 5e-4, and its quality fell (format_json 1.00 to 0.775).

@@ -2,7 +2,7 @@
 and ``soup ship --gate loop-v2``.
 
 The continual-learning loop used to judge a candidate by a task set and a general suite; it never
-saw a correction a person made. Soup Zero's loop (``zero_server/loop/harvest.py``, ``plan.py``)
+saw a correction a person made. The loop of the consuming application
 decides this with two rules both projects share, and this file pins them in the pre-wired loop:
 
 - **the holdout split.** A corrected answer whose prompt hashes under 30 is kept out of training in
@@ -570,7 +570,8 @@ class TestPlan:
 
         plan = loop_holdout.plan_holdout([edit], T0 + 150, ledger)
 
-        # Soup Zero keys graduation by response id: the answer trained, so it is not reported again
+        # The consuming application keys graduation by response id: the answer trained, so it is
+        # not reported again
         assert [e.id for e in plan.trainable] == [uid(2)] and plan.graduated == ()
 
     def test_an_old_held_side_edit_with_no_ledger_row_trained_before_the_ledger(self):

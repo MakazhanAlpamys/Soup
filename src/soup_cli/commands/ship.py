@@ -1286,9 +1286,10 @@ def _answer_generators(
 
     The task eval and the suites generate up to ``BEHAVIOURAL_MAX_NEW_TOKENS`` (256) and keep doing
     so. A corrections or held-out answer may need more to reach the corrected fact, so those
-    questions get ``ANSWER_MAX_NEW_TOKENS`` (512, as Soup Zero), still greedy. The generators are
-    rebuilt on the models ``_resolve_generators`` already loaded (``loaded=``), so no weights are
-    read twice and ``--base-adapter`` and the chat-template options carry over unchanged.
+    questions get ``ANSWER_MAX_NEW_TOKENS`` (512, as the consuming application), still greedy.
+    The generators are rebuilt on the models ``_resolve_generators`` already loaded
+    (``loaded=``), so no weights are read twice and ``--base-adapter`` and the chat-template
+    options carry over unchanged.
     """
     from soup_cli.utils import live_eval
 
