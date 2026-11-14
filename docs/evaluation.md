@@ -832,6 +832,9 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+Local baseline JSON objects must use unique keys. If a baseline file repeats
+a key, keep the intended entry or regenerate the file before running the gate.
+
 `--write-baseline` refuses an output resolving to the suite, custom-task file,
 or judge-prompts file before model construction (exit 3), preserving those inputs.
 Fresh output paths and intentional refreshes of an existing baseline remain allowed.

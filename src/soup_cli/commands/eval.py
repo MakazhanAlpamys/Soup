@@ -1389,7 +1389,7 @@ def gate_cmd(
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot resolve baseline:[/] {exc}")
+        console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
