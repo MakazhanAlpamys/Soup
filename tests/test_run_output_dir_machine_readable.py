@@ -83,6 +83,17 @@ class TestSanitizeRunOutputDir:
     def test_legacy_relative_output_dir(self, tmp_path: Path):
         assert sanitize_run_output_dir("output", base=tmp_path) == "output"
 
+    def test_nested_relative_output_dir_under_base(self, tmp_path: Path):
+        base = tmp_path / "custom_server_dir"
+        assert (
+            sanitize_run_output_dir("sub/nested/output", base=base)
+            == os.path.join("sub", "nested", "output")
+        )
+
+    def test_nested_relative_output_dir_escaping_base(self, tmp_path: Path):
+        base = tmp_path / "custom_server_dir"
+        assert sanitize_run_output_dir("../../outside/output", base=base) == "output"
+
     def test_windows_drive_path_on_posix(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         # On POSIX without the upfront check, is_under treats this as a relative file under cwd
