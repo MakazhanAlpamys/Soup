@@ -251,7 +251,7 @@ def _clean_tool_calls(
     return cleaned_calls
 
 
-def _has_tool_calls(msg: Dict[str, Any]) -> bool:
+def has_tool_calls(msg: Dict[str, Any]) -> bool:
     """True when a turn carries at least one tool call (a non-empty list)."""
     calls = msg.get("tool_calls")
     return isinstance(calls, list) and len(calls) > 0
@@ -367,7 +367,7 @@ def clean_row(
                     # and "" is what the unified tool-calling format writes there;
                     # keep it as the same turn with content null is kept.
                     if (
-                        not _has_tool_calls(msg)
+                        not has_tool_calls(msg)
                         and len(sanitized_content.strip()) < min_tokens
                     ):
                         return None, ["Empty / Whitespace Turns"]

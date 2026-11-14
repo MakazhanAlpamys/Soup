@@ -6,7 +6,8 @@ missing chat_template, a template that can't render the data, no
 ``{% generation %}`` markers (weaker assistant-only masking), a missing
 EOS/EOT token after the trained span (the #1 "model never stops
 generating" bug), duplicated BOS tokens, unsupported system role
-(Mistral-style templates), unknown message roles, and truncation risk.
+(Mistral-style templates), unknown message roles, empty assistant answers,
+and truncation risk.
 
 Design mirrors ``utils/diagnose/report.py``'s OK / MINOR / MAJOR taxonomy
 (worst-verdict-wins aggregation) without literally reusing its
@@ -29,6 +30,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
+from soup_cli.data.answer_checks import count_empty_assistant_turns
 from soup_cli.data.loss_mask import IGNORE_INDEX
 
 VERDICTS: Tuple[str, ...] = ("OK", "MINOR", "MAJOR")
@@ -41,6 +43,7 @@ CHECKS: Tuple[str, ...] = (
     "bos_duplication",
     "system_role",
     "unknown_roles",
+    "empty_answers",
     "truncation_risk",
 )
 
@@ -604,6 +607,25 @@ def check_unknown_roles(rows: Sequence[Mapping]) -> DoctorCheck:
     )
 
 
+def check_empty_answers(rows: Sequence[dict]) -> DoctorCheck:
+    """Report MINOR when at least one converted sample has an empty answer."""
+    affected = turns = 0
+    for row in rows:
+        count = count_empty_assistant_turns(row)
+        affected += count > 0
+        turns += count
+    fraction = affected / len(rows) if rows else 0.0
+    return DoctorCheck(
+        name="empty_answers",
+        verdict="MINOR" if affected else "OK",
+        message=(
+            f"{affected}/{len(rows)} sampled rows ({fraction:.1%}) contain empty assistant "
+            f"answers ({turns} turn(s))."
+        ),
+        evidence="MINOR above 0% of sampled rows. Advisory at every rate.",
+    )
+
+
 def check_truncation_risk(
     tokenizer: Any, rows: Sequence[Mapping], *, max_length: int
 ) -> DoctorCheck:
@@ -745,6 +767,7 @@ def run_doctor(
         ),
         check_system_role(tokenizer, normalized),
         check_unknown_roles(normalized),
+        check_empty_answers(normalized),
         check_truncation_risk(tokenizer, normalized, max_length=max_length),
     ]
     return compose_doctor_report(checks, rows_scanned=len(normalized), total_rows=total)
