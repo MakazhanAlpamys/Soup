@@ -10,12 +10,17 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from rich.console import Console
 
 from soup_cli.cans.schema import CAN_FORMAT_VERSION, Manifest
 from soup_cli.registry.store import RegistryStore
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.redaction import RedactionReport, redact_config, redact_text
+from soup_cli.utils.terminal import for_terminal
 
 _MAX_CAN_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+# How many changed key paths are listed on the console; the count covers all of them.
+_MAX_LISTED_PATHS = 20
 
 
 def _add_text(tar: tarfile.TarFile, name: str, content: str) -> None:
@@ -26,10 +31,41 @@ def _add_text(tar: tarfile.TarFile, name: str, content: str) -> None:
     tar.addfile(info, io.BytesIO(data))
 
 
+def _redact_for_pack(
+    config: object, description: Optional[str],
+) -> tuple[object, Optional[str], RedactionReport]:
+    """The config and description with credentials replaced, and what changed.
+
+    ``report.paths`` holds key paths only (``data.hf_token``), never a value.
+    """
+    redacted, report = redact_config(config)
+    if description:
+        before = report.count
+        description = redact_text(description, report)
+        if report.count != before:
+            report.add_path("description")
+    return redacted, description, report
+
+
+def _announce_redactions(report: RedactionReport, console: Optional[Console]) -> None:
+    """Say which keys were changed before the can was written (paths, never values)."""
+    if not report.count:
+        return
+    shown = [for_terminal(redact_text(path)) for path in report.paths[:_MAX_LISTED_PATHS]]
+    more = len(report.paths) - len(shown)
+    listing = ", ".join(shown) + (f" (+{more} more)" if more > 0 else "")
+    (console or Console()).print(
+        f"[yellow]Redacted {report.count} credential value(s) before packing, "
+        f"keys changed:[/] {listing}",
+        soft_wrap=True, highlight=False,
+    )
+
+
 def pack_entry(
     *, entry_id: str, out_path: str, author: str = "unknown",
     description: Optional[str] = None,
     attestations: Optional[list[dict]] = None,
+    console: Optional[Console] = None,
 ) -> Path:
     """Pack a registry entry as a ``.can`` tarball.
 
@@ -41,6 +77,8 @@ def pack_entry(
         description: optional free-form description.
         attestations: optional list of embedded in-toto Statements (v0.71.3
             #182). Each is shape-validated by the manifest schema.
+        console: where the changed key paths are listed when the config or
+            description carried credentials (they are replaced before packing).
 
     Returns:
         The absolute path to the written file.
@@ -61,13 +99,18 @@ def pack_entry(
         except (TypeError, ValueError):
             config = {}
 
+    config, safe_description, report = _redact_for_pack(
+        config, description or entry.get("notes"),
+    )
+    _announce_redactions(report, console)
+
     manifest = Manifest(
         can_format_version=CAN_FORMAT_VERSION,
         name=entry["name"],
         author=author,
         created_at=datetime.now().isoformat(timespec="seconds"),
         base_hash=entry.get("entry_hash", ""),
-        description=description or entry.get("notes"),
+        description=safe_description,
         tags=list(entry.get("tags", [])),
         attestations=list(attestations or []),
     )
@@ -135,8 +178,14 @@ def _apply_modification(config: dict, mod: str) -> None:
 def fork_can(
     *, source: str, out_path: str, modifications: list[str],
     author: str = "unknown",
+    console: Optional[Console] = None,
 ) -> Path:
-    """Apply ``modifications`` to a can's config and re-pack."""
+    """Apply ``modifications`` to a can's config and re-pack.
+
+    Credentials in the config (including a value set by a modification) and in the
+    description are replaced before packing; the changed key paths are listed on
+    ``console``.
+    """
     from soup_cli.cans.unpack import inspect_can, read_config
 
     src = Path(source)
@@ -153,10 +202,13 @@ def fork_can(
     config = read_config(source)
     for mod in modifications:
         _apply_modification(config, mod)
+    config, safe_description, report = _redact_for_pack(config, manifest.description)
+    _announce_redactions(report, console)
 
     with tarfile.open(out, mode="w:gz") as tar:
         _add_text(tar, "manifest.yaml", yaml.safe_dump({
             **manifest.model_dump(),
+            "description": safe_description,
             "author": author,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "name": f"{manifest.name}-fork",
