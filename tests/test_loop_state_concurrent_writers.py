@@ -358,11 +358,15 @@ class TestEveryWriterTakesTheLock:
         update_state(lambda state: state.with_status("running"), _path(cwd))
         real_read = loop_state.read_state
 
+        injections = []
+
         def read_then_change(path=None):
             state = real_read(path)
-            # another writer lands between this command's first read and its write
+            # another writer lands right after each read this command makes through its own
+            # module (a stale copy of the file is what a careless writer would save)
+            injections.append(1)
             real_write = loop_state._write_state_unlocked
-            real_write(replace(state, production_name="by-another-writer"), path)
+            real_write(replace(state, production_name=f"by-another-writer-{len(injections)}"), path)
             return state
 
         import soup_cli.commands.loop as loop_cmd
@@ -376,4 +380,5 @@ class TestEveryWriterTakesTheLock:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         final = real_read(_path(cwd))
-        assert final.status == "paused" and final.production_name == "by-another-writer"
+        assert final.status == "paused"
+        assert final.production_name == f"by-another-writer-{len(injections)}"
