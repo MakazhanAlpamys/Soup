@@ -18,78 +18,20 @@ import json
 import math
 import os
 import re
-import shutil
 from types import SimpleNamespace
 
 import pytest
 
-#: moonshotai/Kimi-K2-Base ``config.json`` at revision ce72df012259dcc55d945e890f815fe7ef69159c
-#: (sha256 8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439), verbatim. The
-#: Kimi-K2-Instruct file at revision fd1984e2b7a3350dbf7305fe73a4ede25c14de50 is byte-identical.
-K2_BASE_CONFIG = {
-    "architectures": ["DeepseekV3ForCausalLM"],
-    "attention_bias": False,
-    "attention_dropout": 0.0,
-    "auto_map": {
-        "AutoConfig": "configuration_deepseek.DeepseekV3Config",
-        "AutoModel": "modeling_deepseek.DeepseekV3Model",
-        "AutoModelForCausalLM": "modeling_deepseek.DeepseekV3ForCausalLM",
-    },
-    "aux_loss_alpha": 0.001,
-    "bos_token_id": 163584,
-    "eos_token_id": 163585,
-    "first_k_dense_replace": 1,
-    "hidden_act": "silu",
-    "hidden_size": 7168,
-    "initializer_range": 0.02,
-    "intermediate_size": 18432,
-    "kv_lora_rank": 512,
-    "max_position_embeddings": 131072,
-    "model_type": "kimi_k2",
-    "moe_intermediate_size": 2048,
-    "moe_layer_freq": 1,
-    "n_group": 1,
-    "n_routed_experts": 384,
-    "n_shared_experts": 1,
-    "norm_topk_prob": True,
-    "num_attention_heads": 64,
-    "num_experts_per_tok": 8,
-    "num_hidden_layers": 61,
-    "num_key_value_heads": 64,
-    "num_nextn_predict_layers": 0,
-    "pretraining_tp": 1,
-    "q_lora_rank": 1536,
-    "qk_nope_head_dim": 128,
-    "qk_rope_head_dim": 64,
-    "quantization_config": {
-        "activation_scheme": "dynamic",
-        "fmt": "e4m3",
-        "quant_method": "fp8",
-        "weight_block_size": [128, 128],
-    },
-    "rms_norm_eps": 1e-06,
-    "rope_theta": 50000.0,
-    "routed_scaling_factor": 2.827,
-    "rope_scaling": {
-        "beta_fast": 1.0,
-        "beta_slow": 1.0,
-        "factor": 32.0,
-        "mscale": 1.0,
-        "mscale_all_dim": 1.0,
-        "original_max_position_embeddings": 4096,
-        "type": "yarn",
-    },
-    "scoring_func": "sigmoid",
-    "seq_aux": True,
-    "tie_word_embeddings": False,
-    "topk_group": 1,
-    "topk_method": "noaux_tc",
-    "torch_dtype": "bfloat16",
-    "transformers_version": "4.48.3",
-    "use_cache": True,
-    "v_head_dim": 128,
-    "vocab_size": 163840,
-}
+#: The real Base config dict and its ``_base``/``_without`` builders live in the shared
+#: tiny-checkpoint helper (imported back here so this file's module API is unchanged for
+#: the other suites and harnesses that import these names from it).
+from tests.kimi_k2_tiny import (
+    _STALE_INV_FREQ,
+    K2_BASE_CONFIG,
+    _base,
+    _native_tiny_config,
+    _without,
+)
 
 #: The fields moonshotai/Kimi-K2-Thinking's ``config.json`` (revision
 #: a51ccc050d73dab088bf7b0e2dd9b30ae85a4e55, sha256
@@ -174,19 +116,6 @@ K2_INSTRUCT_0905_CHANGES = {
     "tokenizer_class": None, "top_k": 50, "top_p": 1.0, "torchscript": False,
     "transformers_version": "4.51.3", "typical_p": 1.0, "use_bfloat16": False,
 }
-
-
-def _base(**changes):
-    raw = copy.deepcopy(K2_BASE_CONFIG)
-    raw.update(copy.deepcopy(changes))
-    return raw
-
-
-def _without(*keys, raw=None):
-    raw = _base() if raw is None else raw
-    for key in keys:
-        raw.pop(key)
-    return raw
 
 
 def _rope(**changes):
@@ -1030,101 +959,19 @@ def test_the_ropes_differ_on_each_refused_rope_variant(changes):
 # ==========================================================================
 # G2: streamed vs resident parity on a tiny K2-like checkpoint (CPU fp32)
 # ==========================================================================
-_TINY = dict(
-    vocab_size=128, hidden_size=64, intermediate_size=128, moe_intermediate_size=32,
-    num_hidden_layers=3, first_k_dense_replace=1, num_attention_heads=4,
-    num_key_value_heads=4, n_shared_experts=1, n_routed_experts=8, n_group=1, topk_group=1,
-    num_experts_per_tok=2, kv_lora_rank=16, q_lora_rank=24, qk_nope_head_dim=16,
-    qk_rope_head_dim=8, v_head_dim=16, max_position_embeddings=2048, bos_token_id=0,
-    eos_token_id=1,
-)
-_TINY_YARN = {
-    "beta_fast": 1.0, "beta_slow": 1.0, "factor": 32.0, "mscale": 1.0, "mscale_all_dim": 1.0,
-    "original_max_position_embeddings": 64,
-}
-_TINY_LAYERS = 3
-_BLOCK = (16, 32)
-#: The real checkpoint carries 61 of these (BF16 [56]); neither K2's code (non-persistent
-#: buffer) nor the native class (no per-layer rotary module) reads them.
-_STALE_INV_FREQ = "self_attn.rotary_emb.inv_freq"
-_STALE_VALUE = 12345.0
-
-
-def _tiny_k2_raw():
-    """The real Base ``config.json`` with tiny dimensions substituted."""
-    raw = _without("quantization_config", raw=_base(**_TINY))
-    raw["rope_scaling"] = dict(_TINY_YARN, type="yarn")
-    return raw
-
-
-def _native_tiny_config(*, yarn=True):
-    """The resident control's config, from keyword arguments: never through Soup's loader."""
-    from transformers import DeepseekV3Config
-
-    rope = {"rope_type": "yarn", "rope_theta": 50000.0, **_TINY_YARN}
-    if not yarn:
-        rope = {"rope_type": "default", "rope_theta": 50000.0}
-    return DeepseekV3Config(
-        **_TINY, rope_parameters=rope, rms_norm_eps=1e-6, routed_scaling_factor=2.827,
-        norm_topk_prob=True, tie_word_embeddings=False, num_mtp_layers=0,
-    )
-
-
-def _fp8_tools():
-    from tests.test_fp8_block_streaming import _harness, _reference_dequant
-
-    return _harness(), _reference_dequant
+#: The tiny checkpoint's dims, config builders and the seeded builder itself live in the
+#: shared helper (tests/kimi_k2_tiny.py) so the resident-parity recorder builds the same
+#: bytes; the builder's seeds and write order are unchanged by the extraction.
 
 
 @pytest.fixture(scope="module")
 def k2_checkpoints(tmp_path_factory):
     """{"bf16": (K2 folder, resident folder), "fp8": (...)}: the same seeded weights."""
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from safetensors.torch import load_file, save_file
-    from transformers import DeepseekV3ForCausalLM
+    from tests.kimi_k2_tiny import build_tiny_k2_checkpoints
 
-    root = tmp_path_factory.mktemp("kimi-k2-tiny")
-    torch.manual_seed(11)
-    model = DeepseekV3ForCausalLM(_native_tiny_config()).to(torch.float32).eval()
-    generator = torch.Generator().manual_seed(23)
-    with torch.no_grad():
-        for layer in model.model.layers[1:]:
-            bias = layer.mlp.gate.e_score_correction_bias
-            bias.copy_(torch.randn(bias.shape, generator=generator) * 2.0)
-        for parameter in model.parameters():
-            parameter.data = parameter.data.to(torch.bfloat16)
-    native = root / "native-bf16"
-    model.save_pretrained(str(native))
-    state = load_file(str(native / "model.safetensors"))
-    # The real index's per-expert spelling, which the sharder stacks.
-    assert "model.layers.1.mlp.experts.0.gate_proj.weight" in state
-    stale = {
-        f"model.layers.{idx}.{_STALE_INV_FREQ}": torch.full((7,), _STALE_VALUE).to(torch.bfloat16)
-        for idx in range(_TINY_LAYERS)
-    }
-    k2 = root / "k2-bf16"
-    k2.mkdir()
-    save_file({**state, **stale}, str(k2 / "model.safetensors"), metadata={"format": "pt"})
-    (k2 / "config.json").write_text(json.dumps(_tiny_k2_raw()), encoding="utf-8")
-
-    harness, reference_dequant = _fp8_tools()
-    fp8 = root / "k2-fp8"
-    harness.convert_checkpoint(str(k2), str(fp8), block=_BLOCK, log=lambda _line: None)
-    fp8_state = load_file(str(fp8 / "model.safetensors"))
-    assert any(value.dtype == torch.float8_e4m3fn for value in fp8_state.values())
-    ref_state = {}
-    for key, value in fp8_state.items():
-        if key.endswith("_scale_inv") or key.endswith(_STALE_INV_FREQ):
-            continue
-        scale = fp8_state.get(key + "_scale_inv")
-        ref_state[key] = value if scale is None else reference_dequant(value, scale, _BLOCK)
-    ref = root / "native-fp8-ref"
-    ref.mkdir()
-    save_file(ref_state, str(ref / "model.safetensors"), metadata={"format": "pt"})
-    shutil.copyfile(native / "config.json", ref / "config.json")
-    assert not any(name.endswith(".py") for folder in (k2, fp8) for name in os.listdir(folder))
-    return {"bf16": (str(k2), str(native)), "fp8": (str(fp8), str(ref))}
+    return build_tiny_k2_checkpoints(tmp_path_factory.mktemp("kimi-k2-tiny"))
 
 
 def _resident(weights, layout="", config=None):

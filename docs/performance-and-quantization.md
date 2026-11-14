@@ -574,6 +574,8 @@ A guard runs first, before the tokenizer is loaded. It admits the config only wh
 
 Kimi-K2-Base and -Instruct as published pass it. Other K2 releases are out of scope for now, and the refusal says so before it lists the fields. Kimi-K2-Thinking does not pass: its weights are compressed-tensors INT4, refused as `quantization_config.quant_method='compressed-tensors'`, and its file carries 50 more fields the published one does not, each named. Kimi-K2-Instruct-0905 has the same decoder, but its file adds `ep_size`, `pad_token_id` and the serialised `PretrainedConfig` defaults, so it is refused too. Kimi K2.5 and K2.6 (`model_type: kimi_k25`, a vision-language wrapper) are not admitted either.
 
+**Resident training on K2 (sft and grpo).** On the resident (non-streamed) route, `task: sft` and `task: grpo` lift the refusal for Kimi-K2-Base and -Instruct: the same guard rewrites the `config.json` in memory behind `training.stream_layers: false` — the config read passes `trust_remote_code=False`, so no repository code is executed — into transformers' own `DeepseekV3ForCausalLM`, and the safetensors load natively. Each FP8 block weight is dequantised to bf16 per tensor at load through the dequantiser layer streaming already gates bit-exactly. The load never holds a second full model, but the fuse step is the largest transient: one layer's fused routed experts (≈33.8 GB per layer at published K2 scale) are allocated while that layer's per-expert tensors are alive. A `quantization_config` menu entry (NF4/4-bit) is refused on this route — the message names the streamed route as the 4-bit path — and `quantization: 4bit` recipes for K2 therefore stay on `training.stream_layers: true`; the `kimi-k2-sft` recipe stays unavailable because its YAML carries `quantization: 4bit`. The route requires `training.quantization: none`: any other value is refused at config validation, before a run starts. The tokenizer is still repository code on this route — the `trust_remote_code=False` config read covers the config only — and needs `--trust-remote-code` and `pip install tiktoken` to load. transformers' own fine-grained FP8 path is not used because this route must compute exactly what the streamed route computes: both dequantise through `utils/fp8_block.dequantize_fp8_block`, the bit-exactly gated converter, and a second converter would make the two routes disagree by construction. `device_map: auto` or a single-entry dict is resolved to one device; a multi-device map and an unavailable CUDA target are refused before loading. The other trainers still refuse K2 bases on the resident path at config validation, and Kimi-K2-Thinking and -Instruct-0905 remain refused for every task: no supported route. Evidence is CPU-only parity of this load against K2's own pinned modelling code on a tiny K2-shaped checkpoint ([resident gate](../benchmarks/gate-kimi-k2-resident.md)); real-scale routing and GPU execution are unverified.
+
 **The K2 tokenizer.** It exists only as code in the repository (`tokenization_kimi.py`), so a K2 run needs `--trust-remote-code`, and Soup prints its REMOTE CODE WARNING panel for it. Under layer streaming that flag reaches the tokenizer only; the config and the model are transformers' own classes. The tokenizer load is handed the config Soup already loaded, so `AutoTokenizer` does not read the config again with the flag (it would import and run the repository's `configuration_deepseek.py`; Moonlight-16B's tokenizer load did that before this change). The tokenizer also imports `tiktoken`, which Soup does not install: `pip install tiktoken`. When the tokenizer fails to load on a K2 base, Soup names both requirements before the error.
 
 Measured ([gate](../benchmarks/gate-kimi-k2-admission.md), CPU only):
@@ -860,9 +862,27 @@ forecast     5685-8361 tok/s — a compute-bound bound, not a promise
 ```
 
 The prediction was fitted to ten real runs across two models, a 3.1× vocabulary contrast,
-batch 1–8 and two sequence lengths: **worst error 0.85%, and it never under-predicts** —
-the only safe direction for a number allowed to stop a run. The refusal names the two
-knobs that actually scale it (`training.batch_size`, `data.max_length`).
+batch 1–8 and sequence lengths 256 and 512. That grid was measured on an RTX 3050
+(compute capability 8.6). The estimate now explicitly charges two cuBLAS handle/stream
+PyTorch caching-allocator workspaces: the device default is 8,320 KiB each on this
+card, or the summed sizes in `CUBLAS_WORKSPACE_CONFIG` when set. This budget predicts
+`torch.cuda.max_memory_allocated()` and does not include cuBLAS-private buffers allocated
+outside PyTorch's caching allocator when handles are created. On the original grid, the total prediction is
+101.04–106.57% of the recorded peak (the cuBLAS term adds 0.18–5.99% of that peak);
+the former 0.85% accuracy bound no longer
+applies. Because the 13.5 MB fixed allowance was measured before this charge was added,
+some configurations that passed the v0.77.2 pre-flight may now be refused; lower
+`training.batch_size` or `data.max_length`, or use the packed NF4 backward when Soup
+offers it for the run. This evidence does not promise a bound at other sequence lengths
+or devices.
+The refusal names the two knobs that scale the model terms (`training.batch_size`,
+`data.max_length`).
+
+The `SIZE:COUNT` parsing follows PyTorch 2.14.0's `parseChosenWorkspaceSize` in
+`aten/src/ATen/cuda/CublasHandlePool.cpp`. `TORCH_CUBLAS_WORKSPACE_CACHE=1` retains
+ATen's workspace for each cuBLAS handle and CUDA stream; when unset, ATen allocates
+and releases its workspace for each operation. The pre-flight conservatively budgets
+the forward and backward handle/stream workspaces either way.
 
 Refusing rather than warning is deliberate. On Linux an over-budget step is a hard OOM.
 On Windows it is worse: WDDM silently spills to host memory and the run merely becomes an
@@ -1205,7 +1225,7 @@ above); it does not make the reference free.
   streaming's own batch-1 restriction.)
 - **The VRAM pre-flight is deliberately conservative for paired losses.** DPO, ORPO and
   SimPO send chosen and rejected through the model as one tensor, so the budget charges
-  twice the rows — correct, and it never under-predicts. But it charges them at the
+  twice the rows. But it charges them at the
   *supervised* loss's measured per-element rate, and TRL's preference losses use a
   cheaper path, so the estimate is an upper bound rather than a tight one. Concretely,
   on a 4 GB card with a 128k-vocab 1B model: DPO at `max_length: 512` is allowed, and

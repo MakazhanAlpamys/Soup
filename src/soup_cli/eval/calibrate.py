@@ -380,6 +380,8 @@ class JudgeCalibrationReport:
             raise ValueError("num_pairs must be non-negative")
         if not isinstance(self.calibrated, bool):
             raise ValueError("calibrated must be a bool")
+        if self.calibrated and self.num_pairs == 0:
+            raise ValueError("num_pairs must be positive when calibrated is true")
 
     def to_dict(self) -> dict:
         """JSON-serialisable view (v0.71.1 #214)."""

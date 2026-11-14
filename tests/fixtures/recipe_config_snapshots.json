@@ -810,7 +810,7 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. Use the guarded training.stream_layers: true route (#2107), with --trust-remote-code for the tokenizer and pip install tiktoken. See docs/performance-and-quantization.md, Kimi K2: CPU-only parity on a tiny K2-like checkpoint; full K2/GPU training is unverified."
+      "$unavailable": "resident Kimi K2 route: training.quantization '4bit' is refused \u2014 the resident route loads bf16 only; set training.quantization: none for this route, or train 4-bit through training.stream_layers: true (--trust-remote-code for the tokenizer and pip install tiktoken; see docs/performance-and-quantization.md, Kimi K2)."
     },
     "kimi-k2-thinking-grpo": {
       "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."

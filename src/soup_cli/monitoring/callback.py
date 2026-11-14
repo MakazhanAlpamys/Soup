@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 
 from soup_cli.experiment.row_kinds import ROW_KIND_SUMMARY, metric_row_kind
 from soup_cli.monitoring.display import TrainingDisplay
+from soup_cli.monitoring.reward_collapse import (
+    ZERO_SPREAD_FRACTION_THRESHOLD,
+    ZERO_SPREAD_REQUIRED_STEPS,
+    RewardCollapseMonitor,
+)
 from soup_cli.monitoring.step_rate import StepRate, is_finite_number
 
 logger = logging.getLogger(__name__)
@@ -169,6 +174,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         from soup_cli.utils.eval_schedule import DEFAULT_VALIDATION_METRIC
 
         self.display = display
+        self._reward_group_monitor = RewardCollapseMonitor()
         self.tracker = tracker
         self.run_id = run_id
         self.output_dir = output_dir
@@ -240,6 +246,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self, args: TrainingArguments, state: TrainerState,
         control: TrainerControl, **kwargs,
     ):
+        self._reward_group_monitor = RewardCollapseMonitor()
         self.display.start(total_steps=state.max_steps)
         self._step_rate.reset()
         # Prod wiring for the eval gate: load the suite + baseline and build a
@@ -385,6 +392,22 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # number is an evaluation, any other measured one a training log.
         row_kind = metric_row_kind(**{val_field: measured_val_loss})
 
+        reward_metrics = {}
+        if (
+            getattr(getattr(self.display, "config", None), "task", None) == "grpo"
+            and getattr(state, "is_world_process_zero", True)
+            and "frac_reward_zero_std" in logs
+        ):
+            if self._reward_group_monitor.observe(step, logs["frac_reward_zero_std"]):
+                logger.warning(
+                    "GRPO reward diversity is low: more than %.0f%% of groups had zero "
+                    "reward spread for %d distinct logged steps. These groups have "
+                    "no group-relative advantage signal; inspect the rewards and prompts.",
+                    ZERO_SPREAD_FRACTION_THRESHOLD * 100,
+                    ZERO_SPREAD_REQUIRED_STEPS,
+                )
+            reward_metrics["frac_reward_zero_std"] = self._reward_group_monitor.fraction
+
         self.display.update(
             step=step,
             epoch=epoch,
@@ -394,6 +417,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             speed=speed,
             gpu_mem=gpu_mem,
             **{val_field: display_val_loss},
+            **reward_metrics,
         )
 
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI

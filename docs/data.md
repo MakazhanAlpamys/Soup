@@ -660,6 +660,10 @@ contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a t
 as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
 error is reported with its code cell and line.
 
+A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
+names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
+with a warning naming its keys, and the template is not carried over.
+
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
 The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with

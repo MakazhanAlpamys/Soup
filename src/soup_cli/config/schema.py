@@ -3630,7 +3630,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3640,7 +3640,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -7292,7 +7292,8 @@ class SoupConfig(BaseModel):
         """#340 — ``lora.r: 0`` = full fine-tuning (no adapter).
 
         The third member of the "LoRA off" family, sharing Spectrum's and
-        LISA's gate: sft + transformers + text + ``quantization='none'``,
+        LISA's gate: sft + transformers + text + ``quantization='none'``.
+        Native MLX text SFT also qualifies dense Llama models (#1992). Both are
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
@@ -7336,7 +7337,8 @@ class SoupConfig(BaseModel):
             # on the meta device, so there is nothing to full fine-tune).
             # Let it speak rather than reporting a quantization mismatch.
             return self
-        if self.backend != "transformers":
+        mlx_full = self.backend == "mlx" and self.task == "sft"
+        if self.backend != "transformers" and not mlx_full:
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
@@ -7370,6 +7372,17 @@ class SoupConfig(BaseModel):
             )
         lcfg = tcfg.lora
         lora_conflicts = []
+        if mlx_full:
+            defaults = LoraConfig()
+            for field in ("alpha", "dropout", "target_modules"):
+                if getattr(lcfg, field) != getattr(defaults, field):
+                    lora_conflicts.append(f"lora.{field}")
+            for field in ("add_new_tokens", "new_special_tokens"):
+                if getattr(self.data, field):
+                    raise ValueError(
+                        f"MLX full fine-tuning does not support data.{field}; "
+                        "vocabulary expansion currently requires LoRA."
+                    )
         if lcfg.use_dora:
             lora_conflicts.append("lora.use_dora")
         if lcfg.use_vera:
@@ -9520,6 +9533,11 @@ class SoupConfig(BaseModel):
         ]
         if not fields:
             return self
+        if (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and tcfg.lora.r == 0 and not tcfg.stream_layers
+        ):
+            return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
         if self.task not in FREEZE_APPLYING_TASKS:
@@ -9731,14 +9749,27 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _reject_resident_kimi_k2(self) -> "SoupConfig":
-        """K2 remote code cannot import or train on the supported 5.x stack."""
-        from soup_cli.utils.kimi import resident_kimi_k2_refusal
+        """Resident K2 remote code cannot import or train on the supported 5.x stack.
+
+        #2104 task 2: Kimi-K2-Base / -Instruct are admitted on sft/grpo (the resident
+        route); every other task, and Thinking / 0905 for all tasks, stays refused.
+        Review round 2: the admission holds only at ``training.quantization: none``
+        (the resident route loads bf16 only); any other quantization is refused here,
+        at config validation, instead of failing inside the model loader.
+        """
+        from soup_cli.utils.kimi import (
+            _ResidentKimiK2QuantizationRefusal,
+            resident_kimi_k2_refusal,
+        )
 
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
-            stream_layers=self.training.stream_layers,
+            stream_layers=self.training.stream_layers, task=self.task,
+            modality=self.modality, quantization=self.training.quantization,
         )
         if reason is not None:
+            if isinstance(reason, _ResidentKimiK2QuantizationRefusal):
+                raise ValueError(str(reason))
             raise ValueError(
                 f"{reason} base={self.base}. Its remote code uses removed APIs "
                 "and an inference-only MoE training path. Choose a compatible base."

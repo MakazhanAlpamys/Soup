@@ -112,6 +112,10 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
     if cfg.task in UNSUPPORTED_RESUME_TASKS:
         return f"{flag} is not supported for task {cfg.task!r}"
+    if cfg.task == "sft" and cfg.backend == "mlx" and cfg.training.lora.r == 0:
+        from soup_cli.trainer.mlx_full import RESUME_REFUSAL as FULL_RESUME_REFUSAL
+
+        return FULL_RESUME_REFUSAL.replace("--resume", flag, 1)
     if cfg.task == "grpo" and cfg.backend == "mlx":
         # #1976: the native MLX GRPO loop saves the adapter only. The message
         # lives with the trainer (imported lazily: it pulls in mlx-free code only).
@@ -2386,6 +2390,9 @@ def train(
 
     # Report
     merge_hint = (
+        "Full fine-tuning output is a standalone model; no soup merge is needed"
+        if cfg.backend == "mlx" and cfg.training.lora.r == 0
+        else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
         else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"

@@ -127,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -1035,6 +1043,8 @@ it does not create a public repository on its own. Pass `--push-public` to creat
 one, or create the repository yourself first and run again. `--hf-resume` only reads the
 repository; a repository it finds missing is created by the same rule when training starts.
 
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
+
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
 repo and downloads it back to `output_dir`, then resumes — no manual copy /
@@ -1098,7 +1108,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
 
 `soup runs compare` keeps the side-by-side run summary and lists all differences
 in the stored config, including nested settings such as `training.lora.dropout`

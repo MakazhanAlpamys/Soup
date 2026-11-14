@@ -834,8 +834,10 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
 # ==========================================================================
 # sharding
 # ==========================================================================
-def _discover_safetensors(weights_dir: str) -> List[str]:
-    """Sorted, non-symlinked checkpoint files under ``weights_dir``.
+def _discover_safetensors(
+    weights_dir: str, *, allowed_symlink_root: Optional[str] = None
+) -> List[str]:
+    """Sorted checkpoint files; symlinks are skipped unless confined to the allowed root.
 
     The checkpoint's files are what the index names, or ``model.safetensors`` /
     the ``model-*-of-*`` shards (#1806); Mistral's ``consolidated.safetensors``
@@ -845,6 +847,11 @@ def _discover_safetensors(weights_dir: str) -> List[str]:
     from soup_cli.utils.checkpoint_files import checkpoint_files
 
     root = os.path.realpath(os.path.expanduser(weights_dir))
+    allowed_root = (
+        os.path.realpath(os.path.expanduser(allowed_symlink_root))
+        if allowed_symlink_root is not None
+        else None
+    )
     if not os.path.isdir(root):
         raise FileNotFoundError(f"weights directory not found: {weights_dir}")
     selected = checkpoint_files(root)
@@ -852,8 +859,17 @@ def _discover_safetensors(weights_dir: str) -> List[str]:
     for name in selected.weights:
         path = os.path.join(root, name)
         if os.path.islink(path):
-            logger.warning("layer-stream sharder: skipping symlinked shard %s", name)
-            continue
+            if allowed_root is None:
+                logger.warning("layer-stream sharder: skipping symlinked shard %s", name)
+                continue
+            target = os.path.realpath(path)
+            try:
+                contained = os.path.commonpath((allowed_root, target)) == allowed_root
+            except ValueError:
+                contained = False
+            if not contained:
+                raise ValueError(f"checkpoint shard {name} points outside the allowed cache")
+            path = target
         if not os.path.isfile(path):
             continue
         found.append(path)

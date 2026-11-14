@@ -53,7 +53,7 @@ soup export --model ./output --format gguf --no-install-deps  Never invoke pip; 
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
-soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
+soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat [--hardware slug]  Create HF Space
 soup deploy autopilot --target mac-m3|rtx-4090-24gb|...  Pick PEFT+quant+spec-decoding for a hardware target
 soup deploy autopilot --list                  List all 10 deploy profiles
 soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
