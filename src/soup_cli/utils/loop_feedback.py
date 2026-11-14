@@ -59,12 +59,16 @@ skipped and counted, never raised: a log is written by other programs.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Collection, Iterator, Mapping, Optional
 
-from soup_cli.data.traces.parsers import parse_ts
+from soup_cli.data.traces.parsers import parse_ts, ts_is_in_the_future
 from soup_cli.utils.canary_router import QualityStats
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 #: A line longer than this many bytes is skipped (a chat history with a long document fits).
@@ -72,6 +76,13 @@ MAX_LINE_BYTES = 1024 * 1024
 #: Bytes read from one log file; the rest of a larger file is ignored.
 MAX_FILE_BYTES = 256 * 1024 * 1024
 _MAX_ID_LEN = 256
+#: The longest ``conversation_id`` ``soup serve`` accepts and logs.
+_MAX_CONVERSATION_ID_LEN = 512
+#: At most this many rated answers of ONE conversation id count per side in the canary's
+#: quality verdict. The id is chosen by the client, so without a cap one client could supply
+#: the whole sample. A client that can chat can still tilt a verdict by this much per id
+#: (docs/adapters-and-governance.md says so): the canary is not adversary-proof.
+MAX_RATED_PER_CONVERSATION = 3
 _MAX_COMMENT_CHARS = 10_000
 _FEEDBACK_KINDS = ("thumb", "rating", "edit", "comment")
 _BUCKETS = ("stable", "canary")
@@ -89,6 +100,9 @@ class LogStats:
     skipped: int = 0
     #: A file was longer than ``MAX_FILE_BYTES`` and its tail was not read.
     truncated: bool = False
+    #: Records skipped (also counted in ``skipped``) because their ``ts`` is more than 24 h
+    #: in the future: one such record would freeze the data cursor.
+    future_ts: int = 0
 
 
 def _iter_objects(path: str, stats: LogStats) -> Iterator[dict]:
@@ -162,8 +176,16 @@ def _is_int(value: object) -> bool:
     return type(value) is int  # a bool is not a number here
 
 
-def _clean_id(value: object) -> Optional[str]:
-    if isinstance(value, str) and value and len(value) <= _MAX_ID_LEN and "\x00" not in value:
+def _warn_future_ts(stats: LogStats, what: str) -> None:
+    if stats.future_ts:
+        logger.warning(
+            "%d %s record(s) skipped: ts more than 24 h in the future (it would freeze the "
+            "data cursor)", stats.future_ts, what,
+        )
+
+
+def _clean_id(value: object, max_len: int = _MAX_ID_LEN) -> Optional[str]:
+    if isinstance(value, str) and value and len(value) <= max_len and "\x00" not in value:
         return value
     return None
 
@@ -229,6 +251,7 @@ def read_feedback(path: Optional[str]) -> FeedbackLog:
     log = FeedbackLog()
     if not path or not os.path.isfile(path):
         return log
+    now = time.time()
     for seq, obj in enumerate(_iter_objects(path, log.stats)):
         version = obj.get("schema_version", SCHEMA_VERSION)  # no feedback version 0 exists
         response_id = _clean_id(obj.get("response_id"))
@@ -240,6 +263,10 @@ def read_feedback(path: Optional[str]) -> FeedbackLog:
             log.stats.skipped += 1
             continue
         ts = parse_ts(obj.get("ts"))
+        if ts_is_in_the_future(ts, now):
+            log.stats.skipped += 1
+            log.stats.future_ts += 1
+            continue
         if kind == "comment":
             text = obj.get("comment")
             if not (isinstance(text, str) and text.strip()):
@@ -264,6 +291,7 @@ def read_feedback(path: Optional[str]) -> FeedbackLog:
         else:
             record.edit, record.edit_ts = value, (ts if value is not None else None)
             record.edit_seq = seq if value is not None else -1
+    _warn_future_ts(log.stats, "feedback")
     return log
 
 
@@ -327,7 +355,7 @@ def _conversation(obj: dict) -> Optional[Conversation]:
         response=response,
         adapter=adapter if isinstance(adapter, str) and adapter else None,
         canary_bucket=bucket if bucket in _BUCKETS else None,
-        conversation_id=_clean_id(obj.get("conversation_id")),
+        conversation_id=_clean_id(obj.get("conversation_id"), _MAX_CONVERSATION_ID_LEN),
     )
 
 
@@ -352,6 +380,7 @@ def read_conversations(
     holding it; ``None`` keeps all. A missing directory is an empty log.
     """
     log = ConversationLog()
+    now = time.time()
     for path in conversation_files(directory):
         for obj in _iter_objects(path, log.stats):
             version = obj.get("schema_version")
@@ -365,10 +394,15 @@ def read_conversations(
             if record is None:
                 log.stats.skipped += 1
                 continue
+            if ts_is_in_the_future(record.ts, now):
+                log.stats.skipped += 1
+                log.stats.future_ts += 1
+                continue
             log.answers += 1
             if wanted is not None and record.id not in wanted:
                 continue
             log.records.setdefault(record.id, record)
+    _warn_future_ts(log.stats, "conversation")
     return log
 
 
@@ -733,12 +767,16 @@ def read_quality_stats(
     before ``started_ts``: answers of an earlier rollout and answers outside any split say
     nothing about this one. A record without a usable ``ts`` cannot be placed after the
     start, so it does not count. Feedback is read by the contract's rules (latest line per
-    kind wins; unknown ids, version 0 lines and bad lines are ignored).
+    kind wins; unknown ids, version 0 lines and bad lines are ignored). At most
+    ``MAX_RATED_PER_CONVERSATION`` rated answers of one ``conversation_id`` count per side (in
+    the order the feedback log first names them); answers without a conversation id share one
+    group per side.
     """
     feedback = read_feedback(feedback_path)
     conversations = read_conversations(trace_dir, wanted=set(feedback.by_response))
     rated = {"stable": 0, "canary": 0}
     negative = {"stable": 0, "canary": 0}
+    per_conversation: "dict[tuple[str, str], int]" = {}
     for answer_id, record in feedback.by_response.items():
         conversation = conversations.records.get(answer_id)
         if conversation is None or conversation.ts is None or conversation.ts < started_ts:
@@ -755,6 +793,10 @@ def read_quality_stats(
         verdict = answer_negative(record, conversation.response)
         if verdict is None:
             continue
+        group = (side, conversation.conversation_id or "")
+        if per_conversation.get(group, 0) >= MAX_RATED_PER_CONVERSATION:
+            continue
+        per_conversation[group] = per_conversation.get(group, 0) + 1
         rated[side] += 1
         negative[side] += int(verdict)
     return QualityStats(

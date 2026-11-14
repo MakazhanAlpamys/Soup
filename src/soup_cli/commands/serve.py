@@ -426,6 +426,12 @@ def serve(
                 "directory."
             )
             raise typer.Exit(code=2)
+        if _is_filesystem_root(adapter_dir):
+            console.print(
+                f"[red]--adapter-dir:[/] {for_terminal(adapter_dir)} is a filesystem root, "
+                "which makes every path inside it; name the directory that holds the adapters."
+            )
+            raise typer.Exit(code=2)
         if backend.lower() != "transformers":
             console.print(
                 "[red]--adapter-dir requires --backend transformers[/] "
@@ -1701,14 +1707,49 @@ def _parse_adapter_load_body(raw: bytes):
     return name, path
 
 
+def _is_filesystem_root(path: str) -> bool:
+    """Whether ``path`` resolves to the top of a filesystem (``/``, a drive root, a share root).
+
+    Everything is "inside" such a directory, so it cannot serve as the ``--adapter-dir``
+    containment root.
+    """
+    real = os.path.realpath(path)
+    drive, tail = os.path.splitdrive(real)
+    if drive and not tail.strip("\\/"):
+        return True  # a drive root, or a UNC share root with nothing after the share
+    return os.path.dirname(real) == real
+
+
+def _is_remote_or_drive_relative(path: str) -> bool:
+    """Windows only: a UNC path (two leading slashes and a host) or a drive-relative one.
+
+    ``os.path.realpath`` on a UNC path contacts the share (an NTLM handshake with whatever
+    host the client named) before any containment test can say no; a path such as ``C:foo``
+    means "relative to the current directory of drive C:", which is not the working
+    directory. Both are refused before they are resolved. On POSIX these are ordinary
+    file names.
+    """
+    if os.name != "nt":
+        return False
+    drive, tail = os.path.splitdrive(path)
+    if not drive:
+        return False
+    if drive.startswith(("\\\\", "//")):
+        return True
+    return not tail.startswith(("\\", "/"))
+
+
 def _resolve_inside(path: str, root: str):
     """``os.path.realpath(path)`` if it lies inside ``root`` (a real path), else ``None``.
 
     Relative paths resolve against the process's working directory, and a symlink that
-    leaves ``root`` fails here because ``realpath`` follows it.
+    leaves ``root`` fails here because ``realpath`` follows it. A UNC or drive-relative path
+    on Windows is ``None`` without being resolved.
     """
     from soup_cli.utils.paths import is_under
 
+    if _is_remote_or_drive_relative(path):
+        return None
     try:
         resolved = os.path.realpath(path)
     except (OSError, ValueError):
@@ -2009,6 +2050,15 @@ def _stop_strings_criteria(tokenizer, stop_strings, prompt_length: int):
     return StoppingCriteriaList([_StopOnString()])
 
 
+class _ClientInputError(ValueError):
+    """The request's own content could not be turned into a prompt: a 4xx, not a server fault.
+
+    Raised from generation for a problem with what the client sent. The canary counts only
+    server-side generation errors as failures, so a client cannot raise a canary's error rate
+    by sending input that fails.
+    """
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -2051,9 +2101,12 @@ def _generate_response(
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
     # the same function so the two backends cannot drift apart again. #781 —
     # encoded without re-adding the special tokens the template rendered.
-    inputs = encode_chat_prompt(
-        messages, tokenizer, fallback_on_error=True, return_tensors="pt"
-    )
+    try:
+        inputs = encode_chat_prompt(
+            messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+        )
+    except (ValueError, TypeError, KeyError) as exc:
+        raise _ClientInputError("the messages could not be turned into a prompt") from exc
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -2199,9 +2252,11 @@ def _create_app(
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
+    from soup_cli.monitoring.feedback_log import IssuedResponseIds
     from soup_cli.utils.local_request_guard import (
         browser_origin_dependency,
         check_local_request,
+        check_own_origin,
     )
 
     def _check_local_request(request: Request) -> None:
@@ -2212,6 +2267,16 @@ def _create_app(
         if refusal is not None:
             status_code, detail = refusal
             raise HTTPException(status_code=status_code, detail=detail)
+
+    def _check_own_origin(request: Request) -> None:
+        """Refuse a browser request whose Origin is not this server's own (POST /v1/feedback)."""
+        refusal = check_own_origin(request.headers.get("host"), request.headers.get("origin"))
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    # The response ids this process handed out: POST /v1/feedback accepts only these.
+    issued_response_ids = IssuedResponseIds()
 
     # Origin-only check on the generation routes and the adapter listing: a request
     # whose Origin names another site gets 403. Host is not checked, so a reverse
@@ -2709,6 +2774,8 @@ def _create_app(
         max_tokens = request.max_tokens or max_tokens_default
 
         if request.stream:
+            if not internal:
+                issued_response_ids.add(response_id)
             stream_started = time.perf_counter()
             from soup_cli.utils.structured_output import (
                 build_logits_processors,
@@ -2821,6 +2888,10 @@ def _create_app(
                                 # stop string is looked for after that, not mid-generation.
                                 stop_strings=stops if reasoning_parser is None else (),
                             )
+                except _ClientInputError as exc:
+                    # The client's input, not a server fault: no canary failure is recorded.
+                    logger.info("request refused: %s", exc)
+                    raise HTTPException(status_code=400, detail="Invalid request: messages")
                 except Exception:
                     _record_canary_outcome(canary_tracking, False)
                     logger.exception("Generation error")
@@ -2891,6 +2962,8 @@ def _create_app(
                     "response_id": response_id,
                 }
                 _record_canary_outcome(canary_tracking, True)
+                if not internal:
+                    issued_response_ids.add(response_id)
                 return result, response_id
             finally:
                 # Always record latency so tail-latency percentiles include
@@ -3212,7 +3285,10 @@ def _create_app(
             raise HTTPException(status_code=400, detail="Invalid request") from exc
         return {"status": "ok", "thumb": thumb}
 
-    @app.post("/v1/feedback", dependencies=[Depends(_check_local_request)])
+    @app.post(
+        "/v1/feedback",
+        dependencies=[Depends(_check_local_request), Depends(_check_own_origin)],
+    )
     async def record_feedback_endpoint(
         request: Request,
         authorization: Optional[str] = Header(default=None),
@@ -3220,11 +3296,14 @@ def _create_app(
         """Append one feedback record (docs/loop-formats.md) about an earlier answer.
 
         ``response_id`` is the id the answer came back with (``response_id`` in the
-        body, ``X-Response-Id`` header). It is not checked against the trace log: the
-        record is stored as sent. Answers 404 when ``--feedback-log`` was not passed.
+        body, ``X-Response-Id`` header); an id this process did not issue is a 404
+        ``unknown response_id`` (the trace log is not read). A browser request from
+        another origin is a 403, a log at its size cap a 507. Answers 404 when
+        ``--feedback-log`` was not passed.
         """
         from soup_cli.monitoring.feedback_log import (
             MAX_BODY_BYTES,
+            FeedbackLogFullError,
             FeedbackValidationError,
             build_record,
             validate_feedback,
@@ -3250,9 +3329,20 @@ def _create_app(
             raise HTTPException(
                 status_code=400, detail=f"Invalid request: {exc.field}"
             ) from None
+        if fields["response_id"] not in issued_response_ids:
+            raise HTTPException(status_code=404, detail="unknown response_id")
         record = build_record(fields)
         try:
             await run_in_threadpool(writer.append, record)
+        except FeedbackLogFullError as exc:
+            logger.warning("feedback log is full: %s", for_terminal(str(exc.path)))
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    f"feedback log is full: {for_terminal(str(exc.path))} has reached its "
+                    f"size cap ({exc.max_bytes} bytes); nothing was stored"
+                ),
+            ) from None
         except OSError:
             logger.exception("feedback record could not be written")
             raise HTTPException(status_code=500, detail="Internal server error") from None
@@ -3263,6 +3353,7 @@ def _create_app(
     app.state.output_constraint = output_constraint
     app.state.trace_log_writer = trace_log_writer
     app.state.feedback_log_writer = feedback_log_writer
+    app.state.issued_response_ids = issued_response_ids
     app.state.web_search_config = web_search_config
     app.state.web_search_backend = web_search_backend
     app.state.record_thumbs_db = record_thumbs_db
@@ -3773,6 +3864,12 @@ def _stream_response(
                 (
                     response_text, prompt_tokens_for_log, completion_tokens_for_log, finish_reason,
                 ) = generate()
+    except _ClientInputError as exc:
+        # The client's input, not a server fault: the stream ends in an error frame, and no
+        # canary failure is recorded.
+        logger.info("request refused: %s", exc)
+        yield frames.error()
+        return
     except Exception:
         if canary_outcome is not None:
             canary_outcome(False)

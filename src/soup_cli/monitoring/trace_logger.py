@@ -67,7 +67,24 @@ _SECRET_RE = re.compile(
     # silently consumed (e.g. `Use Bearer abc12345xyz.` keeps the period).
     r"(?:hf_[A-Za-z0-9]{8,}"
     r"|sk-[A-Za-z0-9_-]{16,}"
-    r"|Bearer\s+[A-Za-z0-9_\-]{8,})"
+    r"|Bearer\s+[A-Za-z0-9_\-]{8,}"
+    # GitHub tokens: classic (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`) and fine-grained.
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    # AWS access key ids (long-term `AKIA`, temporary `ASIA`).
+    r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
+    # Slack tokens (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`).
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}"
+    # JSON Web Tokens: three base64url parts, the first two starting `eyJ` ({"...).
+    r"|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    # PEM private keys: the block, or from the header on when the footer is missing. The
+    # body is capped so a header without a footer cannot make the scan quadratic.
+    r"|-----BEGIN [A-Z ]{0,24}PRIVATE KEY-----[A-Za-z0-9+/=\s]{0,16384}"
+    r"(?:-----END [A-Z ]{0,24}PRIVATE KEY-----)?"
+    # `api_key=...`, `api-key: ...`, `apikey=...`, `secret=...`, `password: ...`, `token=...`:
+    # the whole assignment goes, name included. A value of at most five characters stays.
+    r"|(?i:\b(?:api[_-]?key|secret|password|passwd|token)\b[\"']?\s*[=:]\s*)"
+    r"[\"']?[^\s\"',;]{6,})"
 )
 
 
@@ -97,6 +114,28 @@ DEFAULT_CAP_MB: int = 100
 
 _MIN_CAP_MB: int = 1
 _MAX_CAP_MB: int = 10_000
+
+
+#: Permission bits of a log ``soup serve`` creates: the owner alone reads and writes it. The
+#: logs hold whole prompts, answers and corrections; on POSIX another local user must not
+#: read them. Windows ignores the mode (access follows the folder's ACL), so there it is no
+#: protection beyond what the directory already gives.
+LOG_FILE_MODE = 0o600
+
+
+def open_private_append(path: "Path | str") -> Any:
+    """Open ``path`` for binary appending, creating it ``0o600`` when it is new.
+
+    The mode applies to a file this call creates; a log that already exists keeps the
+    permissions it has (a ``chmod`` of someone else's file is not this function's call).
+    """
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    fd = os.open(os.fspath(path), flags, LOG_FILE_MODE)
+    try:
+        return os.fdopen(fd, "ab")
+    except Exception:
+        os.close(fd)
+        raise
 
 
 def resolve_log_path(path: str, *, flag: str) -> Path:
@@ -268,7 +307,7 @@ class TraceLogWriter:
             "schema_version": CONVERSATION_SCHEMA_VERSION,
             "id": response_id,
             "conversation_id": _text_or_none(
-                conversation_id, max_chars=_MAX_CONVERSATION_ID_CHARS
+                _redact_secrets(conversation_id), max_chars=_MAX_CONVERSATION_ID_CHARS
             ),
             "ts": utc_timestamp(),
             "model": model,
@@ -307,7 +346,7 @@ class TraceLogWriter:
         with self._lock:
             self._maybe_rotate(extra=len(line_bytes))
             try:
-                with self._path.open("ab") as fh:
+                with open_private_append(self._path) as fh:
                     fh.write(line_bytes)
             except OSError:
                 # Disk full / permissions — never crash the request handler.

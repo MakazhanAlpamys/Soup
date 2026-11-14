@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 from soup_cli.data.traces.messages import content_text, conversation_prompt
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS: tuple[str, ...] = ("langchain", "openai", "soup-serve")
 
@@ -69,6 +73,22 @@ def parse_ts(value: Any) -> Optional[float]:
     if not 0.0 <= seconds <= _MAX_TS:  # False for NaN too
         return None
     return seconds
+
+
+#: A log line dated more than this many seconds ahead of now is not used: one such line
+#: would become the newest ``ts`` and freeze ``soup loop``'s data cursor for good (every
+#: later row would be "not new"). A day tolerates a client whose clock runs ahead.
+MAX_FUTURE_TS_SEC = 24 * 60 * 60
+
+
+def ts_is_in_the_future(ts: Optional[float], now: Optional[float] = None) -> bool:
+    """Whether ``ts`` (epoch seconds) lies more than ``MAX_FUTURE_TS_SEC`` after ``now``.
+
+    ``now`` defaults to the current time. ``None`` (no usable ts) is not in the future.
+    """
+    if ts is None:
+        return False
+    return ts > (time.time() if now is None else now) + MAX_FUTURE_TS_SEC
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +299,8 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
     dir_path = Path(path)
     if not dir_path.is_dir():
         return
+    future = 0
+    now = time.time()
     for file_path in sorted(dir_path.glob("*.jsonl")):
         # utf-8-sig strips a leading BOM (common on Windows-written JSONL);
         # plain utf-8 left the BOM on line 1, so json.loads failed and the
@@ -299,10 +321,19 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
             output = str(event.get("response") or event.get("output") or "")
             if not prompt or not output:
                 continue
+            ts = parse_ts(event.get("ts"))
+            if ts_is_in_the_future(ts, now):
+                future += 1
+                continue
             signal = _record_signal(event)
             yield Trace(
                 trace_id=str(event.get("id") or file_path.stem),
                 prompt=prompt, output=output, signal=signal,
                 edited_output=_edited_output(event),
-                ts=parse_ts(event.get("ts")),
+                ts=ts,
             )
+    if future:
+        logger.warning(
+            "%d trace line(s) skipped: ts more than 24 h in the future (a later line would "
+            "never count as new)", future,
+        )

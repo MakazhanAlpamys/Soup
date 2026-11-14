@@ -1414,3 +1414,84 @@ def test_adapter_scope_always_lock_holds_the_lock_with_no_adapter_loaded():
         assert lock.locked()
     with serve_cmd._adapter_scope(_PlainModel(), lock, set(), None, None):
         assert not lock.locked()
+
+
+# ---------------------------------------------------------------------------
+# --adapter-dir at a filesystem root; UNC and drive-relative adapter paths
+# ---------------------------------------------------------------------------
+
+
+def _filesystem_root() -> str:
+    return os.path.abspath(os.sep)
+
+
+def test_an_adapter_dir_at_a_filesystem_root_is_refused_at_startup(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "200")
+
+    result = _cli("--adapter-dir", _filesystem_root(), "--tool-auth-token", TOKEN)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _plain(result.output)
+    assert "--adapter-dir" in out
+    assert "is a filesystem root" in out
+    assert "Model path not found" not in out
+
+
+def test_an_ordinary_directory_is_not_a_filesystem_root(tmp_path):
+    assert serve_cmd._is_filesystem_root(str(tmp_path)) is False
+    assert serve_cmd._is_filesystem_root(_filesystem_root()) is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC share roots exist on Windows")
+def test_a_unc_share_root_is_a_filesystem_root(monkeypatch):
+    # realpath of a UNC path would contact the host; the test needs only the shape.
+    monkeypatch.setattr(os.path, "realpath", lambda path, *a, **k: str(path))
+
+    assert serve_cmd._is_filesystem_root("\\\\fileserver\\share") is True
+    assert serve_cmd._is_filesystem_root("\\\\fileserver\\share\\") is True
+    assert serve_cmd._is_filesystem_root("\\\\fileserver\\share\\adapters") is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["\\\\attacker-host\\share\\adapter", "//attacker-host/share/adapter"],
+    ids=["unc backslashes", "unc slashes"],
+)
+def test_a_unc_adapter_path_is_403_and_nothing_is_loaded(root, served, loader, path):
+    resp = served.load("v2", path)
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "adapter path is outside --adapter-dir"
+    assert loader.calls == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC paths are resolved over the network on Windows")
+def test_a_unc_adapter_path_is_refused_before_it_is_resolved(root, served, loader, monkeypatch):
+    resolved = []
+    real = os.path.realpath
+
+    def spy(path, *args, **kwargs):
+        resolved.append(str(path))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "realpath", spy)
+
+    resp = served.load("v2", "\\\\attacker-host\\share\\adapter")
+
+    assert resp.status_code == 403, resp.text
+    assert not [path for path in resolved if "attacker-host" in path], resolved
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive-relative paths exist on Windows")
+def test_a_drive_relative_adapter_path_is_403(root, served, loader, monkeypatch):
+    # "C:adapter" means the current directory OF DRIVE C:, not the working directory. With the
+    # working directory inside the root it would otherwise resolve inside it.
+    monkeypatch.chdir(root)
+    _adapter(root, "inside")
+    drive = os.path.splitdrive(os.getcwd())[0]
+
+    resp = served.load("v2", f"{drive}inside")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "adapter path is outside --adapter-dir"
+    assert loader.calls == []

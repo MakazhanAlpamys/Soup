@@ -15,6 +15,7 @@ Every line the server writes is validated against the packaged JSON Schema.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import uuid
@@ -159,6 +160,9 @@ def _client(
         host=host,
         **kwargs,
     )
+    if feedback:
+        # The id the feedback tests post about: an answer this server "gave".
+        app.state.issued_response_ids.add(RESPONSE_ID)
     return TestClient(app, base_url=f"http://{host}")
 
 
@@ -1469,12 +1473,12 @@ class TestFeedbackLogWriter:
 
     def test_the_log_is_not_rotated(self, cwd):
         writer = FeedbackLogWriter(str(cwd / "fb.jsonl"))
-        big = build_record(validate_feedback(_body(kind="edit", edited_text="e" * 60_000)))
+        big = build_record(validate_feedback(_body(kind="edit", edited_text="e" * 20_000)))
 
-        for _ in range(20):  # 1.2 MB: past the trace log's smallest rotation cap
+        for _ in range(60):  # 1.2 MB: past the trace log's smallest rotation cap
             writer.append(big)
 
-        assert len(_feedback_records(cwd / "fb.jsonl")) == 20
+        assert len(_feedback_records(cwd / "fb.jsonl")) == 60
         assert not (cwd / "fb.jsonl.1").exists()
 
     def test_concurrent_appends_keep_every_line_whole(self, cwd):
@@ -1493,7 +1497,7 @@ class TestFeedbackLogWriter:
         written = _feedback_records(cwd / "fb.jsonl")
         assert sorted(r["id"] for r in written) == sorted(r["id"] for r in records)
 
-    def test_only_one_append_is_in_flight_at_a_time(self, cwd):
+    def test_only_one_append_is_in_flight_at_a_time(self, cwd, monkeypatch):
         # Whole lines survive without a lock only by luck of the platform's append
         # semantics; the lock is what makes it a guarantee. Watch the writes overlap.
         import time
@@ -1502,6 +1506,12 @@ class TestFeedbackLogWriter:
         peak = []
 
         class _SlowHandle:
+            def __init__(self):
+                self._fd = os.open(os.devnull, os.O_RDONLY)  # fstat of it: size 0
+
+            def fileno(self):
+                return self._fd
+
             def write(self, data):
                 in_flight.append(1)
                 peak.append(len(in_flight))
@@ -1512,15 +1522,13 @@ class TestFeedbackLogWriter:
                 return self
 
             def __exit__(self, *exc_info):
+                os.close(self._fd)
                 return False
 
-        class _SlowPath:
-            def open(self, mode):
-                assert mode == "ab"
-                return _SlowHandle()
+        import soup_cli.monitoring.feedback_log as feedback_log_module
 
+        monkeypatch.setattr(feedback_log_module, "open_private_append", lambda path: _SlowHandle())
         writer = FeedbackLogWriter(str(cwd / "fb.jsonl"))
-        writer._path = _SlowPath()
         record = build_record(validate_feedback(_body(kind="thumb", value=1)))
 
         threads = [threading.Thread(target=writer.append, args=(record,)) for _ in range(8)]
@@ -1622,12 +1630,18 @@ class TestFeedbackRoute:
         assert _feedback(cwd)[0]["response_id"] == response_id
         assert _trace(cwd)[0]["id"] == response_id
 
-    def test_the_response_id_is_not_checked_against_the_trace_log(self, cwd, monkeypatch):
+    def test_the_response_id_is_checked_against_the_ids_this_process_issued(
+        self, cwd, monkeypatch
+    ):
+        # Not against the trace log (it is not read): the server remembers what it issued.
         client = _client(cwd, monkeypatch, trace=False)
+        other = _body(kind="thumb", value=1) | {"response_id": str(uuid.uuid4())}
 
-        resp = _post_feedback(client, _body(kind="thumb", value=1))
+        assert _post_feedback(client, _body(kind="thumb", value=1)).status_code == 200
+        unknown = _post_feedback(client, other)
 
-        assert resp.status_code == 200, resp.text
+        assert unknown.status_code == 404, unknown.text
+        assert unknown.json() == {"detail": "unknown response_id"}
 
     def test_free_text_is_redacted_on_disk(self, cwd, monkeypatch):
         client = _client(cwd, monkeypatch)
@@ -1838,22 +1852,33 @@ class TestFeedbackAuth:
         assert resp.status_code == 403
         assert _feedback(cwd) == []
 
-    def test_a_loopback_origin_is_accepted(self, cwd, monkeypatch):
+    def test_the_servers_own_origin_is_accepted(self, cwd, monkeypatch):
+        client = _client(cwd, monkeypatch)
+
+        resp = _post_feedback(
+            client, _body(kind="thumb", value=1), headers={"Origin": "http://127.0.0.1"}
+        )
+
+        assert resp.status_code == 200, resp.text
+
+    def test_a_page_on_another_local_port_is_refused(self, cwd, monkeypatch):
+        # Another origin, even on localhost: tests/test_feedback_endpoint_hardening.py.
         client = _client(cwd, monkeypatch)
 
         resp = _post_feedback(
             client, _body(kind="thumb", value=1), headers={"Origin": "http://localhost:3000"}
         )
 
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 403, resp.text
+        assert _feedback(cwd) == []
 
 
 class TestFeedbackBodyCap:
     def _body_of(self, size: int) -> bytes:
-        """A valid feedback body of exactly ``size`` bytes."""
-        head = ('{"response_id": "%s", "kind": "edit", "edited_text": "' % RESPONSE_ID).encode()
-        tail = b'"}'
-        raw = head + b"e" * (size - len(head) - len(tail)) + tail
+        """A valid feedback body of exactly ``size`` bytes (padded with JSON whitespace)."""
+        head = ('{"response_id": "%s", "kind": "thumb", "value": 1' % RESPONSE_ID).encode()
+        tail = b"}"
+        raw = head + b" " * (size - len(head) - len(tail)) + tail
         assert len(raw) == size
         return raw
 
@@ -1866,7 +1891,7 @@ class TestFeedbackBodyCap:
         resp = _post_feedback(client, raw=self._body_of(MAX_BODY_BYTES))
 
         assert resp.status_code == 200, resp.text
-        assert len(_feedback(cwd)[0]["edited_text"]) > 65_000
+        assert _feedback(cwd)[0]["kind"] == "thumb"
 
     def test_one_byte_more_is_a_413(self, cwd, monkeypatch):
         client = _client(cwd, monkeypatch)
