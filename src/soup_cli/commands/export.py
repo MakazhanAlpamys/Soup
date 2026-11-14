@@ -360,7 +360,6 @@ def export(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
-    merge_dir_created = False
 
     if is_adapter:
         console.print("[dim]GGUF: merge adapter...[/]")
@@ -373,11 +372,10 @@ def export(
             )
             raise typer.Exit(1)
 
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
-
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
+            merge_dir = _merge_dir_for(model_path)
             _merge_adapter(
                 str(model_path), base_model, str(merge_dir), trust_remote_code,
             )
@@ -459,7 +457,7 @@ def export(
 
     finally:
         # Clean up temporary merge directory
-        _remove_merge_dir(merge_dir, merge_dir_created)
+        _remove_merge_dir(merge_dir)
 
     if not output_path.exists():
         console.print("[red]Export failed - output file not created.[/]")
@@ -505,23 +503,24 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
         return None
 
 
-def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
-    """The scratch directory next to an adapter, and whether this export will create it.
+def _merge_dir_for(model_path: Path) -> Path:
+    """Create a scratch directory next to an adapter that is unique to this export.
 
-    A directory (or link) already there is not this export's: the cleanup leaves it alone.
+    ``mkdtemp`` creates the directory as soon as the name is chosen, inside the
+    caller's ``try``, so the cleanup can only remove a directory this export
+    owns. A directory left by an earlier run is never reused.
     """
-    path = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-    return path, not (path.exists() or path.is_symlink())
-
-
-def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
-    """Remove the scratch merge directory if this export created it; never one that was there."""
-    if merge_dir is None or not merge_dir.exists():
-        return
-    if not created:
-        console.print(
-            f"[dim]Leaving {for_terminal(str(merge_dir))}: it existed before this export.[/]"
+    return Path(
+        tempfile.mkdtemp(
+            prefix=f".soup_merge_tmp_{model_path.name}_",
+            dir=str(model_path.parent),
         )
+    )
+
+
+def _remove_merge_dir(merge_dir: Optional[Path], *, announce: bool = True) -> None:
+    """Remove the scratch merge directory created for this export."""
+    if merge_dir is None or not merge_dir.exists():
         return
     if announce:
         console.print("[dim]Cleaning up temporary merge files...[/]")
@@ -909,7 +908,6 @@ def _export_onnx(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
-    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -921,13 +919,13 @@ def _export_onnx(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
+            merge_dir = _merge_dir_for(model_path)
             _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
             source_path = merge_dir
 
@@ -982,7 +980,7 @@ def _export_onnx(
             if not result.passed:
                 raise typer.Exit(2)
     finally:
-        _remove_merge_dir(merge_dir, merge_dir_created)
+        _remove_merge_dir(merge_dir)
 
     console.print(
         Panel(
@@ -1039,7 +1037,6 @@ def _export_tensorrt(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
-    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -1051,13 +1048,13 @@ def _export_tensorrt(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
+            merge_dir = _merge_dir_for(model_path)
             _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
             source_path = merge_dir
 
@@ -1129,7 +1126,7 @@ def _export_tensorrt(
             raise typer.Exit(1)
 
     finally:
-        _remove_merge_dir(merge_dir, merge_dir_created)
+        _remove_merge_dir(merge_dir)
 
     console.print(
         Panel(
@@ -1397,19 +1394,19 @@ def _export_bitnet_gguf(
         output_path = Path(output)
 
     adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
     merge_dir = None
-    merge_dir_created = False
-    if adapter_config_path.exists():
+    if is_adapter:
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
             console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        if merge_dir is not None:
+        if is_adapter:
+            merge_dir = _merge_dir_for(model_path)
             _merge_adapter(
                 str(model_path), base_model, str(merge_dir), trust_remote_code,
             )
@@ -1437,7 +1434,7 @@ def _export_bitnet_gguf(
             console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
             raise typer.Exit(1)
     finally:
-        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
+        _remove_merge_dir(merge_dir, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
@@ -1506,9 +1503,9 @@ def _export_gguf_advanced(
 
     # Pre-merge LoRA adapter if needed
     adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
     merge_dir = None
-    merge_dir_created = False
-    if adapter_config_path.exists():
+    if is_adapter:
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
@@ -1516,11 +1513,11 @@ def _export_gguf_advanced(
                 "[red]Cannot detect base model. Pass --base.[/]"
             )
             raise typer.Exit(2)
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        if merge_dir is not None:
+        if is_adapter:
+            merge_dir = _merge_dir_for(model_path)
             _merge_adapter(
                 str(model_path), base_model, str(merge_dir), trust_remote_code,
             )
@@ -1550,7 +1547,7 @@ def _export_gguf_advanced(
             console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
             raise typer.Exit(1)
     finally:
-        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
+        _remove_merge_dir(merge_dir, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
