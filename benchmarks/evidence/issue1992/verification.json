@@ -1,0 +1,249 @@
+{
+  "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9",
+  "upstream_baseline_sha": "9a8a5f39a632742f5abce7f9209d91223ba7638a",
+  "original_negative_control": {
+    "command": "PYTHONPATH=src pytest tests/test_mlx_full_finetune.py::test_public_dense_config_and_dispatch -q --no-cov",
+    "failed_cases": 3,
+    "reason": "training.lora.r=0 requires backend='transformers'; got backend='mlx'"
+  },
+  "feature_current": {
+    "passed": 46,
+    "exit_code": 0,
+    "environment": "current/environment.json"
+  },
+  "feature_floor": {
+    "passed": 46,
+    "exit_code": 0,
+    "environment": "floor/environment.json"
+  },
+  "mutation_controls": {
+    "rejected": 6,
+    "exit_code_each": 1,
+    "positive_controls": "All corresponding tests pass unmutated in both 46-test feature runs.",
+    "scratch_checkout_clean_after_restore": true
+  },
+  "portable_and_affected_guards": {
+    "passed": 349,
+    "command": "PYTHONPATH=src pytest tests/test_mlx_full_finetune.py tests/test_ci_mlx_smoke_files.py tests/test_issue1581_freeze_refused_off_the_text_path.py tests/test_mlx_lora_pattern_refusal.py tests/test_gen_reference_docs.py::test_the_committed_pages_state_what_the_code_does tests/test_issue621_recipe_snapshot.py -q --no-cov"
+  },
+  "training_controls": {
+    "passed": 231,
+    "note": "Earlier development-state run; Transformers full-FT, original freeze controls, rank-pattern controls and feature tests. Final feature suite is recorded separately."
+  },
+  "impact_neighborhood": {
+    "passed": 675,
+    "skipped": 1,
+    "failed": 1,
+    "baseline_reproduction": "Exactly the same result on untouched upstream.",
+    "failure": "test_gen_reference_docs.py::test_types_are_spelled_one_way_on_every_python[Optional-list[dict[str, str | float]] | null]",
+    "isolated_control": "43 passed when run alone; import-order-sensitive typing union order."
+  },
+  "initial_floating_full_suite": {
+    "source": "Development working tree before the source commit; not a final-head validation.",
+    "command": "PYTHONPATH=src pytest tests/ -q --no-cov -n 4 --dist loadfile --maxfail=12",
+    "passed": 37006,
+    "skipped": 186,
+    "failed": 13,
+    "seconds": 599.38,
+    "completed": false,
+    "stopped_on_maxfail": true,
+    "training_versions": {
+      "torch": "2.15.0",
+      "transformers": "5.23.0",
+      "peft": "0.21.3",
+      "huggingface-hub": "2.4.0"
+    },
+    "failed_nodeids": [
+      "tests/test_issue204_langfuse_pull.py::test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded",
+      "tests/test_doctor.py::test_doctor_gpu_panel_shows_the_nf4_note_on_sm_120",
+      "tests/test_compile_tools_terminal.py::test_an_error_is_red_and_a_missing_dependency_yellow",
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[ValueError]",
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[RuntimeError]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestTheRealWrappers::test_the_root_is_read_once_after_the_subfolder[dpo]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestTheRealWrappers::test_the_root_is_read_once_after_the_subfolder[ipo]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestTheRealWrappers::test_the_root_is_read_once_after_the_subfolder[preference, dpo]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestTheRealWrappers::test_the_root_is_read_once_after_the_subfolder[preference, ipo]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestTheRealWrappers::test_the_root_is_read_once_after_the_subfolder[grpo]",
+      "tests/test_issue1768_resume_reloads_the_trained_adapter.py::TestOnARealPeftModel::test_the_trainer_alone_leaves_the_trained_adapter_new",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]"
+    ],
+    "baseline_reproduction": {
+      "failed": 13,
+      "seconds": 12.02,
+      "passed": 0,
+      "failed_nodeids_match": true
+    }
+  },
+  "pinned_full_suite": {
+    "status": "completed_with_failures",
+    "constraints": ".github/constraints/pinned-upstream.txt",
+    "command": "PYTHONPATH=src pytest tests/ -q --no-cov -n 4 --dist loadfile --tb=short --timeout=600 --timeout-method=thread",
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9",
+    "passed": 56771,
+    "skipped": 391,
+    "failed": 37,
+    "seconds": 1049.98,
+    "exit_code": 1,
+    "failed_nodeids": [
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[RuntimeError]",
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[ValueError]",
+      "tests/test_compile_tools_terminal.py::test_an_error_is_red_and_a_missing_dependency_yellow",
+      "tests/test_doctor.py::test_doctor_gpu_panel_shows_the_nf4_note_on_sm_120",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.5-zero-byte]",
+      "tests/test_issue1816_config_error_messages.py::TestCrossFieldValidatorLocation::test_cli[command0]",
+      "tests/test_issue1816_config_error_messages.py::TestCrossFieldValidatorLocation::test_cli[command1]",
+      "tests/test_issue1816_config_error_messages.py::TestUnknownKeyRemedy::test_cli",
+      "tests/test_issue204_langfuse_pull.py::test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded",
+      "tests/test_issue755_backend_support_registry.py::test_the_declared_modules_cover_every_helper_the_trainer_imports",
+      "tests/test_issue830_profile_gpu.py::test_json_says_the_gpu_memory_was_assumed",
+      "tests/test_issue830_profile_gpu.py::test_mcp_profile_reports_an_assumed_gpu",
+      "tests/test_issue830_profile_gpu.py::test_no_detected_gpu_is_not_reported_as_a_measured_fit",
+      "tests/test_issue885_langfuse_error_ansi.py::test_stripped_body_renders_on_a_colour_console",
+      "tests/test_profile.py::TestResolveGpuMemory::test_fallback_to_default_24gb",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[[bold]not-a-commit[/bold]]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[\\x1b[31maaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[gggggggggggggggggggggggggggggggggggggggg]"
+    ],
+    "introduced_failure_fixed": [
+      "tests/test_issue755_backend_support_registry.py::test_the_declared_modules_cover_every_helper_the_trainer_imports"
+    ],
+    "direct_baseline_failures": [
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[RuntimeError]",
+      "tests/test_compile_tools_terminal.py::test_a_compile_error_is_red[ValueError]",
+      "tests/test_compile_tools_terminal.py::test_an_error_is_red_and_a_missing_dependency_yellow",
+      "tests/test_doctor.py::test_doctor_gpu_panel_shows_the_nf4_note_on_sm_120",
+      "tests/test_issue1816_config_error_messages.py::TestCrossFieldValidatorLocation::test_cli[command0]",
+      "tests/test_issue1816_config_error_messages.py::TestCrossFieldValidatorLocation::test_cli[command1]",
+      "tests/test_issue1816_config_error_messages.py::TestUnknownKeyRemedy::test_cli",
+      "tests/test_issue204_langfuse_pull.py::test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded",
+      "tests/test_issue830_profile_gpu.py::test_json_says_the_gpu_memory_was_assumed",
+      "tests/test_issue830_profile_gpu.py::test_mcp_profile_reports_an_assumed_gpu",
+      "tests/test_issue830_profile_gpu.py::test_no_detected_gpu_is_not_reported_as_a_measured_fit",
+      "tests/test_issue885_langfuse_error_ansi.py::test_stripped_body_renders_on_a_colour_console",
+      "tests/test_profile.py::TestResolveGpuMemory::test_fallback_to_default_24gb",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[[bold]not-a-commit[/bold]]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[\\x1b[31maaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+      "tests/test_run_code_revision.py::test_database_commit_is_validated_again_before_show_and_compare[gggggggggggggggggggggggggggggggggggggggg]"
+    ],
+    "long_path_baseline_failures": [
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-gate-only-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[existing-baseline-write-baseline-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-gate-only-0.5-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.0-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.0-zero-byte]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.5-whitespace]",
+      "tests/test_eval_gate_empty_judge_input.py::test_cli_empty_judge_cannot_pass_or_mint_baseline[new-baseline-write-baseline-0.5-zero-byte]"
+    ],
+    "baseline_replay": {
+      "source_sha": "9a8a5f39a632742f5abce7f9209d91223ba7638a",
+      "normal_selection": "20 failed, 17 passed in 18.26s; the registry audit passes on baseline",
+      "long_path_selection": "16 failed, 14 deselected in 1.21s",
+      "long_path_command": "PYTHONPATH=src pytest tests/test_eval_gate_empty_judge_input.py -k test_cli_empty_judge_cannot_pass_or_mint_baseline --basetemp /tmp/soup-1992-baseline-long-temp-path-for-parallel-worker-output/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -q --no-cov --tb=short",
+      "cause": "Rich truncation drops the prompts.jsonl basename from error rows when temporary paths are long."
+    },
+    "full_suite_rerun_after_registry_fix": false
+  },
+  "static": {
+    "ruff": "All checks passed: ruff check src/ tests/",
+    "reference": "--check-structure passes",
+    "recipe_snapshot": "179 recipe deltas regenerated after upstream merge; no diff",
+    "mypy": "Success: no issues found in 1 source file (mlx_full.py; follow-imports=silent)"
+  },
+  "publication": {
+    "published": true,
+    "pr_number": 2818,
+    "url": "https://github.com/MakazhanAlpamys/Soup/pull/2818",
+    "fragment": "changelog.d/0.77.2/2818.added.md",
+    "fragment_note": "Actual pull-request number assigned; fragment credits #1992 by @here-2007 in #2818."
+  },
+  "packaging": {
+    "wheel_entries": 694,
+    "sdist_entries": 3945,
+    "added_wheel_entries": [
+      "soup_cli/trainer/mlx_full.py"
+    ],
+    "removed_wheel_entries": [],
+    "existing_ui_logo_unchanged": true,
+    "duplicate_entries": false,
+    "personal_memory_in_artifacts": false,
+    "validated_fragments": 117,
+    "delivered_source_sha": "4e956912752a5e03e905150ab01c4b84e66ffc60"
+  },
+  "additional_frozen_checkpointing": {
+    "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9",
+    "current": "PASS: frozen tensors unchanged; all other tensors updated, tied and untied; layer class restored",
+    "floor": "PASS: same assertions",
+    "command_prefix": "PYTHONPATH=src:. <environment-python> <script>",
+    "script": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\nimport mlx.core as mx\nfrom mlx.utils import tree_flatten\nfrom soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper\nfrom tests.test_mlx_dora_native import _checkpoint\nfrom tests.test_mlx_full_finetune_native import _config, _rows\nfrom rich.console import Console\nwith TemporaryDirectory() as directory:\n    root=Path(directory)\n    for tied in (False, True):\n        base=_checkpoint(root / f'base-{tied}', layers=2, tied=tied)\n        wrapper=MLXSFTTrainerWrapper(_config(base, root / f'out-{tied}', freeze_layers=1, gradient_checkpointing=True))\n        wrapper.setup(_rows())\n        before=dict(tree_flatten(wrapper.model.parameters()))\n        mx.eval(before)\n        original=type(wrapper.model.layers[0]).__call__\n        wrapper.train()\n        assert type(wrapper.model.layers[0]).__call__ is original\n        for name,value in tree_flatten(wrapper.model.parameters()):\n            unchanged=mx.array_equal(value,before[name]).item()\n            assert unchanged == name.startswith('model.layers.0.'), name\nConsole().print('VERDICT: PASS \u2014 frozen checkpointed layers preserve gradients to embeddings, tied and untied')\n"
+  },
+  "post_integration": {
+    "source_sha": "4e956912752a5e03e905150ab01c4b84e66ffc60",
+    "upstream_sha": "8b80c2db1e5f0f74aeb2968e5a3c2ea5b4216f70",
+    "passed": 432,
+    "seconds": 68.08,
+    "command": "PYTHONPATH=src pytest tests/test_issue755_backend_support_registry.py tests/test_qwen35_122b_dpo_recipe.py tests/test_issue427_qwen35_text_modality.py tests/test_issue798_moe_flags_per_task.py tests/test_issue621_recipe_snapshot.py tests/test_gen_reference_docs.py::test_the_committed_pages_state_what_the_code_does tests/test_mlx_full_finetune.py tests/test_mlx_full_finetune_native.py tests/test_ci_mlx_smoke_files.py -q --no-cov",
+    "measured_source_files_identical": [
+      "src/soup_cli/trainer/mlx_full.py",
+      "src/soup_cli/trainer/mlx_sft.py",
+      "src/soup_cli/commands/train.py",
+      "src/soup_cli/config/schema.py",
+      "src/soup_cli/utils/mlx.py",
+      "tests/test_mlx_full_finetune_native.py"
+    ]
+  },
+  "publication_integration": {
+    "source_sha": "6c365edf3670f8f4443ea19c281e287fa537c321",
+    "upstream_sha": "1f1a3aafe5124504c4b751e11cfa6783b791e98d",
+    "passed": 442,
+    "seconds": 72.68,
+    "command": "PYTHONPATH=src pytest tests/test_mlx_full_finetune.py tests/test_mlx_full_finetune_native.py tests/test_issue755_backend_support_registry.py tests/test_push_as_visibility.py tests/test_freeze_string_target_modules.py tests/test_freeze_lora_layers.py tests/test_eval_gate_baseline.py tests/test_issue621_recipe_snapshot.py tests/test_ci_mlx_smoke_files.py -q --no-cov",
+    "measured_source_files_identical": [
+      "src/soup_cli/trainer/mlx_full.py",
+      "src/soup_cli/trainer/mlx_sft.py",
+      "src/soup_cli/utils/mlx.py",
+      "tests/test_mlx_full_finetune_native.py"
+    ],
+    "upstream_adjusted_files": [
+      "src/soup_cli/config/schema.py",
+      "src/soup_cli/commands/train.py"
+    ],
+    "checks": [
+      "ruff check src/soup_cli/ scripts/ tests/ benchmarks/",
+      "generated-reference --check-structure",
+      "recipe snapshot regenerated with no diff"
+    ]
+  }
+}
