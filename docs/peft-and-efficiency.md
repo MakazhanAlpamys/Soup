@@ -6,6 +6,7 @@
 
 **Contents:**
 
+- [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
 - [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
@@ -79,6 +80,43 @@ verdict uses, not directly comparable to `soup eval` absolute numbers.
 
 ---
 
+## FlashAttention and Liger measurements
+
+The [H200 sequence/checkpointing sweep](../benchmarks/flash-liger-h200-2026-11-10.md)
+extends the [earlier single H100 point](../benchmarks/gate-h100-validation.md)
+with independently varied sequence length and model checkpointing.
+Llama-3.1-8B, BF16 resident LoRA r16, batch 4; five fresh
+interleaved processes per feasible arm, each with five warm-up and 80 measured
+updates. These are synchronized training-step throughput ratios to SDPA, not
+end-to-end CLI speedups. All arms use the same realized tokens and labels.
+
+| Sequence | Checkpointing | FA2 / SDPA | Liger / SDPA | Both / SDPA | SDPA / Liger peak GiB |
+|---:|:---:|---:|---:|---:|---:|
+| 1024 | off | 0.983x | 1.226x | 1.195x | 47.982 / 37.065 |
+| 2048 | off | 0.971x | 1.229x | 1.188x | 80.398 / 58.562 |
+| 4096 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 8192 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 1024 | on | 0.989x | 1.209x | 1.184x | 22.423 / 17.571 |
+| 2048 | on | 0.980x | 1.223x | 1.184x | 29.357 / 19.651 |
+| 4096 | on | 0.959x | 1.213x | 1.149x | 43.226 / 23.812 |
+| 8192 | on | 0.929x | 1.197x | 1.096x | 70.962 / 32.132 |
+
+Read exact peaks, run ranges, SM clocks and the full recipe in the record.
+The native SDPA baseline already executed cuDNN flash attention. On this stack
+(torch 2.14.1/CUDA 13.0, FA2 2.8.3.post2, Liger 0.8.5), standalone FA2 was slower;
+Liger alone was faster than either SDPA or the combined arm at every feasible
+point. Both observations are scoped to this workload. They do not establish
+held-out quality equivalence or a universal preference for either library.
+
+The H200 was shared with an idle process holding 49850 MiB, leaving about
+90 GiB headroom. Checkpoint-off long-sequence probes exhausted that headroom;
+those cells have no timing ratio. This is not a dedicated-card capacity limit.
+The record retains all eight probe OOMs and their 40 unrun timing slots, all
+120 successful timings and every activation probe. No model/config defaults
+were changed to obtain the curve.
+
+---
+
 ## LongLoRA Forward Override
 
 `training.use_longlora: true` is **refused at config load**
@@ -149,7 +187,7 @@ training:
 
 **Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for Llama 3.1-style frequency-band scaling. On a checkpoint without RoPE scaling it emits `factor = data.max_length / max_position_embeddings` over `original_max_position_embeddings = max_position_embeddings`, with `low_freq_factor` 1 and `high_freq_factor` 4, so an 8k checkpoint extended to 64k gets Llama 3.1's own factor 8 over 8192. `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration. On a checkpoint that already ships a `llama3` block (Llama 3.1, 3.2 and 3.3 do), `rope_scaling_type: llama3` composes with it instead of replacing it: the checkpoint's `original_max_position_embeddings`, `low_freq_factor` and `high_freq_factor` are kept, and its `factor` is multiplied by `data.max_length / max_position_embeddings`. Llama-3.1-8B extended from 131072 to 262144 tokens trains with factor 16 over 8192, so no frequency pair rotates faster than it did in pretraining.
 
-RoPE scaling is applied before model construction on `task: sft` (the text path with `backend: transformers` and no layer streaming) and on `task: tts` and `task: pretrain` with `backend: transformers`. Everywhere else `rope_scaling_type` is refused at config load ([#1697](https://github.com/MakazhanAlpamys/Soup/issues/1697)): on the other 20 tasks, on `sft` with `backend: mlx`, `modality: vision`, `modality: audio` or `training.stream_layers: true`, and on any of the three with `backend: unsloth`. Those setups build the model with the checkpoint's own RoPE; the message names each setting to change, and the `yarn_*` keys set beside it. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
+RoPE scaling is applied before model construction on `task: sft` (the text path with `backend: transformers` and no layer streaming, or on `backend: mlx` with `rope_scaling_type: linear` and `quantization: none`, [#1995](https://github.com/MakazhanAlpamys/Soup/issues/1995)) and on `task: tts` and `task: pretrain` with `backend: transformers`. Everywhere else `rope_scaling_type` is refused at config load ([#1697](https://github.com/MakazhanAlpamys/Soup/issues/1697)): on the other 20 tasks, on `sft` with non-linear RoPE scaling or quantized training on `backend: mlx`, on `modality: vision`, `modality: audio` or `training.stream_layers: true`, and on any of the three with `backend: unsloth`. On MLX text SFT, `rope_scaling_type: linear` with `quantization: none` extends context when `data.max_length` exceeds the base checkpoint's `max_position_embeddings`, computing `factor = data.max_length / orig_len` and configuring linear position interpolation (`scale = 1.0 / factor`). The resulting RoPE scaling configuration is recorded in `adapter_config.json` and honoured downstream during generation (`soup infer`, `soup chat`) and fusion (`soup merge --backend mlx`). Those setups build the model with the checkpoint's own RoPE; the message names each setting to change, and the `yarn_*` keys set beside it. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
 
 **LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
@@ -619,14 +657,16 @@ training:
 Works with and without LoRA. When used with LoRA, the adapter is attached only to the unfrozen
 layers, so a frozen layer stays frozen rather than training through a fresh adapter.
 
-`freeze_layers`/`freeze_ratio` cannot currently be combined with LoRA when
-`training.lora.target_modules` is a regex string (an explicit one, or an `auto`-resolved
-architecture table entry such as Mistral 3.5's), when `training.lora.target_parameters` is
-set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`. A
-`target_modules` list entry that only matches modules outside a numbered decoder layer (such as
-`embed_tokens`) and a freeze plan that freezes every layer refuse too. Each of these refuses when
-the model is built rather than silently drop the freeze plan (#1432). A top-level `lm_head` target
-is accepted and keeps its adapter.
+`freeze_layers`/`freeze_ratio` combine with a list `target_modules` (module-name suffixes) and
+with a string one — `all-linear` or a regex. A string is resolved to the module names peft would
+pick, the names outside the trainable layers are dropped, and the explicit list is passed with
+`layers_to_transform` unset; a string that reaches no trainable layer refuses and names the range
+(#2201). The combination is still refused with `training.lora.target_parameters` (per-parameter
+LoRA, e.g. fused MoE experts) and with `training.lora.use_vera`. A `target_modules` list entry
+that only matches modules outside a numbered decoder layer (such as `embed_tokens`) and a freeze
+plan that freezes every layer refuse too. Each of these refuses when the model is built rather
+than silently drop the freeze plan (#1432). A top-level `lm_head` target is accepted and keeps
+its adapter.
 
 Known limitation: a `target_modules` entry spelled as a full module path, such as
 `model.layers.0.self_attn.q_proj`, keeps its adapter even when that layer is frozen, because peft
@@ -792,15 +832,16 @@ The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the re
 
 The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
-### Auto Warmup Schedule
+### Warmup Schedule
 
 ```yaml
 training:
-  warmup_auto: true       # Pick warmup_steps from dataset_size × epochs × warmup_ratio
-  warmup_ratio: 0.03      # 3% of total update steps (default)
+  warmup_ratio: 0.03      # 3% of the real optimizer steps (default)
 ```
 
-Clamped to `[10, 1000]` so tiny datasets get some warmup and huge datasets don't burn half a million wasted steps.
+`warmup_ratio` resolves over the run's real optimizer steps, so the warmup follows the dataset size, epochs and accumulation you actually train with.
+
+`training.warmup_auto` is deprecated (#1814): it was documented as picking the warmup from the dataset size, but no trainer ever read it, so `warmup_auto: true` has no effect. v0.78.0 loads it with a warning that says so, and v0.79.0 refuses it. `warmup_auto: false` is the default and is silent. Migration: delete the `warmup_auto` line; set `training.warmup_ratio` to change the warmup.
 
 ### Auto Mixed-Precision
 
@@ -867,10 +908,15 @@ Records peak memory each step. Pressure is peak allocated memory divided by the 
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, `convergence_detection`, and `forgetting_threshold` settings are
+The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, and `convergence_detection` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
+`forgetting_threshold` is deprecated (#1814): nothing reads it, so setting it away from
+its default of `0.1` has no effect. v0.78.0 loads it with a warning that says so and
+v0.79.0 refuses it. Migration: delete the `training.forgetting_threshold` line (it is not
+`eval.ship.forgetting_threshold`, which `soup ship` reads); for regression checks use
+`--gate <suite.yaml>` below.
 Their tuning knobs (`forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`,
 `checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`,
 `convergence_window`, and `convergence_rel_tol`) warned at load in v0.76 and are

@@ -266,7 +266,7 @@ Sections:
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
-| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); refused at config load anywhere else (#1697). |
+| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); on backend: mlx, task sft text supports rope_scaling_type: linear with quantization: none (#1995); refused at config load anywhere else (#1697). |
 | `training.yarn_factor` | `float \| null` | `null` | `> 1.0`, `<= 1024.0` | YaRN scaling factor (s). Optional — when omitted, the runtime falls back to ``target_length / original_length`` (HF default behaviour). |
 | `training.yarn_attn_factor` | `float \| null` | `null` | `>= 0.0`, `<= 10.0` | YaRN attention temperature multiplier (default 1.0 in HF). |
 | `training.yarn_beta_fast` | `int \| null` | `null` | `>= 1`, `<= 1024` | YaRN beta_fast cutoff (HF default 32). |
@@ -302,7 +302,7 @@ Sections:
 | `training.convergence_detection` | `bool` | `false` |  | Watch for loss plateau / oscillation and surface advice (continue / early_stop / lower_lr) at the end of training. |
 | `training.convergence_window` | `int` | `50` | `>= 5`, `<= 10000` | Staged, not enforced during training: number of recent losses to inspect for plateau / oscillation. Refused at load when set away from its default (v0.77, #808). |
 | `training.convergence_rel_tol` | `float` | `0.005` | `> 0.0`, `<= 1.0` | Staged, not enforced during training: relative range threshold below which the window is a plateau. Refused at load when set away from its default (v0.77, #808). |
-| `training.warmup_auto` | `bool` | `false` |  | Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. Overrides any manual warmup_steps in the trainer. |
+| `training.warmup_auto` | `bool` | `false` |  | Deprecated, no effect: no trainer reads it, and warmup_ratio already sets the warmup over the real optimizer steps. Setting it to true warns at load; refused as of v0.79.0. |
 | `training.auto_mixed_precision` | `bool` | `false` |  | Pick bf16/fp16 based on model + GPU compute capability. Applied by task='sft' (and 'tts', which trains through the SFT trainer); refused on every other task, whose trainers pick their own precision. |
 | `training.grad_accum_auto_tune` | `bool` | `false` |  | Monitor VRAM each step; warn (and recommend new batch/accum) when memory pressure is high. Advisory only: it does not rebuild the DataLoader or change accumulation during a run. |
 | `training.grad_accum_pressure_threshold` | `float` | `0.92` | `> 0.05`, `< 0.99` | VRAM utilisation fraction that triggers a recommendation |
@@ -332,7 +332,7 @@ Sections:
 | `training.neftune_alpha` | `float \| null` | `null` | `>= 0.0`, `<= 50.0` | NEFTune noise alpha (0-50). Adds noise to embeddings for better chat quality. |
 | `training.forgetting_detection` | `bool` | `false` |  | Staged, not enforced during training: enable periodic general-knowledge eval to detect catastrophic forgetting |
 | `training.forgetting_eval_steps` | `int` | `100` | `>= 10`, `<= 10000` | Staged, not enforced during training: run forgetting eval every N steps. Refused at load when set away from its default (v0.77, #808). |
-| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Staged, not enforced during training: warn if accuracy drops beyond this threshold (0.01-0.50) |
+| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Deprecated, no effect: nothing reads it (soup ship reads eval.ship.forgetting_threshold). Setting it away from the default warns at load; refused as of v0.79.0. |
 | `training.forgetting_benchmark` | `str` | `"mini_mmlu"` | one of `"mini_mmlu"`, `"mini_common_sense"`, `"mini_instruction"` | Staged, not enforced during training: built-in mini benchmark for forgetting detection. Refused at load when set away from its default (v0.77, #808). |
 | `training.forgetting_stop` | `bool` | `false` |  | Staged, not enforced during training: stop on severe forgetting. Refused at load when set away from its default (v0.77, #808). |
 | `training.checkpoint_intelligence` | `bool` | `false` |  | Staged, not enforced during training: track best checkpoints by quality |
@@ -384,7 +384,7 @@ Sections:
 | `training.eval_gate.suite` | `str \| null` | `null` |  | Path to eval-suite YAML (evals/gate.yaml) |
 | `training.eval_gate.every_n_epochs` | `int` | `1` | `>= 1`, `<= 100` | Run gate every N epochs (1-100) |
 | `training.eval_gate.regression_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max absolute drop vs baseline before regression fires |
-| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| 'previous' \| file path - scores to compare against |
+| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| file path - scores to compare against |
 | `training.eval_gate.on_regression` | `str` | `"stop"` | one of `"stop"`, `"warn"`, `"continue"` | Action on regression: stop training \| warn only \| continue |
 
 ## `eval`

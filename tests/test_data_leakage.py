@@ -210,4 +210,4 @@ def test_table_preserves_literal_markup_and_emoji(tmp_path, monkeypatch):
     text = "[red]:warning:[/red]"
     result = _cli(tmp_path, monkeypatch, [{"prompt": text}], [{"prompt": text}])
     assert result.exit_code == 2
-    assert text in result.stdout
+    assert text in strip_ansi(result.stdout)

@@ -990,7 +990,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -1010,6 +1014,26 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
@@ -1074,7 +1098,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
 
 `soup runs compare` keeps the side-by-side run summary and lists all differences
 in the stored config, including nested settings such as `training.lora.dropout`

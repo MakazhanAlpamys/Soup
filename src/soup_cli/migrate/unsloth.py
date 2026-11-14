@@ -389,8 +389,8 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             if "warmup_ratio" in kwargs:
                 training_params["warmup_ratio"] = kwargs["warmup_ratio"]
             if "warmup_steps" in kwargs:
-                # Soup derives the warmup length from training.warmup_ratio (and
-                # warmup_auto); a step count has no field to land in.
+                # Soup derives the warmup length from training.warmup_ratio alone
+                # (warmup_auto has no effect, #1814); a step count has no field to land in.
                 warnings.append(
                     f"warmup_steps={kwargs['warmup_steps']} has no Soup equivalent: Soup "
                     "sets warmup from training.warmup_ratio (default 0.03, in force until "

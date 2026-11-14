@@ -46,13 +46,15 @@ console = Console()
 # tables live with the shared estimate in utils/hardware_fit.py (#2049).
 _HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
 
-_UNWIRED_TRAINING_TUNABLES = (
+_UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
     # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
     # config/staged_fields.py (#808), and early_stop_patience moved in #761:
     # the loader refuses them (config/staged_fields.py), so they are not listed here.
-    "forgetting_threshold",
+    # forgetting_threshold moved to the loader too (#1814): it warns at load with the
+    # release that refuses it (config/deprecation.py), so it is not listed twice. That
+    # warning carries the --gate hint this note gave it.
 )
 
 
@@ -657,14 +659,20 @@ def _loads_on_unsloth(cfg) -> bool:
     unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
     instead of a list kept here: the dumped config is validated again with the
     backend changed. Only that pass's ``ValidationError`` means no; anything
-    else is a bug and must surface.
+    else is a bug and must surface. A deprecation warning the dump raises again
+    (#1814) is the loader's line already printed, so the probe drops it.
     """
+    import warnings
+
     from pydantic import ValidationError
 
+    from soup_cli.config.deprecation import SoupConfigDeprecationWarning
     from soup_cli.config.schema import SoupConfig
 
     try:
-        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SoupConfigDeprecationWarning)
+            SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
     except ValidationError:
         return False
     return True
@@ -827,7 +835,19 @@ def train(
         "--push-as",
         help=(
             "Auto-push each save_steps checkpoint to HF Hub as "
-            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model)"
+            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model). "
+            "A repository created by this flag is private unless --push-public "
+            "is given; an existing repository is used as it is and its "
+            "visibility is not changed."
+        ),
+    ),
+    push_public: bool = typer.Option(
+        False,
+        "--push-public",
+        help=(
+            "Create the --push-as repository public instead of private. "
+            "Requires --push-as. It does not change the visibility of a "
+            "repository that already exists."
         ),
     ),
     hf_resume: bool = typer.Option(
@@ -1065,6 +1085,17 @@ def train(
 ):
     """Start training from a soup.yaml config."""
     from soup_cli.utils.launcher import validate_multi_node_options
+
+    # Refused before every other path (--cloud, --find-lr, --dry-run, the config
+    # load): a visibility switch for a repository that is never created would
+    # otherwise be dropped without a word.
+    if push_public and not push_as:
+        console.print(
+            "[red]--push-public requires --push-as <repo>:[/] it sets the "
+            "visibility of the repository --push-as creates, so it does nothing "
+            "without it."
+        )
+        raise typer.Exit(1)
 
     try:
         validate_multi_node_options(nodes, node_rank, master_addr, master_port)
@@ -1391,10 +1422,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
-    # but not enforced mid-training in this build. Their other tuning knobs are
-    # reported by the loader with refusal dates, so only active flags and
-    # non-default forgetting_threshold are reported here.
+    # Honesty guard: these staged flags are accepted but not enforced mid-training in
+    # this build. Their tuning knobs, forgetting_threshold included (#1814), are
+    # reported by the loader with refusal dates, so only the active flags are
+    # reported here.
     _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
@@ -1601,6 +1632,7 @@ def train(
                         reward_hack_mitigation=reward_hack_mitigation,
                         gate=gate,
                         push_as=push_as,
+                        push_public=push_public,
                         hf_resume=hf_resume,
                         trust_remote_code=trust_remote_code,
                         tracker=tracker,
@@ -2193,29 +2225,44 @@ def train(
 
         # --- HF auto-push callback (Part B of v0.29.0) ---
         if push_as:
-            from soup_cli.monitoring.hf_push import build_push_callback
+            from soup_cli.monitoring.hf_push import (
+                build_push_callback,
+                describe_prepare_failure,
+                describe_push_repo,
+            )
 
+            # A repository this run creates is private unless --push-public;
+            # one that already exists is left exactly as it is (the visibility
+            # is only ever sent when the repository is found missing).
+            push_private = not push_public
             push_cb = build_push_callback(
                 repo_id=push_as,
                 output_dir=cfg.output,
-                private=False,
+                private=push_private,
             )
+            hf_trainer = getattr(trainer_wrapper, "trainer", None)
             if push_cb is None:
                 console.print(
                     "[yellow]--push-as: no HF token available; skipping auto-push[/]"
                 )
+            elif hf_trainer is None or not hasattr(hf_trainer, "add_callback"):
+                console.print(
+                    "[yellow]--push-as: trainer does not expose add_callback; "
+                    "auto-push disabled for this run[/]"
+                )
             else:
-                hf_trainer = getattr(trainer_wrapper, "trainer", None)
-                if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                # The repository is prepared here, once, so the line below is
+                # printed before training starts and the callback finds it ready.
+                repo_state = push_cb.prepare_repo()
+                if repo_state is None:
+                    failure = describe_prepare_failure(push_as, push_cb.prepare_error)
+                    console.print(f"[yellow]{for_terminal(failure)}[/]")
+                else:
+                    console.print(for_terminal(describe_push_repo(push_as, repo_state)))
                     hf_trainer.add_callback(push_cb)
                     console.print(
                         f"[green]HF auto-push enabled[/] -> {push_as} "
                         "(one branch per save_steps)"
-                    )
-                else:
-                    console.print(
-                        "[yellow]--push-as: trainer does not expose add_callback; "
-                        "auto-push disabled for this run[/]"
                     )
 
         # Train with live display and experiment tracking
