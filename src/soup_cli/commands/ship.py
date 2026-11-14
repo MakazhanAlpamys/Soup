@@ -569,14 +569,14 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
 
 # live_eval only builds a BitsAndBytesConfig for these two (#367); the other
 # quant_menu formats (gptq/awq/hqq/...) need a full TrainingConfig, so those
-# still fall back to bf16 here, same as no --config at all.
+# still fall back to the device's full-precision dtype, as with no --config.
 _LIVE_EVAL_QUANTIZATION_FORMATS = frozenset({"4bit", "8bit"})
 
 
 def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> Optional[str]:
     """Reuse the training run's own quantization for the live eval load.
 
-    Returns ``None`` (unchanged bf16 default) when no ``--config`` was given,
+    Returns ``None`` (device-selected full precision) when no ``--config`` was given,
     or the run used a format live_eval cannot build directly.
     """
     if soup_config is None:
@@ -598,9 +598,13 @@ def _live_eval_numerics(
     if quantization == "4bit" or quantization == "8bit":
         return quantization
     from soup_cli.utils import live_eval
+    from soup_cli.utils.gpu import bf16_fp16_flags
 
     resolved = live_eval.resolve_device(device)
-    return "bfloat16" if resolved.startswith("cuda") else "float32"
+    bf16, fp16 = bf16_fp16_flags(resolved)
+    if bf16:
+        return "bfloat16"
+    return "float16" if fp16 else "float32"
 
 
 def _expected_numerics_family(soup_config: "SoupConfig") -> str:
@@ -676,7 +680,7 @@ def _resolve_generators(
         )
         dtype = None
     else:
-        # dtype is the stamp: bf16 on CUDA (including cuda:0), fp32 elsewhere.
+        # Both loaders receive the same device-selected dtype as the stamp.
         dtype = numerics
         console.print(
             f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "

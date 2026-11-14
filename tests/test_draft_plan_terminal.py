@@ -1,7 +1,6 @@
 """The distill preview renders model names and copyable YAML literally."""
 
 import json
-import os
 
 import pytest
 import yaml
@@ -9,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.cli import app
 from soup_cli.commands import draft as draft_cmd
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 
@@ -23,7 +23,7 @@ from tests.conftest import make_cli_runner, strip_ansi
             ":warning:",
             ":warning:",
             id="emoji-alias",
-            marks=pytest.mark.skipif(os.name == "nt", reason="Colon is not a Windows filename"),
+            marks=skip_colon_on_windows,
         ),
     ],
 )
@@ -88,3 +88,52 @@ def test_distill_plan_keeps_header_safe_and_yaml_literal(
         f"Plan — distil target-{display_suffix} into student-{display_suffix} over 1 rows "
         "(cross-tokenizer: target=32, draft=16 -> uld_strategy=wasserstein_aligned)"
     )
+
+
+
+def test_distill_plan_yaml_preview_does_not_wrap_on_narrow_console(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(draft_cmd, "console", Console(width=48, height=40))
+
+    long_target = "models/deep-subfolder/long-teacher-model-architecture-checkpoint-v1"
+    base = "student-base"
+    for name, vocab in ((long_target, 32), (base, 16)):
+        path = tmp_path / name
+        path.mkdir(parents=True)
+        (path / "config.json").write_text(
+            json.dumps({"model_type": "gpt2", "vocab_size": vocab}), encoding="utf-8"
+        )
+    data_path = tmp_path / "data.jsonl"
+    data_path.write_text('{"text": "test row"}\n', encoding="utf-8")
+
+    result = make_cli_runner().invoke(
+        app,
+        [
+            "draft",
+            "distill",
+            "--target",
+            long_target,
+            "--draft-base",
+            base,
+            "--data",
+            "data.jsonl",
+            "-o",
+            "draft-out",
+            "--steps",
+            "1",
+            "--plan-only",
+        ],
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    rendered = strip_ansi(result.stdout)
+    start_index = rendered.find("base: ")
+    assert start_index != -1
+    yaml_text, _ = rendered[start_index:].rsplit("--plan-only:", 1)
+    config = yaml.safe_load(yaml_text)
+    assert config["training"]["teacher_model"] == long_target
+    assert config["base"] == base
+    assert config["output"] == "draft-out"
+    assert config["data"]["train"] == "data.jsonl"

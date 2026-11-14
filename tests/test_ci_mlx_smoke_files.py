@@ -28,7 +28,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests._source_scan import parse_source, walk_nodes
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
 
 ROOT = Path(__file__).resolve().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
@@ -39,6 +39,11 @@ JOB = "mlx-smoke"
 #: job, with the reason. Adding an entry is a decision a reviewer should see, so it carries a
 #: sentence, not a flag.
 EXEMPT: dict[str, str] = {
+    "test_mlx_cache_reader_native.py": (
+        "The Arrow-cache lifecycle writes and reads its cache with datasets; the mlx-smoke "
+        "job installs only .[mlx] and pytest and fails when datasets is installed, so hosted "
+        "CI cannot run this file."
+    ),
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
         "field, mlx.optimizers.clip_grad_norm exists) as a tripwire for an upstream release; "
@@ -62,6 +67,8 @@ def _needs_real_mlx(source: str) -> bool:
     gate would fail collection in the 3x3 matrix). The call may sit in a fixture, a method, a
     module-level line or an assignment, be imported bare, or pass the name as `modname=`.
     """
+    if "importorskip" not in source:
+        return False
     for node in walk_nodes(parse_source(source)):
         if not isinstance(node, ast.Call):
             continue
@@ -142,6 +149,7 @@ def _test_files() -> list[Path]:
     return sorted(TESTS.glob("test_*.py"))
 
 
+@memoized_scan
 def _needing_the_real_library() -> list[str]:
     return [
         path.name
@@ -312,6 +320,7 @@ class TestTheScanIsNotVacuous:
         [
             'import pytest\npytest.importorskip("trl")\n',
             'import pytest\npytest.importorskip("numpy")\n',
+            'import pytest\npytest.importorskip(modname="numpy")\n',
             'import pytest\npytest.importorskip("mlxfoo")\n',
             'import pytest\npytest.importorskip(name)\n',
             'import pytest\npytest.importorskip()\n',

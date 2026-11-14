@@ -1,0 +1,4 @@
+[soup_arm] arm S5 shape A config /workspace/out/results/A/80/S5/rep1.work/soup.yaml
+[soup_arm] cwd /workspace/out/results/A/80/S5/rep1.work
+[soup_arm] command soup train --config soup.yaml --yes
+[soup_arm] extra env {'PYTORCH_CUDA_ALLOC_CONF': 'expandable_segments:False'}

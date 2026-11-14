@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from rich.console import Console
 from soup_cli.cli import app
 from soup_cli.commands import drift_alarm as drift_cmd
 from soup_cli.utils.drift_alarm import post_webhook, run_drift_check
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -90,12 +92,9 @@ def test_an_outside_input_is_named_as_typed(side, name):
 
 
 @pytest.mark.parametrize("side", ["reference", "live"])
+@skip_colon_on_windows
 def test_an_empty_input_keeps_its_emoji_code(side):
     # This case really creates the file, so ':' names cannot run on Windows.
-    import sys
-
-    if sys.platform == "win32":
-        pytest.skip("':' is not valid in a Windows filename")
     existing = _write("existing.jsonl", ["base"])
     empty = _write("xn:warning:.jsonl", ["ignored"], key="completion")
     paths = {"reference": existing, "live": existing}
@@ -118,15 +117,18 @@ def test_an_empty_input_keeps_its_emoji_code(side):
     ],
 )
 def test_a_refused_webhook_keeps_the_netloc_text(option, netloc):
-    # A fullwidth slash is rejected by urllib.parse before transport. Unlike
-    # its invalid-IPv6 error, this message quotes netloc without repr().
-    result = _invoke("unused", "unused", option, f"https://{netloc}/hook")
+    # A fullwidth slash is rejected by urllib.parse before transport. The wording and
+    # the order of its checks differ between Python patch releases (3.11.9 reports the
+    # bracketed host first and does not quote the netloc), so the expected text is taken
+    # from urllib.parse itself instead of being pinned: whatever it says, the command
+    # shows it as typed, without its markup read and without the control characters.
+    url = f"https://{netloc}/hook"
+    with pytest.raises(ValueError) as refused:
+        urlsplit(url)
+    result = _invoke("unused", "unused", option, url)
 
     text = _plain(result, 2)
-    assert (
-        f"{option}: netloc '{netloc.replace(_CONTROLS, '')}' contains invalid "
-        "characters under NFKC normalization"
-    ) in text
+    assert f"{option}: {str(refused.value).replace(_CONTROLS, '')}" in text
 
 
 @pytest.mark.parametrize("token", _SPELLINGS)

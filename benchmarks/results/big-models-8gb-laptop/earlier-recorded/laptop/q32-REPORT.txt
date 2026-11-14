@@ -1,0 +1,96 @@
+Stage32: real Qwen3-32B NF4 LoRA on the physical8GB laptop GPU
+2026-11-03. Numerical and resource gates passed; final archive receipt is separate.
+
+Result
+The complete64-layer,32,762,123,264-parameter model completed three real LoRA
+updates, saved all256 FP32 adapter tensors, and reloaded them in a fresh process.
+Both heldout losses and the predetermined128-logit slice per example reproduced
+exactly after reload. The source/store bytes and resident frozen norms did not
+change. This is a capacity/update/save/reload proof, not a model-quality benchmark.
+
+Setting: physical RTX5070Laptop8151MiB,31.73GiB systemRAM, nativeWindows;
+NF4 double-quantized frozen base, BF16 computation, rank8 q/v LoRA(alpha16),
+9,961,472 trainable FP32 parameters, FP32 AdamW, batch1,sequence128,dropout0.
+All64decoderlayers participate. Exactly381 causal targets across3updates and
+254 heldout causal targets across2examples. This is not full-weight training.
+
+Measured training
+- Three audit-step times:10.139701,9.474364,9.265869s; median9.474364s.
+  Includes parameter clones, gradient/update inspection and AdamW, not just kernels.
+- Torch peak allocated2651.397949MiB; reserved2828MiB.
+- Whole-device nvidia-smi sampled maximum3002MiB (2.931641GiB).
+  Sampling can miss brief peaks. Neither value proves a physical3GB/4GB card works.
+- OS process peak working set6173.074219MiB (~6.03GiB); this is processRAM,
+  not total hostRAM. Privatecommit max9825.445313MiB is a separate accounting metric.
+- Minimum host available6339.738281MiB; minimum systemcommitheadroom6457.414063MiB.
+- Worker169.354335s total, including35.25s before/36.94s after immutable-file hashing.
+  Guard invocation175.578s includes startup/monitor finalization.
+- Disk reader direct_io=true,read_ahead1,2decoder slots, sharedGPU vocab slot,
+  4GiB pinned host arena,3,363,213,312B staging, NF4 scale cacheoff.
+  Runtime store_bytes ondisktier denotes staging, not the19.21GB modelsize.
+
+Training losses3.595974,4.572230,4.455287 belong to DIFFERENT examples and are not
+a convergence curve. All128 B tensors had positive finite gradients/updates on
+step1; A was initiallyzero-gradient as expected. Every one of256 A/B tensors had
+positive finite gradients/updates onsteps2/3; optimizer counters were1/2/3.
+Two heldout losses changed4.309379->4.298624 and4.310736->4.307984. This small,
+fixed smoke dataset cannot support a general quality claim or BF16 equivalence.
+
+Cold reload
+TrainingPID41692 exited. FreshPID39296 rebuilt the same base and loaded the saved
+adapter, without repeating training. Same2losses and256 selected logit values
+matched exactly, with full savedadapter tensor equality and all provenance hashes.
+Worker123.195918s; guard129.438s; sampleddevice2440MiB. Fresh process is not a cold
+OS disk cache. All owned workers stopped and post-run GPUmemory read0MiB.
+The adapter is a completed-stage artifact; optimizer state is not saved for exact
+continuation of the same Adam trajectory.
+
+Implementation and prior correctness gates
+Reuse immutable existing Soup f215941b23a5cddd2f2e1338b6956ae828461645.
+New isolated importer copies existing serialized NF4 tensors into nativeSoup
+layer shards, without dequantizing/requantizing. Source model:
+unsloth/Qwen3-32B-bnb-4bit revision7f721e74a6a8cc9ee352f7e49303a2c1705f9083.
+Four publishedsource files19,211,935,565B passed completeSHA256; tokenizer/config
+identities also verified. Import/readback checked2053 tensorpayloads totaling
+19,211,023,168B. Importprocesspeak45.714844MiB; total150.328s.
+
+RealCUDA module controls compared original and imported packed bytes, BF16 decoded
+weights, outputs,dX,all LoRA gradients and two actual updates for q/v/up projections.
+Pooled control used3actualQwen3layers with2slots and nonreentrantcheckpointing;
+12ownershipchecks,4slotrecycles, earliestlayer0 reclaimed slot previouslyholding2.
+Outputs,dX,all12adapter gradients/updates were exact across2updates. This validates
+the actual streamed backward path, not merely a finite loss.
+Fulltraining/reload preserved81source/store files bySHA256 before/after eachworker.
+No productionSoup changes, package upgrades, merges or public posts were made.
+
+Preserved issues
+- Firstdownload CLI pattern syntax fetched metadata only; corrected explicitnames.
+- InitialCPUguard rejected the nativeWindows conhost child; diagnosed and narrowly
+  recognized exactsystemconhost while retaining owned-process cleanup tracking.
+- modules01 failed before allocation: memory-fraction API requires cuda:0.
+- pooled01 failed before allocation: reducing testvocab to8 invalidated original
+  padtoken. Frozenparityv2 keeps originalvocab metadata; unusedvocab remainsmeta.
+- CPUtest harness exposed automaticPEFT placement and TorchAdamW CUDAhealthprobe;
+  exactreload now copies into existingdevice; CPUtests use-1 and rejectCUDAinit.
+Rawfailed artifacts remain. Frozenv1 files were preserved rather than overwritten.
+
+Verification
+38importer/preparationCPUtests;23supervisorCPUtests plusreal success/timeoutprobe;
+14finalrunnerCPUtests including parity/train/save/reload; independentraw audits.
+ExistingfrozenSoup subset52passed,1skipped,4GPUcasesdeselected separately.
+See ANALYSIS.json,AUDIT32.txt,FINAL_AUDIT.txt,REPRODUCE.txt and rawresults.
+
+Next scale target
+32B is an intermediate result. We identified a concrete dense122.610B candidate:
+unsloth/Mistral-Large-Instruct-2407-bnb-4bit revision
+a76e109f4b66807d88fa92b5d7e0dead1a354494;13declaredshards64.450GB.
+Pinnedconfig plus first/lastheaders and a realMLPquantstate were inspected using
+boundedHTTP ranges. No complete123Bweights were downloaded and no123B was run.
+Its BF16vocab tensors are each805MB; packeddecoder~714MB and largestdecodedMLP
+~705MB. Wholelayerdequantized~2.578GiB may matter more than oneprojection.
+Next: import one real123Bblock, measure forward/backward/LoRA memory and fidelity,
+then decide fullcheckpoint load. Add isolated Mistral support, since the current
+experimental importer/runner deliberately requireQwen3. SeeMISTRAL123_CANDIDATE.txt.
+For throughput, test sharing a layer load across several microbatches against
+an exact gradient-accumulation control. This is a hypothesis informed by existing
+offloading research, not a claimednewalgorithm or a promised120Btraining result.

@@ -203,7 +203,7 @@ def _load_json(
 def _load_csv(path: Path) -> list[dict]:
     import csv
 
-    with open(path, encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         return list(reader)
 

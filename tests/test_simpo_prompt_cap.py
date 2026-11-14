@@ -109,6 +109,13 @@ def _before(wrapper, raw: dict) -> dict:
     return wrapper.trainer.tokenize_row(raw)
 
 
+def _kept_prompt(before: dict) -> list[int]:
+    """The keep_end cut of TRL's prompt: its leading BOS, then its last tokens (#2545)."""
+    prompt = before["prompt_input_ids"]
+    assert prompt[0] == 1, "TRL's prompt no longer starts with the BOS"
+    return prompt[:1] + prompt[-(PROMPT_BUDGET - 1) :]
+
+
 class TestAPromptLongerThanMaxLength:
     def test_every_sequence_fits_and_the_prompt_keeps_its_end(self, tmp_path, monkeypatch):
         wrapper = _setup_simpo(tmp_path, monkeypatch, [LONG] * 4, val_rows=[LONG] * 2)
@@ -121,7 +128,7 @@ class TestAPromptLongerThanMaxLength:
                 lengths = {key: len(row[key]) for key in SEQUENCE_KEYS}
                 assert all(n <= MAX_LENGTH for n in lengths.values()), (split, lengths)
 
-                kept = before["prompt_input_ids"][-PROMPT_BUDGET:]
+                kept = _kept_prompt(before)
                 assert row["prompt_input_ids"] == kept, split
                 assert row["prompt_attention_mask"] == [1] * PROMPT_BUDGET, split
                 for side in ("chosen", "rejected"):
@@ -207,11 +214,11 @@ class TestThePromptBudgetBoundary:
         wrapper = _setup_simpo(tmp_path, monkeypatch, [raw] * 4)
         before = _before(wrapper, raw)
         assert len(before["prompt_input_ids"]) == MAX_LENGTH + 1
-        # The row does not fit: the cap trims the prompt to its last PROMPT_BUDGET.
+        # The row does not fit: the cap trims the prompt to PROMPT_BUDGET tokens.
         assert any(len(before[key]) > MAX_LENGTH for key in SEQUENCE_KEYS), before
 
         after = wrapper.trainer.train_dataset[0]
-        kept = before["prompt_input_ids"][-PROMPT_BUDGET:]
+        kept = _kept_prompt(before)
         assert len(after["prompt_input_ids"]) == PROMPT_BUDGET
         assert after["prompt_input_ids"] == kept
         assert after["prompt_attention_mask"] == [1] * PROMPT_BUDGET

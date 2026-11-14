@@ -9,6 +9,7 @@ import types
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -263,6 +264,7 @@ class TestHFPushCallback:
         (ckpt_dir / "adapter_config.json").write_text("{}")
 
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False  # a new repository
         monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
 
         callback = HFPushCallback(
@@ -276,8 +278,9 @@ class TestHFPushCallback:
         control = types.SimpleNamespace()
         callback.on_save(args, state, control)
 
+        # Private by default; see tests/test_push_as_visibility.py.
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
         assert fake_api.upload_folder.called
         kwargs = fake_api.upload_folder.call_args.kwargs
@@ -687,7 +690,10 @@ class TestDeployHfSpace:
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "token" in result.output.lower()
 
-    def test_hf_space_happy_path_gradio_chat(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("template", ["gradio-chat", "streamlit-chat"])
+    def test_hf_space_happy_path(self, tmp_path, monkeypatch, template):
+        from soup_cli.commands.deploy import render_space_template
+
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("HF_TOKEN", "t1")
 
@@ -704,12 +710,107 @@ class TestDeployHfSpace:
                 "--space",
                 "user/my-space",
                 "--template",
-                "gradio-chat",
+                template,
                 "--yes",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert fake_api.create_repo.called
+        fake_api.create_repo.assert_called_once()
+        fake_api.create_commit.assert_called_once()
+        args = fake_api.create_commit.call_args.kwargs
+        assert args["repo_id"] == "user/my-space"
+        assert args["repo_type"] == "space"
+        expected = render_space_template(template, model_repo="user/my-model")
+        assert [(op.path_in_repo, op.path_or_fileobj) for op in args["operations"]] == [
+            (name, content.encode("utf-8")) for name, content in expected.items()
+        ]
+        fake_api.upload_file.assert_not_called()
+
+
+    @pytest.mark.parametrize("with_requirements", [False, True])
+    def test_hf_space_custom_template_commits_exact_files(
+        self, tmp_path, monkeypatch, with_requirements
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HF_TOKEN", "t1")
+        template = tmp_path / "custom"
+        template.mkdir()
+        contents = {
+            "app.py": "# café\nMODEL = '{MODEL_REPO}'\n",
+            "README.md": "---\nsdk: gradio\n---\n# {MODEL_REPO}\n",
+        }
+        if with_requirements:
+            contents["requirements.txt"] = "gradio>=4\n"
+        for name, content in contents.items():
+            (template / name).write_text(content, encoding="utf-8")
+        (template / "ignored.txt").write_text("local only", encoding="utf-8")
+
+        fake_api = MagicMock()
+        monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
+        result = runner.invoke(
+            app,
+            [
+                "deploy", "hf-space", "--model", "user/my-model",
+                "--space", "user/my-space", "--template-dir", "custom", "--yes",
+            ],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        fake_api.create_repo.assert_called_once_with(
+            repo_id="user/my-space", repo_type="space", space_sdk="gradio",
+            private=False, exist_ok=True,
+        )
+        fake_api.create_commit.assert_called_once()
+        args = fake_api.create_commit.call_args.kwargs
+        assert args["repo_id"] == "user/my-space"
+        assert args["repo_type"] == "space"
+        operations = args["operations"]
+        assert len(operations) == len(contents)
+        assert {op.path_in_repo: op.path_or_fileobj for op in operations} == {
+            name: content.replace("{MODEL_REPO}", "user/my-model").encode("utf-8")
+            for name, content in contents.items()
+        }
+        fake_api.upload_file.assert_not_called()
+
+    @pytest.mark.parametrize("rejected_path", ["README.md", "app.py"])
+    def test_hf_space_rejected_commit_preserves_existing_files(self, monkeypatch, rejected_path):
+        monkeypatch.setenv("HF_TOKEN", "t1")
+        original = {
+            "app.py": b"old app",
+            "README.md": b"old readme",
+            "requirements.txt": b"old requirements",
+        }
+        published = original.copy()
+
+        def upload_file(*, path_in_repo, path_or_fileobj, **_):
+            if path_in_repo == rejected_path:
+                raise RuntimeError("Hub rejected Space update")
+            published[path_in_repo] = path_or_fileobj
+
+        def create_commit(*, operations, **_):
+            files = {op.path_in_repo: op.path_or_fileobj for op in operations}
+            if rejected_path in files:
+                raise RuntimeError("Hub rejected Space update")
+            published.update(files)
+
+        fake_api = MagicMock()
+        fake_api.upload_file.side_effect = upload_file
+        fake_api.create_commit.side_effect = create_commit
+        monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
+
+        result = runner.invoke(
+            app,
+            [
+                "deploy", "hf-space", "--model", "user/my-model",
+                "--space", "user/my-space", "--yes",
+            ],
+        )
+
+        assert published == original
+        assert result.exit_code == 1, result.output
+        assert "Hub rejected Space update" in result.output
+        fake_api.create_commit.assert_called_once()
+        fake_api.upload_file.assert_not_called()
 
     def test_render_gradio_chat_template(self):
         from soup_cli.commands.deploy import render_space_template
@@ -740,6 +841,17 @@ class TestDeployHfSpace:
         assert "sdk: gradio" in gradio["README.md"]
         streamlit = render_space_template("streamlit-chat", model_repo="user/my-model")
         assert "sdk: streamlit" in streamlit["README.md"]
+
+    @pytest.mark.parametrize("template", ["gradio-chat", "streamlit-chat"])
+    def test_readme_colors_are_accepted_by_hf_spaces(self, template):
+        from soup_cli.commands.deploy import render_space_template
+
+        rendered = render_space_template(template, model_repo="user/my-model")
+        _, front_matter, _ = rendered["README.md"].split("---", 2)
+        metadata = yaml.safe_load(front_matter)
+        # https://huggingface.co/docs/hub/spaces-config-reference
+        allowed_colors = {"red", "yellow", "green", "blue", "indigo", "purple", "pink", "gray"}
+        assert {metadata["colorFrom"], metadata["colorTo"]} <= allowed_colors
 
     def test_template_escapes_model_repo_id(self):
         from soup_cli.commands.deploy import render_space_template
@@ -983,6 +1095,7 @@ class TestBuildPushCallback:
 class TestCallbackLifecycle:
     def _fake_api(self, monkeypatch):
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False  # a new repository
         monkeypatch.setattr(
             "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
         )
@@ -1001,7 +1114,7 @@ class TestCallbackLifecycle:
             control=types.SimpleNamespace(),
         )
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
 
     def test_on_train_begin_swallows_failure(self, monkeypatch):

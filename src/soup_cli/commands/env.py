@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
@@ -27,7 +28,7 @@ from soup_cli.utils.env_lock import (
     write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
 
@@ -68,11 +69,12 @@ def env_lock_cmd(
 
     console.print(
         Panel(
-            f"[green]Locked {len(lock.entries)} packages to "
-            f"{for_terminal(output)}[/]\n"
-            f"Python: {for_terminal(lock.python_version)} | "
-            f"Platform: {for_terminal(lock.platform)} | "
-            f"CUDA: {for_terminal(lock.cuda_version or 'none')}",
+            Text.assemble(
+                (f"Locked {len(lock.entries)} packages to {strip_control(output)}", "green"),
+                f"\nPython: {strip_control(lock.python_version)} | "
+                f"Platform: {strip_control(lock.platform)} | "
+                f"CUDA: {strip_control(lock.cuda_version or 'none')}",
+            ),
             title="env lock",
             border_style="green",
         )
@@ -92,8 +94,12 @@ def env_status_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[yellow]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="yellow",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
@@ -145,8 +151,12 @@ def env_check_cmd(
         locked = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         lock_exit = 1
     except (TypeError, ValueError) as exc:
@@ -226,8 +236,12 @@ def env_fix_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
@@ -260,7 +274,7 @@ def env_fix_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote requirements to {for_terminal(output)}[/]")
+        console.print(Text.assemble("Wrote requirements to ", terminal_text(output), style="green"))
 
 
 __all__ = ["env_app"]

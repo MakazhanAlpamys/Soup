@@ -20,6 +20,8 @@ from urllib.parse import urlencode
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
 
+from soup_cli.utils.finite_json import finite_json
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -497,9 +499,22 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             )
 
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import HTMLResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
+
+    class _FiniteJSONResponse(JSONResponse):
+        """JSONResponse that sends a non-finite float as ``null``.
+
+        Starlette renders with ``allow_nan=False``, so one infinite value in a
+        tracker row or a dataset sample raised inside ``render`` and the whole
+        route answered 500.
+        """
+
+        def render(self, content) -> bytes:
+            return super().render(finite_json(content))
 
     # #731: FastAPI's interactive docs describe every route, parameter and
     # schema, and served none of it behind a token -- so a `soup ui --public`
@@ -522,7 +537,17 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         swagger_ui_oauth2_redirect_url=(
             "/docs/oauth2-redirect" if _docs_enabled else None
         ),
+        default_response_class=_FiniteJSONResponse,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        # FastAPI's own handler builds the same 422 body with a plain
+        # JSONResponse, so a request that sent `NaN` (Python's JSON reader
+        # accepts it) had the value echoed back as `input` and answered 500.
+        return _FiniteJSONResponse(
+            status_code=422, content={"detail": jsonable_encoder(exc.errors())}
+        )
 
     # Install before CORS so a 413 from the size cap still carries the same
     # CORS headers as a normal endpoint response.
@@ -711,7 +736,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             result = []
             for rid in run_ids:
                 run_info = tracker.get_run(rid)
-                metrics = tracker.get_metrics(rid)
+                resolved_id = run_info["run_id"] if run_info else rid
+                metrics = tracker.get_metrics(resolved_id)
                 config = {}
                 if run_info and run_info.get("config_json"):
                     try:
@@ -719,7 +745,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     except (ValueError, TypeError):
                         pass
                 result.append({
-                    "run_id": rid,
+                    "run_id": resolved_id,
                     "config": config,
                     "metrics": metrics,
                 })
@@ -729,28 +755,39 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
             run = tracker.get_run(run_id)
             if not run:
-                raise HTTPException(status_code=404, detail="Run not found")
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
             return run
         finally:
             tracker.close()
 
     @app.get("/api/runs/{run_id}/metrics", dependencies=[Depends(_verify_token)])
     def get_run_metrics(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
             run = tracker.get_run(run_id)
             if not run:
-                raise HTTPException(status_code=404, detail="Run not found")
-            metrics = tracker.get_metrics(run_id)
-            return {"run_id": run_id, "metrics": metrics}
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
+            resolved_id = run["run_id"]
+            metrics = tracker.get_metrics(resolved_id)
+            return {"run_id": resolved_id, "metrics": metrics}
         finally:
             tracker.close()
 
@@ -1062,7 +1099,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 ]
                 if new_metrics:
                     for m_row in new_metrics:
-                        data = json_mod.dumps(m_row, default=str)
+                        data = json_mod.dumps(finite_json(m_row), default=str)
                         yield f"data: {data}\n\n"
                     last_step = max(
                         m.get("step", 0) for m in new_metrics

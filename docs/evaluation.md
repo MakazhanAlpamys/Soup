@@ -16,6 +16,7 @@
 - [Drift Alarm (`soup drift-alarm`)](#drift-alarm-soup-drift-alarm)
 - [Diagnose (Post-Training Report Card)](#diagnose-post-training-report-card)
 - [Ship Verdict (`soup ship`)](#ship-verdict-soup-ship)
+- [Retention across versions: `soup eval retention`](#retention-across-versions-soup-eval-retention)
 - [NLG Evaluation Metrics (BLEU + ROUGE)](#nlg-evaluation-metrics-bleu--rouge)
 - [Quant Calibration (KL Divergence)](#quant-calibration-kl-divergence)
 - [Model Arena (Elo Tournament)](#model-arena-elo-tournament)
@@ -268,11 +269,21 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+`soup eval gate` refuses YAML booleans such as `false` and `true` before model
+construction; use numeric `0` when a zero cutoff is intended.
+
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
 handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
+
+`training.eval_gate.baseline: previous` is not implemented and is refused when the
+config loads; use a path to a baseline results file instead. A baseline set in
+`training.eval_gate` that cannot be resolved (a missing or invalid file, an unknown
+`registry://` reference) stops `soup train` when training starts, with an error naming
+`training.eval_gate.baseline`, instead of running the gate with no baseline (#2523).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
@@ -775,8 +786,13 @@ every PR instead of relying on a hand-edited JSON file.
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
   best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
-  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
-  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  `bfloat16` / `float16` / `float32`) — the actual load, not the training field.
+  Full-precision live eval uses native `bfloat16` on the requested CUDA card when
+  supported, `float16` on older CUDA cards such as T4/V100, and `float32` on CPU or
+  without an available CUDA runtime. Indexed devices such as `cuda:1` are checked
+  independently of the current card. Both model loaders, the console line and the
+  evidence use the same dtype. Unsupported quantization formats fall back to this
+  full-precision policy. With `--evidence` alone, `--config` GATES: it refuses
   (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
   *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
   warns rather than failing closed.
@@ -867,9 +883,160 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+`--write-baseline` refuses an output resolving to the suite, custom-task file,
+or judge-prompts file before model construction (exit 3), preserving those inputs.
+Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
+
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
+
+
+## Retention across versions: `soup eval retention`
+
+`soup ship` judges one candidate against one base on a fixed general suite, so a
+series of adapter updates can erode a task an earlier update taught while every step
+still looks fine against the one before it. `soup eval retention` measures that
+accumulated forgetting. It keeps a **ledger** of control tasks (held-out task-eval
+JSONL files, the same format `soup ship --task-eval` reads) and the accuracy every
+recorded version got on each, then scores a new candidate on **every** control task
+with one loaded model and compares each task with the **best** score any earlier
+version ever had.
+
+```bash
+# v1: register two control tasks and record the first version
+soup eval retention --model ./base --label v1 \
+  --add-task billing=evals/billing.jsonl --add-task tools=evals/tools.jsonl --record
+
+# v2 (an adapter trained afterwards): add a third task, judge, and record
+soup eval retention --model ./base --adapter ./out/v2 --label v2 \
+  --add-task invoices=evals/invoices.jsonl --record
+
+# v3: a dry run (the ledger is not touched) with a JSON report, refusing a lost ledger
+soup eval retention --model ./base --adapter ./out/v3 --label v3 \
+  --require-history --output report.json
+```
+
+**Rules.**
+
+- `--add-task NAME=PATH` registers a control task. A name is 1-64 characters of
+  `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
+  pinned in the ledger; if a registered file later changes, the run is refused (exit
+  `3`) with a message naming the task and both hashes, because a silently swapped
+  control set would fake retention. Register the new file under a new task name
+  instead. The same name with the same bytes is a no-op, or updates the stored path if
+  you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
+  with exactly that hint). The file is read once and the bytes that are hashed are the
+  bytes that are parsed.
+- For each task the reference is the **best** score over all recorded versions that
+  scored it, not the previous version: v1 0.90, v2 0.70 (shipped anyway), v3 0.75 is
+  still a 0.15 regression. `drop = best - current`; the task regressed when
+  `drop > --threshold` (default `0.05`; the threshold is an
+  absolute accuracy difference (a fraction, 0.05 = 5%), like
+  `soup ship --forgetting-threshold`; a drop of exactly the threshold passes). The
+  verdict compares the drop rounded to six decimals, and the table prints those digits
+  (`+0.333334`; a short one is padded to three, `+0.150`).
+- The first version that scores a task makes it a *new* task: that run is its baseline
+  entry, with no regression possible.
+- `--record` appends the version (label, `--model`, `--adapter`, UTC time, scores,
+  numerics) and any `--add-task` registrations to the ledger. Without it the ledger is
+  not touched (`--output` still writes its report file). A regressed version is still
+  recorded (the series is history) and the run still exits `2`. Labels are unique; a
+  duplicate is refused before any model loads.
+- `--require-history` refuses (exit `3`) a ledger that holds no recorded version. A
+  lost or reset ledger makes every task new, so nothing can regress and the run exits
+  `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
+  earlier version prints a warning that names it.
+
+**Loading the model.** The candidate is loaded the way `soup ship` loads one, with
+the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
+and float32 elsewhere; `--config soup.yaml` reuses
+the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
+is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
+variables (a Qwen3 model scores differently with thinking on or off). Every recorded
+version carries these **numerics** (`dtype`, `device` family, `quantization`,
+`chat_template_kwargs`), and a run whose numerics differ from any recorded version is
+refused before the model loads (exit `3`), naming each differing key with this run's
+value and the recorded one. CPU runs (float32), native-BF16 CUDA runs (bfloat16), and
+pre-Ampere CUDA runs (float16) therefore use separate ledgers; start a new ledger with
+`--ledger NEW.json` to change those settings.
+
+**Existing pre-Ampere histories.** Before the device-aware precision change (#2409),
+full-precision runs on T4, V100 and RTX 20xx also recorded `dtype: bfloat16`. The same
+card now selects `float16`, so continuing that existing BF16 ledger is refused **before
+the model loads**, with exit `3` naming the old and new dtype. Start a separate ledger
+with `--ledger NEW.json`, register the control tasks again with `--add-task`, and record
+a new FP16 baseline. Historical scores retain their BF16 stamp and are not migrated
+into the FP16 series, since scores measured under different dtypes are not comparable.
+
+**Failed generations.** A generation that raises, or returns something that is not
+text, is a failure and not a wrong answer. If any sample of a control task fails (an
+out-of-memory error on every example would otherwise read as accuracy 0.000, a
+regression), the run exits `1` naming the task and the count, and nothing is recorded
+or written, with or without `--record`. An empty string is an answer, a wrong one.
+
+**Output.** A Rich table (task rows x version columns, then the current score, the
+best earlier score, the drop and a status) and a summary:
+
+- *Regressions*: the tasks whose drop exceeded the threshold.
+- *Mean forgetting*: the mean over tasks an earlier version also scored of
+  `max(0, best - current)`.
+- *Backward transfer*: the mean over the same tasks of `current - first score`
+  (negative: the old tasks ended below where they started).
+
+New tasks are in neither mean. The table shows the last 8 earlier versions;
+`--output report.json` holds the full matrix, per-task example counts, the summary and
+this run's numerics.
+
+Exit codes follow `soup ship`: `0` no regression, `2` a regression, `3` a usage or
+input error (bad flag, malformed ledger, changed control file, different numerics), `1`
+a runtime error (model load, failed generation, ledger or `--output` write). A write
+that fails is reported as an error line after the report, and a regression still exits
+`2`: a failed write never hides it.
+
+**Ledger file** (`retention.json`, schema 1, written atomically):
+
+```json
+{"schema": 1,
+ "tasks": [{"name": "billing", "path": "evals/billing.jsonl", "sha256": "...",
+            "added_at": "2026-11-05T12:00:00Z", "added_with": "v1"}],
+ "versions": [{"label": "v1", "model": "./base", "adapter": null,
+               "evaluated_at": "2026-11-05T12:00:00Z", "scores": {"billing": 0.9},
+               "numerics": {"dtype": "float32", "device": "cpu", "quantization": null,
+                            "chat_template_kwargs": null}}]}
+```
+
+Every field is validated on read: an unknown key, a wrong type or a score outside
+[0, 1] (including an integer too large for a float) is refused with a message naming
+the key and the type found. The ledger, control files and `--output` must stay under
+the working directory and not be symlinks, the ledger is capped at 4 MiB, 1000 tasks and
+1000 versions, and `--output` may not be the ledger or a control file.
+
+**Two runs at once.** A run takes minutes. Right before `--record` writes, the ledger
+is read again; if it changed since this run read it (another run recorded a version),
+the write is refused with a message naming the cause, the report is still printed, and
+a label the other run already recorded is never duplicated.
+
+**What it does not do.** It is not part of the `soup ship` verdict. The evidence file
+that `soup ship --evidence` reads needs a leg-1 task win, which a retention run does
+not produce, so there is no `--emit-evidence`; gate a pipeline on the exit code instead.
+Scores come from one greedy-decode pass, so compare versions evaluated the same way
+(the numerics check enforces it) and read a drop against the size of the control set:
+with 40 examples, `0.05` is two answers.
+
+**Known limitations.**
+
+- Two runs whose compare-and-write land in the same instant can still both pass the
+  re-read check, and the later write then replaces the earlier one. There is no lock
+  file on purpose: a run killed while holding one would block every later `--record`.
+  Serialise recording runs in CI (one job per ledger).
+- `--require-history` cannot tell a ledger that was replaced by an OLDER copy from the
+  current one; keep the ledger under version control and review its diff.
+- A run stops at the first control task with a failed generation, so the message counts
+  that task's failures, not every task's.
+- The numerics stamp names the load settings, not the library versions or the checkpoint
+  bytes behind `--model`: the same `--model` path can hold different weights on two days.
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
@@ -1034,6 +1201,13 @@ unusable reply rather than a transient outage: it is not retried. The error name
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
 
+Rubric files supplied to `soup eval judge --rubric` and
+`training.grpo_judge_rubric` require unique criterion names after trimming
+surrounding whitespace and ignoring case. In v0.78.0, previously accepted
+duplicate names are refused when the file is loaded. Rename or remove the
+duplicate. The eval CLI exits `1` before sending a judge request, and GRPO
+ranking rejects the rubric at trainer setup.
+
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
 the saved banner reports the saved count. It exits `0` when at least one result was
@@ -1042,7 +1216,22 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
+With `--rubric`, `soup eval judge` exits `1` before sending a request if a weight
+is non-finite or non-numeric. The error names the rubric, criterion and value.
+Weighted and aggregate means use an overflow-safe fallback when intermediate totals
+overflow; calculations whose totals stay finite retain their existing rounding.
+Zero or negative total weights keep the existing zero result. If a signed-weight
+mean is unrepresentable, the command skips that row with
+`Warning: judge failed for prompt: Weighted judge score must be finite`.
+It exits `1` if every row fails. In the SDK, `JudgeResults.compute()` raises
+`ValueError` for non-finite aggregate input. Ranking rubrics still ignore weights.
+Re-evaluate any previously saved scores affected by overflow before reusing them.
+
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
+
+`soup eval compare` reads results for the full run IDs resolved from its arguments.
+When `soup eval aider --run-id` accepts a unique prefix, it saves the result under
+the matching full run ID. Existing evaluation rows keep their stored run IDs.
 
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;

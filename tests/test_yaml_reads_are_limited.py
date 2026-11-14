@@ -43,12 +43,14 @@ YAML_USERS = {
     "cans/pack.py": ("safe_dump",),
     "cloud/runpod.py": ("YAMLError",),
     "commands/adapters.py": ("YAMLError",),
+    "commands/data_mix.py": ("safe_dump",),
     "commands/deploy.py": ("YAMLError",),
     "commands/plan.py": ("YAMLError",),
     "commands/push.py": ("YAMLError",),
     "commands/ship.py": ("YAMLError",),
     "commands/spectrum.py": ("safe_dump",),
     "commands/sweep.py": ("YAMLError",),
+    "commands/train.py": ("safe_dump",),
     "config/loader.py": ("YAMLError",),
     "eval/gate.py": ("YAMLError",),
     "migrate/common.py": ("dump",),
@@ -65,7 +67,6 @@ YAML_USERS = {
     "utils/onboarding.py": ("safe_dump",),
     "utils/ra_dit_run.py": ("safe_dump",),
     "utils/recipe_dag.py": ("YAMLError",),
-    "utils/terraform_plan.py": ("YAMLError", "safe_dump"),
 }
 
 _YAML_PACKAGES = ("yaml", "ruamel")

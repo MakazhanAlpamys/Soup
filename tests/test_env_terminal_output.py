@@ -11,7 +11,8 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import env
 from soup_cli.utils.env_lock import EnvEntry, EnvLock, read_lock, write_lock
-from tests.conftest import strip_ansi
+from tests._windows_filenames import skip_colon_on_windows
+from tests.conftest import make_cli_runner, strip_ansi
 
 DIRTY = "[bold]value\x1b\x07\x9b\u202e[/]"
 CLEAN = "[bold]value[/]"
@@ -74,6 +75,31 @@ def test_lock_sanitizes_snapshot_and_success_path_but_keeps_file_contents(workdi
     assert read_lock(name) == lock
 
 
+@skip_colon_on_windows
+def test_lock_receipt_keeps_alias_in_the_written_path(workdir, monkeypatch):
+    lock = _lock()
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+    name = "[bold]snapshot-:warning:\x9b\u202e.lock"
+
+    result = make_cli_runner().invoke(app, ["env", "lock", "--output", name])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert "Locked 1 packages to [bold]snapshot-:warning:.lock" in _plain(result)
+    assert read_lock(name) == lock
+    assert not Path("[bold]snapshot-:warning:.lock").exists()
+
+
+def test_lock_receipt_keeps_alias_in_snapshot_metadata(workdir, monkeypatch):
+    lock = replace(_lock(), platform="[bold]platform-:warning:\x9b\u202e[/]")
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+
+    result = make_cli_runner().invoke(app, ["env", "lock"])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert "Platform: [bold]platform-:warning:[/] | CUDA: 12.4" in _plain(result)
+    assert read_lock("soup-env.lock") == lock
+
+
 @pytest.mark.parametrize("command", ["status", "check", "fix"])
 def test_missing_lock_path_is_literal_and_terminal_safe(workdir, command):
     name = "[bold]missing\x9b\u202e[end].lock"
@@ -125,3 +151,27 @@ def test_check_sanitizes_declared_bound_metadata(workdir, monkeypatch):
     output = strip_ansi(result.output)
     assert output.count(CLEAN) == 3
     assert not any(c in output for c in ("\x1b", "\x07", "\x9b", "\u202e"))
+
+
+def test_lock_receipt_preserves_backslash_in_written_path(workdir, monkeypatch):
+    lock = _lock()
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+    name = "nested\\[unclosed\x9b\u202e.lock"
+    Path(name).parent.mkdir(exist_ok=True)
+
+    result = make_cli_runner().invoke(app, ["env", "lock", "--output", name])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert r"Locked 1 packages to nested\[unclosed.lock" in _plain(result)
+    assert read_lock(name) == lock
+
+
+def test_lock_receipt_preserves_backslash_in_metadata(workdir, monkeypatch):
+    lock = replace(_lock(), platform="host\\[unclosed\x9b\u202e")
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+
+    result = make_cli_runner().invoke(app, ["env", "lock"])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert r"Platform: host\[unclosed | CUDA: 12.4" in _plain(result)
+    assert read_lock("soup-env.lock") == lock

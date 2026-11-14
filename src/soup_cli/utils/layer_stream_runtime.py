@@ -371,10 +371,14 @@ _PACKED_DEQUANT_NF4_FUNCTION = None
 def _packed_dequant_nf4_function():
     """Lazy autograd Function: dense-dequant forward, PACKED-only saved state.
 
-    For a streamed layer that runs WITHOUT checkpoint recompute. ``F.linear`` on
-    a dequantised weight would save the dense bf16 weight for the backward (437 MB
-    per Mistral-7B layer); this saves only the packed bytes and the quantisation
-    tensors through ``save_for_backward`` and dequantises again for ``grad_x``.
+    For a streamed layer that runs WITHOUT checkpoint recompute, or whose
+    checkpoint recompute would hold too many dense weights at once (see
+    :func:`set_stream_packed_backward`). ``F.linear`` on a dequantised weight
+    would save the dense bf16 weight for the backward (437 MB per Mistral-7B
+    layer); this saves only the packed bytes and the quantisation tensors through
+    ``save_for_backward`` and dequantises again for ``grad_x``. Under a
+    checkpoint the saved tensors are the pool-slot aliases the recompute
+    restores, and the slot-owner check runs before ``grad_x``.
     The forward arithmetic is the compatibility path's (dequantise + ``F.linear``)
     and the backward's ``grad_y @ W`` is the same GEMM ``F.linear``'s backward
     issues, so outputs and gradients stay bit-identical to the recompute path.
@@ -451,8 +455,9 @@ def _packed_dequant_nf4_function():
 
 
 def packed_dequant_nf4_linear(x: Any, packed: Any, quant_state: Any, bias: Any = None) -> Any:
-    """Dense-dequant NF4 linear that saves only packed state for its backward
-    (training.stream_recompute 'off' / 'auto')."""
+    """Dense-dequant NF4 linear that saves only packed state for its backward: a layer
+    without checkpoint recompute (training.stream_recompute 'off' / 'auto'), or a
+    checkpointed one the VRAM pre-flight routed here (set_stream_packed_backward)."""
     empty = packed.new_empty((0,))
     state2_absmax = empty
     state2_code = empty
@@ -571,7 +576,13 @@ def install_dequant_forward(module: Any) -> int:
     quantisation tensor go through ``save_for_backward``, so non-reentrant
     checkpointing can discard and recompute them after the pool refills the correct
     layer. Whenever bitsandbytes selects its dequantise + linear fallback, Soup
-    keeps the v0.73.0 path rather than paying a third dequantisation in backward.
+    keeps the v0.73.0 path rather than paying a third dequantisation in backward,
+    with one exception: when the VRAM pre-flight predicts that this arm's
+    dense weights (a checkpointed layer's recompute holds all of the layer's at
+    once, 2.77 GB per Mistral Large layer) would not fit, it routes the layer's
+    linears to the packed-state Function instead
+    (:func:`set_stream_packed_backward`), paying the extra dequantisation for a
+    backward that holds one dense matrix at a time. Same arithmetic, same bits.
     Missing private dispatch symbols fail toward the Function: exact but possibly
     slower, never toward an alias-unsafe ``MatMul4Bit``.
 
@@ -623,9 +634,11 @@ def install_dequant_forward(module: Any) -> int:
         if scale_cache is not None:
             quant_state = scale_cache.dense_state(self.weight._soup_scale_cache_key, quant_state)
         if getattr(self, "_soup_packed_backward", False) and torch.is_grad_enabled():
-            # training.stream_recompute — no checkpoint recompute around this
-            # layer: never let F.linear save the dense weight; save the packed
-            # bytes instead.
+            # Never let F.linear save the dense weight; save the packed bytes
+            # instead. Set for a layer with no checkpoint recompute
+            # (training.stream_recompute), and for a checkpointed layer whose dense
+            # weights the VRAM pre-flight predicted would not fit
+            # (set_stream_packed_backward).
             return packed_dequant_nf4_linear(x, self.weight, quant_state, bias).to(inp_dtype)
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
@@ -1621,6 +1634,13 @@ def _build_streamed_layer_class():
             # unpack instead of at the recompute. See _body_retained /
             # set_stream_recompute.
             self.recompute = True
+            # Set by the VRAM pre-flight (set_stream_packed_backward) when the
+            # dense-retaining NF4 arm would not fit: this layer's NF4 linears then
+            # save packed state and dequantise per matrix even while the layer is
+            # checkpointed. Kept apart from ``recompute`` so that the 'auto' probe
+            # and set_stream_recompute, which flip a layer's recompute, do not
+            # undo it.
+            self.packed_checkpoint_backward = False
             self._bwd_visited = True
             # The pool slot's load generation at the first backward visit; a
             # later unpack refuses a slot that was reloaded since, even with the
@@ -2054,16 +2074,48 @@ def _linear4bit_class() -> Any:
 
 def _set_layer_recompute(module: Any, *, skip: bool) -> None:
     """One streamed layer: ``skip`` = no checkpoint recompute. Its NF4 linears
-    then save the packed bytes, not the dense weight, for the backward. A layer
-    with no patched NF4 linear (``n_dequant_forward == 0``) has none to flag, and
-    bitsandbytes is not imported for it."""
+    then save the packed bytes, not the dense weight, for the backward; so do they
+    on a checkpointed layer the pre-flight routed there
+    (``packed_checkpoint_backward``). A layer with no patched NF4 linear
+    (``n_dequant_forward == 0``) has none to flag, and bitsandbytes is not
+    imported for it."""
     module.recompute = not skip
     if not getattr(module, "n_dequant_forward", 0):
         return
+    packed = skip or bool(getattr(module, "packed_checkpoint_backward", False))
     linear4bit = _linear4bit_class()
     for child in module.inner.modules():
         if isinstance(child, linear4bit):
-            child._soup_packed_backward = skip
+            child._soup_packed_backward = packed
+
+
+def set_stream_packed_backward(model: Any, enabled: bool) -> int:
+    """Route every streamed layer's NF4 linears to the packed-state backward, or back.
+
+    On bitsandbytes' dequantise + ``F.linear`` arm a checkpointed layer's recompute
+    rebuilds the layer's dense weights together and holds them until its backward
+    has used each one (2.77 GB per Mistral Large layer). Enabled, the layer's NF4
+    linears save only the packed bytes and quantisation tensors
+    (``packed_dequant_nf4_linear``) and dequantise one matrix at a time in the
+    backward, for one more dequantisation per matrix. Both arms dequantise with the
+    same call and issue the same GEMMs; ``tests/test_stream_packed_backward.py``
+    checks loss, every LoRA gradient and an AdamW update bit-for-bit on CPU. The
+    streamed-slot owner check still runs before every backward.
+
+    Decided by the VRAM pre-flight (``decide_packed_backward``), never by a config
+    key. A layer that skips the recompute is packed for its own reason and stays so
+    when this is turned off. Returns the number of streamed layers that carry NF4
+    linears, i.e. the ones whose arm this can change.
+    """
+    if not isinstance(enabled, bool):
+        raise TypeError(f"enabled must be a bool; got {enabled!r}")
+    routed = 0
+    for module in streamed_decoder_layers(model):
+        module.packed_checkpoint_backward = enabled
+        _set_layer_recompute(module, skip=not module.recompute)
+        if getattr(module, "n_dequant_forward", 0):
+            routed += 1
+    return routed
 
 
 def _output_nbytes(output: Any) -> int:
@@ -2442,9 +2494,11 @@ def _refuse_trainable_streamed_boundary(model: Any, index: Any, lora_config: Any
     if isinstance(targets, str):
         targets = (targets,)
     boundaries = (model.get_input_embeddings(), model.get_output_embeddings())
-    for name, module in model.named_modules():
+    # Match the way PEFT's _set_trainable does: every registered name, aliases
+    # included, by plain suffix, so ["head"] names "lm_head" too (#2548).
+    for name, module in model.named_modules(remove_duplicate=False):
         if any(module is boundary for boundary in boundaries) and any(
-            name == target or name.endswith("." + target) for target in targets
+            name.endswith(target) for target in targets
         ):
             raise ValueError(
                 f"modules_to_save targets the frozen streamed boundary {name!r}; "
@@ -4574,12 +4628,27 @@ def _spec_bytes(
     )
 
 
+def freeze_for_inference(model: Any) -> None:
+    """Make a streamed model forward-only: eval mode, frozen, no layer checkpointing.
+
+    Run after :func:`install_streaming`. The streamed layers checkpoint only when autograd
+    is recording, so a caller who forgets ``torch.inference_mode()`` would otherwise still
+    route every layer through ``torch.utils.checkpoint``; switching it off here keeps a
+    plain ``model(...)`` call on the same code path as the inference-mode one.
+    """
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    for layer in streamed_decoder_layers(model):
+        layer.use_checkpoint = False
+
+
 def build_streamed_model(
     *,
     model_id: str,
     shard_dir: str,
     index: Any,
-    lora_config: Any,
+    lora_config: Any = None,
     device: str = "cuda",
     dtype: str = "bfloat16",
     buffers: int = 2,
@@ -4601,11 +4670,20 @@ def build_streamed_model(
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
+    ``lora_config=None`` (the default) builds the forward-only INFERENCE model instead:
+    peft is never imported, no adapter exists, the model is in eval mode with every
+    parameter frozen, and the streamed layers do not checkpoint. The returned model is the
+    plain Hugging Face class (not a ``PeftModel``), and everything else (weight source,
+    tier, buffer pool, prefetch, NF4 rebuild, scale cache, stripe roots) is the training
+    path's. Use :func:`soup_cli.utils.stream_inference.build_streamed_inference_model` for
+    the supported entry point.
+
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
     ``install_streaming``'s: an API switch, no config field.
     """
-    from peft import get_peft_model
+    if lora_config is not None:
+        from peft import get_peft_model
 
     model = build_meta_skeleton(
         model_id,
@@ -4634,10 +4712,11 @@ def build_streamed_model(
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(model, model_id)
-        _refuse_trainable_streamed_boundary(model, index, lora_config)
-        model = get_peft_model(model, lora_config)
-        materialize_meta_adapters(model, seed=seed, device=device)
-        assert_trainable_adapters_materialized(model)
+        if lora_config is not None:
+            _refuse_trainable_streamed_boundary(model, index, lora_config)
+            model = get_peft_model(model, lora_config)
+            materialize_meta_adapters(model, seed=seed, device=device)
+            assert_trainable_adapters_materialized(model)
         runtime = install_streaming(
             model,
             shard_dir=shard_dir,
@@ -4655,6 +4734,12 @@ def build_streamed_model(
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
         )
+        if lora_config is None:
+            try:
+                freeze_for_inference(model)
+            except BaseException:
+                runtime.close()
+                raise
     except BaseException:
         for external in external_sources:
             external.close()

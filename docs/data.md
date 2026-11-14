@@ -472,6 +472,13 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
+`--count` is the number of rows requested. Rows the provider did not return, and rows that
+fail validation, are asked for again. A row dropped as a duplicate (of `--dedup-with`, or of
+an earlier row in the same run) counts toward `--count`: the file then holds fewer rows, the
+summary shows how many were requested and how many duplicates were removed, and the command
+exits 0. If three requests in a row return no valid row, the command stops, saves the rows it
+has to the output file and exits 1.
+
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
@@ -594,6 +601,11 @@ soup data review prefs.jsonl --sample 10
 **Supported log formats:** `langchain`, `openai`, `soup-serve`
 **Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
 
+For `thumbs_up`, each prompt yields at most one pair. Soup selects the first
+upvoted response with a different downvoted response, then the first such
+downvoted response. Prompts without two distinct responses across the ratings
+yield no pair.
+
 **The `soup-serve` record shape.** The parser reads a top-level `signal` in the
 canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
 for older logs:
@@ -711,6 +723,7 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parq
 Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
 including Excel's CSV UTF-8 exports. The signature is removed before parsing;
 U+FEFF characters inside field values or document text are preserved.
+Quoted CSV fields also preserve their original LF, CRLF or CR line endings.
 
 The same leading-BOM handling applies to tokenizer corpora, inference benchmark
 prompts, Agent Forge predictions, draft JSONL inputs, edit covariance corpora,
@@ -790,6 +803,12 @@ to `prompt`).
   and a file with `{"messages": ..., "chosen": ..., "rejected": ...}` detects as `chatml`
   (losing the answers). Standalone validation of these layouts needs `--format dpo`.
   Tasks outside those seven get no automatic `dpo` resolution.
+- **KTO row validation:** For `task: kto`, training checks after loading that every row
+  in both the train and val splits contains `prompt`, `completion` **and** `label`.
+  If `data.format: auto` detects the file as a different format (e.g. `chatml`, `alpaca`,
+  `dpo`), this check catches the mismatch before any model is loaded and names the
+  detected format, the three required fields, and the fix (`data.format: kto`).
+  This applies to both live training and `soup train --dry-run` (#2423).
 - **Ignored keys:** A top-level `system` key, `scores`, and `ids` are ignored (system instructions
   belong in the conversation message list).
 - **Refusals:** A refused row is dropped with `Warning: N of M rows dropped: they do not convert as 'dpo'. First: row I: <reason>.`
@@ -872,6 +891,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "Python is a programming language."}
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
+
+The two lines show the two shapes, and a file uses one of them: a non-blank `negative` on every row, or on none. A mix is refused before the model loads, naming how many rows have a `negative` and how many do not; the validation set is checked on its own.
 
 With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
@@ -1079,9 +1100,17 @@ data:
 resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
 `orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
 vision and audio paths whatever the backend (they run their transformers setup before the
-backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
-`mlx`, and `training.stream_layers` never add them, so a config setting them there is
-refused at load, naming which of those applies (#1358).
+backend is read). On `backend: mlx`, text SFT supports native vocabulary expansion
+when `training.quantization: none` on dense causal models (`mlx_lm.models.llama` layout)
+whose base embedding row count matches the tokenizer vocabulary length (#1994). Special tokens
+are registered first to ensure semantic precedence, whereas `backend: transformers`
+(`apply_vocab_expansion`) registers ordinary tokens first. New rows are
+initialized with a normal distribution matching the base embedding's std and dtype.
+Saved adapters include separate `added_tokens.safetensors` and `added_tokens_info.json`
+sidecar artifacts, while downstream consumers (`soup infer`, `soup chat`, `soup merge`)
+explicitly refuse expanded vocabulary MLX adapters until unified loader support lands.
+Any other task on MLX, quantized MLX models, `backend: unsloth` (text SFT and every other task),
+and `training.stream_layers` refuse vocabulary expansion at config load, naming which applies (#1358).
 
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
@@ -1100,17 +1129,43 @@ rules out `train_on_messages_with_train_field`, which is itself exclusive with
 never both decide a run.
 
 On text SFT it is honoured by the transformers and unsloth backends, which run
-the same `SFTTrainerWrapper.setup()` row builder, and `task: distill` honours it
-too, since distill builds every row that way. On `task: sft` with
+the same `SFTTrainerWrapper.setup()` row builder, and native MLX text SFT, below.
+`task: distill` honours it too, since distill builds every row that way.
+On the transformers and unsloth backends, `task: sft` with
 `modality: vision` or `audio` it is accepted but not applied: those rows are
 built by the vision and audio preparers, which never read it (#1156).
 
-**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
-assistant turn, so the same config trains the last turn on transformers and every
-turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
-`soup doctor --config` reports it.
+**Native MLX text SFT:** `mask_history` selects the last actual assistant message,
+including consecutive assistant turns and a conversation ending in a tool turn.
+All earlier context remains in the input. The existing native response-only rule
+still excludes assistant headers and includes its end marker.
 
-**Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
+Alternatively, set `train_on_responses_only: false` and
+`train_on_messages_with_train_field: true`. Each message's `train: true` selects
+its whole token span (header, content and end marker), even for user, system,
+developer or tool roles. `false` excludes it; missing/`null` uses the assistant-role
+default. A non-boolean non-null flag is refused. This uses the shared per-message
+label policy with verified actual token-prefix boundaries; it does not estimate
+spans from rendered string lengths or apply an approximate alignment fallback.
+
+Both selective modes require chat message rows and verifiable native token
+boundaries. History masking checks the selected final assistant span: a template
+may rewrite ignored earlier reasoning if that span's boundaries remain exact.
+Per-message masking verifies every message boundary. Unsupported template renders
+raise an actionable error. The first training row is checked before training;
+other training and validation rows are checked as they are read. Rows with no
+selected causal target, including a selected turn fully truncated by
+`data.max_length`, are refused rather than training another turn. Each binary
+mask belongs to the original token position before the causal shift; padding has
+zero weight even when PAD=EOS. Batching/truncation retain this alignment. Saved
+adapter metadata records the effective selective flags. Existing assistant-only
+and full-sequence defaults are unchanged; no custom-template or train-on-EOT
+support is added here. Native evidence covers ordinary LoRA with dense and genuine
+4-bit text bases. Selective native masking on vision/audio is explicitly refused
+and reported by `soup doctor`; other task backends retain their existing scope.
+
+**Multimodal vision and audio ignore it (transformers backend):**
+For `modality: vision` and `modality: audio`,
 every text token is supervised. Soup's vision collator masks only padding and image
 tokens, and the audio path only padding. Assistant-only masking would have to locate the
 assistant spans after the processor expands the image or audio tokens, which neither path
@@ -1430,6 +1485,35 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+**Native MLX text SFT** also consumes this cache with both
+`data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional
+Arrow reader with `pip install 'soup-cli[mlx]' datasets`. The consumer uses the
+same fingerprint gate and legacy missing-metadata advisory as Transformers,
+without importing Torch, PEFT or TRL. Corrupt metadata, changed key inputs
+and incomplete shards fail without a raw-data fallback. The CLI retains the
+existing source-availability contract; a cache does not make an unavailable
+configured source valid.
+
+Native cached batches use the stored IDs and explicit target labels exactly:
+no template render, retokenization, added BOS/EOS or regenerated response mask.
+Labels may differ from input IDs; `-100` ignores a target. Padding labels remain
+ignored even when PAD=EOS, and the causal shift applies to labels and tokens
+together. Every row is checked for integer IDs/labels (bools/floats are refused),
+vocabulary bounds, matching lengths, right-padding attention masks and at least
+one retained causal target after truncation. A single bad train/validation row
+stops the run. The native sampler retains its existing whole-batch behaviour;
+loading preserves the cache's split/row identity. Saved metadata records cache
+consumption, and rewind records the same stored-label objective.
+
+The producer's masking policy is frozen in its labels; raw native and Transformers
+template heuristics can differ, so cache consumption does not rewrite one into
+the other. Native qualification covers ordinary text LoRA with dense and genuine
+4-bit bases. The existing native custom-template override refusal remains;
+consuming a cache does not enable arbitrary raw template overrides or other tasks.
+Keys bind configured names/paths/settings, not source-file contents, shipped
+model-template contents or model-weight hashes. Unchanged names do not prove
+unchanged data/model contents; only use legacy metadata-free caches you trust.
 
 Rows are rendered with `data.chat_template` when it is set, the same as live
 training. The `pre_tokenized` training config must name the same template, since

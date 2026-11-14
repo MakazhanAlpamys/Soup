@@ -71,16 +71,25 @@ whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
 
-`soup recipes use qwen3.5-2b-dpo` and `soup recipes use qwen3.5-4b-dpo` select
-the 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
-`rejected`). Both inherit the shipped
+`soup recipes use qwen3.5-0.8b-dpo`, `qwen3.5-2b-dpo` and `qwen3.5-4b-dpo` select
+the 0.8B, 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
+`rejected`). All three inherit the shipped
 Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
 4-bit quantization and a 4096-token limit. These are inherited starting values,
-not measured 2B or 4B tuning recommendations. The model's visual tower is excluded;
+not measured 0.8B, 2B or 4B tuning recommendations. The model's visual tower is excluded;
 image preference data is not supported by these recipes. The 2B config's native
 text architecture and LoRA attachment have been checked on the meta device, with
 a tiny random decoder's forward/backward pass checked on CPU. This does not
 establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
+
+`soup recipes use qwen3.5-4b-grpo` selects the 4B language decoder for text
+reasoning data in `./data/reasoning_train.jsonl`. It inherits the 0.8B, 2B and
+9B GRPO starting settings, including four generations, the `accuracy` reward,
+eight accumulation steps and gradient checkpointing. Supply a reference answer
+for each prompt, either as an `answer` column or as the final assistant message.
+The native decoder and LoRA path are checked with the public configuration on
+meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
+GPU memory use and reward quality need separate validation.
 
 `soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
 decoder for the same text preference layout. It inherits the 9B DPO recipe's
@@ -91,6 +100,73 @@ and memory fit have not been measured.
 The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
+
+`soup recipes use qwen3.5-27b-grpo` selects the same 27B language decoder for
+`./data/reasoning_train.jsonl`, with a reference answer in an `answer` column or
+the final assistant message. It inherits the 4B/9B GRPO starting values:
+`lr: 1e-5`, three epochs, four generations, `grpo_beta: 0.1` and the `accuracy`
+reward. The 4096-token limit, auto batch size, eight accumulation steps, LoRA
+rank 16 / alpha 32 and 4-bit quantization also match the shipped 27B SFT/DPO
+recipes; gradient checkpointing is explicit. These are inherited starting values.
+The pinned public configuration's full text architecture and LoRA attachment
+have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
+forward/backward check. This does not validate full 27B weights, GRPO rollouts,
+NF4 execution, GPU memory fit or training quality.
+
+`soup recipes use qwen3.5-122b-a10b-dpo` selects the 122B-A10B language decoder
+for `prompt`, `chosen` and `rejected` text preferences in
+`./data/preference_train.jsonl`. It inherits the 122B SFT recipe's one epoch,
+batch size 1, 16 accumulation steps, LoRA rank 32 / alpha 64, gradient
+checkpointing, 4-bit quantization and 4096-token limit, with the 35B MoE DPO
+recipe's `lr: 5e-6` and `dpo_beta: 0.1`. These are starting settings, not measured
+122B tuning recommendations. `moe_lora: true` includes the routed experts and
+`lora.dropout: 0.0` permits PEFT's fused-expert adapters. Model quantization is
+distinct from the SFT-only `moe_expert_quant` and `train_router_only` options;
+DPO does not apply Soup's `moe_aux_loss_coeff` setting.
+The pinned public configuration builds the complete native text MoE on the meta
+device with the recipe's LoRA attached, and a tiny random decoder retaining
+linear attention, full attention and expert routing passes a CPU forward/backward
+check with attention and expert adapter gradients. The visual tower is excluded.
+Full 122B weights, DPO training, NF4 execution, GPU memory fit and tuning quality
+remain unverified; meta tensors do not allocate the public checkpoint's weights.
+
+`soup recipes use qwen3.5-122b-a10b-grpo` selects the 122B-A10B language
+MoE for text reasoning rows whose final assistant message holds the reference
+answer. The shipped `format: auto` path is tested with that ChatML layout.
+It inherits one epoch, batch size 1, sixteen accumulation steps, LoRA rank 32 /
+alpha 64, zero dropout, a 4096-token limit, 4-bit quantization and checkpointing
+from the 122B SFT recipe. The 35B MoE GRPO sibling supplies learning rate 1e-5,
+four generations, beta 0.1 and the `accuracy` reward. `moe_lora: true` includes
+fused experts; the SFT-only auxiliary-loss option is omitted.
+These are untuned starting values. GRPO promotes the configured batch size of
+1 to at least 4 for four generations, so it is not a one-completion workload.
+Ten billion active parameters do not mean ten billion resident parameters:
+the whole 122B base, rollout state and reference-model requirements matter.
+No GPU count or memory-fit recommendation has been measured. The public config
+was verified at `dc4d348443bc740c68e2d77492492c11606384d5`; offline tests use
+a tiny random native hybrid text MoE with expert LoRA. They do not qualify full
+122B weights, tokenizer/rollout behavior, full GRPO training, NF4 execution,
+distributed training, GPU memory fit or reward quality.
+
+`soup recipes use qwen3.5-397b-a17b-grpo` selects the 397B-A17B language MoE
+for the same text reasoning rows: the reference answer is the final assistant
+message or an `answer` column. It inherits one epoch, batch size 1, 32
+accumulation steps, LoRA rank 32 / alpha 64, zero dropout, a 4096-token limit,
+4-bit quantization and checkpointing from the 397B SFT recipe. The Qwen3.5 MoE
+GRPO rows (35B-A3B, 122B-A10B) supply learning rate 1e-5, four generations,
+beta 0.1 and the `accuracy` reward. `moe_lora: true` includes fused experts; the
+SFT-only auxiliary-loss option is omitted. These are untuned starting values,
+and GRPO promotes the configured batch size of 1 to at least 4 for four
+generations. Seventeen billion active parameters do not mean seventeen billion
+resident parameters: the whole 397B base, rollout state and reference-model
+requirements matter, and the SFT sibling already needs multi-node DeepSpeed or
+FSDP. No GPU count or memory-fit recommendation has been measured. The public
+config was verified at `8472618112abcbd45acbcdc58436aff4233c23f7` (60 text
+layers, 512 experts, 10 active); offline tests use a tiny random native hybrid
+text MoE with the same three-linear-to-one-full attention pattern and expert
+LoRA. They do not qualify full 397B weights, tokenizer/rollout behavior, full
+GRPO training, NF4 execution, distributed training, GPU memory fit or reward
+quality.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
@@ -189,7 +265,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO, SimPO, KTO and GRPO backend for local data; `[train]` is not required |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon backend for SFT, DPO, ORPO, SimPO, KTO and GRPO with local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
