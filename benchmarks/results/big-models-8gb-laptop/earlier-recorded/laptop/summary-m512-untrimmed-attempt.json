@@ -1,0 +1,53 @@
+{
+  "label": "earlier-recorded-m512-untrimmed",
+  "train_guard": {
+    "outcome": "guard_stopped",
+    "failure": "system_commit_floor",
+    "elapsed_s": 532.6100000000006,
+    "worker_returncode": 1,
+    "sampled_device_peak_mib": 5512.0,
+    "gpu_samples": 322,
+    "min_host_available_mib": 5758.45703125,
+    "min_commit_headroom_mib": 390.38671875,
+    "max_own_private_commit_mib": 10621.203125,
+    "max_own_peak_working_set_mib": 4301.9296875
+  },
+  "train_worker": {
+    "status": "running",
+    "pid": 3636,
+    "seq_len": 512,
+    "device": "cuda:0",
+    "elapsed_seconds": null,
+    "torch_peak_allocated_mib": 0.0,
+    "torch_peak_reserved_mib": 0.0,
+    "torch_peak_allocated_bytes": null,
+    "torch_peak_reserved_bytes": null,
+    "adapter_params": 26673152,
+    "adapter_tensors": 352,
+    "step_seconds": [],
+    "step_losses": [],
+    "heldout_before": [],
+    "heldout_after": [],
+    "heldout_reloaded": [],
+    "fresh_process_exact": null,
+    "adapter_hashes": null,
+    "reloaded_artifact_hashes": null,
+    "runtime_manifest_sha256": "dd429e47af337550e10f0b16a463a1a9ab1085e062a584a944b6f87430ac10e3",
+    "runner_sha256": "04b215a1b863ed721d0a1d57b7214b0d4b8bbb119bfe452598b9028d1fb57d1b",
+    "environment": {
+      "python": "3.12.10",
+      "executable": "<HOME>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "packages": {
+        "torch": "2.14.0+cu130",
+        "transformers": "5.17.0",
+        "peft": "0.20.0",
+        "accelerate": "1.15.0",
+        "bitsandbytes": "0.50.2",
+        "safetensors": "0.8.0"
+      }
+    },
+    "runtime_path": "<ASSETS>\\soup-runtime-f215941b",
+    "runtime_layer_loads_initial": 0,
+    "runtime_layer_loads_final": null
+  }
+}

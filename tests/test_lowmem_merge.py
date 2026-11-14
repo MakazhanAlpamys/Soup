@@ -39,7 +39,7 @@ def _tiny_adapter(base: Path, directory: Path, **lora_kwargs) -> Path:
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(base, dtype=torch.float32)
     options = dict(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj", "down_proj"])
     options.update(lora_kwargs)
     peft_model = get_peft_model(model, LoraConfig(**options))
@@ -55,7 +55,7 @@ def _regular_merge(base: Path, adapter: Path, dtype: torch.dtype) -> dict:
     from peft import PeftModel
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=dtype, device_map="cpu")
+    model = AutoModelForCausalLM.from_pretrained(base, dtype=dtype, device_map="cpu")
     merged = PeftModel.from_pretrained(model, str(adapter)).merge_and_unload()
     return {key: value.detach().clone() for key, value in merged.state_dict().items()}
 

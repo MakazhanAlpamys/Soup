@@ -34,6 +34,72 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 GeneratorFn = Callable[[str], str]
 MultiGen = Callable[[str, int], "list[str]"]
 
+
+class GeneratedText(str):
+    """An answer a live generator returned, which also says whether it hit the new-token cap.
+
+    It is a ``str`` in every other respect (equality, hashing, formatting, JSON), so every caller
+    that takes the generator's text keeps working. ``truncated`` is ``True`` when decoding used up
+    ``max_new_tokens`` and did not end on a stop token, ``False`` when it stopped on its own, and
+    ``None`` when the generator could not tell: it is never ``False`` for "not measured". It comes
+    from the token ids the model returned, never from the length of the text. A string operation
+    (``text + "x"``, a slice) gives a plain ``str`` without the flag: read it from the generator's
+    own return value, with :func:`truncation_of`.
+    """
+
+    truncated: Optional[bool]
+
+    def __new__(cls, text: str, *, truncated: Optional[bool]) -> "GeneratedText":
+        instance = super().__new__(cls, text)
+        instance.truncated = None if truncated is None else bool(truncated)
+        return instance
+
+    def __getnewargs_ex__(self) -> Tuple[Tuple[str], Dict[str, Optional[bool]]]:
+        # copy / pickle rebuild through ``__new__``, which needs the keyword
+        return (str(self),), {"truncated": self.truncated}
+
+
+def truncation_of(answer: object) -> Optional[bool]:
+    """Whether ``answer`` hit the new-token cap: True / False, or None when it was not measured.
+
+    A plain ``str`` (a generator that returns no token counts, or an answer a string operation
+    rebuilt) is ``None``, never ``False``.
+    """
+    return answer.truncated if isinstance(answer, GeneratedText) else None
+
+
+def _stop_token_ids(model: Any, tokenizer: Any, pad_id: Optional[int]) -> frozenset:
+    """The ids that end a generation.
+
+    The model's ``eos_token_id`` (an int or a list), the tokenizer's, and the padding id (a batch
+    fills a finished row with it).
+    """
+    found = {pad_id, getattr(tokenizer, "eos_token_id", None)}
+    configured = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    found.update(configured if isinstance(configured, (list, tuple)) else [configured])
+    return frozenset(
+        item for item in found if isinstance(item, int) and not isinstance(item, bool)
+    )
+
+
+def _hit_new_token_cap(new_ids: Any, max_new_tokens: int, stop_ids: frozenset) -> Optional[bool]:
+    """Whether ``new_ids`` (the tokens a generation added) used the whole budget without stopping.
+
+    Fewer than ``max_new_tokens`` ids means it stopped on its own, and a last id that is a stop
+    token means it finished exactly at the cap: both ``False``. Anything else was cut off
+    (``True``), unless no stop token is known at all, where a last id at the cap cannot be told
+    from a finished answer. ``None`` also covers ids that cannot be counted.
+    """
+    try:
+        count = len(new_ids)
+        last = int(new_ids[count - 1]) if count else None
+    except (TypeError, ValueError, IndexError):
+        return None
+    if last is None or count < max_new_tokens or last in stop_ids:
+        return False
+    return True if stop_ids else None
+
+
 # Bounds — keep the live paths from running away on a 4 GB box.
 MAX_PROMPT_TOKENS = 1024
 _MAX_PROMPT_TOKENS = MAX_PROMPT_TOKENS  # compatibility for existing private consumers
@@ -91,14 +157,17 @@ def _check_positive_int(value: object, name: str) -> int:
 
 
 def resolve_device(device: Optional[str] = None) -> str:
-    """Return ``device`` if given, else ``"cuda"`` when available, else ``"cpu"``.
+    """Return concrete device (``"cuda"`` if available, else ``"cpu"``) for ``None``/``"auto"``.
 
-    Never raises — falls back to ``"cpu"`` if torch is unavailable.
+    Explicit device strings (e.g. ``"cpu"``, ``"cuda:0"``) are returned verbatim.
+    Raises ``ValueError`` if ``device`` is not a non-empty string or None.
+    Falls back to ``"cpu"`` if torch is unavailable.
     """
     if device is not None:
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be a non-empty string or None")
-        return device
+        if device.strip().lower() != "auto":
+            return device
     try:
         import torch
 
@@ -227,7 +296,7 @@ def load_model_and_tokenizer(
 
     Returns ``(model, tokenizer, device)``. ``model`` is ``.eval()``-ed and
     moved to the resolved device. Heavy imports are local. ``dtype`` (e.g.
-    ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
+    ``"auto"``) is forwarded as ``dtype`` so a caller can preserve the
     checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
     needs this so the shipped smaller model is not silently re-widened).
     ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
@@ -260,7 +329,7 @@ def load_model_and_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
     model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
-        model_kwargs["torch_dtype"] = dtype
+        model_kwargs["dtype"] = dtype
     quant_config = _build_quantization_config(quantization)
     if quant_config is not None:
         # A quantized load is pinned to a device at from_pretrained time
@@ -326,8 +395,9 @@ def make_generator(
         if tokenizer.pad_token_id is not None
         else tokenizer.eos_token_id
     )
+    stop_ids = _stop_token_ids(model, tokenizer, pad_id)
 
-    def _gen(prompt: str) -> str:
+    def _gen(prompt: str) -> GeneratedText:
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
         inputs = encode_prompt(tokenizer, prompt, chat_template_kwargs=options).to(dev)
@@ -340,9 +410,12 @@ def make_generator(
                 pad_token_id=pad_id,
             )
         gen_ids = out[0][prompt_len:]
-        return tokenizer.decode(gen_ids, skip_special_tokens=True)
+        return GeneratedText(
+            tokenizer.decode(gen_ids, skip_special_tokens=True),
+            truncated=_hit_new_token_cap(gen_ids, max_new_tokens, stop_ids),
+        )
 
-    def _batch(prompts: list[str]) -> list[str]:
+    def _batch(prompts: list[str]) -> list[GeneratedText]:
         if not isinstance(prompts, list) or any(not isinstance(p, str) for p in prompts):
             raise TypeError("prompts must be a list of strings")
         outputs = []
@@ -372,11 +445,16 @@ def make_generator(
                     do_sample=False, num_return_sequences=1, pad_token_id=pad_id,
                 )
             outputs.extend(
-                tokenizer.decode(row[width:], skip_special_tokens=True) for row in generated
+                GeneratedText(
+                    tokenizer.decode(row[width:], skip_special_tokens=True),
+                    truncated=_hit_new_token_cap(row[width:], max_new_tokens, stop_ids),
+                )
+                for row in generated
             )
         return outputs
 
     _gen.batch = _batch
+    _gen.batch_size = batch_size
     return _gen
 
 

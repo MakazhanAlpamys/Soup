@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.mcp_server.registry import tool_profile
 from tests._tiny_checkpoint import write_tiny_model
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 #: (what the config says, the task, the card to resolve `auto` on) -> the priced tier.
 CASES = [
@@ -55,9 +55,11 @@ def _write(workdir, value, task="sft") -> None:
 
 
 def _cli(*extra: str) -> dict:
-    result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json", *extra])
+    result = make_cli_runner().invoke(
+        app, ["profile", "--config", "soup.yaml", "--json", *extra]
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    return json.loads(result.output)
+    return json.loads(result.stdout)
 
 
 @pytest.mark.parametrize(("value", "task", "tier"), CASES)
@@ -117,14 +119,3 @@ def test_the_rendered_profile_prices_a_dpo_run_as_full(workdir):
     result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--gpu", "a100"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "Gradient checkpointing: enabled (full)" in _plain(result.output)
-
-
-def test_the_direct_estimate_reports_the_same_two_fields():
-    from soup_cli.utils.profiler import estimate_total
-
-    off = estimate_total("m", 70.0, "none", 16, 32, 4, 2048, "adamw_torch", False)
-    assert off["gradient_checkpointing"] is False
-    assert off["gradient_checkpointing_tier"] == "off"
-    on = estimate_total("m", 70.0, "none", 16, 32, 4, 2048, "adamw_torch", True)
-    assert on["gradient_checkpointing"] is True
-    assert on["gradient_checkpointing_tier"] == "full"

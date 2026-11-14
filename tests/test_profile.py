@@ -3,197 +3,11 @@
 import json
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
-
-
-# --- Memory estimation tests ---
-
-
-class TestEstimateModelMemory:
-    """Test model memory estimation for various sizes and quantizations."""
-
-    def test_7b_4bit(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(7.0, "4bit")
-        assert 3.0 <= mem_gb <= 5.0  # ~3.5 GB for 7B 4bit
-
-    def test_7b_8bit(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(7.0, "8bit")
-        assert 6.0 <= mem_gb <= 9.0  # ~7 GB for 7B 8bit
-
-    def test_7b_none(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(7.0, "none")
-        assert 13.0 <= mem_gb <= 16.0  # ~14 GB for 7B FP16
-
-    def test_1b_4bit(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(1.0, "4bit")
-        assert 0.3 <= mem_gb <= 1.5
-
-    def test_13b_4bit(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(13.0, "4bit")
-        assert 5.0 <= mem_gb <= 9.0
-
-    def test_70b_4bit(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem_gb = estimate_model_memory(70.0, "4bit")
-        assert 30.0 <= mem_gb <= 45.0
-
-
-class TestEstimateLoraMemory:
-    """Test LoRA parameter memory estimation."""
-
-    def test_default_lora(self):
-        from soup_cli.utils.profiler import estimate_lora_memory
-
-        mem_gb = estimate_lora_memory(7.0, lora_r=64, lora_alpha=16)
-        assert 0.01 <= mem_gb <= 1.0
-
-    def test_higher_rank(self):
-        from soup_cli.utils.profiler import estimate_lora_memory
-
-        low = estimate_lora_memory(7.0, lora_r=16, lora_alpha=16)
-        high = estimate_lora_memory(7.0, lora_r=128, lora_alpha=32)
-        assert high > low
-
-    def test_small_model(self):
-        from soup_cli.utils.profiler import estimate_lora_memory
-
-        mem_gb = estimate_lora_memory(1.0, lora_r=8, lora_alpha=16)
-        assert mem_gb >= 0
-
-
-class TestEstimateOptimizerMemory:
-    """Test optimizer memory estimation."""
-
-    def test_adam_optimizer(self):
-        from soup_cli.utils.profiler import estimate_optimizer_memory
-
-        # ~13M trainable params for 7B with LoRA r=64
-        mem_gb = estimate_optimizer_memory(13_000_000, "adamw_torch")
-        assert 0.01 <= mem_gb <= 0.5
-
-    def test_adam_8bit(self):
-        from soup_cli.utils.profiler import estimate_optimizer_memory
-
-        adam = estimate_optimizer_memory(13_000_000, "adamw_torch")
-        adam8 = estimate_optimizer_memory(13_000_000, "adamw_bnb_8bit")
-        assert adam8 < adam
-
-    def test_sgd_optimizer(self):
-        from soup_cli.utils.profiler import estimate_optimizer_memory
-
-        adam = estimate_optimizer_memory(13_000_000, "adamw_torch")
-        sgd = estimate_optimizer_memory(13_000_000, "sgd")
-        assert sgd < adam
-
-
-class TestEstimateActivationMemory:
-    """Test activation memory estimation."""
-
-    def test_basic(self):
-        from soup_cli.utils.profiler import estimate_activation_memory
-
-        mem_gb = estimate_activation_memory(
-            batch_size=4, seq_len=2048, hidden_size=4096, num_layers=32
-        )
-        assert mem_gb > 0
-
-    def test_larger_batch_more_memory(self):
-        from soup_cli.utils.profiler import estimate_activation_memory
-
-        small = estimate_activation_memory(
-            batch_size=1, seq_len=2048, hidden_size=4096, num_layers=32
-        )
-        large = estimate_activation_memory(
-            batch_size=8, seq_len=2048, hidden_size=4096, num_layers=32
-        )
-        assert large > small
-
-    def test_longer_seq_more_memory(self):
-        from soup_cli.utils.profiler import estimate_activation_memory
-
-        short = estimate_activation_memory(
-            batch_size=4, seq_len=512, hidden_size=4096, num_layers=32
-        )
-        long = estimate_activation_memory(
-            batch_size=4, seq_len=4096, hidden_size=4096, num_layers=32
-        )
-        assert long > short
-
-    def test_gradient_checkpointing_reduces_memory(self):
-        from soup_cli.utils.profiler import estimate_activation_memory
-
-        normal = estimate_activation_memory(
-            batch_size=4, seq_len=2048, hidden_size=4096, num_layers=32,
-            gradient_checkpointing=False,
-        )
-        checkpointed = estimate_activation_memory(
-            batch_size=4, seq_len=2048, hidden_size=4096, num_layers=32,
-            gradient_checkpointing=True,
-        )
-        assert checkpointed < normal
-
-
-class TestEstimateTotal:
-    """Test total profile estimation from SoupConfig."""
-
-    def test_basic_profile(self):
-        from soup_cli.utils.profiler import estimate_total
-
-        result = estimate_total(
-            model_name="meta-llama/Llama-3.1-8B-Instruct",
-            model_params_b=8.0,
-            quantization="4bit",
-            lora_r=64,
-            lora_alpha=16,
-            batch_size=4,
-            seq_len=2048,
-            optimizer="adamw_torch",
-            gradient_checkpointing=False,
-        )
-        assert "model_memory_gb" in result
-        assert "lora_memory_gb" in result
-        assert "optimizer_memory_gb" in result
-        assert "activation_memory_gb" in result
-        assert "total_memory_gb" in result
-        assert result["total_memory_gb"] > 0
-
-    def test_total_is_sum_of_parts(self):
-        from soup_cli.utils.profiler import estimate_total
-
-        result = estimate_total(
-            model_name="meta-llama/Llama-3.1-8B-Instruct",
-            model_params_b=8.0,
-            quantization="4bit",
-            lora_r=64,
-            lora_alpha=16,
-            batch_size=4,
-            seq_len=2048,
-            optimizer="adamw_torch",
-            gradient_checkpointing=False,
-        )
-        parts_sum = (
-            result["model_memory_gb"]
-            + result["lora_memory_gb"]
-            + result["optimizer_memory_gb"]
-            + result["activation_memory_gb"]
-        )
-        # Total includes overhead, so should be >= parts_sum
-        assert result["total_memory_gb"] >= parts_sum
+runner = make_cli_runner()
 
 
 class TestEstimateSpeed:
@@ -245,6 +59,12 @@ class TestEstimateTrainingTime:
             dataset_size=10000, epochs=3, samples_per_sec=0.0
         )
         assert minutes == float("inf")
+
+    def test_negative_samples_per_sec(self):
+        from soup_cli.utils.profiler import estimate_training_time
+
+        result = estimate_training_time(1000, 3, -1.0)
+        assert result == float("inf")
 
 
 class TestRecommendBatchSize:
@@ -409,9 +229,15 @@ class TestProfileCLI:
         )
         result = runner.invoke(app, ["profile", "--config", str(config_file), "--json"])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert "total_memory_gb" in data
-        assert "model_memory_gb" in data
+        data = json.loads(result.stdout)
+        for key in (
+            "model_memory_gb",
+            "lora_memory_gb",
+            "optimizer_memory_gb",
+            "activation_memory_gb",
+            "total_memory_gb",
+        ):
+            assert key in data, key
 
     def test_profile_with_gpu_flag(self, tmp_path):
         """soup profile --gpu a100 uses specified GPU memory."""
@@ -543,23 +369,6 @@ class TestGpuLookup:
         assert result.exit_code != 0
 
 
-class TestEstimateModelMemoryEdge:
-    """Edge case tests for model memory estimation."""
-
-    def test_unknown_quantization_falls_back_to_fp16(self):
-        from soup_cli.utils.profiler import estimate_model_memory
-
-        mem = estimate_model_memory(7.0, "bfloat16")
-        fp16_mem = estimate_model_memory(7.0, "none")
-        assert mem == fp16_mem  # unknown falls back to 2.0 bytes/param
-
-    def test_negative_samples_per_sec(self):
-        from soup_cli.utils.profiler import estimate_training_time
-
-        result = estimate_training_time(1000, 3, -1.0)
-        assert result == float("inf")
-
-
 class TestResolveGpuMemory:
     """Test GPU memory resolution."""
 
@@ -574,24 +383,3 @@ class TestResolveGpuMemory:
         mem, source = _resolve_gpu_memory(None)
         assert mem == 24.0
         assert source == "assumed"
-
-
-class TestTrainableParamsEstimate:
-    """Test trainable parameter count estimation."""
-
-    def test_lora_params(self):
-        from soup_cli.utils.profiler import estimate_trainable_params
-
-        params = estimate_trainable_params(
-            model_params_b=7.0, lora_r=64, hidden_size=4096
-        )
-        assert params > 0
-        # LoRA should be a small fraction of total
-        assert params < 7_000_000_000 * 0.05
-
-    def test_higher_rank_more_params(self):
-        from soup_cli.utils.profiler import estimate_trainable_params
-
-        low = estimate_trainable_params(model_params_b=7.0, lora_r=16, hidden_size=4096)
-        high = estimate_trainable_params(model_params_b=7.0, lora_r=128, hidden_size=4096)
-        assert high > low

@@ -15,6 +15,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -247,7 +248,7 @@ class RewardModelTrainerWrapper:
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
             "num_labels": 1,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -350,7 +351,8 @@ class RewardModelTrainerWrapper:
             )
             if resume_from_checkpoint is not None:
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         # Save final model

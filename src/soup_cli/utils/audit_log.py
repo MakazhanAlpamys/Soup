@@ -565,9 +565,14 @@ def read_audit_tail(path: Optional[str] = None, *, limit: int = 50) -> list[dict
                 if not raw:
                     continue
                 try:
-                    out.append(json.loads(raw))
+                    record = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
+                # A line can be valid JSON without being a record (an array,
+                # a string, a number). Skip it like an unparsable line, before
+                # the ``limit`` slice, so ``limit`` counts real records.
+                if isinstance(record, dict):
+                    out.append(record)
     except OSError:
         return []
     return out[-limit:]

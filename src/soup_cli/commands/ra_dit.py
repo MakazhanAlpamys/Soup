@@ -21,10 +21,17 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _line(label: str, value: object) -> Text:
+    # A Text is not parsed as markup and has no emoji codes, so the value is shown as typed.
+    return Text.assemble((label, "bold"), " ", strip_control(value))
 
 app = typer.Typer(
     name="ra-dit",
@@ -74,7 +81,7 @@ def main(
         retr_path = validate_ra_dit_config_path("--retriever-config", retriever_config)
         gen_path = validate_ra_dit_config_path("--generator-config", generator_config)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Invalid ra-dit config:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("Invalid ra-dit config:", "red"), " ", strip_control(exc)))
         raise typer.Exit(2) from exc
 
     if plan_only:
@@ -84,25 +91,28 @@ def main(
                 gen_path,
             )
         except (TypeError, ValueError, FileNotFoundError) as exc:
-            console.print(f"[red]Invalid ra-dit config:[/] {escape(str(exc))}")
+            console.print(
+                Text.assemble(("Invalid ra-dit config:", "red"), " ", strip_control(exc))
+            )
             raise typer.Exit(2) from exc
 
         if retriever_model is not None:
-            link_preview = f"manual override: {escape(retriever_model)}"
+            link_preview = f"manual override: {retriever_model}"
         else:
-            link_preview = (
-                "auto-link to stage-1 output: "
-                f"{escape(retriever_output)}"
-            )
+            link_preview = f"auto-link to stage-1 output: {retriever_output}"
 
         console.print(
             Panel(
-                f"[bold]Stage 1 (retriever):[/] {escape(retr_path)}\n"
-                f"[bold]Retriever output:[/] {escape(retriever_output)}\n"
-                f"[bold]Stage 2 (generator):[/] {escape(gen_path)}\n"
-                f"[bold]Generator output:[/] {escape(generator_output)}\n"
-                f"[bold]Retriever link:[/] {link_preview}\n"
-                f"[bold]Per-stage timeout:[/] {timeout}s",
+                Text("\n").join(
+                    [
+                        _line("Stage 1 (retriever):", retr_path),
+                        _line("Retriever output:", retriever_output),
+                        _line("Stage 2 (generator):", gen_path),
+                        _line("Generator output:", generator_output),
+                        _line("Retriever link:", link_preview),
+                        _line("Per-stage timeout:", f"{timeout}s"),
+                    ]
+                ),
                 title="soup ra-dit (plan-only)",
                 border_style="cyan",
             )
@@ -121,16 +131,19 @@ def main(
             timeout_seconds=timeout,
         )
     except (TypeError, ValueError, FileNotFoundError, RuntimeError) as exc:
-        console.print(f"[red]RA-DIT run failed:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("RA-DIT run failed:", "red"), " ", strip_control(exc)))
         raise typer.Exit(2) from exc
 
     link_note = "auto-linked" if result.autolinked else "manual override"
     console.print(
         Panel(
-            f"[bold]Retriever output:[/] {escape(result.retriever_output)}\n"
-            f"[bold]Generator output:[/] {escape(result.generator_output)}\n"
-            f"[bold]Retriever model used:[/] "
-            f"{escape(result.retriever_model_used)} ({link_note})",
+            Text("\n").join(
+                [
+                    _line("Retriever output:", result.retriever_output),
+                    _line("Generator output:", result.generator_output),
+                    _line("Retriever model used:", f"{result.retriever_model_used} ({link_note})"),
+                ]
+            ),
             title="RA-DIT pipeline complete",
             border_style="green",
         )

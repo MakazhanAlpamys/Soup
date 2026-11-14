@@ -28,7 +28,7 @@ from soup_cli.utils.adapter_diff import (
     WRITE_ADAPTER_DEPS_MSG,
     require_adapter_dependencies,
 )
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
 MergeStrategy = Literal["linear", "ties", "dare", "svd", "cmaes"]
 # A canary scorer: ``scorer(role, tasks) -> per-prompt scores`` where ``role``
@@ -301,6 +301,9 @@ def merge_adapters(
 
     require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
+    ensure_distinct_paths(
+        [("adapter", path) for path in adapter_paths], [("output_dir", output_dir)]
+    )
 
     weights_list = [load_adapter_weights(p) for p in adapter_paths]
 

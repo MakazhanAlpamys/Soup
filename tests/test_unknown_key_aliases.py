@@ -6,7 +6,11 @@ import pytest
 
 from soup_cli.config.aliases import CONFIG_ALIASES
 from soup_cli.config.schema import SoupConfig, TrainingConfig
-from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+from soup_cli.config.unknown_keys import (
+    NO_SUGGESTION_REMEDY,
+    find_unknown_config_keys,
+    format_unknown_keys,
+)
 from tests.conftest import strip_ansi
 
 _BASE_CONFIG = """
@@ -174,6 +178,10 @@ def _both_levels(key: str) -> tuple[str, str]:
 
 class TestNearIdenticalTyposOnly:
     """"use X" is for the alias table's own spellings and one-edit typos of them (#2099)."""
+
+    def test_a_root_alias_typo_at_the_cutoff_still_says_use(self):
+        hint = _hint(_raw_with_root(batcj_size=4), path="batcj_size")
+        assert "use training.batch_size" in hint
 
     @pytest.mark.parametrize(
         ("typo", "target"),
@@ -351,8 +359,9 @@ class TestNamesThatAreNotTheTrainingSettings:
         refused = format_unknown_keys(
             find_unknown_config_keys(_raw_with_training(**{key: 1})), include_deadline=False
         )
-        assert refused.lower().endswith("refused.")
+        assert refused.splitlines()[0].lower().endswith("refused.")
         assert f"'training.{key}'" in refused
+        assert (NO_SUGGESTION_REMEDY in refused) is (key == "learning_rate_decay")
 
     def test_a_note_is_a_fact_not_a_replacement(self):
         # The notes only name settings that exist, and none of them is offered as "use X".

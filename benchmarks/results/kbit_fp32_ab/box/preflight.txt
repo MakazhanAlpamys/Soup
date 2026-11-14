@@ -1,0 +1,36 @@
+{
+ "case": "1",
+ "framework": "soup",
+ "hardware": {
+  "gpu_name": "NVIDIA GeForce RTX 4090",
+  "gpu_total_mib": 24564.0,
+  "driver": "595.99.02",
+  "pcie_gen": "4",
+  "pcie_width": "16",
+  "power_limit_w": "450.00",
+  "max_sm_clock_mhz": "3105",
+  "nvidia_smi_cuda": "13.2",
+  "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+  "cpu_threads": 24,
+  "ram_gb": 61.9,
+  "memlock_ulimit": 8388608,
+  "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39"
+ },
+ "disk_free_gb": 66.1,
+ "need": {
+  "ram_gb": 48,
+  "disk_gb": 80
+ },
+ "checks": {
+  "gpu_visible": true,
+  "ram_gb_ok": true,
+  "disk_free_gb_ok": false,
+  "python_3_11_to_3_13": true,
+  "pinned_h2d_ge_10_gb_s": true
+ },
+ "torch": "2.11.0+cu128",
+ "bf16": true,
+ "sm": "8.9",
+ "h2d_pinned_gb_s": 26.84,
+ "valid_host": false
+}

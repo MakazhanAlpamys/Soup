@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+results/
+model/
+venv_main/
+venv_s0/
+env.sh

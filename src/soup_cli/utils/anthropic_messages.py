@@ -177,11 +177,28 @@ def from_anthropic(anthropic_payload: Dict[str, Any]) -> Dict[str, Any]:
                 "content": message.get("content", ""),
             }
         )
-    return {
+    out: Dict[str, Any] = {
         "model": anthropic_payload["model"],
         "messages": out_messages,
         "max_tokens": anthropic_payload["max_tokens"],
     }
+    # Forward sampling knobs when present so /v1/messages matches
+    # /v1/chat/completions (#2381). Defaults apply only when omitted.
+    if "temperature" in anthropic_payload:
+        temperature = anthropic_payload["temperature"]
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+            raise TypeError("temperature must be int or float")
+        if not 0.0 <= float(temperature) <= 2.0:
+            raise ValueError("temperature must be in [0.0, 2.0]")
+        out["temperature"] = float(temperature)
+    if "top_p" in anthropic_payload:
+        top_p = anthropic_payload["top_p"]
+        if isinstance(top_p, bool) or not isinstance(top_p, (int, float)):
+            raise TypeError("top_p must be int or float")
+        if not 0.0 <= float(top_p) <= 1.0:
+            raise ValueError("top_p must be in [0.0, 1.0]")
+        out["top_p"] = float(top_p)
+    return out
 
 
 def validate_anthropic_payload(payload: Dict[str, Any]) -> None:

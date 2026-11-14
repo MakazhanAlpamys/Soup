@@ -51,6 +51,29 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 # ─── soup eval benchmark ───
 
 
+def _resolve_run_id(run_id: Optional[str]) -> Optional[str]:
+    """Return the full id of the run ``run_id`` names, or ``None`` if it names none.
+
+    The tracker stores a row under the id it is given, so a prefix, or an id
+    that names no run at all, has to be resolved before the row is written
+    (#2742).  A missing or ambiguous run is refused with the wording the other
+    run-lookup commands use.
+    """
+    if not run_id:
+        return None
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
+            raise typer.Exit(1)
+        return run["run_id"]
+    finally:
+        tracker.close()
+
+
 @app.command()
 def benchmark(
     model: str = typer.Option(
@@ -87,6 +110,10 @@ def benchmark(
     ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     model_path = Path(model)
     if not model_path.exists():
         console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
@@ -150,7 +177,7 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, resolved_run_id)
     if not saved:
         console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
         raise typer.Exit(1)
@@ -207,9 +234,11 @@ def aider(
     from soup_cli.eval.aider_polyglot import (
         AiderEvalError,
         build_docker_command,
+        new_container_name,
         parse_aider_results,
         preflight_docker,
         prepare_output_dir,
+        remove_container,
         validate_exercises_dir,
         write_soup_result,
     )
@@ -217,19 +246,22 @@ def aider(
 
     tracker = None
     if run_id:
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
-        if tracker.get_run(run_id) is None:
-            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+        run_data = tracker.get_run(run_id)
+        if run_data is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
+        run_id = run_data["run_id"]
 
     try:
         output_dir = prepare_output_dir(output)
         corpus_dir = validate_exercises_dir(exercises_dir)
         corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
+        container_name = new_container_name()
         command = build_docker_command(
             docker=docker,
             image=image,
@@ -239,6 +271,7 @@ def aider(
             threads=threads,
             num_tests=num_tests,
             allow_host_services=allow_host_services,
+            container_name=container_name,
         )
     except AiderEvalError as exc:
         if tracker is not None:
@@ -280,7 +313,21 @@ def aider(
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
         raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
+        raise
     except OSError as exc:
         if tracker is not None:
             tracker.close()
@@ -367,6 +414,10 @@ def custom(
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
 
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     tasks_path = Path(tasks)
     model_path = Path(model)
 
@@ -432,7 +483,7 @@ def custom(
     _display_custom_results(eval_results)
 
     # Save to tracker
-    _save_custom_results(eval_results, str(model_path), run_id)
+    _save_custom_results(eval_results, str(model_path), resolved_run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
     # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
@@ -569,7 +620,8 @@ def judge(
             api_base=api_base,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        message = f"Cannot use rubric {rubric!r}: {exc}" if rubric else str(exc)
+        console.print(f"[red]{for_terminal(message)}[/]")
         raise typer.Exit(1)
 
     from rich.progress import (
@@ -801,18 +853,23 @@ def compare(
 ):
     """Compare eval results between two training runs."""
     from soup_cli.eval.leaderboard import compare_runs
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
-    # Verify runs exist
-    for rid in [run1, run2]:
+    resolved_ids: list[str] = []
+    for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]Run not found: {rid}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
             raise typer.Exit(1)
+        resolved_ids.append(run_data["run_id"])
 
-    comparison = compare_runs(tracker, run1, run2)
+    try:
+        comparison = compare_runs(tracker, *resolved_ids)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
         console.print("[yellow]No eval results found for these runs.[/]")
@@ -879,7 +936,11 @@ def leaderboard(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    lb = build_leaderboard_from_tracker(tracker)
+    try:
+        lb = build_leaderboard_from_tracker(tracker)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not lb.entries:
         console.print("[yellow]No eval results found.[/]")
@@ -1162,17 +1223,20 @@ def _save_custom_results(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    tracker.save_eval_result(
-        model_path=model_path,
-        benchmark=TASK_NAME,
-        score=eval_results.accuracy,
-        details={
-            "total": eval_results.total,
-            "correct": eval_results.correct,
-            "category_scores": eval_results.category_scores,
-        },
-        run_id=run_id,
-    )
+    try:
+        tracker.save_eval_result(
+            model_path=model_path,
+            benchmark=TASK_NAME,
+            score=eval_results.accuracy,
+            details={
+                "total": eval_results.total,
+                "correct": eval_results.correct,
+                "category_scores": eval_results.category_scores,
+            },
+            run_id=run_id,
+        )
+    finally:
+        tracker.close()
 
 
 def _display_judge_results(results: object) -> None:
@@ -1292,6 +1356,33 @@ def gate_cmd(
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    if write_baseline:
+        import os
+
+        from soup_cli.utils.paths import check_report_output_path, quote_path
+
+        try:
+            check_report_output_path(write_baseline, "--write-baseline")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write --write-baseline:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
+
+        inputs = [("--suite", suite)]
+        for task in eval_suite.tasks:
+            if task.type == "custom" and task.tasks:
+                inputs.append((f"task {task.name!r} --tasks", task.tasks))
+            elif task.type == "judge" and task.prompts:
+                inputs.append((f"task {task.name!r} --prompts", task.prompts))
+        output_identity = os.path.normcase(os.path.realpath(write_baseline))
+        for field, input_path in inputs:
+            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+                message = (
+                    f"--write-baseline {quote_path(write_baseline)} aliases "
+                    f"{field} {quote_path(input_path)}; choose a different --write-baseline"
+                )
+                console.print(f"[red]{for_terminal(message)}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR)
+
     try:
         baseline_scores = resolve_baseline(
             baseline,
@@ -1355,6 +1446,7 @@ def gate_cmd(
 
 @app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
+    ctx: typer.Context,
     before: str = typer.Option(
         ..., "--before",
         help="Before-quantization model path or registry://<id>",
@@ -1374,6 +1466,22 @@ def quant_check_cmd(
     allow_stub: bool = typer.Option(
         False, "--allow-stub",
         help="Allow deterministic stub generators if live model loading fails.",
+    ),
+    performance: bool = typer.Option(
+        False, "--performance",
+        help="Also measure generation latency, tokens/s and CUDA memory sequentially.",
+    ),
+    performance_warmup: int = typer.Option(
+        1, "--performance-warmup", min=0,
+        help="Unscored first-prompt warm-ups per model (requires --performance).",
+    ),
+    performance_repeats: int = typer.Option(
+        3, "--performance-repeats", min=1,
+        help="Measured greedy generations per task (requires --performance).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="Device for --performance: auto (default), cpu, cuda, cuda:<index> or mps.",
     ),
 ) -> None:
     """Compare accuracy before vs after quantization on the same eval suite.
@@ -1397,6 +1505,19 @@ def quant_check_cmd(
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if performance and allow_stub:
+        console.print("[red]--performance cannot measure deterministic --allow-stub generators.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    performance_options_supplied = any(
+        ctx.get_parameter_source(name) not in (None, ParameterSource.DEFAULT)
+        for name in ("device", "performance_warmup", "performance_repeats")
+    )
+    if not performance and performance_options_supplied:
+        console.print("[red]--device and performance budgets require --performance.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     resolved: dict[str, Optional[str]] = {}
     for label, ref in (("--before", before), ("--after", after)):
@@ -1446,50 +1567,89 @@ def quant_check_cmd(
         console.print(f"[red]--after not found: {resolved_after}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
+    # Pre-parse --tasks before any model is loaded (#2053): an unparseable
+    # tasks file is a usage error (exit 3) with the loader's message, not a
+    # late ValueError after both models have already been loaded. The parsed
+    # list is handed to run_quant_check so the file is read once, not once
+    # per model. OSError (FileNotFoundError, IsADirectoryError,
+    # PermissionError, ...) and ValueError (bad JSON / schema, decoding)
+    # both mark a file the user wrote as unusable.
+    from soup_cli.eval.custom import load_eval_tasks
+
+    try:
+        pre_tasks = load_eval_tasks(tasks)
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]Cannot load --tasks: {for_terminal(str(exc))}[/]"
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
 
-    is_stub = False
+    if performance:
+        from soup_cli.eval.quant_check import run_performance_quant_check
+        from soup_cli.eval.quant_performance import resolve_performance_device
 
-    try:
-        before_gen = make_model_generator(resolved_before)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --before model ({resolved_before}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
+        try:
+            measured_device = resolve_performance_device(device or "auto")
+        except (ValueError, ImportError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        try:
+            result = run_performance_quant_check(
+                before_factory=lambda: make_model_generator(
+                    resolved_before, device=measured_device,
+                ),
+                after_factory=lambda: make_model_generator(resolved_after, device=measured_device),
+                tasks=pre_tasks, device=measured_device,
+                warmup=performance_warmup, repeats=performance_repeats,
             )
+        except (OSError, ValueError, ImportError, RuntimeError) as exc:
+            console.print(f"[red]Performance comparison failed: {for_terminal(str(exc))}[/]")
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
-            )
-        before_gen = stub_generator("before")
-        is_stub = True
+    else:
+        is_stub = False
 
-    try:
-        after_gen = make_model_generator(resolved_after)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --after model ({resolved_after}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
-            )
-            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
-            )
-        after_gen = stub_generator("after")
-        is_stub = True
+        try:
+            before_gen = make_model_generator(resolved_before)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --before model ({resolved_before}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
+                )
+            before_gen = stub_generator("before")
+            is_stub = True
 
-    result = run_quant_check(
-        before_gen=before_gen,
-        after_gen=after_gen,
-        tasks_file=tasks,
-        stub=is_stub,
-    )
+        try:
+            after_gen = make_model_generator(resolved_after)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --after model ({resolved_after}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
+                )
+            after_gen = stub_generator("after")
+            is_stub = True
+
+        result = run_quant_check(
+            before_gen=before_gen,
+            after_gen=after_gen,
+            tasks=pre_tasks,
+            stub=is_stub,
+        )
     rendered = render(result, fmt=fmt)
     if fmt == "table":
         console.print(rendered)
@@ -1497,7 +1657,10 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags, and disable
         # highlighting so JSON output is not polluted with ANSI escape codes.
-        console.print(rendered, markup=False, highlight=False)
+        if performance:
+            console.print(rendered, markup=False, highlight=False, soft_wrap=True)
+        else:
+            console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
@@ -1555,3 +1718,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register the retention-ledger subcommand (eval retention)
+from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
+
+_register_retention(app, console)

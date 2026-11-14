@@ -14,12 +14,14 @@ forward or a container mapping, and an ``Origin`` port names the page's server
 The hostname is the part that says which site the request is for.
 
 Dependency-free on purpose: imported by ``soup serve`` at app construction, and
-must not pull in the optional ``mcp`` SDK or any heavy dependency.
+must not pull in the optional ``mcp`` SDK or any heavy dependency. Only
+:func:`browser_origin_dependency` imports FastAPI, when it is called.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 LOOPBACK_HOSTNAMES: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -140,3 +142,27 @@ def check_browser_origin(
     421.
     """
     return _check_origin(_normalise_bind(bind_host), host_header, origin_header)
+
+
+def browser_origin_dependency(bind_host: str) -> Callable[..., None]:
+    """A FastAPI dependency that applies :func:`check_browser_origin` for ``bind_host``.
+
+    For the generation routes of every ``soup serve`` backend: put it in the
+    route's ``dependencies`` and a request whose ``Origin`` names another site
+    gets 403 before the route runs.
+    """
+    from fastapi import HTTPException, Request
+
+    def origin_check(request: Request) -> None:
+        refusal = check_browser_origin(
+            bind_host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    # Annotations in this module are postponed, so the one above is the string
+    # "Request", which FastAPI would look up in this module's globals and not
+    # find. Hand it the class, so the request is injected.
+    origin_check.__annotations__["request"] = Request
+    return origin_check

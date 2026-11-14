@@ -150,6 +150,25 @@ def build_distill_prompt_plan(
     )
 
 
+_PROMPT_KEYS = ("prompt", "input", "instruction", "question", "query")
+
+
+class NoTracePromptsError(ValueError):
+    """No trace row yielded a prompt (#1854): nothing to send to the teacher."""
+
+
+@dataclass
+class TraceRowStats:
+    """Trace-row accounting filled in by :func:`prepare_distill_dataset` (#1854).
+
+    ``read`` counts the JSON-object rows read from the traces file; ``skipped``
+    counts those for which :func:`extract_prompt` found no prompt.
+    """
+
+    read: int = 0
+    skipped: int = 0
+
+
 def extract_prompt(row: Mapping[str, Any]) -> Optional[str]:
     """Extract the teacher-facing prompt from a trace row.
 
@@ -159,7 +178,7 @@ def extract_prompt(row: Mapping[str, Any]) -> Optional[str]:
     """
     if not isinstance(row, Mapping):
         return None
-    for key in ("prompt", "input", "instruction", "question", "query"):
+    for key in _PROMPT_KEYS:
         value = row.get(key)
         if isinstance(value, str) and value.strip():
             return value[:_MAX_PROMPT_CHARS]
@@ -228,6 +247,7 @@ def prepare_distill_dataset(
     teacher_fn: "Optional[Callable[[str], Mapping[str, Any]]]" = None,
     student_fn: "Optional[Callable[[str], Mapping[str, Any]]]" = None,
     stats: "Optional[ForgeJudgeStats]" = None,
+    trace_stats: Optional[TraceRowStats] = None,
 ) -> int:
     """Prepare a distillation dataset from prompt-heavy traces (v0.71.13 #226).
 
@@ -249,6 +269,10 @@ def prepare_distill_dataset(
     of rows written. ``max_rows`` caps the number of rows *written* (not the
     number of teacher calls — a prompt whose teacher reply is empty still
     consumes a call without producing a row).
+
+    Rows with no recognised prompt are counted in ``trace_stats``; when no
+    row has one, :class:`NoTracePromptsError` is raised before any provider
+    is built and before ``plan.output_path`` is touched (#1854).
     """
     from soup_cli.utils.data_forge import (
         ForgeJudgeStats,
@@ -264,6 +288,22 @@ def prepare_distill_dataset(
         raise ValueError("max_rows must be a positive int or None")
     if stats is None:
         stats = ForgeJudgeStats()
+    if trace_stats is None:
+        trace_stats = TraceRowStats()
+
+    rows = _read_traces(plan.traces_path)
+    prompts = [extract_prompt(row) for row in rows]
+    trace_stats.read = len(rows)
+    trace_stats.skipped = sum(1 for prompt in prompts if prompt is None)
+    if trace_stats.skipped == trace_stats.read:
+        # #1854: nothing to distil — refuse instead of replacing an existing
+        # output with an empty file and reporting "done".
+        raise NoTracePromptsError(
+            f"0 of {trace_stats.read} trace rows had a prompt (only lines holding a "
+            "JSON object count as rows; blank lines, invalid JSON and other values are "
+            f"ignored); looked for a non-empty string under {' / '.join(_PROMPT_KEYS)}, "
+            "or a user turn with string content in messages"
+        )
 
     teacher = teacher_fn
     if teacher is None:
@@ -276,12 +316,10 @@ def prepare_distill_dataset(
             provider, plan.student, base_url=base_url, temperature=temperature
         )
 
-    rows = _read_traces(plan.traces_path)
     out_lines: List[str] = []
-    for row in rows:
+    for prompt in prompts:
         if max_rows is not None and len(out_lines) >= max_rows:
             break
-        prompt = extract_prompt(row)
         if prompt is None:
             continue
         stats.calls += 1
@@ -350,6 +388,8 @@ __all__ = [
     "validate_student_id",
     "validate_traces_path",
     "extract_prompt",
+    "NoTracePromptsError",
+    "TraceRowStats",
     "DistillPromptPlan",
     "build_distill_prompt_plan",
     "prepare_distill_dataset",

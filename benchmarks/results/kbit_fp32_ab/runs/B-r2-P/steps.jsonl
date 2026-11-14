@@ -1,0 +1,9 @@
+{"step": 1, "t_begin": 230031.308518528, "t_end": 230033.261036696, "tokens": 4096, "fp": "effd7c5f07ce43fa", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 2, "t_begin": 230033.271708726, "t_end": 230034.960747036, "tokens": 4096, "fp": "a120bdf14e37618b", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 3, "t_begin": 230034.969946564, "t_end": 230036.659678936, "tokens": 4096, "fp": "9340415fc6671094", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 4, "t_begin": 230036.668984186, "t_end": 230038.358904774, "tokens": 4096, "fp": "f131de1de3dc2ac9", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 5, "t_begin": 230038.368242386, "t_end": 230040.058595877, "tokens": 4096, "fp": "731431aa27ff9df5", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 6, "t_begin": 230040.067796788, "t_end": 230041.778174178, "tokens": 4096, "fp": "b4b7e6e1e35dafb4", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 7, "t_begin": 230041.787575372, "t_end": 230043.484755619, "tokens": 4096, "fp": "a06581d55eb83966", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 8, "t_begin": 230043.49447858, "t_end": 230045.192452633, "tokens": 4096, "fp": "79f45da04cc32744", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}
+{"step": 9, "t_begin": 230065.548894095, "t_end": 230067.250703325, "tokens": 4096, "fp": "ad318cda8fa1c525", "alloc_peak_mib": 5628.6, "reserved_peak_mib": 17942.0}

@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
 from .conftest import strip_ansi
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +351,7 @@ class TestQuantCheckIssue809:
             "--format", "json",
         ])
         assert result.exit_code == 2
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert data["rows"][0]["verdict"] == "MAJOR"
         assert data["rows"][0]["delta"] == -1.0
 
@@ -374,7 +374,7 @@ class TestQuantCheckIssue809:
             "--format", "json",
         ])
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert data["rows"][0]["verdict"] == "OK"
 
     def test_allow_stub_flag_marks_json_and_renders_banner(
@@ -393,7 +393,7 @@ class TestQuantCheckIssue809:
             "--format", "json",
         ])
         assert result_json.exit_code == 0
-        data = json.loads(result_json.output)
+        data = json.loads(result_json.stdout)
         assert data.get("stub") is True
 
         # Markdown output
@@ -447,7 +447,7 @@ class TestQuantCheckIssue809:
         ])
         # Live before got 1.0, stub after got 0.0 -> delta -1.0 (MAJOR) -> exit code 2
         assert result.exit_code == 2
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert data["stub"] is True
         assert data["rows"][0]["before"] == 1.0
         assert data["rows"][0]["after"] == 0.0

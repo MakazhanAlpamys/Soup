@@ -1,0 +1,30 @@
+base: Qwen/Qwen2.5-7B-Instruct
+task: sft
+data:
+  train: /workspace/tco-shared/data/1/train_window_105x8.jsonl
+  format: chatml
+  train_on_responses_only: false
+  val_split: 0.0
+  max_length: 512
+training:
+  epochs: 1
+  lr: 0.0002
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  seed: 3408
+  data_seed: 3408
+  scheduler: constant
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  optimizer: adamw_torch
+  gradient_checkpointing: true
+  quantization: 4bit
+  logging_steps: 1
+  save_steps: 1000000
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+output: /workspace/tco-cells/C-r2-P/runs/1/soup/nvidia-geforce-rtx-4090/rep2/soup_out

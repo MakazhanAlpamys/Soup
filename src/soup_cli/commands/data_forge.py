@@ -6,10 +6,10 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -95,6 +95,7 @@ def forge(
     Anthropic reads ``ANTHROPIC_API_KEY`` from env, vLLM is
     scheme-allowlist + loopback validated.
     """
+    from soup_cli.commands._common import refuse_output_over_input
     from soup_cli.utils.data_forge import (
         JUDGE_PROVIDERS,
         ForgeJudgeStats,
@@ -107,10 +108,28 @@ def forge(
     )
     from soup_cli.utils.hubs import validate_hub_name
 
+    # Discover names without reading document contents or contacting a teacher.
+    try:
+        doc_paths = discover_documents(docs)
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(Text.assemble(("Plan failed:", "red"), f" {strip_control(str(exc))}"))
+        raise typer.Exit(1) from exc
+
+    refuse_output_over_input(
+        [("--docs", docs)] + [("--docs", path) for path in doc_paths],
+        [("--output", output), ("--provenance", provenance)],
+        console=console,
+    )
+    refuse_output_over_input(
+        [("--output", output)],
+        [("--provenance", provenance)],
+        console=console,
+    )
+
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(str(exc)), style="red"))
         raise typer.Exit(2) from exc
 
     effective_teacher = teacher
@@ -126,11 +145,13 @@ def forge(
                     teacher, hub_canonical, console=console
                 )
             except ImportError as exc:
-                console.print(f"[red]{escape(str(exc))}[/]")
+                console.print(Text(strip_control(str(exc)), style="red"))
                 raise typer.Exit(1) from exc
             except (TypeError, ValueError) as exc:
                 console.print(
-                    f"[red]Teacher pre-fetch failed:[/] {escape(str(exc))}"
+                    Text.assemble(
+                        ("Teacher pre-fetch failed:", "red"), f" {strip_control(str(exc))}"
+                    )
                 )
                 raise typer.Exit(1) from exc
         else:
@@ -138,9 +159,9 @@ def forge(
             # (owner/name) — warn loudly instead of silently ignoring --hub
             # (code-review MEDIUM fix v0.71.5 #157).
             console.print(
-                f"[yellow]--hub {escape(hub_canonical)} ignored:[/] --teacher "
-                f"{for_terminal(repr(teacher))} is not a repo id (owner/name), so there "
-                "is nothing to pre-fetch."
+                Text.assemble((f"--hub {hub_canonical} ignored:", "yellow"),
+                              f" --teacher {strip_control(repr(teacher))} is not a repo id "
+                              "(owner/name), so there is nothing to pre-fetch.")
             )
 
     judge_fn = _default_judge
@@ -148,8 +169,9 @@ def forge(
         canonical = judge_provider.strip().lower()
         if canonical not in JUDGE_PROVIDERS:
             console.print(
-                f"[red]Unknown --judge-provider:[/] {escape(judge_provider)}. "
-                f"Choose from {sorted(JUDGE_PROVIDERS)}."
+                Text.assemble(("Unknown --judge-provider:", "red"),
+                              f" {strip_control(judge_provider)}. "
+                              f"Choose from {sorted(JUDGE_PROVIDERS)}.")
             )
             raise typer.Exit(2)
         try:
@@ -163,7 +185,9 @@ def forge(
             )
         except (TypeError, ValueError, ImportError) as exc:
             console.print(
-                f"[red]Failed to build judge backend:[/] {escape(str(exc))}"
+                Text.assemble(
+                        ("Failed to build judge backend:", "red"), f" {strip_control(str(exc))}"
+                    )
             )
             raise typer.Exit(1) from exc
         # Record the live backend in provenance.
@@ -178,9 +202,8 @@ def forge(
             teacher=effective_teacher,
             uncertainty_threshold=uncertainty_threshold,
         )
-        doc_paths = discover_documents(docs)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("Plan failed:", "red"), f" {strip_control(str(exc))}"))
         raise typer.Exit(1) from exc
 
     judge_stats = ForgeJudgeStats()
@@ -214,7 +237,7 @@ def forge(
         # #1221: a judge that produced nothing usable must fail loudly
         # rather than write a dataset (of empty answers or otherwise).
         console.print(
-            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
+            Text.assemble(("No usable rows produced:", "red"), f" {strip_control(failure_summary)}")
         )
         raise typer.Exit(1)
 
@@ -229,33 +252,36 @@ def forge(
         dataset_path = write_forge_dataset(rows, output)
         manifest_path = write_provenance(rows, provenance)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Write failed:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("Write failed:", "red"), f" {strip_control(str(exc))}"))
         raise typer.Exit(1) from exc
 
-    judge_line = ""
+    judge_line = Text()
     if judge_stats.failures:
         judge_line = (
-            f"Judge calls: [bold yellow]{judge_stats.failures} of "
-            f"{judge_stats.calls} failed[/]\n"
+            Text.assemble("Judge calls: ",
+                          (f"{judge_stats.failures} of {judge_stats.calls} failed", "bold yellow"),
+                          "\n")
         )
         title = "[bold yellow]Data Forge — synth complete with judge failures[/]"
     else:
         title = "[bold green]Data Forge — synth complete[/]"
     console.print(
         Panel(
-            f"Task:        [bold]{escape(plan.task)}[/]\n"
-            f"Docs scanned:[bold] {plan.num_docs}[/]\n"
-            f"Rows kept:   [bold]{len(rows)}[/] / target {plan.target_rows}\n"
-            f"{judge_line}"
-            f"Teacher:     [bold]{escape(plan.teacher)}[/]\n"
-            f"Threshold:   [bold]{plan.uncertainty_threshold:.2f}[/]\n"
-            f"Dataset:     [bold]{escape(dataset_path)}[/]\n"
-            f"Provenance:  [bold]{escape(manifest_path)}[/]",
+            Text.assemble(
+                "Task:        ", (plan.task, "bold"),
+                "\nDocs scanned:", (f" {plan.num_docs}", "bold"),
+                "\nRows kept:   ", (str(len(rows)), "bold"), f" / target {plan.target_rows}\n",
+                judge_line,
+                "Teacher:     ", (strip_control(plan.teacher), "bold"),
+                "\nThreshold:   ", (f"{plan.uncertainty_threshold:.2f}", "bold"),
+                "\nDataset:     ", (strip_control(dataset_path), "bold"),
+                "\nProvenance:  ", (strip_control(manifest_path), "bold"),
+            ),
             title=title,
         )
     )
     if failure_summary:
-        console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
+        console.print(Text.assemble(("Warning:", "yellow"), f" {strip_control(failure_summary)}"))
     if judge_provider is None:
         console.print(
             "[dim]The built-in judge is the deterministic offline stub. "
@@ -264,6 +290,7 @@ def forge(
         )
     else:
         console.print(
-            f"[dim]Live judge backend: [bold]{escape(judge_provider)}[/] "
-            f"(model: {escape(judge_model)}).[/]"
+            Text.assemble("Live judge backend: ",
+                          (strip_control(judge_provider), "bold"),
+                          f" (model: {strip_control(judge_model)}).", style="dim")
         )

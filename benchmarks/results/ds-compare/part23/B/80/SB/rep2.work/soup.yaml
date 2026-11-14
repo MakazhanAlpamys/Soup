@@ -1,0 +1,30 @@
+base: /workspace/payload/benchmarks/harness/ds_compare/model
+task: sft
+data:
+  train: rows.jsonl
+  format: alpaca
+  val_split: 0
+  max_length: 512
+training:
+  epochs: 2
+  lr: 0.0002
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  quantization: none
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.05
+  optimizer: adamw_torch
+  scheduler: constant
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  logging_steps: 1
+  save_steps: 1000000
+  seed: 42
+  stream_layers: true
+  stream_pin: true
+  stream_buffers: 3
+  stream_recompute: auto
+output: ./output

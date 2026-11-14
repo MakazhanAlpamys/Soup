@@ -349,10 +349,20 @@ def blocker(issue: dict, comments: list[dict], is_open=_always_open) -> str | No
     return None
 
 
-def quiet_days(comments: list[dict], login: str | None, now: datetime) -> int | None:
+def quiet_days(
+    comments: list[dict], login: str | None, now: datetime, pr_items: list[dict] | None = None
+) -> int | None:
+    """Days since `login` last wrote on the issue or acted on their pull request.
+
+    `pr_items` are comment-shaped dicts (`user.login`, `created_at`) for the claimant's
+    pull request: a comment, an inline review comment or a commit. Without them a claimant
+    who is pushing to a pull request shows as quiet because the issue thread is silent.
+    """
     if not login:
         return None
-    times = [parse_time(c["created_at"]) for c in comments if _login(c) == login]
+    times = [
+        parse_time(c["created_at"]) for c in [*comments, *(pr_items or [])] if _login(c) == login
+    ]
     if not times:
         return None
     return max((now - max(times)).days, 0)
@@ -372,8 +382,17 @@ def find_pr(prs: list[dict], issue_number: int, login: str | None) -> int | None
     return min(hits) if hits else None
 
 
+def _no_pr_activity(number: int) -> list[dict]:
+    return []
+
+
 def classify(
-    issue: dict, comments: list[dict], prs: list[dict], now: datetime, is_open=_always_open
+    issue: dict,
+    comments: list[dict],
+    prs: list[dict],
+    now: datetime,
+    is_open=_always_open,
+    pr_activity=_no_pr_activity,
 ) -> dict:
     labels = label_names(issue)
     login, since, confirmed, terminal, claimed_pr = _claim_state(comments, issue["number"], prs)
@@ -394,15 +413,18 @@ def classify(
         _login(item) == login and _CLASSIC_TAKE_RE.search(item.get("body", ""))
         for item in comments
     ))
+    pr = None
+    if kind != "free" and metrics:
+        pr = claimed_pr or find_pr(prs, issue["number"], login)
     return {
         "number": issue["number"],
         "title": issue["title"],
         "difficulty": difficulty(issue),
         "kind": kind,
         "state": state,
-        "pr": (claimed_pr or find_pr(prs, issue["number"], login))
+        "pr": pr,
+        "quiet": quiet_days(comments, login, now, pr_activity(pr) if pr else None)
         if kind != "free" and metrics else None,
-        "quiet": quiet_days(comments, login, now) if kind != "free" and metrics else None,
     }
 
 
@@ -486,6 +508,27 @@ def gh_json(args: list[str]) -> list[dict]:
     return items
 
 
+def pr_activity(number: int) -> list[dict]:
+    """Everything written or committed on pull request `number`, shaped like issue comments.
+
+    Conversation comments and inline review comments already carry `user.login` and
+    `created_at`. A commit counts for whoever authored it and for whoever committed it (a
+    rebase or amend by the claimant moves only the committer date), each at its own date; a
+    maintainer rebasing someone's commits does not count for the author.
+    """
+    items: list[dict] = []
+    for path in ("issues", "pulls"):
+        url = f"repos/{REPO}/{path}/{number}/comments?per_page=100"
+        items.extend(gh_json([url, "--paginate"]))
+    for commit in gh_json([f"repos/{REPO}/pulls/{number}/commits?per_page=100", "--paginate"]):
+        for role in ("author", "committer"):
+            login = (commit.get(role) or {}).get("login")
+            date = ((commit.get("commit") or {}).get(role) or {}).get("date")
+            if login and date:
+                items.append({"user": {"login": login}, "created_at": date})
+    return items
+
+
 def fetch(now: datetime) -> list[dict]:
     issues: dict[int, dict] = {}
     for label in LABELS:
@@ -508,7 +551,7 @@ def fetch(now: datetime) -> list[dict]:
     rows = []
     for number in sorted(issues):
         comments = gh_json([f"repos/{REPO}/issues/{number}/comments?per_page=100", "--paginate"])
-        rows.append(classify(issues[number], comments, prs, now, is_open))
+        rows.append(classify(issues[number], comments, prs, now, is_open, pr_activity))
     return rows
 
 

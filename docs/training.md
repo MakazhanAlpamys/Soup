@@ -94,6 +94,19 @@ training:
   brings its own validation split: an HF-hub dataset's `validation` split, or a
   pre-tokenized cache's `val` / `validation` split.
 
+The live training panel estimates remaining time from the remaining optimizer
+steps and the speed in iterations per second, and shows an estimated finish in
+the machine's local time. When the trainer reports no usable speed, the panel
+measures steps and elapsed time from its first update. On resume, the steps
+loaded from the checkpoint are excluded from this measurement. The row stays
+hidden until the total and a usable speed are known. Evaluation, checkpoint
+saves and changes in step speed can shift the finish time.
+The Speed row uses the panel's measurement when the trainer reports no usable
+speed, and progress stays between 0% and 100%.
+Each step row in the run's record stores the same speed the panel shows: the
+average since the first logged step, empty on that first row, where there is no
+interval yet. The final summary row stores the trainer's own steps per second.
+
 **Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
 generating completions, which costs about as much per row as training on it. So
 they do not evaluate by default, and they do not withhold rows either:
@@ -129,13 +142,15 @@ weighted by supervised tokens. mlx-lm's own pass would evaluate before the
 update it is scheduled at and read at most 25 whole batches. An evaluation
 takes no step and leaves the training order and the model's mode as they were.
 Unset, MLX keeps mlx-lm's cadence (a quarter of the run). The MLX preference
-tasks (`dpo`, `orpo`) evaluate once per epoch and refuse the field.
+tasks (`dpo`, `orpo`, `simpo`, `kto`) keep their once-per-epoch evaluation
+cadence and refuse this field. MLX GRPO also refuses `training.eval_steps`; it
+reports its held-out reward once after training instead (see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx)).
 
-**Refused at config load.** `training.eval_steps` on the MLX preference tasks
-(see above), on `task: unlearn` (it trains on
-`forget_set` / `retain_set` and has no validation split), and with
-`val_split: 0` on local files or remote URIs, where there would be nothing to
-evaluate.
+**Refused at config load.** `training.eval_steps` on MLX preference tasks or
+GRPO (see above), on `task: unlearn` (it trains on `forget_set` / `retain_set`
+and has no validation split), and with `val_split: 0` on local files or remote
+URIs, where there would be nothing to evaluate.
 
 **Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
 training callback (#802), so their `eval_loss` reaches the trainer's log history
@@ -270,6 +285,12 @@ row 91: 94% of step 340's loss, 3,900 tokens
 Inspect or drop this row, then retrain.
 ```
 
+`soup rewind --json` writes `run_id`, `step`, `spikes` and `rows`. The file is strict
+JSON: a non-finite loss, baseline or ratio is written as `null` and the object that
+held it carries `non_finite: true`, so `json.loads()` reads it without accepting the
+non-standard `NaN` / `Infinity` tokens. The flag keeps "the run measured a non-finite
+value" distinct from a field that was never measured (which is a plain `null`).
+
 Scope: task `sft` on the transformers and MLX backends, single process, on the plain
 text path. The recorder turns itself off, with one warning naming the reason, for
 resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
@@ -313,7 +334,7 @@ instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
 
 Requirements, each rejected at config load with the reason named:
-`task: sft`, `backend: transformers`, `modality: text`, and
+`task: sft`, `backend: transformers` (or the native MLX Llama path below), `modality: text`, and
 `quantization: none` (quantized weights cannot be trained directly — use LoRA
 on top of them, i.e. QLoRA). It is mutually exclusive with every LoRA feature
 (`use_dora` / `use_vera` / `use_olora` / `use_rslora` / `rank_pattern` /
@@ -352,8 +373,72 @@ Pick between the three "LoRA off" modes by how much you want to train:
 > `batch_size` explicitly, or start low and raise it. (This is not new to
 > `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
 
+### Dense Llama training on MLX
+
+Native MLX text SFT supports `lora.r: 0` on unquantized Llama models loaded as
+`mlx_lm.models.llama.Model` (`model_type: llama`). Other architectures and quantized
+loaded modules are refused, even if the recipe says `quantization: none`.
+
+```yaml
+base: ./local-dense-llama
+backend: mlx
+task: sft
+output: ./llama-full
+data:
+  train: ./train.jsonl
+training:
+  quantization: none
+  batch_size: 1
+  freeze_ratio: 0.75      # optional; omit to train every base parameter
+  lora:
+    r: 0
+```
+
+Layers below `freeze_layers`, or `int(num_layers * freeze_ratio)`, remain frozen;
+`freeze_layers` takes priority when both are set. Embeddings, the final norm and
+the output head remain trainable. Tied embedding/head weights receive one update.
+An out-of-range layer count is refused. Even when every decoder block is frozen,
+the embedding, final norm and output head remain trainable. Exact frozen/trainable
+parameter and tensor counts are printed before the first update.
+Frozen tensors receive no optimizer state. Accumulated gradients are weighted by
+the number of supervised tokens, then clipped once per optimizer update.
+
+Trainable weights are promoted to **float32**, including when the input checkpoint
+is bf16/fp16; frozen weights retain their input dtype. AdamW moments and gradients
+are therefore float32 on this path. This avoids fp16 moment/epsilon underflow.
+`gradient_checkpointing: true` is supported. No automatic batch-size estimate
+qualifies a dense model's memory use; choose an explicit small batch size.
+
+The final output and each `checkpoint-000000N/` contain complete weights (including
+frozen layers), config, tokenizer, and `training_config.json` with the effective
+freeze plan and completed update count. Saved trainable tensors are float32 and
+saved frozen tensors keep their input dtype, so a checkpoint can contain both.
+`config.json` preserves the effective model configuration. Any dtype field it
+carries comes from that configuration. `mlx_lm.load` reads each tensor's dtype
+from the safetensors file. An all-trainable 8B model therefore writes about 32 GB
+of weights in decimal units. `save_steps` counts micro-batches; a save
+due within an accumulation group waits for its completed optimizer update. Load
+any saved directory with `mlx_lm.load("./llama-full")`, without the original base
+directory or `adapter_path`. Use a fresh output directory for each run.
+
+LoRA plus freeze settings, non-default LoRA controls, vocabulary expansion, LISA,
+Spectrum, distributed training, `--resume` and `--hf-resume` remain refused.
+Checkpoints contain model weights rather than exact optimizer/RNG training state
+(#1977); a saved standalone model can be the base of a new run.
+
+For a model with `P` total and `T` trainable parameters, the persistent memory
+projection is `4*T + frozen_weight_bytes + 4*T + 8*T` bytes: trainable weights,
+frozen weights, gradients, and two float32 AdamW moments. Activations, temporary
+buffers, accumulation, cache, and macOS need additional memory. With all 8 billion
+parameters trainable this is **128 GB before those extras**; with bf16 frozen
+weights it is `2*(P-T) + 16*T`. Freezing 75% of blocks does not freeze 75% of all
+parameters, because embeddings/norm/head stay trainable. Neither 96 GB nor 128 GB
+unified memory is a measured capacity guarantee. See the
+[native qualification record](../benchmarks/mlx-full-ft-1992.md) for tested shapes,
+peak memory, versions and reproducible checks.
+
 **Load dtype** (#339, #471, #492): a frozen base — LoRA, or QLoRA — loads at
-the checkpoint's own dtype (`torch_dtype="auto"`) instead of always upcasting to fp32,
+the checkpoint's own dtype (`dtype="auto"`) instead of always upcasting to fp32,
 since the base never receives an optimizer step. Measured on an H100,
 Llama-3.1-8B, LoRA: 48,241 MiB peak -> 18,658 MiB, a 28.9 GB / 2.59x saving.
 On a pre-Ampere CUDA card (T4 / P100 / V100 / GTX 16xx / RTX 20xx), `"auto"`
@@ -595,7 +680,7 @@ soup train --config unlearn.yaml --yes
 soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output report.json
 ```
 
-`task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
+`task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly. A `forget_set` or a `retain_set` that is set but yields no usable row is refused, naming the file, before any model loads.
 
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
 `max_grad_norm`, `batch_size`, `gradient_accumulation_steps` and
@@ -749,8 +834,38 @@ training:
 
 **Row shapes by task:**
 - `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
-- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
-- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index). Add an optional `"query_id"` (a non-empty string or an integer) to group the candidates of one query for ranking metrics: `{"query_id": "q17", "text": "query doc", "label": 1}`. Use one type for every `query_id` in the training and validation rows, all strings or all integers; a dataset that mixes them is refused at load with the row that differs.
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`, with the same optional `"query_id"`.
+
+**Ranking metrics (`reranker`, `cross_encoder`, #2618).** When the validation rows carry
+`query_id`, each evaluation also reports `eval_mrr@10`, `eval_recall@1`, `eval_recall@5`,
+`eval_recall@10` and `eval_ndcg@10`, averaged over queries. They reach the Hugging Face log and
+`trainer_state.json`; the run's recorded validation number stays `val_loss`.
+
+- **Score.** With `num_labels: 2` (single-label), candidates are ranked by
+  `logit[1] - logit[0]`, so label index 1 (`label_names[1]` when names are set) is the relevant
+  class. With `num_labels: 1`, ranking needs `classifier_kind: multi_label` and uses the single
+  logit; a relevant row has label `[1]`. Any other head prints one line saying why ranking metrics
+  are skipped.
+- **Ranking.** Candidates are ordered by descending score, ties by row order. `recall@k` is the
+  share of a query's relevant candidates in its top `k`; nDCG uses binary gains.
+- **Skipped queries.** A query with no relevant candidate is skipped and counted in
+  `eval_ranking_queries_no_positive`. A query whose `query_id` also appears in the training rows
+  has an incomplete candidate list in validation (`data.val_split` cuts the file at a row index,
+  and a dataset's own validation split can do the same), so it is left out, counted in
+  `eval_ranking_queries_split` and reported in one line at setup. Keep all rows of a query on one side
+  of the split. Validation rows without `query_id` are left out; with none at all, ranking
+  metrics are skipped with one line. `eval_ranking_queries` counts the queries that were scored.
+
+**Classification metrics (`classifier`, #2638).** When there are validation rows, each evaluation
+also reports `eval_accuracy` and `eval_f1_macro` for a single-label head, or
+`eval_subset_accuracy` (every label of a row correct), `eval_f1_micro` and `eval_f1_macro` for a
+multi-label head. They reach the Hugging Face log and `trainer_state.json`; the run's recorded
+validation number stays `val_loss`. A single-label prediction is the argmax of the logits (the
+first index on a tie). A multi-label label is predicted when its logit is above 0, a sigmoid
+probability above 0.5; a logit of exactly 0 is not predicted. A class with no true and no predicted
+row is left out of the macro average instead of counting as 0. `num_labels: 1` with the default
+single-label kind accepts only label 0, so the metrics are skipped with one line saying why.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -784,7 +899,14 @@ training:
 `reasoning_effort` injects `<|reasoning_effort|>high<|/reasoning_effort|>` into
 the system turn (creating one if absent). `train_on_eot=True` makes the model
 learn when to stop generating by training on the trailing EOS token instead of
-masking it out. Both load only on `task: sft`, `tts` and `distill`.
+masking it out. Both load only on `task: sft`, `tts` and `distill`, and inside
+`task: sft` only where they are applied. The vision and audio setups,
+`data.format: raft` and `backend: mlx` apply neither, and
+`data.format: pre_tokenized` drops `reasoning_effort`, so setting a field on one
+of those paths fails at config load, naming the path and the fix. The text path
+is unaffected, including `backend: unsloth` and `training.stream_layers: true`,
+and `train_on_eot` keeps loading with `data.format: pre_tokenized`, where
+`soup data preprocess` bakes it into the cache's mask mode.
 
 
 ## EBFT / GDPO Loss Variants
@@ -891,7 +1013,7 @@ pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains
 With the default optimizer (AdamW), budget about 16 bytes per parameter before
 activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
 VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
-default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+default `batch_size: auto` the pre-flight does not run, and says the fit is not checked). The saved checkpoint is fp32, and
 without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
 each rank loads the base in fp32 on the host before the engine exists (4 bytes per
 parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
@@ -1256,7 +1378,7 @@ good for before/after deltas, not leaderboard-comparable absolutes.
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
 
-Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
+Soup ships seven GRPO objective variants, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
 
 ```yaml
 # soup.yaml — DAPO with replay buffer and TIS truncation masking
@@ -1274,7 +1396,7 @@ training:
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 — #808
-  vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
+  # vllm_sleep_mode: true            # refused as of v0.78.0: GRPO does not use a vLLM server for rollouts, so there is no engine to sleep
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
   rollout_func: my_module:my_rollout  # module:function resolver (openenv; trusted operator code)
@@ -1318,7 +1440,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
+All flags shipped as schema gates in v0.50.0. `openenv` rollout and PRM training (`task: prm`) are live. `vllm_sleep_mode` has no effect, because GRPO generates with the model's own `generate` and never starts a vLLM server for rollouts; `training.vllm_sleep_mode: true` is refused at load as of v0.78.0 (delete the line). Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
 
 
 ## DPO Training
@@ -1349,6 +1471,14 @@ model's processor, and trains the language tower; the LoRA targets resolve to th
 Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
 `backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
 
+`soup recipes use minimax-m3-dpo` writes that configuration for `MiniMaxAI/MiniMax-M3`:
+`modality: vision`, `format: dpo` rows of text-only `prompt` / `chosen` / `rejected`, and the
+LoRA block of `minimax-m3-sft` (rank 32 / alpha 64, `target_modules: auto`, which resolves to
+the language tower's attention), with `lr: 5e-6` and `dpo_beta: 0.1` from the other MoE DPO
+recipes. Its processor is custom code, so run `soup train --trust-remote-code`. These are
+untuned starting values: the tests run one DPO step on a tiny LLaVA that has the wrapper's
+shape, not on the 428B weights, NF4 or a multi-GPU setup.
+
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
 
@@ -1360,6 +1490,36 @@ frozen reference.
 
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
+
+**When the prompt is cut, for all six preference tasks (transformers
+backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`
+enforces `data.max_length` itself
+on TRL's tokenized rows, for the train and validation splits. A row whose
+prompt plus longest answer fits in `data.max_length` reaches the trainer
+unchanged, however long its prompt. A row that overflows has a prompt longer than
+`data.max_length // 2` tokens cut to that many, and its answers cut to the room
+left, so every sequence is at most `data.max_length`. Which end of the prompt survives the
+cut is each TRL trainer's own `truncation_mode`:
+
+| Task (transformers backend) | Prompt cut | End kept |
+|---|---|---|
+| `dpo` | only when the row does not fit `data.max_length` (#1209) | start (`keep_start`) |
+| `ipo` | only when the row does not fit `data.max_length` | start (`keep_start`, as DPO) |
+| `orpo` | only when the row does not fit `data.max_length` (#1209) | end (`keep_end`), BOS kept in front |
+| `simpo` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+| `kto` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+| `bco` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+
+When BCO, KTO, ORPO or SimPO keeps the end of a prompt that starts with the
+tokenizer's BOS token, the BOS stays in front, followed by the last
+`data.max_length // 2 - 1` prompt tokens.
+
+Keeping the end preserves a chat template's assistant header, which sits at
+the end of the prompt; DPO and IPO keep the start because that is TRL's
+default for `DPOConfig`, and Soup does not change it. Before #1209, DPO and
+ORPO cut every prompt longer than `data.max_length // 2`, including rows that
+fit. Native MLX DPO, ORPO and SimPO now use the same overflow-only rule (see
+[SimPO on MLX](backends-and-ops.md#simpo-on-mlx)).
 
 ```yaml
 task: bco
@@ -1454,6 +1614,16 @@ training:
   quantization: 4bit
 ```
 
+On the Transformers backend the live panel shows **Zero-spread groups**, TRL's
+measured `frac_reward_zero_std` (the fraction of generation groups with identical
+rewards). A real zero displays as 0%; the row is hidden until a valid measurement
+exists. Logs without this metric keep the last reading; an invalid fraction hides
+the row until the next valid measurement and breaks the warning streak. More than
+50% over five distinct logged optimizer steps emits one warning per run. This is
+a diagnostic heuristic, not a quality threshold: it neither stops training nor
+changes rewards or gradients. Evaluation/summary logs do not count as new
+measurements. MLX's existing logging is unchanged.
+
 ```bash
 # Create a reasoning config
 soup init --template reasoning
@@ -1467,10 +1637,15 @@ a GRPO run, the optimizer step is skipped: weights and optimizer state are
 unchanged, and the step still counts toward the step total and the LR schedule.
 The skipped-step count is logged at the end of the run (as a console warning
 when the fraction exceeds 5%) and persisted in `trainer_state.json` so
-`soup adapters audit` can see it.
+`soup adapters audit` can see it. The warning and each skipped step's record
+name the parameters whose gradient was non-finite before the gradient clip
+(`nan_param_names_source: before_clip`). Where that is not known, they name the
+parameters read after the clip and say `after_clip`; one NaN reaches every
+gradient through the clip, so those names do not point at the cause.
 
 On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
-(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards, on a dense or a
+pre-quantized 4-bit (`affine`) MLX base; see
 [GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
 mode and what it refuses.
 
@@ -1935,14 +2110,13 @@ training:
   quantization: 4bit
 ```
 
-**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
-answers, so after it tokenizes, `soup train` cuts the prompt to
-`data.max_length // 2` tokens, keeping its end, and the answers to the room
-left, for the train and validation splits. Every sequence is then at most
-`data.max_length`. The cut goes by the prompt alone: a prompt longer than
-`data.max_length // 2` tokens loses its start even when prompt and answers
-would fit in `data.max_length`. A row whose prompt is at most
-`data.max_length // 2` tokens and which fits is unchanged.
+**Long prompts are capped only when a row overflows.** trl's CPO trainer cuts
+only the answers, so a long prompt reached the model whole. A SimPO prompt is
+now cut only when the row does not fit in `data.max_length`: it is then cut to
+`data.max_length // 2` tokens, keeping its end, and the answers get the room
+left, for the train and validation splits, so every sequence is at most
+`data.max_length`. A row that fits is unchanged, whatever its prompt length
+(see the table under [Preference Variety](#preference-variety--bco--unified-dispatcher--kl-variants)).
 
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,
@@ -2279,7 +2453,7 @@ the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
 
-`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are applied by the SFT formatter, which runs on `sft`, `tts` and `distill`, so those are the tasks they load on. Setting either on any other task (`pretrain`, DPO, GRPO, PPO, `classifier`, `reranker`, `cross_encoder`) fails at config load. Live formatter wiring in v0.52.1.
+`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are applied by the SFT formatter, which runs on `sft`, `tts` and `distill`, so those are the tasks they load on. Setting either on any other task (`pretrain`, DPO, GRPO, PPO, `classifier`, `reranker`, `cross_encoder`) fails at config load. Inside `task: sft` they are also gated on the path (#1698): `modality: vision` or `audio`, `data.format: raft` and `backend: mlx` apply neither, and `data.format: pre_tokenized` drops `reasoning_effort` because the cache is built without it, while `train_on_eot` keeps loading there since `soup data preprocess` keys the cache on it. Live formatter wiring in v0.52.1.
 
 
 ## MoLE — Per-Token Adapter Routing (`task='moe_lora_routing'`)
@@ -2456,3 +2630,11 @@ historical startup digest. Copied artifacts retain that digest without the
 original dataset. Existing runs stay unknown; no historical identity is inferred
 from today's files. Sweep and other training entry points do not gain capture in
 this change.
+
+Single-process Hugging Face Transformers `soup sweep` records a base revision per
+arm, independently of training-data hashing. Each arm resolves once before its
+first base load and keeps that commit across its base loads; arms can name
+different bases or record different commits if the Hub moves during the sweep.
+The arm's `runs` row identifies its commit, and its final `soup_run.json` preserves
+it for a copied artifact. Both the row and file leave `training_data_sha256`
+unknown: sweep does not capture a training-data hash.

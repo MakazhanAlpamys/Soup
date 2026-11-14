@@ -17,8 +17,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -100,13 +102,13 @@ def expect_cmd(
     try:
         spec = load_suite_yaml(suite)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         rows = _load_jsonl_rows(data)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     cli_judge_fn = None
@@ -114,7 +116,7 @@ def expect_cmd(
         try:
             cli_judge_fn = build_pairwise_judge_fn(judge)
         except (ValueError, TypeError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
         if not any(
             e.name == "expect_chosen_preferred_over_rejected_by_judge"
@@ -128,17 +130,19 @@ def expect_cmd(
     try:
         report = run_suite(rows, spec, judge_fn=cli_judge_fn)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
     except Exception as exc:
         from soup_cli.eval.judge import JudgeUnavailableError
 
         if isinstance(exc, JudgeUnavailableError):
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         raise
 
-    table = Table(title=f"soup expect — {escape(data)}")
+    # The path is typed text: a Text title is not read as markup or emoji codes. A Text does
+    # not get the italic a str title gets, so the table's title style is set by hand.
+    table = Table(title=Text(f"soup expect — {strip_control(data)}", style="table.title"))
     table.add_column("Expectation")
     table.add_column("Passed")
     table.add_column("Rows")

@@ -160,6 +160,9 @@ def render_lambda_stub(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "mkdir -p /home/ubuntu/soup\n"
+        # #2234 - the log exists before the first step that can fail, so a failed
+        # install is visible in the tail the controller fetches on a non-zero exit.
+        ": > /home/ubuntu/soup/train.log\n"
         "finish() {\n"
         "  rc=$?\n"
         "  printf '%s\\n' \"$rc\" > /home/ubuntu/soup.exit\n"
@@ -168,12 +171,12 @@ def render_lambda_stub(
         "  exit \"$rc\"\n"
         "}\n"
         "trap finish EXIT\n"
-        "apt-get update\n"
-        "apt-get install -y python3-pip\n"
-        f"python3 -m pip install {pip_spec!r}\n"
+        "apt-get update 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        "apt-get install -y python3-pip 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        f"python3 -m pip install {pip_spec!r} 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
-        "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
+        "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
     )
 
     lines = [
@@ -479,13 +482,21 @@ def plan_lambda_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_lambda_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
-    """Build a Lambda controller plan from a cwd-contained config."""
+    """Build a Lambda controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed. The caller passes the *effective*
+    config (the loaded object with every CLI override applied), not the file's
+    text, so the remote run trains what the local run said it would (#1430).
+    Reading ``config_path`` remains the fallback for a direct caller.
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_LAMBDA_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_LAMBDA_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)

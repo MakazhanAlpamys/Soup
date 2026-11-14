@@ -1041,9 +1041,23 @@ class TestToolEndpointsLive:
         if _get_isolation_strategy() != "namespaces":
             pytest.skip("namespaces not available")
 
-        cmd = "curl -s --connect-timeout 1 http://169.254.169.254/ || echo 'BLOCKED'"
-        result = _run_bash_sandbox(cmd)
-        assert "BLOCKED" in result.stdout or result.returncode != 0
+        import shutil
+
+        if shutil.which("curl") is None:
+            pytest.skip("curl is not installed")
+        # One command, so bash runs curl in its own process.
+        cmd = "curl -s --connect-timeout 1 http://169.254.169.254/"
+        try:
+            result = _run_bash_sandbox(cmd)
+        except PermissionError as exc:
+            # The command never ran: this host refuses the namespaces.
+            pytest.skip(f"the sandbox namespaces cannot be created here: {exc}")
+        # The run must have started and finished, and curl must have failed to
+        # connect (exit 7): a timeout or a launch failure is no evidence that the
+        # network is cut. tests/test_serve_code_tool_namespaces.py checks the
+        # interfaces the child sees.
+        assert result.timed_out is False, result
+        assert result.returncode == 7, result
 
     def test_bash_tool_windows_returns_501(self, monkeypatch):
         from fastapi.testclient import TestClient
@@ -1249,7 +1263,9 @@ class TestToolEndpointsLive:
             json={"command": "echo hello"},
         )
         assert resp.status_code == 501
-        assert "Operation not permitted" in resp.json()["detail"]
+        # The fixed sentence; the start-up error itself stays in the server's log.
+        assert resp.json() == {"detail": "bash sandbox requires OS-level isolation"}
+        assert "Operation not permitted" not in resp.text
 
     def test_bash_tool_subprocess_error_maps_to_501(self, monkeypatch):
         import subprocess
@@ -1273,7 +1289,8 @@ class TestToolEndpointsLive:
             json={"command": "echo hello"},
         )
         assert resp.status_code == 501
-        assert "preexec_fn" in resp.json()["detail"]
+        assert resp.json() == {"detail": "bash sandbox requires OS-level isolation"}
+        assert "preexec_fn" not in resp.text
 
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient
@@ -1372,7 +1389,7 @@ class TestAnthropicMessagesStreaming:
         # actually invoking a model.
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("hello world", 3, 2),
+            return_value=("hello world", 3, 2, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)
@@ -1398,7 +1415,7 @@ class TestAnthropicMessagesStreaming:
 
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("response", 1, 1),
+            return_value=("response", 1, 1, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)
@@ -1423,7 +1440,7 @@ class TestAnthropicMessagesStreaming:
 
         with patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("x", 1, 1),
+            return_value=("x", 1, 1, "stop"),
         ):
             app = _create_test_app()
             client = TestClient(app)
@@ -1492,17 +1509,13 @@ class TestVllmAnthropicMessages:
 
 class TestServeStreamHelper:
     def test_transformers_stream_helper_emits_anthropic_events(self):
-        from soup_cli.commands.serve import _stream_anthropic_messages
+        # #2515: the events are built piece by piece now, as the reply is generated.
+        from soup_cli.commands.serve import _AnthropicStreamFrames
 
-        frames = list(
-            _stream_anthropic_messages(
-                msg_id="m1",
-                model="test",
-                text="hello world from soup",
-                input_tokens=4,
-                output_tokens=4,
-            )
-        )
+        builder = _AnthropicStreamFrames("test")
+        frames = builder.start(4)
+        frames += [builder.text(word) for word in ("hello", " world", " from", " soup")]
+        frames += builder.end("stop", 4, None)
         joined = "".join(frames)
         assert "event: message_start" in joined
         assert "event: content_block_delta" in joined
@@ -1874,22 +1887,21 @@ class TestReviewFixesSSEHeaders:
         assert _sanitise_sse_field("a\x00b", max_len=200) == "ab"
         assert _sanitise_sse_field("x" * 500, max_len=10) == "x" * 10
 
-    def test_stream_anthropic_sanitises_msg_id(self):
-        """Caller-controlled msg_id with CR/LF cannot create a new SSE event.
+    def test_stream_anthropic_sanitises_model(self):
+        """Caller-controlled model name with CR/LF cannot create a new SSE event.
 
         After sanitisation the injected ``event:``/``data:`` text becomes a
-        literal substring inside an existing JSON ``id`` value — no new
+        literal substring inside an existing JSON ``model`` value — no new
         ``\\n\\n`` boundary, so the SSE consumer treats the whole frame as
-        one event with garbled-but-safe ``id`` content.
+        one event with garbled-but-safe ``model`` content. (The message id is
+        generated by the server since #2515, so the model name is the
+        caller-controlled field left.)
         """
-        from soup_cli.commands.serve import _stream_anthropic_messages
-        evil_id = "msg-1\nevent: hijack\ndata: {}\n"
-        frames = list(_stream_anthropic_messages(
-            msg_id=evil_id, model="m", text="hi",
-            input_tokens=1, output_tokens=1,
-        ))
+        from soup_cli.commands.serve import _AnthropicStreamFrames
+        builder = _AnthropicStreamFrames("m-1\nevent: hijack\ndata: {}\n")
+        frames = builder.start(1) + [builder.text("hi")] + builder.end("stop", 1, None)
         # Each frame is one SSE event terminated by exactly one "\n\n".
-        # The CR/LFs from the evil id must have been stripped — count of
+        # The CR/LFs from the evil model must have been stripped — count of
         # "\n\n" must equal the number of frames produced.
         joined = "".join(frames)
         assert joined.count("\n\n") == len(frames)
