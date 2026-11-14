@@ -435,3 +435,54 @@ def test_help_lists_the_flag():
     flat = _flat(res.output)
     assert "--base-adapter" in flat
     assert HELP_TEXT in flat
+
+
+# ---------------------------------------------------------------------------
+# The weight screen: pickle weights are refused before PEFT reads the directory
+# ---------------------------------------------------------------------------
+
+
+def _pickle_adapter(path: Path) -> None:
+    """An adapter directory whose weights are a ``.bin`` pickle (code runs when it loads)."""
+    path.mkdir()
+    (path / "adapter_model.bin").write_bytes(b"\x80\x04N.")
+    (path / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": 4}), encoding="utf-8"
+    )
+
+
+def test_a_base_adapter_with_pickle_weights_is_refused_by_name(work):
+    root, fake = work
+    _pickle_adapter(root / "pickled")
+    res = _live("--base-adapter", "pickled", "--adapter", "cand")
+    assert res.exit_code == 3, (res.output, repr(res.exception))
+    flat = _flat(res.output)
+    assert "--base-adapter" in flat and "adapter_model.bin" in flat
+    assert "unsafe weight file" in flat
+    assert fake.calls == []
+
+
+def test_an_adapter_with_pickle_weights_is_refused_with_a_base_adapter(work):
+    root, fake = work
+    _pickle_adapter(root / "pickled")
+    res = _live("--base-adapter", "prod", "--adapter", "pickled")
+    assert res.exit_code == 3, (res.output, repr(res.exception))
+    flat = _flat(res.output)
+    assert "--adapter" in flat and "adapter_model.bin" in flat
+    assert fake.calls == []
+
+
+def test_an_adapter_with_pickle_weights_is_refused_without_a_base_adapter(work):
+    root, fake = work
+    _pickle_adapter(root / "pickled")
+    res = _live("--adapter", "pickled")
+    assert res.exit_code == 3, (res.output, repr(res.exception))
+    assert "adapter_model.bin" in _flat(res.output)
+    assert fake.calls == []
+
+
+def test_safetensors_adapters_still_pass_the_screen(work):
+    _root, fake = work
+    res = _live("--base-adapter", "prod", "--adapter", "cand")
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert fake.adapters() == ["prod", "cand"]

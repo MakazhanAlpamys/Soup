@@ -189,6 +189,21 @@ def _validate_noise_floor_flag(value: Optional[int]) -> Optional[int]:
     return value
 
 
+def _screen_adapter_weights(path: str, flag: str) -> None:
+    """Refuse an adapter directory holding loadable pickle weights, before PEFT reads it.
+
+    The same screen ``soup serve`` applies to an adapter it loads
+    (``strict_safetensors.assert_safe_top_level_weights``): a ``.bin`` / ``.pt`` pickle runs
+    code when it is loaded, and a safetensors file with a bad header is not what it claims.
+    """
+    from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+
+    try:
+        assert_safe_top_level_weights(path)
+    except ValueError as exc:
+        _fail(f"{flag} {path}: {exc}", _EXIT_USAGE)
+
+
 def _validate_base_adapter(
     base_adapter: str,
     *,
@@ -252,6 +267,9 @@ def _validate_base_adapter(
             "an adapter against itself",
             _EXIT_USAGE,
         )
+    _screen_adapter_weights(base_adapter, "--base-adapter")
+    if os.path.isdir(adapter):
+        _screen_adapter_weights(adapter, "--adapter")
 
 
 def _parse_chat_template_kwargs(value: Optional[str]) -> Optional[dict]:
@@ -1728,6 +1746,8 @@ def ship(
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     if progress is not None and progress != "jsonl":
         _fail("--progress must be jsonl", _EXIT_USAGE)
+    if adapter is not None and os.path.isdir(adapter):
+        _screen_adapter_weights(adapter, "--adapter")
     if base_adapter is not None:
         # The flags that never reach _verdict_live (it re-runs this check with the
         # config-resolved --baseline and --general-suite, which only it sees).
