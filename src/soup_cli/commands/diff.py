@@ -9,8 +9,9 @@ from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 
 console = Console()
 
@@ -85,10 +86,10 @@ def diff(
     path_a = Path(model_a)
     path_b = Path(model_b)
     if not path_a.exists():
-        console.print(f"[red]Model A not found: {for_terminal(path_a)}[/]")
+        console.print(terminal_text(f"Model A not found: {path_a}", "red"))
         raise typer.Exit(1)
     if not path_b.exists():
-        console.print(f"[red]Model B not found: {for_terminal(path_b)}[/]")
+        console.print(terminal_text(f"Model B not found: {path_b}", "red"))
         raise typer.Exit(1)
 
     # Validate prompts path before collecting prompts
@@ -96,10 +97,10 @@ def diff(
     if prompts is not None:
         prompts_path = Path(prompts)
         if not prompts_path.exists():
-            console.print(f"[red]Prompts file not found: {for_terminal(prompts_path)}[/]")
+            console.print(terminal_text(f"Prompts file not found: {prompts_path}", "red"))
             raise typer.Exit(1)
         if not prompts_path.is_file():
-            console.print(f"[red]Prompts path is not a file: {for_terminal(prompts_path)}[/]")
+            console.print(terminal_text(f"Prompts path is not a file: {prompts_path}", "red"))
             raise typer.Exit(1)
 
     # Collect prompts
@@ -107,13 +108,12 @@ def diff(
         file_prompts = _collect_prompts(prompts, None) if prompts is not None else None
     except (OSError, UnicodeDecodeError) as exc:
         console.print(
-            f"[red]Cannot read prompts file {for_terminal(prompts_path)}: "
-            f"{for_terminal(exc)}[/]"
+            terminal_text(f"Cannot read prompts file {prompts_path}: {exc}", "red")
         )
         raise typer.Exit(1) from exc
 
     if prompts is not None and not file_prompts:
-        console.print(f"[red]No prompts found in file: {for_terminal(prompts_path)}[/]")
+        console.print(terminal_text(f"No prompts found in file: {prompts_path}", "red"))
         raise typer.Exit(1)
 
     prompt_list = (
@@ -133,10 +133,12 @@ def diff(
 
     console.print(
         Panel(
-            f"Model A:  [bold]{for_terminal(path_a)}[/]\n"
-            f"Model B:  [bold]{for_terminal(path_b)}[/]\n"
-            f"Prompts:  [bold]{len(prompt_list)}[/]\n"
-            f"Device:   [bold]{device}[/]",
+            Text.assemble(
+                "Model A:  ", terminal_text(path_a, "bold"), "\n",
+                "Model B:  ", terminal_text(path_b, "bold"), "\n",
+                "Prompts:  ", (str(len(prompt_list)), "bold"), "\n",
+                "Device:   ", terminal_text(device, "bold"),
+            ),
             title="Diff Plan",
         )
     )
@@ -156,7 +158,7 @@ def diff(
     results = []
     for idx, prompt_text in enumerate(prompt_list):
         console.print(f"[bold]--- Prompt {idx + 1}/{len(prompt_list)} ---[/]")
-        console.print(f"[dim]{for_terminal(prompt_text)}[/]\n")
+        console.print(terminal_text(f"{prompt_text}\n", "dim"))
 
         messages = [{"role": "user", "content": prompt_text}]
 
@@ -171,14 +173,14 @@ def diff(
 
         # Side-by-side display
         panel_a = Panel(
-            for_terminal(response_a) if response_a else "[dim]<empty>[/]",
-            title=f"[blue]Model A: {for_terminal(path_a.name)}[/]",
+            terminal_text(response_a) if response_a else Text("<empty>", style="dim"),
+            title=terminal_text(f"Model A: {path_a.name}", "blue"),
             border_style="blue",
             width=console.width // 2 - 1,
         )
         panel_b = Panel(
-            for_terminal(response_b) if response_b else "[dim]<empty>[/]",
-            title=f"[green]Model B: {for_terminal(path_b.name)}[/]",
+            terminal_text(response_b) if response_b else Text("<empty>", style="dim"),
+            title=terminal_text(f"Model B: {path_b.name}", "green"),
             border_style="green",
             width=console.width // 2 - 1,
         )
@@ -209,7 +211,7 @@ def diff(
         with open(out_path, "w", encoding="utf-8") as f:
             for row in results:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        console.print(f"[dim]Results saved to {for_terminal(out_path)}[/]")
+        console.print(terminal_text(f"Results saved to {out_path}", "dim"))
 
 
 def _collect_prompts(prompts_file: Optional[str], prompt_args: Optional[list[str]]) -> list[str]:
@@ -272,7 +274,7 @@ def _load_model(
 
     if is_adapter and not base_model:
         console.print(
-            f"[red]Cannot detect base model for {for_terminal(path)}. Use --base-a/--base-b.[/]"
+            terminal_text(f"Cannot detect base model for {path}. Use --base-a/--base-b.", "red")
         )
         raise typer.Exit(1)
 
@@ -363,8 +365,8 @@ def _display_summary(results: list[dict], name_a: str, name_b: str):
 
     table = Table(title="Comparison Summary")
     table.add_column("Metric", style="bold")
-    table.add_column(f"Model A ({for_terminal(name_a)})", justify="right", style="blue")
-    table.add_column(f"Model B ({for_terminal(name_b)})", justify="right", style="green")
+    table.add_column(terminal_text(f"Model A ({name_a})"), justify="right", style="blue")
+    table.add_column(terminal_text(f"Model B ({name_b})"), justify="right", style="green")
 
     avg_len_a = sum(r["metrics"]["len_a"] for r in results) / len(results)
     avg_len_b = sum(r["metrics"]["len_b"] for r in results) / len(results)

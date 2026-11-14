@@ -1252,6 +1252,10 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 
 ## Model Comparison
 
+`soup diff` displays paths, prompts and generated replies literally, preserving emoji
+aliases and backslashes while removing terminal controls and bidi marks from the display.
+Model loading, generation inputs, metrics and saved JSONL retain their original values.
+
 Compare outputs of two models side-by-side:
 
 ```bash
