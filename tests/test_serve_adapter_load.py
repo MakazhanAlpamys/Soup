@@ -58,6 +58,13 @@ class _FakeModel:
     def __init__(self, label: str = "base") -> None:
         self.label = label
         self.current = None
+        self.deleted: list = []
+        self.delete_error: Exception | None = None
+
+    def delete_adapter(self, name: str) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted.append(name)
 
     def set_adapter(self, name: str) -> None:
         self.current = name
@@ -677,7 +684,7 @@ def test_the_duplicate_check_leaves_the_map_alone(root, loader):
     assert served.adapter_map == before
 
 
-def test_sixteen_runtime_adapters_load_and_the_seventeenth_is_409(root, loader):
+def test_sixteen_runtime_adapters_load_and_the_seventeenth_evicts_the_oldest(root, loader):
     served = _serve(root, startup=["chat"])  # a startup adapter does not use up a slot
 
     for index in range(16):
@@ -686,11 +693,67 @@ def test_sixteen_runtime_adapters_load_and_the_seventeenth_is_409(root, loader):
 
     resp = served.load("v16", _adapter(root, "d16"))
 
+    assert resp.status_code == 200, resp.text
+    assert loader.returned.deleted == ["v0"]
+    assert len(loader.calls) == 17
+    listed = served.listed()
+    assert "v16" in listed and "v0" not in listed
+    assert len(listed) == 17  # chat + 16
+
+
+def _loop_state(root, **fields):
+    path = root.parent / ".soup" / "loop.yaml"
+    write_state(
+        LoopState(served_model="base", eval_suite="e", baseline="b", **fields), str(path)
+    )
+    return str(path)
+
+
+def test_eviction_skips_production_its_rollback_target_and_the_canary(
+    root, loader, monkeypatch
+):
+    monkeypatch.chdir(root.parent)
+    state_path = _loop_state(
+        root, production_name="v0", production_adapter="v0",
+        previous_production_name="v1", previous_production_adapter="v1",
+        canary_active="v2", canary_traffic_pct=5.0, canary_rollout_id="r1",
+    )
+    served = _serve(root, canary_state_path=state_path)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+
+    assert served.load("v16", _adapter(root, "d16")).status_code == 200
+
+    assert loader.returned.deleted == ["v3"], "v0, v1 and v2 are in use"
+
+
+def test_a_failed_unload_is_409_and_leaves_the_adapters_alone(root, loader):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    loader.returned.delete_error = RuntimeError("cannot delete")
+    before = served.listed()
+
+    resp = served.load("v16", _adapter(root, "d16"))
+
     assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"] == "runtime adapter limit reached (16)"
-    assert len(loader.calls) == 16
-    assert "v16" not in served.listed()
-    assert len(served.listed()) == 17  # chat + 16
+    assert "could not be unloaded" in resp.json()["detail"]
+    assert served.listed() == before
+
+
+def test_an_unreadable_loop_state_evicts_nothing(root, loader, monkeypatch):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    monkeypatch.setattr(
+        "soup_cli.utils.canary_router.CanaryStateCache.get",
+        lambda self: (_ for _ in ()).throw(ValueError("torn file")),
+    )
+
+    resp = served.load("v16", _adapter(root, "d16"))
+
+    assert resp.status_code == 409, resp.text
+    assert loader.returned.deleted == []
 
 
 def test_failed_loads_do_not_use_up_the_cap(root, loader):

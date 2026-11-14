@@ -2580,6 +2580,45 @@ def _create_app(
             active_state["active"] = None
         return {"active": None, "status": "ok"}
 
+    def _evictable_runtime_adapter() -> Optional[str]:
+        """The oldest runtime adapter nothing depends on, or ``None``.
+
+        Protected: the active adapter, and what ``loop.yaml`` names as the canary, as production
+        (the stable side of keyed traffic) and as production's rollback target. If the loop's
+        state cannot be read, nothing is evicted.
+        """
+        protected = {_active_snapshot()}
+        try:
+            state = canary_state.get()
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            return None
+        if state is not None:
+            protected.update({
+                state.canary_active, state.production_name, state.previous_production_name,
+            })
+        for candidate in _runtime_adapters:
+            if candidate not in protected:
+                return candidate
+        return None
+
+    def _evict_runtime_adapter(victim: str) -> None:
+        """Unload ``victim`` (the caller holds ``_adapter_load_lock``)."""
+        with _generation_lock:
+            try:
+                model_obj.delete_adapter(victim)
+            except Exception:
+                logger.exception("runtime adapter %r could not be unloaded", victim)
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); the oldest "
+                        "adapter could not be unloaded"
+                    ),
+                ) from None
+            _peft_adapter_names.discard(victim)
+            _adapter_map.pop(victim, None)
+            _runtime_adapters.remove(victim)
+
     def _load_adapter_blocking(name: str, path: str) -> Dict[str, str]:
         """Checks d-i of POST /v1/adapters/load. Runs in a worker thread: PEFT is slow."""
         nonlocal model_obj
@@ -2595,11 +2634,6 @@ def _create_app(
                 or _model_has_adapter(model_obj, name)
             ):
                 raise HTTPException(status_code=409, detail="adapter name already loaded")
-            if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS})",
-                )
             for unsupported, feature in (
                 (_mole_runtime, "--mole"),
                 (_loaded_bank, "--bank"),
@@ -2609,6 +2643,20 @@ def _create_app(
                         status_code=409,
                         detail=f"runtime adapter loading is not supported with {feature}",
                     )
+            if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
+                # At the cap the OLDEST runtime adapter that is not in use is unloaded to make
+                # room (never the active one, production, its rollback target or the canary).
+                victim = _evictable_runtime_adapter()
+                if victim is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); every "
+                            "loaded adapter is the active one, production, its rollback target "
+                            "or the canary"
+                        ),
+                    )
+                _evict_runtime_adapter(victim)
             # The model is process-global: the load takes the lock a generation holds.
             with _generation_lock:
                 try:
