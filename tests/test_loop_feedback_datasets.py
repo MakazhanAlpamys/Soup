@@ -361,7 +361,6 @@ class TestMalformedLines:
         json.dumps({"response_id": uid(1), "kind": "thumb", "value": 0}),
         json.dumps({"response_id": uid(1), "kind": "thumb", "value": True}),
         json.dumps({"response_id": uid(1), "kind": "thumb", "value": "up"}),
-        json.dumps({"response_id": uid(1), "kind": "thumb", "value": 1.0}),
         json.dumps({"response_id": uid(1), "kind": "rating", "value": 0}),
         json.dumps({"response_id": uid(1), "kind": "rating", "value": 6}),
         json.dumps({"response_id": uid(1), "kind": "rating", "value": 4.5}),
@@ -385,6 +384,30 @@ class TestMalformedLines:
         assert rows(out.datasets.kto) == [kto_row(ANSWER, False)]
         assert out.skipped_lines == 1
         assert out.feedback_lines == 3
+
+    @pytest.mark.parametrize(
+        "line",
+        [thumb(1, 1, 1.0), rating(1, 1, 4.0), thumb(1, 1, 1), rating(1, 1, 4)],
+        ids=["thumb 1.0", "rating 4.0", "thumb 1", "rating 4"],
+    )
+    def test_a_whole_number_float_is_the_integer(self, cwd, line):
+        """Python review P11-P22: the reader refused 4.0 although serve stores 4.0 as 4."""
+        logs([conv(1)], [line])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
+        assert out.skipped_lines == 0
+        assert out.feedback_lines == 1
+
+    @pytest.mark.parametrize("value", [1.5, 4.5, float("nan"), float("inf")])
+    def test_a_float_that_is_not_whole_is_still_skipped(self, cwd, value):
+        logs([conv(1)], [rating(1, 1, value)])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == []
+        assert out.skipped_lines == 1
 
     def test_a_bad_conversation_line_is_skipped(self, cwd):
         bad = [
@@ -1091,7 +1114,7 @@ class TestTrainStage:
             ("dpo", "dpo", "dpo", {"epochs": 1, "batch_size": 1, "lr": 5.0e-5}),
             ("kto", "kto", "kto", {"epochs": 1, "batch_size": 2, "lr": 5.0e-5}),
             ("sft", "sft", "chatml", {
-                "epochs": 8, "batch_size": 2, "lr": 5.0e-4,
+                "epochs": 8, "batch_size": 2, "lr": 2.0e-4,
                 "gradient_accumulation_steps": 4, "seed": 42,
                 "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
                 # quantization auto with no measurable GPU (the test conftest): the safe side.

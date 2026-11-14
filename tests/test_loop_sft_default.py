@@ -638,7 +638,7 @@ class TestEveryRowIsOneSoupTrainReads:
 
 
 class TestSftConfig:
-    def test_the_config_is_candidate_b_lr_5e4_eight_epochs_and_lora_64_128(self, cwd):
+    def test_the_config_is_candidate_b_at_lr_2e4_eight_epochs_and_lora_64_128(self, cwd):
         rendered = yaml.safe_load(ls._render_train_yaml(_state(train_method="sft"), "d.jsonl", "o"))
 
         assert rendered == {
@@ -647,7 +647,7 @@ class TestSftConfig:
             "data": {"train": "d.jsonl", "format": "chatml", "val_split": 0},
             "training": {
                 "epochs": 8, "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
-                "lr": 5.0e-4,
+                "lr": 2.0e-4,
                 "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
                 "quantization": "4bit",
             },
@@ -665,7 +665,7 @@ class TestSftConfig:
 
         assert config.task == method
         if method == "sft":
-            assert (config.training.epochs, config.training.lr) == (8, 5.0e-4)
+            assert (config.training.epochs, config.training.lr) == (8, 2.0e-4)
             assert (config.training.lora.r, config.training.lora.alpha) == (64, 128)
             assert config.training.lora.target_modules == "all-linear"
             assert config.data.val_split == 0
@@ -1218,7 +1218,8 @@ class TestCli:
         result, text, _ = _cli(*_INIT, flag, "many")
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
-        assert flag in text and "not a valid integer" in text
+        # click words the type "int" or "integer" by version: match the common prefix
+        assert f"'{flag}'" in text and "not a valid int" in text
         assert not os.path.exists(os.path.join(".soup", "loop.yaml"))
 
     def test_help_names_the_flags_and_the_default(self, cwd):
