@@ -668,7 +668,6 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
         else:
             console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
-        # A run that observed no loss stores NULL, not the trainer's 0.0 placeholder.
         initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,

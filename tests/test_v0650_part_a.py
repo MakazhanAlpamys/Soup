@@ -6,6 +6,7 @@ judges in production scoring is wired through a runtime gate.
 """
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -258,6 +259,101 @@ class TestJudgeCalibrationReport:
                 num_pairs=10,
                 calibrated="yes",  # type: ignore[arg-type]
             )
+
+    def test_calibrated_requires_positive_num_pairs(self):
+        with pytest.raises(
+            ValueError, match="num_pairs must be positive when calibrated is true",
+        ):
+            JudgeCalibrationReport(
+                position_bias=0.0,
+                conformal_threshold=0.3,
+                agreement_rate=0.9,
+                num_pairs=0,
+                calibrated=True,
+            )
+
+    def test_zero_pairs_rejected_report_allowed(self):
+        report = JudgeCalibrationReport(
+            position_bias=0.0,
+            conformal_threshold=0.3,
+            agreement_rate=0.9,
+            num_pairs=0,
+            calibrated=False,
+        )
+        assert report.num_pairs == 0
+
+    def test_zero_pairs_existing_errors_win(self):
+        with pytest.raises(ValueError, match="agreement_rate"):
+            JudgeCalibrationReport(
+                position_bias=0.0,
+                conformal_threshold=0.3,
+                agreement_rate=1.5,
+                num_pairs=0,
+                calibrated=True,
+            )
+
+    def test_load_zero_pairs_calibrated_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "synthetic.json").write_text(json.dumps({
+            "position_bias": 0.0,
+            "conformal_threshold": 0.3,
+            "agreement_rate": 0.9,
+            "num_pairs": 0,
+            "calibrated": True,
+        }), encoding="utf-8")
+        with pytest.raises(
+            ValueError, match="num_pairs must be positive when calibrated is true",
+        ):
+            load_judge_calibration("synthetic.json")
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"num_pairs": -1}, "num_pairs must be non-negative"),
+            ({"num_pairs": 0.0}, "num_pairs must be int"),
+            ({"num_pairs": True}, "num_pairs must be int"),
+            ({"calibrated": "yes"}, "calibrated must be a bool"),
+            ({"position_bias": 2.0}, "position_bias must be in"),
+            ({"conformal_threshold": 1.5}, "conformal_threshold must be in"),
+        ],
+    )
+    def test_zero_pairs_calibrated_existing_errors_win(self, overrides, message):
+        fields = {
+            "position_bias": 0.0,
+            "conformal_threshold": 0.3,
+            "agreement_rate": 0.9,
+            "num_pairs": 0,
+            "calibrated": True,
+        }
+        fields.update(overrides)
+        with pytest.raises(ValueError, match=message):
+            JudgeCalibrationReport(**fields)
+
+    def _write_report(self, tmp_path, num_pairs, calibrated):
+        (tmp_path / "report.json").write_text(json.dumps({
+            "position_bias": 0.0,
+            "conformal_threshold": 0.3,
+            "agreement_rate": 0.9,
+            "num_pairs": num_pairs,
+            "calibrated": calibrated,
+        }), encoding="utf-8")
+
+    def test_load_zero_pairs_uncalibrated_still_refused_by_gate(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        self._write_report(tmp_path, 0, False)
+        report = load_judge_calibration("report.json")
+        assert report.num_pairs == 0 and report.calibrated is False
+        with pytest.raises(RuntimeError):
+            ensure_judge_calibrated(report)
+
+    def test_load_one_pair_calibrated_passes_gate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_report(tmp_path, 1, True)
+        report = load_judge_calibration("report.json")
+        assert report.num_pairs == 1 and report.calibrated is True
+        ensure_judge_calibrated(report)
 
 
 # ─── run_pairwise_calibration ───

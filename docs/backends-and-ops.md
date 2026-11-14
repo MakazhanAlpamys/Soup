@@ -127,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -990,7 +998,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -1010,6 +1022,30 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
+
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
+
+Hugging Face no longer creates new Spaces with the Streamlit SDK. Soup keeps `streamlit-chat` available for existing deployments and prints a deprecation warning for it and for custom template directories detected as Streamlit in v0.78.0. Use `--template gradio-chat` (or a custom Gradio template) for new Spaces. If the Hub response names the `sdk` field and an SDK value, Soup identifies the Streamlit refusal, suggests `gradio-chat`, and includes the Hub response; unrelated Hub errors keep their usual message.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
@@ -1074,7 +1110,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
 
 `soup runs compare` keeps the side-by-side run summary and lists all differences
 in the stored config, including nested settings such as `training.lora.dropout`
@@ -1554,17 +1590,20 @@ A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
 `runs.final_loss`: when a trainer's summary says `loss_summary_kind: unavailable`
 (its numeric `initial_loss` / `final_loss` are a `0.0` placeholder), `soup train` and
 `soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
-`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged (`inf`) tail is
-kept, and a run-level `train_loss` mean on a run too short to log a step is stored as
+`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged `inf` tail is
+kept as logged, a NaN end stores NULL for both (SQLite cannot hold a NaN, and a half-NULL pair would contradict the kind below; the completion panel still prints it), and a run-level `train_loss` mean on a run too short to log a step is stored as
 before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
 below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
 with no loss cannot be the best run.
 
 Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
-omitted `loss` / `lr` NULL, and HF's final runtime-summary event (`train_runtime`, the
+omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; an infinity is kept), and HF's final runtime-summary event (`train_runtime`, the
 `train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
-no `metrics` row and pushes no live event, while the terminal panel keeps showing the last
-real values. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+no training row and pushes no live event, while the terminal panel keeps showing the last
+real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm` and
+`val_loss` NULL and `speed` set (#2810), so a reader that wants the training curve skips
+rows whose `kind` is `summary`. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
 returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
 row written, so a later measurement at the same or a lower step is a new row with a larger
 `id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
@@ -1578,15 +1617,17 @@ before they existed; nothing is backfilled. Their values are module constants in
 - `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
   and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
   step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
-  `unavailable`: the run observed no loss and both columns are NULL. `soup train` and
+  `unavailable`: the run observed no loss (or only a NaN one) and both columns are NULL; a
+  pair is never stored with one NULL end. `soup train` and
   `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
   from the trainer's summary (`delta` and `single` are `per_step`).
 - `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the
   same `kind`. `train`: a training log, whose loss / lr / grad norm that log measured.
   `eval`: an evaluation, carrying a `val_loss` or `val_reward`; its `loss` / `lr` are the
   last measured training values carried into the row, not a measurement of the evaluation.
-  `summary`: a run-level summary row; the engine's own callback writes none for HF's final
-  runtime event, so the value is reserved for callers that choose to write one. Every
+  `summary`: a run-level summary row, written by the HF callback for HF's final runtime
+  event when it carries `train_steps_per_second`: `loss`, `lr`, `grad_norm` and the
+  validation columns are NULL, `speed` is the throughput, and `step` is the last step. Every
   in-repo writer (the HF callback and the MLX and PPO loops) states its kind through
   `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
   and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
@@ -2050,6 +2091,10 @@ Both commands refuse unreadable inputs before creating or changing the state fil
 Malformed YAML reports the config path and line/column; invalid UTF-8 reports the
 byte offset; an OS read error names its cause. These refusals exit 2. A missing config
 keeps exit 1, and schema validation keeps its existing validation messages and exit code.
+
+Plan and apply display model names, paths and diagnostics literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; config values, hashes and state-file contents keep their original values.
 
 ```bash
 # Render a pre-flight summary + write soup.tfstate

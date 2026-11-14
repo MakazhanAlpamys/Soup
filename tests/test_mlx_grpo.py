@@ -1882,7 +1882,7 @@ class TestSavingAndTheRunRecord:
         log_val_reward(Tracker(), None, step=4, epoch=1.0, lr=0.01, val_reward=0.5)
         log_val_reward(None, "run-1", step=4, epoch=1.0, lr=0.01, val_reward=0.5)
         assert rows == [{"run_id": "run-1", "step": 4, "epoch": 1.0, "loss": None,
-                         "lr": 0.01, "val_reward": 0.5, "kind": "eval"}]
+                         "lr": 0.01, "val_reward": 0.5, "speed": None, "kind": "eval"}]
 
         class Broken:
             def log_metrics(self, **row):

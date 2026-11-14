@@ -451,7 +451,7 @@ class ExperimentTracker:
         loss: Optional[float] = None,
         lr: Optional[float] = None,
         grad_norm: Optional[float] = None,
-        speed: float = 0.0,
+        speed: Optional[float] = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
         val_reward: Optional[float] = None,
@@ -463,9 +463,11 @@ class ExperimentTracker:
         ``None`` rather than ``0.0``: an omitted measurement must not look like a
         genuinely measured zero. ``loss`` is None for a training log that carried no
         loss (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
-        task leaves it NULL. Each row gets its own ``id`` (``AUTOINCREMENT``), the
-        row identity ``get_metrics`` returns: a later measurement at the same or a
-        lower step is a new row with a larger id, never an overwrite.
+        task leaves it NULL. ``speed`` is None on a row with no measured rate
+        yet, such as the trainer callback's first step row (#2791). Each row gets its
+        own ``id`` (``AUTOINCREMENT``), the row identity ``get_metrics`` returns: a
+        later measurement at the same or a lower step is a new row with a larger id,
+        never an overwrite.
 
         ``kind`` says what the row is: ``train``, ``eval`` or ``summary``
         (``experiment.row_kinds``). A writer states it; None is what a row written

@@ -12,7 +12,10 @@ row states its kind; the strings below are the contract, and are pinned by
                   one step, when the run logged a single step);
 * ``mean``        a run too short to log a step: both columns hold the run-level
                   ``train_loss`` mean, which is not a per-step loss (#908);
-* ``unavailable`` the run observed no loss; both columns are NULL.
+* ``unavailable`` the run observed no loss, or only a NaN one (SQLite cannot hold a NaN, so
+                  it is refused rather than left as a NULL end beside ``per_step``); both
+                  columns are NULL. A pair is never stored with one NULL end. An infinite
+                  loss is kept as logged and is ``per_step``.
 
 ``metrics.kind`` -- what a ``metrics`` row (and the live ``metric`` event that mirrors it)
 is:
@@ -23,9 +26,12 @@ is:
                   ``val_reward``), and ``loss`` / ``lr`` are the last measured training
                   values carried into it (tests/test_issue23_mlx_val_loss_producer.py),
                   not a measurement of the evaluation;
-* ``summary``     a run-level summary (HF's final runtime event: ``train_runtime``, the
-                  ``train_loss`` mean, throughput). The engine's own callback writes no
-                  row for that event, so it is reserved for callers that choose to.
+* ``summary``     a run-level summary: HF's final runtime event, which measures no
+                  per-step loss. The callback stores its throughput
+                  (``train_steps_per_second``) as ``speed`` and nothing else: ``loss``,
+                  ``lr``, ``grad_norm`` and the validation columns are NULL, never the
+                  last training values carried forward, and the ``train_loss`` mean is
+                  not stored. A reader of the training curve skips these rows.
 """
 
 from __future__ import annotations

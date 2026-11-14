@@ -665,7 +665,7 @@ Usage: `soup bench infer [OPTIONS] MODEL`
 |---|---|---|---|---|
 | `MODEL` | text |  | yes | Path to model (LoRA adapter or full model) to benchmark |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
-| `--max-tokens` | integer | `128` |  | Maximum tokens to generate per prompt |
+| `--max-tokens` | integer, at least 1 | `128` |  | Maximum tokens to generate per prompt |
 | `--num-prompts`, `-n` | integer | `3` |  | Number of prompts to run for averaging (ignored when --prompts-file is set) |
 | `--prompts-file` | text |  |  | Path to custom prompts file (.txt or .jsonl) |
 | `--p50` | flag | off |  | Print p50 (median) per-prompt latency. v0.53.9 #26. |
@@ -841,7 +841,7 @@ Usage: `soup chat [OPTIONS]`
 | `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
-| `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
+| `--max-tokens` | integer, at least 1 | `512` |  | Maximum number of tokens to generate |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0.0 = greedy, 1.0 = creative) |
 | `--system`, `-s` | text |  |  | System prompt for the conversation |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
@@ -958,6 +958,7 @@ Subcommands:
 - [`ingest`](#soup-data-ingest)
 - [`inspect`](#soup-data-inspect)
 - [`langdetect`](#soup-data-langdetect)
+- [`leakage`](#soup-data-leakage)
 - [`lint`](#soup-data-lint)
 - [`merge`](#soup-data-merge)
 - [`mix`](#soup-data-mix)
@@ -1382,6 +1383,19 @@ Usage: `soup data langdetect [OPTIONS]`
 | `--input`, `-i` | text |  | yes | Input JSONL file to tag. |
 | `--output`, `-o` | text | `langdetect.jsonl` |  | Output JSONL file with language tags. |
 
+### `soup data leakage`
+
+Check input-text overlap without writing datasets.
+
+Usage: `soup data leakage [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--train` | text |  | yes | Training JSONL under cwd. |
+| `--eval` | text |  | yes | Evaluation JSONL under cwd. |
+| `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
+| `--json` | flag | off |  | Print a machine-readable JSON report. |
+
 ### `soup data lint`
 
 Preference-data linter (dpo/orpo/simpo/ipo/bco/kto).
@@ -1711,8 +1725,9 @@ Usage: `soup deploy hf-space [OPTIONS]`
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | HuggingFace model repo id to wrap in the Space (e.g. user/my-model) |
 | `--space`, `-s` | text |  | yes | HuggingFace Space repo id to create (e.g. user/my-space) |
-| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat |
+| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat. Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer creates new Streamlit Spaces. Use gradio-chat. |
 | `--template-dir` | text |  |  | Custom template directory (overrides --template). Must contain app.py + README.md, optionally requirements.txt. Use {MODEL_REPO} placeholder for substitution. |
+| `--hardware` | text |  |  | Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g) |
 | `--private` | flag | off |  | Create the Space as private |
 | `--yes`, `-y` | flag | off |  | Skip confirmation |
 
@@ -2327,6 +2342,10 @@ Usage: `soup eval quant-check [OPTIONS]`
 | `--tasks` | text |  | yes | JSONL eval tasks file (see 'soup eval custom') |
 | `--format` | text | `table` |  | Output format: table \| json \| markdown |
 | `--allow-stub` | flag | off |  | Allow deterministic stub generators if live model loading fails. |
+| `--performance` | flag | off |  | Also measure generation latency, tokens/s and CUDA memory sequentially. |
+| `--performance-warmup` | integer, at least 0 | `1` |  | Unscored first-prompt warm-ups per model (requires --performance). |
+| `--performance-repeats` | integer, at least 1 | `3` |  | Measured greedy generations per task (requires --performance). |
+| `--device` | text |  |  | Device for --performance: auto (default), cpu, cuda, cuda:&lt;index> or mps. |
 
 ### `soup eval retention`
 
@@ -2390,6 +2409,9 @@ Usage: `soup export [OPTIONS]`
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
+| `--validate-onnx` | flag | off |  | ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, 3=unusable validation. Other export option conflicts also use 2; inspect the diagnostic. |
+| `--prompts` | text |  |  | Explicit text/JSONL prompts for --validate-onnx (at most 32). |
+| `--atol` | float |  |  | Absolute logits tolerance for --validate-onnx. Default 1e-4 (FP32 smoke check, not a quality threshold). |
 | `--deploy` | text |  |  | Auto-deploy after export. Currently supported: ollama |
 | `--deploy-name` | text |  |  | Model name for deployment (used with --deploy) |
 | `--calibration-data` | text |  |  | Path to calibration JSONL for imatrix GGUF export. |
@@ -3761,7 +3783,8 @@ Usage: `soup train [OPTIONS]`
 | `--master-port` | integer |  |  | Shared coordinator port for multiple nodes (default 29500) |
 | `--no-reexec` | flag | off |  | Print the distributed launch command instead of launching it |
 | `--gate` | text |  |  | Enable eval-gated training with a suite file (shortcut for training.eval_gate.enabled=true + suite=&lt;path>) |
-| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model) |
+| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model). A repository created by this flag is private unless --push-public is given; an existing repository is used as it is and its visibility is not changed. |
+| `--push-public` | flag | off |  | Create the --push-as repository public instead of private. Requires --push-as. It does not change the visibility of a repository that already exists. |
 | `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured. |
 | `--find-lr` | flag | off |  | LR range finder (v0.32.0): run a short geometric LR sweep, write a JSON report with the recommended LR, then exit without training. |
 | `--find-lr-start` | float | `1e-07` |  | LR range finder: starting LR (default 1e-7) |
