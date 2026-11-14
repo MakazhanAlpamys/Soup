@@ -46,22 +46,26 @@ def never_loaded(monkeypatch) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "options,option",
+    "options,option,message",
     [
-        (["--num-prompts", "0"], "--num-prompts"),
-        (["--num-prompts", "-2"], "--num-prompts"),
-        (["--max-tokens", "0"], "--max-tokens"),
-        (["--max-tokens", "-5"], "--max-tokens"),
+        (["--num-prompts", "0"], "--num-prompts", "must be at least 1"),
+        (["--num-prompts", "-2"], "--num-prompts", "must be at least 1"),
+        # An empty --prompts-file is no file: the rest of the command reads
+        # the option by truthiness, so the count is used and has to be usable.
+        (["--num-prompts", "0", "--prompts-file", ""], "--num-prompts", "must be at least 1"),
+        (["--max-tokens", "0"], "--max-tokens", "0 is not in the range x>=1"),
+        (["--max-tokens", "-5"], "--max-tokens", "-5 is not in the range x>=1"),
     ],
 )
 def test_a_count_below_one_is_refused_before_the_model_loads(
-    model_dir, never_loaded, options, option
+    model_dir, never_loaded, options, option, message
 ):
     result = runner.invoke(app, ["bench", "infer", model_dir, *options])
 
     assert result.exit_code == 2, result.output
     plain = " ".join(strip_ansi(result.output).split())
     assert option in plain
+    assert message in plain
     assert never_loaded == []
 
 
@@ -85,7 +89,9 @@ def test_the_max_token_counts_that_work_today_still_run(model_dir, monkeypatch, 
     )
 
     assert result.exit_code == 0, result.output
-    assert seen
+    # The timed call passes the value unchanged; the warm-up before it uses
+    # min(max_tokens, 32).
+    assert seen[-1] == int(value)
 
 
 @pytest.mark.parametrize("count", ["0", "-2"])

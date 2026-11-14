@@ -89,8 +89,9 @@ def bench(
     # #2757: a count below 1 cuts the prompt list to nothing, and the warm-up
     # then reads prompts[0] and dies with an IndexError after the model has
     # loaded. With --prompts-file the count is ignored, so that call works
-    # today and must keep working.
-    if prompts_file is None and num_prompts < 1:
+    # today and must keep working. The rest of the command reads the option
+    # by truthiness, so an empty value counts as no file here too.
+    if not prompts_file and num_prompts < 1:
         raise typer.BadParameter(
             "--num-prompts must be at least 1 when --prompts-file is not set"
         )
