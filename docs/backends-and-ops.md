@@ -1356,6 +1356,10 @@ soup --verbose eval benchmark --model ./output --benchmarks mmlu
 
 ## Unknown config keys
 
+Config-loader diagnostics display paths, keys and values literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; loaded config values and API/UI exception messages retain their original text.
+
 Every config model used to run with Pydantic's default `extra="ignore"`, so a key the
 schema did not declare was dropped without a word. `soup train --dry-run` printed
 "Config valid. Ready to train!", the run exited 0, and the requested setting was simply
