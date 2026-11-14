@@ -11,8 +11,8 @@ Scope: Qwen2 QLoRA SFT. Qwen3 is ported and tested at layer level; its gate is c
 
 The pure half (no torch, no Triton; safe to import from the config and the CLI preflight)::
 
-    config.py   the settings of one run (a future ``training.packed_lora``) and which runs the
-                kernels cannot take; nothing in ``config/schema.py`` refers to it yet
+    config.py   the settings of one run (the type of ``training.packed_lora``) and which runs
+                the kernels cannot take
     layout.py   byte sizes shared by the planner, the stash and the int8 kernels
     policy.py   the settings -> a frozen per-run policy, rounding and int8 state
     budget.py   the GPU memory planner

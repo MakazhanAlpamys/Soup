@@ -36,9 +36,11 @@ MIN_COMPUTE_MAJOR = 8
 
 def environment_problems(*, system: str, has_triton: bool,
                          compute_capability: Optional[tuple[int, int]],
-                         bf16_supported: bool, world_size: int = 1) -> list[str]:
+                         bf16_supported: bool, world_size: int = 1,
+                         sharding: Optional[str] = None) -> list[str]:
     """Reasons the machine cannot run the kernels. ``system`` is ``platform.system()``;
-    ``compute_capability`` is ``None`` without a CUDA device."""
+    ``compute_capability`` is ``None`` without a CUDA device; ``sharding`` names the FSDP or
+    DeepSpeed setting of a single-process run, if it has one."""
     problems: list[str] = []
     if system != "Linux":
         problems.append(
@@ -66,6 +68,11 @@ def environment_problems(*, system: str, has_triton: bool,
         problems.append(
             f"supports one GPU only; WORLD_SIZE is {world_size}. FSDP, DeepSpeed and DDP are "
             f"not supported."
+        )
+    if sharding:
+        problems.append(
+            f"supports one GPU only; {sharding} is set. FSDP, DeepSpeed and DDP are not "
+            f"supported."
         )
     return problems
 

@@ -12,7 +12,7 @@ import soup_cli.kernels.packed_lora as package
 ROOT = Path(package.__file__).parent
 FILES = sorted(ROOT.rglob("*.py"))
 # written for Soup, not ported
-OWN = {"config.py", "loader.py", "selftest.py"}
+OWN = {"config.py", "loader.py", "selftest.py", "hook.py", "preflight.py"}
 # the package above this one, and the test files adapted from the challenge team's
 KERNELS_INIT = ROOT.parent / "__init__.py"
 PORTED_TESTS = [Path(__file__).parent / "test_packed_lora_kernels_gpu.py"]

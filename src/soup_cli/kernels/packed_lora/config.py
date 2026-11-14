@@ -3,10 +3,9 @@
 # Written for Soup.
 """The settings of the packed-LoRA kernels, and which runs they cannot take.
 
-Internal to the package: nothing in ``config/schema.py`` refers to this module yet, so a
-``soup.yaml`` has no ``training.packed_lora`` key. The trainer wiring adds the key, with this
-model as its type and :func:`packed_lora_problem` as its cross-validator. Pure Python (pydantic
-only): no torch, no Triton.
+``PackedLoraConfig`` is the type of ``training.packed_lora`` in ``config/schema.py``, and
+:func:`packed_lora_problem` is the sentence of its cross-validator (``SoupConfig``). Pure Python
+(pydantic only): no torch, no Triton.
 
 Defaults when enabled: ``int8_backward: auto`` (the int8 MLP input gradient, kept on when a
 start-up gradient check passes) with ``int8_rounding: grad`` (stochastic rounding of the gradient
@@ -183,6 +182,11 @@ def packed_lora_problem(config, block):
             f"needs lora.dropout: 0; got {lora.dropout} (Soup's default is 0.05). "
             f"peft gives every projection its own dropout, so q/k/v and gate/up "
             f"would no longer share the one input the kernels read."
+        )
+    elif tcfg.batch_size == "auto":
+        reason = (
+            "needs an explicit training.batch_size; got 'auto'. The memory plan is made for "
+            "the batch size, which 'auto' only finds out while the run trains."
         )
     else:
         for label, clash, why in (

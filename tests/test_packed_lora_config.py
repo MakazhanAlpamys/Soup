@@ -1,7 +1,7 @@
 """``soup_cli.kernels.packed_lora.config``: the settings of the packed-LoRA kernels (CPU).
 
-The model is internal to the package: no field of ``SoupConfig`` refers to it, so a ``soup.yaml``
-has no ``training.packed_lora`` key. What is checked here: the block's defaults and bounds, and
+The model is the type of ``training.packed_lora`` (tested through ``SoupConfig`` in
+``test_packed_lora_schema.py``). What is checked here: the block's defaults and bounds, and
 :func:`packed_lora_problem`, the sentence for each setting of a run that the kernels cannot honour.
 Every refusal is asserted on the words a user would grep for, and each one is reached with exactly
 one offending setting, so that removing its branch fails exactly one test.
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.config.schema import TrainingConfig
 from soup_cli.kernels.packed_lora.config import (
     MAX_BUDGET_MIB,
     MIN_BUDGET_MIB,
@@ -30,7 +30,8 @@ def _problem(*, packed=None, task="sft", backend="transformers", modality="text"
     config = SimpleNamespace(
         backend=backend, modality=modality, task=task,
         data=SimpleNamespace(format=(data or {}).get("format", "alpaca")),
-        training=TrainingConfig(**{"quantization": "4bit", "lora": lora, **training}))
+        training=TrainingConfig(
+            **{"quantization": "4bit", "batch_size": 2, "lora": lora, **training}))
     block = PackedLoraConfig(**({"enabled": True} if packed is None else packed))
     return packed_lora_problem(config, block)
 
@@ -41,11 +42,6 @@ def _problem(*, packed=None, task="sft", backend="transformers", modality="text"
 class TestTheBlock:
     def test_it_is_off_unless_asked_for(self):
         assert PackedLoraConfig().enabled is False
-
-    def test_no_field_of_the_config_refers_to_it(self):
-        # zero user-visible surface until the trainer is wired
-        assert "packed_lora" not in TrainingConfig.model_fields
-        assert "packed_lora" not in SoupConfig.model_fields
 
     def test_the_defaults(self):
         block = PackedLoraConfig()
@@ -205,9 +201,24 @@ class TestWhatItRefuses:
     def test_the_default_lora_block_is_refused_for_its_dropout(self):
         config = SimpleNamespace(
             backend="transformers", modality="text", task="sft",
-            data=SimpleNamespace(format="alpaca"), training=TrainingConfig(quantization="4bit"))
+            data=SimpleNamespace(format="alpaca"),
+            training=TrainingConfig(quantization="4bit", batch_size=2))
         problem = packed_lora_problem(config, PackedLoraConfig(enabled=True))
         assert "needs lora.dropout: 0" in problem
+
+    def test_an_auto_batch_size_is_refused_with_the_reason(self):
+        message = _problem(batch_size="auto")
+        assert message.startswith(
+            "training.packed_lora needs an explicit training.batch_size; got 'auto'")
+        assert "memory plan is made for the batch size" in message
+
+    def test_the_default_batch_size_is_auto_and_is_refused(self):
+        config = SimpleNamespace(
+            backend="transformers", modality="text", task="sft",
+            data=SimpleNamespace(format="alpaca"),
+            training=TrainingConfig(quantization="4bit", lora={"dropout": 0.0}))
+        assert "explicit training.batch_size" in packed_lora_problem(
+            config, PackedLoraConfig(enabled=True))
 
     @pytest.mark.parametrize("lora,name", [
         ({"use_dora": True}, "lora.use_dora"),

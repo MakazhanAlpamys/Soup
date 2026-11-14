@@ -12,6 +12,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.packed_lora_setup import PackedLoraSetupMixin
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -519,7 +520,7 @@ def is_full_finetune(tcfg) -> bool:
     return bool(tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0)
 
 
-class SFTTrainerWrapper(StreamingSetupMixin):
+class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
     """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
 
     def __init__(
@@ -672,6 +673,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "[yellow]Could not release the layer-streaming runtime: "
                     f"{for_terminal(str(close_error))}[/]"
                 )
+            self._close_packed_lora()
             raise
 
     def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
@@ -1026,7 +1028,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # TRL's `compute_loss` reads for its metrics. The schema keeps the
         # option to the two branches below that build `sft_cls`.
         sft_cls = SFTTrainer
-        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        # ... and so does training.packed_lora (the packed step returns the loss and no logits).
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None) or getattr(
+            self, "_packed_lora_hook", None
+        )
         if chunk_hook is not None:
             from soup_cli.utils.stream_loss_chunk import (
                 HOOK_ATTR,
@@ -1551,6 +1556,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             validate_cuda_hardware()
             self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
 
+        # training.packed_lora -- the machine and the model's config, before anything is loaded.
+        self._begin_packed_lora(cfg, tcfg)
+
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
             from soup_cli.utils.liger import apply_liger_kernel
@@ -1707,12 +1715,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
-                self.model,
-                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
-                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
-                ),
-            )
+            with self._packed_lora_kbit_context():
+                self.model = prepare_model_for_kbit_training(
+                    self.model,
+                    use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                        tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                    ),
+                )
 
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
@@ -1987,6 +1996,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
+        # training.packed_lora -- on the final LoRA model, last, so the kernels see what trains.
+        self._install_packed_lora(cfg, tcfg)
 
     def _apply_quantization_aware(self, tcfg) -> None:
         """Apply quantization-aware training post-LoRA (shared text/vision).
@@ -2484,6 +2495,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ) as train_ctx:
             # #1693: also when training raises.
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
+            # training.packed_lora: the hook comes off and the pinned memory goes back.
+            train_ctx.callback(self._close_packed_lora)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

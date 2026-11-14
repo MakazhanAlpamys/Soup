@@ -310,6 +310,45 @@ def test_tables_in_pinned_host_memory_give_the_same_step(tied):
     assert run.pool.locked_bytes() == 0
 
 
+def test_prepare_without_parking_leaves_the_tables_until_park_tables():
+    """The trainer is built after the preparation: a parameter on the host must not be there for
+    it to see. ``park=False`` makes the plan and the stash but moves no table; ``park_tables``
+    does, at the first step, and again after an evaluation put them back."""
+    from soup_cli.kernels.packed_lora import budget
+    from soup_cli.kernels.packed_lora.policy import Policy
+    from soup_cli.kernels.packed_lora.runtime import PackedRun
+    from soup_cli.kernels.packed_lora.support import PORTED_ARCHITECTURES
+
+    dt = torch.bfloat16
+    model = build(dt, hidden=896, inter=4864, heads=14, kv=2, layers=6, vocab=32000)
+    ids, mask, labels = batch(rows=4, width=128, vocab=32000)
+    lines = []
+    # the smallest budget the planner accepts keeps both tables off the GPU
+    shape = budget.Shape.of_model(model.get_base_model())
+    floor_mib = budget.minimum_budget_mib(shape, ids.numel())
+    run = PackedRun(Policy(gpu_budget_bytes=floor_mib << 20, int8_backward="on",
+                           int8_rounding="nearest"), log=lines.append)
+    run.prepare(model, dt, ids.numel(), architectures=tuple(PORTED_ARCHITECTURES.values()),
+                park=False)
+    try:
+        assert run.dtype is dt
+        assert run.plan is not None and not run.plan.embed_gpu and not run.plan.head_gpu
+        table = model.get_input_embeddings().weight
+        head = model.get_output_embeddings().weight
+        assert table.is_cuda and head.is_cuda and run.tables is None and run.park_pending
+        run.park_tables()
+        assert not run.park_pending and run.tables.any_active()
+        assert not table.is_cuda and not head.is_cuda
+        packed(model, run, ids, mask, labels)  # a step reads the parked table
+        run.restore_tables()
+        assert table.is_cuda and head.is_cuda and not run.tables.any_active()
+        run.park_tables()  # the first step after an evaluation
+        assert not table.is_cuda and not head.is_cuda
+    finally:
+        run.close()
+    assert table.is_cuda and head.is_cuda
+
+
 # --- the stock forward keeps working ------------------------------------------------------
 
 
