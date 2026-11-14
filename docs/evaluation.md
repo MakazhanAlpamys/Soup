@@ -462,10 +462,27 @@ skipped without a message. Weights the reader refuses (`adapter_model.bin`, a sy
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).
 
+`--base-adapter <path>` swaps the *before* side from the bare base to `base + that LoRA adapter`,
+so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
+already in production (`base + --base-adapter`), both trained from the same base. It is a live
+run with `--adapter` only. `soup ship` refuses it, with exit code 3 and a message naming both
+flags, when `--adapter` is missing (alone, or with `--tuned`); together with `--evidence`,
+`--require-provenance`, `--emit-evidence` or `--baseline`, which all describe the bare base;
+when `--general-suite` names a non-bundled benchmark, which lm-eval would score on the bare
+base; when the path is not an existing directory; and when it is the same path as `--adapter`.
+The `adapter_noop` check above is skipped: an all-zero `--adapter` equals the bare base, which is
+no longer the before side. The `--output` JSON gains a `base_adapter` key (the path, or `null`), the
+terminal panel prints a `Base adapter:` line, and `--noise-floor` repeats run on the
+`base + --base-adapter` model.
+
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
   --task-eval tasks.jsonl --device cuda
+
+# Live: the candidate adapter vs the adapter in production (same base)
+soup ship --base <base> --base-adapter ./adapters/v1 --adapter ./adapters/v2 \
+  --task-eval tasks.jsonl
 
 # Live: disable thinking when the model's chat template supports that variable
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
@@ -484,6 +501,11 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
 # that answers "tie" still scores 0.5. The error says how many pairs were not judged (#1522).
 
+# Reference-guided judging (#2520): the judge also sees each task row's `expected`
+# answer, in both judge modes. Off by default; without it the prompts are unchanged.
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1 --judge-reference
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123
@@ -491,6 +513,35 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 # Offline: decide from pre-computed scores, persist the verdict JSON
 soup ship --evidence evidence.json --output verdict.json
 ```
+
+### Reference-guided judging
+
+By default the judge sees only the prompt and the response(s), so it rewards the
+answer it likes, which may not be the one your task expects. `--judge-reference`
+also shows it the task row's `expected` answer and asks it to judge agreement in
+substance with that reference. It applies to `--task-mode judge_score` and
+`pairwise` on a live run.
+
+- Every task row needs a non-blank string `expected`. A missing, `null`,
+  non-string, empty or whitespace-only `expected` is a usage error (exit 3) that
+  names the field and the file's line number, and it is found before any model
+  loads. A `scoring: "regex"` row is refused too: its `expected` is a pattern,
+  not an answer.
+- `--judge-reference` with `--task-mode metric` (from the flag or
+  `eval.ship.task_mode`) or with `--evidence` is a usage error.
+- The reference is shown fenced as data, not as instructions to the judge. In
+  pairwise mode both swap orders get the same reference, and a disagreement
+  between the two orders still scores as a tie.
+- `--noise-floor` judges with the same template as the leg it guards.
+
+The judge prompts are versioned templates in `soup_cli.eval.judge_templates`:
+`judge_score.preference`, `judge_score.reference`, `pairwise.preference` and
+`pairwise.reference`, each with an integer version. In the `--output` verdict
+JSON, a judge-mode `task_win` carries `judge_mode` (`preference` or `reference`)
+and `judge_template` (`{"id", "version"}`); a metric `task_win` carries neither.
+`--emit-evidence` writes the two fields only for a reference-judged leg, so
+evidence from a default run is unchanged and older evidence still reads as
+preference judging.
 
 ### Opt-in progress
 
