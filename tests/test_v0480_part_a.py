@@ -611,8 +611,8 @@ def test_curriculum_curve_malformed_history_exits_2(
             "--history", str(history),
         ],
     )
-    assert result.exit_code == 2
-    output = " ".join(result.output.split())
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    output = " ".join(strip_ansi(result.output).split())
     assert "history malformed" in output
     assert reason in output
     assert "Error:" not in output
