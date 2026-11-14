@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from soup_cli.config.loader import load_config
+from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.sweep_config import load_sweep_yaml
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -667,14 +668,19 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
         else:
             console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
+        initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
-            initial_loss=result["initial_loss"],
-            final_loss=result["final_loss"],
+            initial_loss=initial_loss,
+            final_loss=final_loss,
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
+        # The sweep ranks on what the run stored: an arm that observed no loss has
+        # none, and cannot win with the trainer's 0.0 placeholder.
+        result["initial_loss"], result["final_loss"] = initial_loss, final_loss
         result["run_id"] = run_id
         return result
     except Exception as exc:
@@ -709,9 +715,10 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
             loss_str = f"{finite_loss:.4f}"
         else:
             loss_str = "-"
+        # The star marks a ranked arm; a completed run with no loss has no rank.
         best_marker = (
             " [bold yellow]*[/]"
-            if idx == 0 and display_status == "completed"
+            if idx == 0 and display_status == "completed" and finite_loss is not None
             else ""
         )
         table.add_row(

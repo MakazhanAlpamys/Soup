@@ -958,6 +958,7 @@ Subcommands:
 - [`ingest`](#soup-data-ingest)
 - [`inspect`](#soup-data-inspect)
 - [`langdetect`](#soup-data-langdetect)
+- [`leakage`](#soup-data-leakage)
 - [`lint`](#soup-data-lint)
 - [`merge`](#soup-data-merge)
 - [`mix`](#soup-data-mix)
@@ -1382,6 +1383,19 @@ Usage: `soup data langdetect [OPTIONS]`
 | `--input`, `-i` | text |  | yes | Input JSONL file to tag. |
 | `--output`, `-o` | text | `langdetect.jsonl` |  | Output JSONL file with language tags. |
 
+### `soup data leakage`
+
+Check input-text overlap without writing datasets.
+
+Usage: `soup data leakage [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--train` | text |  | yes | Training JSONL under cwd. |
+| `--eval` | text |  | yes | Evaluation JSONL under cwd. |
+| `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
+| `--json` | flag | off |  | Print a machine-readable JSON report. |
+
 ### `soup data lint`
 
 Preference-data linter (dpo/orpo/simpo/ipo/bco/kto).
@@ -1711,7 +1725,7 @@ Usage: `soup deploy hf-space [OPTIONS]`
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | HuggingFace model repo id to wrap in the Space (e.g. user/my-model) |
 | `--space`, `-s` | text |  | yes | HuggingFace Space repo id to create (e.g. user/my-space) |
-| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat |
+| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat. Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer creates new Streamlit Spaces. Use gradio-chat. |
 | `--template-dir` | text |  |  | Custom template directory (overrides --template). Must contain app.py + README.md, optionally requirements.txt. Use {MODEL_REPO} placeholder for substitution. |
 | `--hardware` | text |  |  | Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g) |
 | `--private` | flag | off |  | Create the Space as private |

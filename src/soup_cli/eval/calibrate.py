@@ -34,6 +34,14 @@ _WINNER_VALUES = frozenset({"a", "b", "tie"})
 _MAX_PAIRS = 50_000
 
 
+def _is_finite_input(value: float) -> bool:
+    """Check a type-validated numeric input without leaking float overflow."""
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
 @dataclass(frozen=True)
 class CalibrationReport:
     """Per-prompt KL divergence + corpus mean.
@@ -105,7 +113,7 @@ def kl_divergence(p_logits: Sequence[float], q_logits: Sequence[float]) -> float
         for x in logits:
             if isinstance(x, bool) or not isinstance(x, (int, float, numbers.Real)):
                 raise ValueError(f"{name} must contain only int/float")
-            if not math.isfinite(float(x)):
+            if not _is_finite_input(x):
                 raise ValueError(f"{name} must be finite")
     log_p, p = _log_softmax_and_probs(p_logits)
     log_q = _log_softmax(q_logits)
@@ -127,7 +135,7 @@ def classify_kl_delta(mean_kl: float) -> str:
     """OK / MINOR / MAJOR thresholds (v0.26.0 Part D policy)."""
     if isinstance(mean_kl, bool) or not isinstance(mean_kl, (int, float)):
         raise ValueError("mean_kl must be a number")
-    if not math.isfinite(float(mean_kl)) or mean_kl < 0:
+    if not _is_finite_input(mean_kl) or mean_kl < 0:
         raise ValueError("mean_kl must be a finite non-negative number")
     if mean_kl < 0.05:
         return "OK"
@@ -311,7 +319,7 @@ def conformal_threshold(
     """
     if isinstance(alpha, bool) or not isinstance(alpha, (int, float)):
         raise ValueError("alpha must be a number")
-    if not math.isfinite(float(alpha)):
+    if not _is_finite_input(alpha):
         raise ValueError("alpha must be finite")
     if not 0.0 <= alpha <= 1.0:
         raise ValueError("alpha must be in [0.0, 1.0]")
@@ -322,7 +330,7 @@ def conformal_threshold(
     for s in scores:
         if isinstance(s, bool) or not isinstance(s, (int, float)):
             raise ValueError("scores must contain only int/float")
-        if not math.isfinite(float(s)):
+        if not _is_finite_input(s):
             raise ValueError("scores must be finite")
         if not 0.0 <= s <= 1.0:
             raise ValueError("scores must be in range [0.0, 1.0]")
@@ -366,7 +374,7 @@ class JudgeCalibrationReport:
         ):
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"{field} must be a number")
-            if not math.isfinite(float(value)):
+            if not _is_finite_input(value):
                 raise ValueError(f"{field} must be finite")
         if not -1.0 <= self.position_bias <= 1.0:
             raise ValueError("position_bias must be in [-1.0, 1.0]")
