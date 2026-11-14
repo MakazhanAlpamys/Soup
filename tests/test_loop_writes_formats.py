@@ -1581,9 +1581,10 @@ class TestLogFailures:
 
         real_merge_state = daemon.merge_state
 
-        def checking(base, new_state, path=None):
+        def checking(base, new_state, path=None, **kwargs):
+            # the daemon also passes ``skipped=`` (the fields it did not overwrite)
             seen.setdefault("lines", len(_read(cwd, "iteration")))  # at the first save
-            return real_merge_state(base, new_state, path)
+            return real_merge_state(base, new_state, path, **kwargs)
 
         monkeypatch.setattr(daemon, "merge_state", checking)
 

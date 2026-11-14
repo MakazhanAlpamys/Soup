@@ -179,7 +179,14 @@ class TestSetRefusalsAndWarnings:
         assert read_state().verify == "ship"
 
     def test_verify_that_can_run_the_eval_file_is_set_quietly_for_a_pre_wired_loop(self, loop):
-        (loop / "e.json").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
+        from dataclasses import replace
+
+        from soup_cli.utils.loop_state import write_state
+
+        # soup ship reads a task-eval file by its .jsonl extension: the fixture's e.json is
+        # not one (see the refusal above), so this loop's eval file is a real e.jsonl.
+        (loop / "e.jsonl").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
+        write_state(replace(read_state(), eval_suite="e.jsonl"))
         self._pre_wired()
 
         result, out = _invoke("set", "verify", "ship")

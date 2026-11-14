@@ -1571,8 +1571,10 @@ class TestGateFiles:
         directory = os.path.join(".soup-loops", "verdicts")
         names = sorted(os.listdir(directory))
         run_id = world.records[-1].run_id
+        # plus the ship child's output file (the review fixes: children write to log files)
         assert names == [
-            f"{run_id}.corrections.jsonl", f"{run_id}.held-out.jsonl", f"{run_id}.json"
+            f"{run_id}.corrections.jsonl", f"{run_id}.held-out.jsonl", f"{run_id}.json",
+            f"{run_id}.ship.log",
         ]
         assert not [name for name in os.listdir(directory) if name.endswith(".tmp")]
 
@@ -1989,14 +1991,17 @@ class TestIterationRecordEvidence:
     def test_the_fields_are_appended_last_and_default_to_none(self):
         names = list(IterationRecord.__dataclass_fields__)
 
-        assert names[-6:] == [
+        # train_log and verify_log were appended after them by the review fixes (the child
+        # processes' output files): still last, so an older iteration.json reader is unaffected
+        assert names[-8:] == [
             "canary_quality", "verdict_gate", "verdict_corrections", "verdict_held_out",
-            "verdict_reason", "graduated",
+            "verdict_reason", "graduated", "train_log", "verify_log",
         ]
         record = self._record()
         assert (record.verdict_gate, record.verdict_corrections, record.graduated) == (
             None, None, None
         )
+        assert (record.train_log, record.verify_log) == (None, None)
 
     def test_valid_evidence_is_accepted(self):
         output = gate_output()

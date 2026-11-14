@@ -97,6 +97,14 @@ class TestLogLevel:
         assert len(_lines(cwd / "logs" / "progress.jsonl")) == 2
 
 
+class _Killed(BaseException):
+    """A process kill. Not an ``Exception``: no handler of the daemon sees it.
+
+    An ``OSError`` from the state write is a transient error the daemon rides out and notes
+    (tests/test_loop_daemon_state_errors.py), so it no longer simulates a crash.
+    """
+
+
 class TestACrashBetweenTheLogAndTheState:
     def _config(self, root):
         return WatchConfig(
@@ -132,10 +140,10 @@ class TestACrashBetweenTheLogAndTheState:
         real_merge = loop_daemon.merge_state
 
         def killed(*args, **kwargs):
-            raise OSError("killed before loop.yaml was written")
+            raise _Killed("killed before loop.yaml was written")
 
         monkeypatch.setattr(loop_daemon, "merge_state", killed)
-        with pytest.raises(OSError):
+        with pytest.raises(_Killed):
             watch(config)  # promotes: the lines are appended, loop.yaml is not
         monkeypatch.setattr(loop_daemon, "merge_state", real_merge)
         assert read_state(path).canary_active == "cand", "the crash left the canary active"
