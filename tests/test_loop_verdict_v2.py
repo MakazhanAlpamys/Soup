@@ -1365,13 +1365,18 @@ class TestLineageCursor:
 
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
+    # appended after them by the review fixes (2026-11-14): at the very end, so a reader of
+    # an older loop.yaml is unaffected; they come last in this order
+    LATER = ["pending_deploy", "last_failure", "canary_on_timeout_explicit"]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):
         names = list(LoopState.__dataclass_fields__)
 
-        assert names[-len(self.NEW):] == self.NEW
+        assert names[-len(self.LATER):] == self.LATER
+        tail = names[: -len(self.LATER)]
+        assert tail[-len(self.NEW):] == self.NEW
         # the paraphraser fields (tests/test_loop_paraphrases.py) are the two before them
-        assert names[-len(self.NEW) - 2: -len(self.NEW)] == [
+        assert tail[-len(self.NEW) - 2: -len(self.NEW)] == [
             "paraphraser_endpoint", "paraphraser_model"
         ]
         state = LoopState(served_model="m", eval_suite="e", baseline="b")

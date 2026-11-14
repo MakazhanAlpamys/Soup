@@ -213,9 +213,11 @@ class TestToolAuthTokenHelp:
         # Read the routes off the source so a fourth tool route cannot slip past; the
         # floor keeps a changed decorator spelling from turning the loop into a no-op.
         source = inspect.getsource(serve_cmd)
-        tool_routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', source)
-        thumbs_routes = re.findall(r'@app\.post\("(/v1/(?:thumbs|feedback))"', source)
-        adapter_routes = re.findall(r'@app\.(?:get|post)\("(/v1/adapters[^"]*)"', source)
+        # The patterns allow whitespace after the paren: a decorator with a dependency
+        # list is formatted over several lines (the /v1/feedback route).
+        tool_routes = re.findall(r'@app\.post\(\s*"(/v1/tools/[a-z_]+)"', source)
+        thumbs_routes = re.findall(r'@app\.post\(\s*"(/v1/(?:thumbs|feedback))"', source)
+        adapter_routes = re.findall(r'@app\.(?:get|post)\(\s*"(/v1/adapters[^"]*)"', source)
         assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(tool_routes)
         assert {"/v1/thumbs", "/v1/feedback"} <= set(thumbs_routes)
         assert {

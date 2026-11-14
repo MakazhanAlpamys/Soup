@@ -657,7 +657,11 @@ class TestTrainStage:
         out, _ = self._run(cwd, monkeypatch, _state(), returncode=1)
 
         assert out["failed"] is True
-        assert out["notes"] == "sft quantization auto: none (need 4.7 GB, free 8.0 GB)"
+        # the quantization note stays first; the failure (decision S3: the exit code) follows
+        assert out["notes"] == (
+            "sft quantization auto: none (need 4.7 GB, free 8.0 GB); "
+            "train failed (exit code 1)"
+        )
 
     def test_the_measurement_comes_after_the_skip_checks(self, cwd, monkeypatch, decide):
         """A skipped iteration measures nothing: no GPU context for a run that never trains."""

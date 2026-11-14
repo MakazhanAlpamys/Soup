@@ -588,8 +588,8 @@ class TestCursorAdvance:
         # moves when the candidate is promoted (tests/test_loop_verdict_v2.py).
         assert new_state.harvest_cursor_ts is None
 
-    @pytest.mark.parametrize("gate", ["OK", "MAJOR", "SKIPPED"])
-    def test_the_verdict_does_not_matter(self, cwd, gate):
+    @pytest.mark.parametrize("gate", ["OK", "MAJOR"])
+    def test_a_decided_verdict_consumes_the_batch(self, cwd, gate):
         """DON'T SHIP still consumed the data: retraining on it would loop forever."""
         new_state, record, _ = run_once(
             _base_state(), _config({"run_id": "r1", "skipped": False}, gate=gate)
@@ -598,11 +598,25 @@ class TestCursorAdvance:
         assert record.gate_verdict == gate
         assert new_state.attempt_cursor_ts == 500.0
 
+    def test_a_skipped_verdict_keeps_the_batch(self, cwd):
+        """Decision S1 (code review 2026-11-14): no verdict, no consumption.
+
+        A SKIPPED verdict means the gate could not decide (soup ship crashed, the suite
+        would not load); the cursor stays so the same batch is looked at again.
+        """
+        new_state, record, _ = run_once(
+            _base_state(), _config({"run_id": "r1", "skipped": False}, gate="SKIPPED")
+        )
+
+        assert record.gate_verdict == "SKIPPED"
+        assert new_state.attempt_cursor_ts is None
+
     @pytest.mark.parametrize(
         "train",
         [
             {"run_id": None, "skipped": True},                         # skipped (not enough data)
-            {"run_id": None, "skipped": True, "notes": "x"},           # failed subprocess
+            {"run_id": None, "skipped": True, "notes": "x"},           # skipped with a reason
+            {"run_id": None, "skipped": False, "failed": True, "notes": "x"},  # failed run
             {"run_id": "r1", "skipped": True},                         # skipped wins
             {"run_id": None, "skipped": False},                        # no run to credit
             {"skipped": False},

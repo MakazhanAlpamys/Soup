@@ -249,7 +249,11 @@ def test_a_failing_train_subprocess_keeps_its_return_shape(cwd, monkeypatch, cap
     finally:
         ls._TRAIN_RUNNER = None
     assert len(runner.argvs) == 1
-    assert out["run_id"] is None and out["skipped"] is True and out["adapter_path"] is None
+    # A run that was attempted and failed is not a skip (decision S3, code review 2026-11-14):
+    # skipped stays False, ``failed`` is True, the exit code is in the notes.
+    assert out["run_id"] is None and out["skipped"] is False and out["adapter_path"] is None
+    assert out["failed"] is True
+    assert "train failed (exit code 1)" in out["notes"]
     assert "no_preference_pairs" not in str(out.get("notes", ""))
     assert "soup train exited rc=1" in caplog.text
 
@@ -267,7 +271,10 @@ def test_a_raising_train_subprocess_keeps_its_return_shape(cwd, monkeypatch):
         out = ls.train_dpo_from_pairs(_state(), harvested)
     finally:
         ls._TRAIN_RUNNER = None
-    assert out["run_id"] is None and out["skipped"] is True and out["adapter_path"] is None
+    # decision S3: a failed run is ``failed`` with skipped False, not a skip
+    assert out["run_id"] is None and out["skipped"] is False and out["adapter_path"] is None
+    assert out["failed"] is True
+    assert out["notes"] == "train failed: OSError"
     assert "no_preference_pairs" not in str(out.get("notes", ""))
 
 

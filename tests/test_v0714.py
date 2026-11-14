@@ -819,7 +819,10 @@ class TestTrainStage:
         out = ls.train_dpo_from_pairs(
             loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)}
         )
-        assert out["skipped"] is True
+        # decision S3 (code review 2026-11-14): a failed run is not a skip
+        assert out["skipped"] is False
+        assert out["failed"] is True
+        assert out["run_id"] is None
 
 
 class TestGateStage:

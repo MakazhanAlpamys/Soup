@@ -832,10 +832,17 @@ def _log_tail(log_path: str) -> str:
 
 
 def _train_failure(note: str, decided: Mapping[str, object]) -> "dict[str, object]":
-    """A failed run: ``failed`` (never ``skipped``) and the reason in ``notes``."""
+    """A failed run: ``failed`` (``skipped`` stays False) and the reason in ``notes``.
+
+    The return shape stays ``{run_id, skipped, adapter_path}``: a run that was attempted and
+    failed is not a skip, so readers of ``skipped`` (the daemon, the iteration log) see False.
+    """
     previous = decided.get("notes")
     notes = f"{previous}; {note}" if previous else note
-    return {**decided, "run_id": None, "adapter_path": None, "failed": True, "notes": notes}
+    return {
+        **decided, "run_id": None, "skipped": False, "adapter_path": None, "failed": True,
+        "notes": notes,
+    }
 
 
 def train_dpo_from_pairs(
