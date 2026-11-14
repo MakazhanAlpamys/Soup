@@ -22,10 +22,12 @@ CPU-testable. Model loading + live evaluation live in ``commands/ship.py``.
 
 Public surface
 --------------
-- Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``ShipVerdict``.
+- Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``AdapterChange``,
+  ``ShipVerdict``.
 - Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``TASK_MODES``,
   ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` / ``DECISION_DONT_SHIP``, the
-  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
+  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``,
+  ``ADAPTER_CHANGE_WARN_BELOW``.
 - Pure functions: ``build_task_win``, ``compute_benchmark_deltas``,
   ``decide_ship`` (the moat), ``render_ship_panel``, ``format_ship_rubric``,
   ``verdict_from_evidence`` (the canonical evidence reader),
@@ -86,6 +88,12 @@ FAILED_ADAPTER_NOOP = "adapter_noop"  # every lora_B is zero: tuned == base, not
 # Default forgetting threshold — 0.05 ABSOLUTE points, mirroring
 # ``EvalGateConfig.regression_threshold`` and ``run_gate`` semantics.
 DEFAULT_FORGETTING_THRESHOLD = 0.05
+
+# Below this changed fraction ``soup ship --adapter`` adds a warning line (#2762).
+# A display line, not a rule: the calibration table in docs/evaluation.md has
+# near-zero-learning-rate controls up to 6.5e-3 and early checkpoints of real runs
+# from 2.5e-3, so no fraction separates them and the verdict never depends on it.
+ADAPTER_CHANGE_WARN_BELOW = 1e-2
 
 # Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
 # format name; full-precision loads use the torch dtype that actually went to
@@ -200,6 +208,41 @@ class NoiseFloor:
 
 
 @dataclass(frozen=True)
+class AdapterChange:
+    """How much of the base an adapter's merged update changes (#2762).
+
+    ``changed`` of ``elements`` (the elements of the ``modules`` target modules)
+    differ in value after the update is added in the base dtype. ``reason`` is set
+    instead when the adapter or base could not be measured; the counts are then 0.
+    """
+
+    changed: int = 0
+    elements: int = 0
+    modules: int = 0
+    base_dtypes: Tuple[str, ...] = ()
+    reason: Optional[str] = None
+
+    @classmethod
+    def not_measured(cls, reason: str) -> "AdapterChange":
+        return cls(reason=reason or "unknown reason")
+
+    @property
+    def measured(self) -> bool:
+        return self.reason is None
+
+    @property
+    def fraction(self) -> Optional[float]:
+        if not self.measured or self.elements <= 0:
+            return None
+        return self.changed / self.elements
+
+    @property
+    def warning(self) -> bool:
+        fraction = self.fraction
+        return fraction is not None and fraction < ADAPTER_CHANGE_WARN_BELOW
+
+
+@dataclass(frozen=True)
 class ShipVerdict:
     """The binary decision plus the evidence that produced it."""
 
@@ -216,6 +259,9 @@ class ShipVerdict:
     #: pre-#367 evidence that never stamped it — the panel then says
     #: ``unstamped`` rather than implying bf16.
     numerics: Optional[str] = None
+    #: Set only by a live ``--adapter`` run that reached the evaluation (#2762).
+    #: Display only: no rule reads it.
+    adapter_change: Optional[AdapterChange] = None
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +627,33 @@ def _failed_rule_explanation(verdict: ShipVerdict) -> str:
     return f"Unrecognised failed rule: {verdict.failed_rule!r}"
 
 
+def adapter_change_lines(change: AdapterChange) -> List[str]:
+    """Plain-text lines for the adapter-update number (and its warning)."""
+    if not change.measured:
+        return [
+            f"Adapter update: not measured ({change.reason}). Only plain LoRA "
+            "adapters on safetensors bases are measured; nothing was checked here."
+        ]
+    fraction = change.fraction
+    dtypes = ", ".join(change.base_dtypes) or "unknown dtype"
+    if fraction is None:
+        return [f"Adapter update: its {change.modules} target modules have no elements."]
+    lines = [
+        f"Adapter update: changes {change.changed:,} of {change.elements:,} elements "
+        f"of its {change.modules} target modules in the base dtype ({dtypes}), "
+        f"fraction {fraction:.3e}."
+    ]
+    if change.warning:
+        lines.append(
+            f"Warning: the adapter changes fewer than {ADAPTER_CHANGE_WARN_BELOW:.0%} of "
+            f"the elements of its target modules ({fraction:.3e} < "
+            f"{ADAPTER_CHANGE_WARN_BELOW:.0e}). Adapters trained with a near-zero "
+            "learning rate sit in this range, and so can an early checkpoint of a real "
+            "run. This line does not change the verdict."
+        )
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Rendering — plain text (for --output / clipboard) and Rich (for the terminal)
 # ---------------------------------------------------------------------------
@@ -620,6 +693,9 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
             )
     else:
         parts.append("  (no benchmarks measured)")
+    if verdict.adapter_change is not None:
+        parts.append("")
+        parts.extend(adapter_change_lines(verdict.adapter_change))
     parts.append("")
     if verdict.failed_rule is not None:
         parts.append(f"Failed rule: {verdict.failed_rule}")
@@ -687,6 +763,14 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
             "instrument's resolution; it does not calibrate a threshold.[/]",
             "",
         ])
+    if verdict.adapter_change is not None:
+        # The reason can quote tensor names from the adapter file.
+        for line in adapter_change_lines(verdict.adapter_change):
+            text = escape(for_terminal(line))
+            if line.startswith("Warning:"):
+                text = "[yellow]" + text + "[/]"
+            parts.append(text)
+        parts.append("")
     parts.append(footer)
     body = Group(*parts)
     return Panel(body, title="soup ship", border_style=style)
@@ -1016,4 +1100,21 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
             }
         ),
         "numerics": verdict.numerics,
+        "adapter_change": _adapter_change_dict(verdict.adapter_change),
+    }
+
+
+def _adapter_change_dict(change: Optional[AdapterChange]) -> Optional[Dict[str, object]]:
+    if change is None:
+        return None
+    return {
+        "measured": change.measured,
+        "fraction": change.fraction,
+        "changed": change.changed,
+        "elements": change.elements,
+        "modules": change.modules,
+        "base_dtypes": list(change.base_dtypes),
+        "warn_below": ADAPTER_CHANGE_WARN_BELOW,
+        "warning": change.warning,
+        "reason": change.reason,
     }

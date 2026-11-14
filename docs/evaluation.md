@@ -841,6 +841,92 @@ Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
 
+### Adapter update size, and what it does not tell you (#2762)
+
+A `soup ship --adapter ./out` run prints one more line beside the verdict: how much of
+the base the adapter's merged update actually changes.
+
+```text
+Adapter update: changes 8,534,916 of 1,310,195,712 elements of its 196 target modules
+in the base dtype (bfloat16), fraction 6.514e-03.
+Warning: the adapter changes fewer than 1% of the elements of its target modules
+(6.514e-03 < 1e-02). Adapters trained with a near-zero learning rate sit in this range,
+and so can an early checkpoint of a real run. This line does not change the verdict.
+```
+
+The number is the share of the elements of the adapter's **target modules** whose value
+differs from the base weight once the LoRA update is added in the **base's own dtype**,
+with the same arithmetic `soup merge --low-memory` writes. Values are compared, not bits:
+adding a zero contribution turns `-0.0` into `+0.0`, which is not a change, and a `NaN`
+that stays `NaN` is not one either. Only the base tensors the adapter targets are read,
+one at a time (memory-mapped); the model itself is not loaded, so the count adds roughly
+the time it takes to read those tensors and nothing else — **about 14 s** for the
+Qwen2.5-1.5B / 196-module case above, 0.1–17 s across the table below by module count.
+A 7B-class base and the peak memory are **not measured**: the count streams the base, reading
+one target tensor at a time and forming each update in float32 (the arithmetic
+`lowmem_merge.merged_tensor` uses), so the peak is one tensor's float32 copy on top of that
+tensor, not the model.
+
+The line is **display only**. It never changes the verdict, `failed_rule` or the exit
+code, and it is not part of the `--evidence` schema, so a verdict still replays as input
+exactly as before. An adapter the low-memory reader refuses to parse — DoRA, `bias`
+other than `none`, `modules_to_save`, embedding or `lm_head` targets, a non-LoRA PEFT
+type — prints `Adapter update: not measured (<reason>)` instead, so "no number" is never
+shown as "0 %". The warning line is added only when the fraction is **below `1e-2`**.
+
+**Why a warning and not a rule.** The instrument was calibrated by training seven runs
+with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
+checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
+fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
+interleave:
+
+| adapter | kind | changed fraction (base dtype) | fp16 merge |
+|---|---|---|---|
+| control r16 lr 1e-8, step 10 | control | 3.56e-05 … 6.52e-04 | 0 … 4.74e-03 |
+| control r16 lr 1e-7, step 10/50/190 | control | 4.66e-04 … **6.51e-03** | 3.13e-03 … 5.17e-02 |
+| lowlr r16 lr 2e-6, step 5 | real, lr/100 | **2.47e-03** … 1.03e-01 | 1.96e-02 … 5.37e-01 |
+| lowlr r16 lr 2e-5, step 5 … 190 | real, lr/10 | 2.46e-02 … 2.81e-01 | 1.85e-01 … 8.01e-01 |
+| real r16 lr 2e-4, step 2 … 190 | real | 2.66e-02 … 7.25e-01 | 1.99e-01 … 9.61e-01 |
+| low-rank r1 q / r2 v, lr 2e-4 | real, low rank | 8.45e-02 … 7.79e-01 | 4.84e-01 … 9.67e-01 |
+| 9 public LoRA adapters, 7 bases | public | 5.07e-01 … 9.88e-01 | 9.12e-01 … 9.85e-01 |
+
+The highest control (**6.51e-03**, lr 1e-7 at step 190) sits *above* the lowest real
+adapter (**2.47e-03**, lr 2e-6 at step 5) by less than a factor of three, and the real
+family spans 2.5e-3 → 0.99. **No fraction separates "changes nothing" from "changes
+something"**, so the number cannot be a pass/fail rule and the threshold is chosen as a
+round warning bound rather than calibrated. A short follow-up on the same rows found the
+same thing for behaviour: the NLL gain (and the fraction of greedy tokens whose argmax
+moves) stays near zero and its 95 % CI straddles 0 across the whole control band *and*
+the lowest real band, only becoming clearly positive past ~0.06 — which is itself inside
+the real family, not a boundary. The fp16 column is the fraction when the same update is
+merged in fp16 instead of the base dtype; it is much larger for the same adapter, which
+is why the printed number is always the base dtype's, and why a control that changes
+"0" weights in fp16 still changes weights in bf16.
+
+**Read it as a smell, not a verdict.** A fraction below `1e-2` says the adapter is an
+early checkpoint, or was trained with a near-zero learning rate, or targets very few
+modules — worth a second look before shipping. The existing `adapter_noop` rule (every
+`lora_B` zero, no other saved tensor non-zero) still runs first and still gives
+DON'T SHIP; this line only ever *adds* information beside whatever verdict those rules
+produced.
+
+**In the verdict JSON.** A live `--adapter` run adds one field to the `--output` object:
+
+```json
+"adapter_change": {
+  "measured": true, "fraction": 9e-3, "changed": 9, "elements": 1000, "modules": 1,
+  "base_dtypes": ["bfloat16"], "warn_below": 0.01, "warning": true, "reason": null
+}
+```
+
+`fraction` is `null` when the count cannot be made (`measured` is `false` and `reason`
+says why), and `warning` is `fraction < warn_below`. A live run **without** `--adapter`,
+and an offline `--evidence` run, emit `adapter_change: null`. The field is not read back by
+`verdict_to_evidence`, so a verdict still replays as input exactly as before.
+
+The table above is the calibration record; the raw per-adapter JSON is not shipped in this
+repository.
+
 
 ## Retention across versions: `soup eval retention`
 
