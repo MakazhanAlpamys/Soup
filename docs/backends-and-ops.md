@@ -1341,6 +1341,11 @@ soup version --full --json
 
 ## Error Handling
 
+`soup bench infer` and `soup bench train` show model names, paths, diagnostics and
+report receipts literally, preserving emoji aliases and backslashes. Terminal controls
+and bidi marks are removed from the display only; measurement inputs and JSON reports
+keep their original values.
+
 Soup shows friendly error messages by default (2-3 lines with a fix suggestion). For full tracebacks:
 
 ```bash
