@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from soup_cli.experiment.row_kinds import check_metric_row_kind
 from soup_cli.utils.finite_json import finite_json
 
 # Closed allowlist — drop any payload key not in this set.
@@ -32,6 +33,7 @@ _ALLOWED_KEYS = frozenset(
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     }
 )
 
@@ -66,8 +68,13 @@ class TrainEvent:
     p99_step_ms: Optional[float] = None
     eta_seconds: Optional[float] = None
     message: Optional[str] = None
+    #: What the ``metric`` event mirrors: ``train`` / ``eval`` / ``summary``, the
+    #: ``metrics.kind`` of the row written beside it (experiment/row_kinds.py).
+    #: None is omitted from the payload.
+    kind: Optional[str] = None
 
     def __post_init__(self) -> None:
+        check_metric_row_kind(self.kind)
         if self.type not in _VALID_TYPES:
             raise ValueError(
                 f"type must be one of {sorted(_VALID_TYPES)}; got {self.type!r}"
@@ -107,6 +114,7 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     ):
         value = getattr(event, key)
         if value is not None:

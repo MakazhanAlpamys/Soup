@@ -30,6 +30,7 @@
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
 - [Data Recipe DAG Runner (`soup data recipe --execute`)](#data-recipe-dag-runner-soup-data-recipe---execute)
+- [Train/evaluation leakage check](#trainevaluation-leakage-check)
 
 ---
 
@@ -1674,3 +1675,41 @@ synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.
+
+
+## Train/evaluation leakage check
+
+```bash
+soup data leakage --train train.jsonl --eval eval.jsonl --samples 5
+soup data leakage --train train.jsonl --eval eval.jsonl --json
+```
+
+This read-only check reports the number and percentage of **eval records** whose
+extracted input text exactly matches any train input. Each eval record counts
+once, even when several train records match. Inputs must be nonempty JSONL
+objects under the current directory; malformed records or unusable input text
+are refused instead of being silently skipped. Neither file is modified.
+Both files are loaded fully into memory, within the loader's per-file caps of
+1 GiB and 1,000,000 records.
+
+Matching uses the shared text extractor on input fields: `prompt` (including
+message-list prompts), Alpaca `instruction`/`input`/`system`, ChatML `messages`,
+ShareGPT `conversations`, preference conversation prefixes, and plain
+`text`/`content`/`query`. For complete conversations, only the final assistant
+answer is excluded; previous turns stay in the context. Preference conversations
+must agree on their input prefix. Thus the same question with different answers
+still matches. Prompt-only preference strings require an explicit `prompt` field.
+
+Only outer whitespace is stripped; case and internal whitespace remain exact.
+Roles and message boundaries are not part of the match: message texts are joined
+with newlines, so one message `a\nb` matches two messages `a` and `b`.
+This compares extracted textual inputs, not rendered chat-template tokens,
+images, semantic similarity, or near-duplicates. A clean result only describes
+this exact check on these two files.
+
+The JSON report includes counts, percentage and up to `--samples` example pairs
+(default 5, range 0–20), with 160-character prompt previews and the number of
+matching train records. Record numbers are one-based logical JSONL records,
+excluding blank lines. Examples use the first matching train record and follow
+eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
+There is no automatic training hook or dataset filtering.

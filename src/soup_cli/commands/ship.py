@@ -78,6 +78,7 @@ from soup_cli.utils.ship_verdict import (
     NUMERICS_FAMILY_FULL,
     TASK_AXIS,
     TASK_MODES,
+    AdapterChange,
     NoiseFloor,
     ShipVerdict,
     TaskWin,
@@ -1089,6 +1090,43 @@ def _adapter_is_noop(adapter: str) -> bool:
     )
 
 
+def _local_base_dir(base: str, adapter: str) -> str:
+    """The base's weights on disk: a local directory, or the cached Hub snapshot.
+
+    Never downloads. The live evaluation has already loaded the base, so a Hub
+    base is in the cache at the revision it was loaded from.
+    """
+    if os.path.isdir(base):
+        return base
+    from huggingface_hub import snapshot_download
+
+    from soup_cli.utils.run_provenance import base_revision_kwargs, recorded_base_kwargs
+
+    revision = base_revision_kwargs(base) or recorded_base_kwargs(adapter, base)
+    return snapshot_download(base, local_files_only=True, **revision)
+
+
+def _measure_adapter_change(adapter: str, base: str) -> AdapterChange:
+    """The adapter's changed fraction for the verdict, or why it is not measured.
+
+    Display only (#2762): no failure here changes the verdict or the exit code.
+    """
+    if not os.path.isdir(adapter):
+        return AdapterChange.not_measured("the adapter is not a local directory")
+    try:
+        base_dir = _local_base_dir(base, adapter)
+    except Exception:  # display only: no failure here may end the run (#2762)
+        return AdapterChange.not_measured(
+            "the base weights are not in a local directory or the local Hugging Face cache"
+        )
+    try:
+        from soup_cli.utils.adapter_change import measure_adapter_change
+
+        return measure_adapter_change(adapter, base_dir)
+    except Exception as exc:  # display only: no failure here may end the run (#2762)
+        return AdapterChange.not_measured(f"{type(exc).__name__}: {exc}")
+
+
 def _verdict_live(
     *,
     base: Optional[str],
@@ -1231,8 +1269,13 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
+        adapter_change = (
+            _measure_adapter_change(adapter, base) if adapter else None
+        )
         return replace(
-            verdict, numerics=_live_eval_numerics(quantization, device)
+            verdict,
+            numerics=_live_eval_numerics(quantization, device),
+            adapter_change=adapter_change,
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
