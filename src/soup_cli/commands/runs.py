@@ -479,6 +479,17 @@ def _checkpoint_to_keep(
     return None, False
 
 
+def _resolved_output_dir(run: dict) -> Optional[Path]:
+    """A run's recorded output directory as ``runs clean`` compares it, or None."""
+    out_dir_str = run.get("output_dir")
+    if not out_dir_str:
+        return None
+    try:
+        return Path(os.path.realpath(out_dir_str))
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -528,41 +539,52 @@ def clean(
         console.print("[yellow]No runs to clean.[/]")
         raise typer.Exit()
 
+    # Cross-platform containment: project convention requires
+    # os.path.realpath + commonpath because Path.resolve() + relative_to()
+    # silently mismatches on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
     total_bytes_to_reclaim = 0
     files_to_delete = []
     dirs_to_delete = []
 
+    # Several runs can share one output directory (#2724). Each directory is
+    # pruned once, so no path is listed, counted or deleted twice.
+    runs_by_dir: dict[Path, list[dict]] = {}
     for run in runs_to_clean:
-        out_dir_str = run.get("output_dir")
-        if not out_dir_str:
+        output_dir = _resolved_output_dir(run)
+        if output_dir is None or not is_under_cwd(output_dir) or not output_dir.exists():
             continue
-        # Cross-platform containment: project convention requires
-        # os.path.realpath + commonpath because Path.resolve() + relative_to()
-        # silently mismatches on Windows 8.3 short names.
-        from soup_cli.utils.paths import is_under_cwd
+        runs_by_dir.setdefault(output_dir, []).append(run)
 
-        try:
-            output_dir = Path(os.path.realpath(out_dir_str))
-        except (OSError, ValueError):
-            continue
-        if not is_under_cwd(output_dir):
-            continue
-        if not output_dir.exists():
-            continue
+    # Every run recorded at a directory keeps its best checkpoint, including
+    # runs that are not being cleaned: `runs clean B` must not prune A's best.
+    # Each directory's list starts from the runs being cleaned, so they are
+    # protected even when `list_runs` does not return them.
+    cleaned_ids = {run["run_id"] for runs in runs_by_dir.values() for run in runs}
+    runs_at_dir = {output_dir: list(runs) for output_dir, runs in runs_by_dir.items()}
+    recorded_runs = runs_to_clean if all_runs else tracker.list_runs(limit=100000)
+    for run in recorded_runs:
+        output_dir = _resolved_output_dir(run)
+        if output_dir in runs_at_dir and run["run_id"] not in cleaned_ids:
+            runs_at_dir[output_dir].append(run)
 
-        metrics = tracker.get_metrics(run["run_id"])
-
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
-        if fallback:
-            console.print(
-                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
-                emoji=False,
-            )
+        keep_steps = set()
+        for run in runs_here:
+            keep_step, fallback = _checkpoint_to_keep(tracker.get_metrics(run["run_id"]), steps)
+            if keep_step is not None:
+                keep_steps.add(keep_step)
+            if fallback and run["run_id"] in cleaned_ids:
+                console.print(
+                    f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                    f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                    emoji=False,
+                )
         for ckpt in checkpoints:
-            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
+            if _checkpoint_step(ckpt) in keep_steps:
                 continue
 
             if keep_weights:

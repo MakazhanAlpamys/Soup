@@ -6,6 +6,7 @@
 
 **Contents:**
 
+- [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
 - [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
@@ -76,6 +77,43 @@ The importance pass loads the model, so live-validated on ≤ 3 B; larger models
 work but are unvalidated on the reference hardware. Perplexity is an unweighted
 mean of per-example perplexities — valid for the before/after *ratio* the
 verdict uses, not directly comparable to `soup eval` absolute numbers.
+
+---
+
+## FlashAttention and Liger measurements
+
+The [H200 sequence/checkpointing sweep](../benchmarks/flash-liger-h200-2026-11-10.md)
+extends the [earlier single H100 point](../benchmarks/gate-h100-validation.md)
+with independently varied sequence length and model checkpointing.
+Llama-3.1-8B, BF16 resident LoRA r16, batch 4; five fresh
+interleaved processes per feasible arm, each with five warm-up and 80 measured
+updates. These are synchronized training-step throughput ratios to SDPA, not
+end-to-end CLI speedups. All arms use the same realized tokens and labels.
+
+| Sequence | Checkpointing | FA2 / SDPA | Liger / SDPA | Both / SDPA | SDPA / Liger peak GiB |
+|---:|:---:|---:|---:|---:|---:|
+| 1024 | off | 0.983x | 1.226x | 1.195x | 47.982 / 37.065 |
+| 2048 | off | 0.971x | 1.229x | 1.188x | 80.398 / 58.562 |
+| 4096 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 8192 | off | probe OOM | probe OOM | probe OOM | not measured |
+| 1024 | on | 0.989x | 1.209x | 1.184x | 22.423 / 17.571 |
+| 2048 | on | 0.980x | 1.223x | 1.184x | 29.357 / 19.651 |
+| 4096 | on | 0.959x | 1.213x | 1.149x | 43.226 / 23.812 |
+| 8192 | on | 0.929x | 1.197x | 1.096x | 70.962 / 32.132 |
+
+Read exact peaks, run ranges, SM clocks and the full recipe in the record.
+The native SDPA baseline already executed cuDNN flash attention. On this stack
+(torch 2.14.1/CUDA 13.0, FA2 2.8.3.post2, Liger 0.8.5), standalone FA2 was slower;
+Liger alone was faster than either SDPA or the combined arm at every feasible
+point. Both observations are scoped to this workload. They do not establish
+held-out quality equivalence or a universal preference for either library.
+
+The H200 was shared with an idle process holding 49850 MiB, leaving about
+90 GiB headroom. Checkpoint-off long-sequence probes exhausted that headroom;
+those cells have no timing ratio. This is not a dedicated-card capacity limit.
+The record retains all eight probe OOMs and their 40 unrun timing slots, all
+120 successful timings and every activation probe. No model/config defaults
+were changed to obtain the curve.
 
 ---
 
@@ -794,15 +832,16 @@ The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the re
 
 The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
-### Auto Warmup Schedule
+### Warmup Schedule
 
 ```yaml
 training:
-  warmup_auto: true       # Pick warmup_steps from dataset_size × epochs × warmup_ratio
-  warmup_ratio: 0.03      # 3% of total update steps (default)
+  warmup_ratio: 0.03      # 3% of the real optimizer steps (default)
 ```
 
-Clamped to `[10, 1000]` so tiny datasets get some warmup and huge datasets don't burn half a million wasted steps.
+`warmup_ratio` resolves over the run's real optimizer steps, so the warmup follows the dataset size, epochs and accumulation you actually train with.
+
+`training.warmup_auto` is deprecated (#1814): it was documented as picking the warmup from the dataset size, but no trainer ever read it, so `warmup_auto: true` has no effect. v0.78.0 loads it with a warning that says so, and v0.79.0 refuses it. `warmup_auto: false` is the default and is silent. Migration: delete the `warmup_auto` line; set `training.warmup_ratio` to change the warmup.
 
 ### Auto Mixed-Precision
 
@@ -869,10 +908,15 @@ Records peak memory each step. Pressure is peak allocated memory divided by the 
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, `convergence_detection`, and `forgetting_threshold` settings are
+The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, and `convergence_detection` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
+`forgetting_threshold` is deprecated (#1814): nothing reads it, so setting it away from
+its default of `0.1` has no effect. v0.78.0 loads it with a warning that says so and
+v0.79.0 refuses it. Migration: delete the `training.forgetting_threshold` line (it is not
+`eval.ship.forgetting_threshold`, which `soup ship` reads); for regression checks use
+`--gate <suite.yaml>` below.
 Their tuning knobs (`forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`,
 `checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`,
 `convergence_window`, and `convergence_rel_tol`) warned at load in v0.76 and are
