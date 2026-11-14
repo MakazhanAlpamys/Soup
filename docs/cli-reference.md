@@ -841,7 +841,7 @@ Usage: `soup chat [OPTIONS]`
 | `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
-| `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
+| `--max-tokens` | integer, at least 1 | `512` |  | Maximum number of tokens to generate |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0.0 = greedy, 1.0 = creative) |
 | `--system`, `-s` | text |  |  | System prompt for the conversation |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
