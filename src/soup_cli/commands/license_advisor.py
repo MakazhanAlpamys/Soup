@@ -13,11 +13,13 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.license_advisor import (
     advise_license_for_target,
     flag_downstream_risk,
 )
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -45,7 +47,7 @@ def license_advisor_cmd(
     try:
         rec = advise_license_for_target(target)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     table = Table(title=f"License advisor — target: {rec.target}")
@@ -72,6 +74,8 @@ def license_advisor_cmd(
                 monthly_active_users=monthly_active_users,
             )
         except (TypeError, ValueError) as exc:
+            # Only type names, fixed text and numbers: the license id and the target were
+            # validated before, and a quoted value is a repr().
             console.print(f"[red]{escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
 
@@ -80,11 +84,15 @@ def license_advisor_cmd(
             "warn": "yellow",
             "block": "red",
         }.get(risk.severity, "yellow")
+        # The reason quotes the license with repr(); the title is the license as typed.
         console.print(
             Panel(
-                f"[bold]severity: {escape(risk.severity)}[/]\n"
-                f"{escape(risk.reason)}",
-                title=f"Risk check: {escape(license_id)}",
+                Text.from_markup(
+                    f"[bold]severity: {escape(risk.severity)}[/]\n"
+                    f"{for_terminal(risk.reason)}",
+                    emoji=False,
+                ),
+                title=Text(f"Risk check: {strip_control(license_id)}"),
                 border_style=border,
             )
         )

@@ -1,0 +1,1362 @@
+Loading config from soup.yaml...
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Training Setup ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Device:  NVIDIA H100 80GB HBM3                                                                                                                                                                                                                         │
+│ Memory:  79.2 GB                                                                                                                                                                                                                                       │
+│ Model:   /workspace/payload/benchmarks/harness/ds_compare/model                                                                                                                                                                                        │
+│ Task:    sft                                                                                                                                                                                                                                           │
+│ Backend: transformers                                                                                                                                                                                                                                  │
+│ LoRA:    r=8, alpha=16                                                                                                                                                                                                                                 │
+│ Quant:   none                                                                                                                                                                                                                                          │
+│ Seed:    42                                                                                                                                                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Loading dataset...
+Loaded: 64 train samples
+Run ID: run_20261107_094419_f3f1f73e
+Setting up model + trainer...
+Loading tokenizer: /workspace/payload/benchmarks/harness/ds_compare/model
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────── Layer streaming disk pre-flight ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ HF/local source: 16.06 GB                                                                                                                                                                                                                              │
+│ Soup materialized copy: 0.00 GB (no write required)                                                                                                                                                                                                    │
+│ Layer-shard cache: 16.06 GB (reusable)                                                                                                                                                                                                                 │
+│ Projected total on disk: 32.12 GB                                                                                                                                                                                                                      │
+│ Additional writes before training: 0.00 GB                                                                                                                                                                                                             │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> /root/.soup/layer-stream/workspace__payload__benchmarks__harness__ds_compare__model
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────── training.stream_layers ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                                                                                                                                                                                            │
+│   base store   16.06 GB across 32 layers (pageable)                                                                                                                                                                                                    │
+│   VRAM buffers 2 x 436 MB + 1 x 1051 MB large-layer slot = 1923 MB                                                                                                                                                                                     │
+│   resident     0 MB extras + adapters                                                                                                                                                                                                                  │
+│   peak VRAM    ~2.62 GB at batch 1 x seq 256 (logits 0.46 GB)                                                                                                                                                                                          │
+│   free VRAM    84.41 GB                                                                                                                                                                                                                                │
+│   forecast     11144-16388 tok/s — a compute-bound bound, not a promise                                                                                                                                                                                │
+│                (from 789.61 TFLOPS measured on this card now using bfloat16 @ 1980 MHz)                                                                                                                                                                │
+│   ! training.stream_pin=false forces PAGEABLE host memory — the base store on the RAM tier, the async reader's staging on the disk tier. Host-to-device copies become synchronous, which costs overlap: measured GPU utilisation drops from ~97% to    │
+│ ~79%, and page-locking is worth up to 6.56x measured throughput (Qwen2.5-32B NF4), 7.41x on a synthetic. Unset stream_pin to let the box page-lock when it can.                                                                                        │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.
+Layer streaming ready: 32 layers, 16.06 GB pageable RAM store, 2 x 436 MB decoder buffers + 1 x 1051 MB large-layer slot
+LoRA applied: 3,407,872 trainable / 8,030,261,248 total (0.04%)
+
+Map:   0%|          | 0/64 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+
+Map: 100%|██████████| 64/64 [00:00<00:00, 2018.37 examples/s]
+
+Map:   0%|          | 0/64 [00:00<?, ? examples/s]
+Map: 100%|██████████| 64/64 [00:00<00:00, 19131.60 examples/s]
+
+Truncating train dataset:   0%|          | 0/64 [00:00<?, ? examples/s]
+Truncating train dataset: 100%|██████████| 64/64 [00:00<00:00, 31640.20 examples/s]
+[transformers] The model is already on multiple devices. Skipping the move to device specified in `args`.
+Rewind log: output/rewind.jsonl
+Base revision: unknown (existing loading behavior preserved)
+Training started!
+
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 128009}.
+
+  0%|          | 0/256 [00:00<?, ?it/s]
+  0%|          | 1/256 [00:01<07:58,  1.88s/it]
+
+{'loss': '5.889', 'grad_norm': '3.269', 'learning_rate': '0.0002', 'entropy': '3.154', 'num_tokens': '32', 'mean_token_accuracy': '0.4', 'epoch': '0.01562'}
+
+  0%|          | 1/256 [00:01<07:58,  1.88s/it]
+  1%|          | 2/256 [00:03<06:53,  1.63s/it]
+
+{'loss': '7.627', 'grad_norm': '10.35', 'learning_rate': '0.0002', 'entropy': '3.093', 'num_tokens': '64', 'mean_token_accuracy': '0.2857', 'epoch': '0.03125'}
+
+  1%|          | 2/256 [00:03<06:53,  1.63s/it]
+  1%|          | 3/256 [00:04<06:30,  1.55s/it]
+
+{'loss': '7.169', 'grad_norm': '3.216', 'learning_rate': '0.0002', 'entropy': '3.265', 'num_tokens': '96', 'mean_token_accuracy': '0.3333', 'epoch': '0.04688'}
+
+  1%|          | 3/256 [00:04<06:30,  1.55s/it]
+  2%|▏         | 4/256 [00:06<06:19,  1.51s/it]
+
+{'loss': '7.629', 'grad_norm': '9.947', 'learning_rate': '0.0002', 'entropy': '3.241', 'num_tokens': '128', 'mean_token_accuracy': '0.2', 'epoch': '0.0625'}
+
+  2%|▏         | 4/256 [00:06<06:19,  1.51s/it]
+  2%|▏         | 5/256 [00:07<06:12,  1.49s/it]
+
+{'loss': '7.586', 'grad_norm': '10.41', 'learning_rate': '0.0002', 'entropy': '3.757', 'num_tokens': '160', 'mean_token_accuracy': '0.2', 'epoch': '0.07812'}
+
+  2%|▏         | 5/256 [00:07<06:12,  1.49s/it]
+  2%|▏         | 6/256 [00:09<06:08,  1.47s/it]
+
+{'loss': '7.577', 'grad_norm': '7.056', 'learning_rate': '0.0002', 'entropy': '3.18', 'num_tokens': '192', 'mean_token_accuracy': '0.3333', 'epoch': '0.09375'}
+
+  2%|▏         | 6/256 [00:09<06:08,  1.47s/it]
+  3%|▎         | 7/256 [00:10<06:05,  1.47s/it]
+
+{'loss': '6.216', 'grad_norm': '7.755', 'learning_rate': '0.0002', 'entropy': '3.188', 'num_tokens': '224', 'mean_token_accuracy': '0.2667', 'epoch': '0.1094'}
+
+  3%|▎         | 7/256 [00:10<06:05,  1.47s/it]
+  3%|▎         | 8/256 [00:12<06:02,  1.46s/it]
+
+{'loss': '6.06', 'grad_norm': '8.336', 'learning_rate': '0.0002', 'entropy': '3.015', 'num_tokens': '256', 'mean_token_accuracy': '0.2667', 'epoch': '0.125'}
+
+  3%|▎         | 8/256 [00:12<06:02,  1.46s/it]
+  4%|▎         | 9/256 [00:13<06:00,  1.46s/it]
+
+{'loss': '6.358', 'grad_norm': '8.243', 'learning_rate': '0.0002', 'entropy': '3.29', 'num_tokens': '288', 'mean_token_accuracy': '0.3333', 'epoch': '0.1406'}
+
+  4%|▎         | 9/256 [00:13<06:00,  1.46s/it]
+  4%|▍         | 10/256 [00:14<05:58,  1.46s/it]
+
+{'loss': '5.818', 'grad_norm': '9.174', 'learning_rate': '0.0002', 'entropy': '3.046', 'num_tokens': '320', 'mean_token_accuracy': '0.4', 'epoch': '0.1562'}
+
+  4%|▍         | 10/256 [00:14<05:58,  1.46s/it]
+  4%|▍         | 11/256 [00:16<05:56,  1.46s/it]
+
+{'loss': '5.941', 'grad_norm': '6.73', 'learning_rate': '0.0002', 'entropy': '3.241', 'num_tokens': '352', 'mean_token_accuracy': '0.3333', 'epoch': '0.1719'}
+
+  4%|▍         | 11/256 [00:16<05:56,  1.46s/it]
+  5%|▍         | 12/256 [00:17<05:55,  1.46s/it]
+
+{'loss': '6.402', 'grad_norm': '8.693', 'learning_rate': '0.0002', 'entropy': '3.799', 'num_tokens': '384', 'mean_token_accuracy': '0.3333', 'epoch': '0.1875'}
+
+  5%|▍         | 12/256 [00:17<05:55,  1.46s/it]
+  5%|▌         | 13/256 [00:19<06:00,  1.48s/it]
+
+{'loss': '5.361', 'grad_norm': '8.047', 'learning_rate': '0.0002', 'entropy': '3.373', 'num_tokens': '416', 'mean_token_accuracy': '0.2667', 'epoch': '0.2031'}
+
+  5%|▌         | 13/256 [00:19<06:00,  1.48s/it]
+  5%|▌         | 14/256 [00:20<05:56,  1.47s/it]
+
+{'loss': '5.486', 'grad_norm': '7.108', 'learning_rate': '0.0002', 'entropy': '3.158', 'num_tokens': '448', 'mean_token_accuracy': '0.3333', 'epoch': '0.2188'}
+
+  5%|▌         | 14/256 [00:20<05:56,  1.47s/it]
+  6%|▌         | 15/256 [00:22<05:59,  1.49s/it]
+
+{'loss': '5.664', 'grad_norm': '5.799', 'learning_rate': '0.0002', 'entropy': '3.794', 'num_tokens': '480', 'mean_token_accuracy': '0.2667', 'epoch': '0.2344'}
+
+  6%|▌         | 15/256 [00:22<05:59,  1.49s/it]
+  6%|▋         | 16/256 [00:23<05:55,  1.48s/it]
+
+{'loss': '5.722', 'grad_norm': '5.222', 'learning_rate': '0.0002', 'entropy': '3.785', 'num_tokens': '512', 'mean_token_accuracy': '0.2667', 'epoch': '0.25'}
+
+  6%|▋         | 16/256 [00:23<05:55,  1.48s/it]
+  7%|▋         | 17/256 [00:25<05:51,  1.47s/it]
+
+{'loss': '4.872', 'grad_norm': '5.791', 'learning_rate': '0.0002', 'entropy': '3.756', 'num_tokens': '544', 'mean_token_accuracy': '0.3333', 'epoch': '0.2656'}
+
+  7%|▋         | 17/256 [00:25<05:51,  1.47s/it]
+  7%|▋         | 18/256 [00:26<05:49,  1.47s/it]
+
+{'loss': '5', 'grad_norm': '4.682', 'learning_rate': '0.0002', 'entropy': '3.824', 'num_tokens': '576', 'mean_token_accuracy': '0.3333', 'epoch': '0.2812'}
+
+  7%|▋         | 18/256 [00:26<05:49,  1.47s/it]
+  7%|▋         | 19/256 [00:28<05:46,  1.46s/it]
+
+{'loss': '4.98', 'grad_norm': '4.528', 'learning_rate': '0.0002', 'entropy': '4.234', 'num_tokens': '608', 'mean_token_accuracy': '0.3333', 'epoch': '0.2969'}
+
+  7%|▋         | 19/256 [00:28<05:46,  1.46s/it]
+  8%|▊         | 20/256 [00:29<05:44,  1.46s/it]
+
+{'loss': '5.276', 'grad_norm': '9.184', 'learning_rate': '0.0002', 'entropy': '3.42', 'num_tokens': '640', 'mean_token_accuracy': '0.3333', 'epoch': '0.3125'}
+
+  8%|▊         | 20/256 [00:29<05:44,  1.46s/it]
+  8%|▊         | 21/256 [00:31<05:41,  1.45s/it]
+
+{'loss': '4.688', 'grad_norm': '5.4', 'learning_rate': '0.0002', 'entropy': '3.863', 'num_tokens': '672', 'mean_token_accuracy': '0.3333', 'epoch': '0.3281'}
+
+  8%|▊         | 21/256 [00:31<05:41,  1.45s/it]
+  9%|▊         | 22/256 [00:32<05:39,  1.45s/it]
+
+{'loss': '4.739', 'grad_norm': '6.23', 'learning_rate': '0.0002', 'entropy': '3.716', 'num_tokens': '704', 'mean_token_accuracy': '0.3333', 'epoch': '0.3438'}
+
+  9%|▊         | 22/256 [00:32<05:39,  1.45s/it]
+  9%|▉         | 23/256 [00:33<05:38,  1.45s/it]
+
+{'loss': '4.608', 'grad_norm': '5.298', 'learning_rate': '0.0002', 'entropy': '4.034', 'num_tokens': '736', 'mean_token_accuracy': '0.3333', 'epoch': '0.3594'}
+
+  9%|▉         | 23/256 [00:33<05:38,  1.45s/it]
+  9%|▉         | 24/256 [00:35<05:36,  1.45s/it]
+
+{'loss': '4.539', 'grad_norm': '4.729', 'learning_rate': '0.0002', 'entropy': '4', 'num_tokens': '768', 'mean_token_accuracy': '0.3333', 'epoch': '0.375'}
+
+  9%|▉         | 24/256 [00:35<05:36,  1.45s/it]
+ 10%|▉         | 25/256 [00:36<05:34,  1.45s/it]
+
+{'loss': '4.078', 'grad_norm': '6.026', 'learning_rate': '0.0002', 'entropy': '4.073', 'num_tokens': '800', 'mean_token_accuracy': '0.4286', 'epoch': '0.3906'}
+
+ 10%|▉         | 25/256 [00:36<05:34,  1.45s/it]
+ 10%|█         | 26/256 [00:38<05:33,  1.45s/it]
+
+{'loss': '4.47', 'grad_norm': '5.242', 'learning_rate': '0.0002', 'entropy': '4.052', 'num_tokens': '832', 'mean_token_accuracy': '0.3333', 'epoch': '0.4062'}
+
+ 10%|█         | 26/256 [00:38<05:33,  1.45s/it]
+ 11%|█         | 27/256 [00:39<05:31,  1.45s/it]
+
+{'loss': '4.331', 'grad_norm': '8.63', 'learning_rate': '0.0002', 'entropy': '3.91', 'num_tokens': '864', 'mean_token_accuracy': '0.2667', 'epoch': '0.4219'}
+
+ 11%|█         | 27/256 [00:39<05:31,  1.45s/it]
+ 11%|█         | 28/256 [00:41<05:30,  1.45s/it]
+
+{'loss': '4.33', 'grad_norm': '9.959', 'learning_rate': '0.0002', 'entropy': '3.797', 'num_tokens': '896', 'mean_token_accuracy': '0.4', 'epoch': '0.4375'}
+
+ 11%|█         | 28/256 [00:41<05:30,  1.45s/it]
+ 11%|█▏        | 29/256 [00:42<05:28,  1.45s/it]
+
+{'loss': '4.391', 'grad_norm': '6.881', 'learning_rate': '0.0002', 'entropy': '3.87', 'num_tokens': '928', 'mean_token_accuracy': '0.3333', 'epoch': '0.4531'}
+
+ 11%|█▏        | 29/256 [00:42<05:28,  1.45s/it]
+ 12%|█▏        | 30/256 [00:44<05:43,  1.52s/it]
+
+{'loss': '4.364', 'grad_norm': '8.532', 'learning_rate': '0.0002', 'entropy': '3.889', 'num_tokens': '960', 'mean_token_accuracy': '0.2667', 'epoch': '0.4688'}
+
+ 12%|█▏        | 30/256 [00:44<05:43,  1.52s/it]
+ 12%|█▏        | 31/256 [00:45<05:38,  1.50s/it]
+
+{'loss': '4.154', 'grad_norm': '7.335', 'learning_rate': '0.0002', 'entropy': '3.934', 'num_tokens': '992', 'mean_token_accuracy': '0.4286', 'epoch': '0.4844'}
+
+ 12%|█▏        | 31/256 [00:45<05:38,  1.50s/it]
+ 12%|█▎        | 32/256 [00:47<05:39,  1.51s/it]
+
+{'loss': '4.352', 'grad_norm': '7.684', 'learning_rate': '0.0002', 'entropy': '3.941', 'num_tokens': '1024', 'mean_token_accuracy': '0.3333', 'epoch': '0.5'}
+
+ 12%|█▎        | 32/256 [00:47<05:39,  1.51s/it]
+ 13%|█▎        | 33/256 [00:48<05:38,  1.52s/it]
+
+{'loss': '4.801', 'grad_norm': '27.94', 'learning_rate': '0.0002', 'entropy': '4.042', 'num_tokens': '1056', 'mean_token_accuracy': '0.2', 'epoch': '0.5156'}
+
+ 13%|█▎        | 33/256 [00:48<05:38,  1.52s/it]
+ 13%|█▎        | 34/256 [00:50<05:32,  1.50s/it]
+
+{'loss': '4.622', 'grad_norm': '9.234', 'learning_rate': '0.0002', 'entropy': '4.003', 'num_tokens': '1088', 'mean_token_accuracy': '0.2857', 'epoch': '0.5312'}
+
+ 13%|█▎        | 34/256 [00:50<05:32,  1.50s/it]
+ 14%|█▎        | 35/256 [00:51<05:27,  1.48s/it]
+
+{'loss': '4.232', 'grad_norm': '8.412', 'learning_rate': '0.0002', 'entropy': '4.065', 'num_tokens': '1120', 'mean_token_accuracy': '0.2857', 'epoch': '0.5469'}
+
+ 14%|█▎        | 35/256 [00:51<05:27,  1.48s/it]
+ 14%|█▍        | 36/256 [00:53<05:24,  1.47s/it]
+
+{'loss': '4.091', 'grad_norm': '8.191', 'learning_rate': '0.0002', 'entropy': '3.959', 'num_tokens': '1152', 'mean_token_accuracy': '0.4', 'epoch': '0.5625'}
+
+ 14%|█▍        | 36/256 [00:53<05:24,  1.47s/it]
+ 14%|█▍        | 37/256 [00:54<05:21,  1.47s/it]
+
+{'loss': '4.871', 'grad_norm': '8.27', 'learning_rate': '0.0002', 'entropy': '4.081', 'num_tokens': '1184', 'mean_token_accuracy': '0.4', 'epoch': '0.5781'}
+
+ 14%|█▍        | 37/256 [00:54<05:21,  1.47s/it]
+ 15%|█▍        | 38/256 [00:56<05:24,  1.49s/it]
+
+{'loss': '4.571', 'grad_norm': '9.076', 'learning_rate': '0.0002', 'entropy': '4.01', 'num_tokens': '1216', 'mean_token_accuracy': '0.3333', 'epoch': '0.5938'}
+
+ 15%|█▍        | 38/256 [00:56<05:24,  1.49s/it]
+ 15%|█▌        | 39/256 [00:57<05:26,  1.51s/it]
+
+{'loss': '4.537', 'grad_norm': '8.011', 'learning_rate': '0.0002', 'entropy': '3.89', 'num_tokens': '1248', 'mean_token_accuracy': '0.3333', 'epoch': '0.6094'}
+
+ 15%|█▌        | 39/256 [00:57<05:26,  1.51s/it]
+ 16%|█▌        | 40/256 [00:59<05:21,  1.49s/it]
+
+{'loss': '4.067', 'grad_norm': '7.813', 'learning_rate': '0.0002', 'entropy': '4.027', 'num_tokens': '1280', 'mean_token_accuracy': '0.3333', 'epoch': '0.625'}
+
+ 16%|█▌        | 40/256 [00:59<05:21,  1.49s/it]
+ 16%|█▌        | 41/256 [01:00<05:24,  1.51s/it]
+
+{'loss': '4.595', 'grad_norm': '8.496', 'learning_rate': '0.0002', 'entropy': '4.07', 'num_tokens': '1312', 'mean_token_accuracy': '0.3333', 'epoch': '0.6406'}
+
+ 16%|█▌        | 41/256 [01:00<05:24,  1.51s/it]
+ 16%|█▋        | 42/256 [01:02<05:25,  1.52s/it]
+
+{'loss': '4.427', 'grad_norm': '6.802', 'learning_rate': '0.0002', 'entropy': '4.04', 'num_tokens': '1344', 'mean_token_accuracy': '0.3333', 'epoch': '0.6562'}
+
+ 16%|█▋        | 42/256 [01:02<05:25,  1.52s/it]
+ 17%|█▋        | 43/256 [01:03<05:20,  1.50s/it]
+
+{'loss': '4.207', 'grad_norm': '7.185', 'learning_rate': '0.0002', 'entropy': '4.241', 'num_tokens': '1376', 'mean_token_accuracy': '0.4', 'epoch': '0.6719'}
+
+ 17%|█▋        | 43/256 [01:03<05:20,  1.50s/it]
+ 17%|█▋        | 44/256 [01:05<05:21,  1.52s/it]
+
+{'loss': '4.255', 'grad_norm': '8.219', 'learning_rate': '0.0002', 'entropy': '4.34', 'num_tokens': '1408', 'mean_token_accuracy': '0.4286', 'epoch': '0.6875'}
+
+ 17%|█▋        | 44/256 [01:05<05:21,  1.52s/it]
+ 18%|█▊        | 45/256 [01:06<05:21,  1.52s/it]
+
+{'loss': '4.061', 'grad_norm': '7.136', 'learning_rate': '0.0002', 'entropy': '4.163', 'num_tokens': '1440', 'mean_token_accuracy': '0.3333', 'epoch': '0.7031'}
+
+ 18%|█▊        | 45/256 [01:06<05:21,  1.52s/it]
+ 18%|█▊        | 46/256 [01:08<05:15,  1.50s/it]
+
+{'loss': '3.723', 'grad_norm': '7.716', 'learning_rate': '0.0002', 'entropy': '4.173', 'num_tokens': '1472', 'mean_token_accuracy': '0.4286', 'epoch': '0.7188'}
+
+ 18%|█▊        | 46/256 [01:08<05:15,  1.50s/it]
+ 18%|█▊        | 47/256 [01:09<05:17,  1.52s/it]
+
+{'loss': '4.143', 'grad_norm': '10.11', 'learning_rate': '0.0002', 'entropy': '3.83', 'num_tokens': '1504', 'mean_token_accuracy': '0.3333', 'epoch': '0.7344'}
+
+ 18%|█▊        | 47/256 [01:09<05:17,  1.52s/it]
+ 19%|█▉        | 48/256 [01:11<05:17,  1.53s/it]
+
+{'loss': '4.079', 'grad_norm': '9.45', 'learning_rate': '0.0002', 'entropy': '3.854', 'num_tokens': '1536', 'mean_token_accuracy': '0.3333', 'epoch': '0.75'}
+
+ 19%|█▉        | 48/256 [01:11<05:17,  1.53s/it]
+ 19%|█▉        | 49/256 [01:12<05:17,  1.53s/it]
+
+{'loss': '4.162', 'grad_norm': '11.73', 'learning_rate': '0.0002', 'entropy': '3.715', 'num_tokens': '1568', 'mean_token_accuracy': '0.3333', 'epoch': '0.7656'}
+
+ 19%|█▉        | 49/256 [01:12<05:17,  1.53s/it]
+ 20%|█▉        | 50/256 [01:14<05:17,  1.54s/it]
+
+{'loss': '4.886', 'grad_norm': '12.27', 'learning_rate': '0.0002', 'entropy': '3.662', 'num_tokens': '1600', 'mean_token_accuracy': '0.3333', 'epoch': '0.7812'}
+
+ 20%|█▉        | 50/256 [01:14<05:17,  1.54s/it]
+ 20%|█▉        | 51/256 [01:15<05:10,  1.52s/it]
+
+{'loss': '3.991', 'grad_norm': '9.782', 'learning_rate': '0.0002', 'entropy': '3.893', 'num_tokens': '1632', 'mean_token_accuracy': '0.4', 'epoch': '0.7969'}
+
+ 20%|█▉        | 51/256 [01:15<05:10,  1.52s/it]
+ 20%|██        | 52/256 [01:17<05:11,  1.53s/it]
+
+{'loss': '4.547', 'grad_norm': '9.737', 'learning_rate': '0.0002', 'entropy': '3.926', 'num_tokens': '1664', 'mean_token_accuracy': '0.3333', 'epoch': '0.8125'}
+
+ 20%|██        | 52/256 [01:17<05:11,  1.53s/it]
+ 21%|██        | 53/256 [01:19<05:11,  1.54s/it]
+
+{'loss': '4.16', 'grad_norm': '8.556', 'learning_rate': '0.0002', 'entropy': '3.928', 'num_tokens': '1696', 'mean_token_accuracy': '0.3333', 'epoch': '0.8281'}
+
+ 21%|██        | 53/256 [01:19<05:11,  1.54s/it]
+ 21%|██        | 54/256 [01:20<05:10,  1.54s/it]
+
+{'loss': '4.054', 'grad_norm': '9.007', 'learning_rate': '0.0002', 'entropy': '4.071', 'num_tokens': '1728', 'mean_token_accuracy': '0.3333', 'epoch': '0.8438'}
+
+ 21%|██        | 54/256 [01:20<05:10,  1.54s/it]
+ 21%|██▏       | 55/256 [01:22<05:08,  1.54s/it]
+
+{'loss': '4.121', 'grad_norm': '9.398', 'learning_rate': '0.0002', 'entropy': '4.115', 'num_tokens': '1760', 'mean_token_accuracy': '0.4', 'epoch': '0.8594'}
+
+ 21%|██▏       | 55/256 [01:22<05:08,  1.54s/it]
+ 22%|██▏       | 56/256 [01:23<05:02,  1.51s/it]
+
+{'loss': '4.605', 'grad_norm': '9.094', 'learning_rate': '0.0002', 'entropy': '4.07', 'num_tokens': '1792', 'mean_token_accuracy': '0.3333', 'epoch': '0.875'}
+
+ 22%|██▏       | 56/256 [01:23<05:02,  1.51s/it]
+ 22%|██▏       | 57/256 [01:25<05:02,  1.52s/it]
+
+{'loss': '3.756', 'grad_norm': '7.323', 'learning_rate': '0.0002', 'entropy': '4.143', 'num_tokens': '1824', 'mean_token_accuracy': '0.4', 'epoch': '0.8906'}
+
+ 22%|██▏       | 57/256 [01:25<05:02,  1.52s/it]
+ 23%|██▎       | 58/256 [01:26<05:13,  1.58s/it]
+
+{'loss': '4.265', 'grad_norm': '9.568', 'learning_rate': '0.0002', 'entropy': '4.283', 'num_tokens': '1856', 'mean_token_accuracy': '0.3571', 'epoch': '0.9062'}
+
+ 23%|██▎       | 58/256 [01:26<05:13,  1.58s/it]
+ 23%|██▎       | 59/256 [01:28<05:09,  1.57s/it]
+
+{'loss': '4.033', 'grad_norm': '7.356', 'learning_rate': '0.0002', 'entropy': '4.08', 'num_tokens': '1888', 'mean_token_accuracy': '0.3333', 'epoch': '0.9219'}
+
+ 23%|██▎       | 59/256 [01:28<05:09,  1.57s/it]
+ 23%|██▎       | 60/256 [01:29<05:00,  1.54s/it]
+
+{'loss': '4.143', 'grad_norm': '9.486', 'learning_rate': '0.0002', 'entropy': '4.021', 'num_tokens': '1920', 'mean_token_accuracy': '0.3333', 'epoch': '0.9375'}
+
+ 23%|██▎       | 60/256 [01:29<05:00,  1.54s/it]
+ 24%|██▍       | 61/256 [01:31<04:59,  1.54s/it]
+
+{'loss': '4.576', 'grad_norm': '9.384', 'learning_rate': '0.0002', 'entropy': '4.07', 'num_tokens': '1952', 'mean_token_accuracy': '0.3333', 'epoch': '0.9531'}
+
+ 24%|██▍       | 61/256 [01:31<04:59,  1.54s/it]
+ 24%|██▍       | 62/256 [01:32<04:58,  1.54s/it]
+
+{'loss': '4.073', 'grad_norm': '7.451', 'learning_rate': '0.0002', 'entropy': '4.253', 'num_tokens': '1984', 'mean_token_accuracy': '0.3571', 'epoch': '0.9688'}
+
+ 24%|██▍       | 62/256 [01:32<04:58,  1.54s/it]
+ 25%|██▍       | 63/256 [01:34<04:56,  1.54s/it]
+
+{'loss': '4.255', 'grad_norm': '8.448', 'learning_rate': '0.0002', 'entropy': '4.141', 'num_tokens': '2016', 'mean_token_accuracy': '0.4', 'epoch': '0.9844'}
+
+ 25%|██▍       | 63/256 [01:34<04:56,  1.54s/it]
+ 25%|██▌       | 64/256 [01:36<04:55,  1.54s/it]
+
+{'loss': '4.249', 'grad_norm': '7.669', 'learning_rate': '0.0002', 'entropy': '4.105', 'num_tokens': '2048', 'mean_token_accuracy': '0.4', 'epoch': '1'}
+
+ 25%|██▌       | 64/256 [01:36<04:55,  1.54s/it]
+ 25%|██▌       | 65/256 [01:37<04:48,  1.51s/it]
+
+{'loss': '3.599', 'grad_norm': '8.442', 'learning_rate': '0.0002', 'entropy': '4.243', 'num_tokens': '2080', 'mean_token_accuracy': '0.4', 'epoch': '1.016'}
+
+ 25%|██▌       | 65/256 [01:37<04:48,  1.51s/it]
+ 26%|██▌       | 66/256 [01:39<04:48,  1.52s/it]
+
+{'loss': '3.871', 'grad_norm': '7.858', 'learning_rate': '0.0002', 'entropy': '4.152', 'num_tokens': '2112', 'mean_token_accuracy': '0.3571', 'epoch': '1.031'}
+
+ 26%|██▌       | 66/256 [01:39<04:48,  1.52s/it]
+ 26%|██▌       | 67/256 [01:40<04:47,  1.52s/it]
+
+{'loss': '3.746', 'grad_norm': '8.829', 'learning_rate': '0.0002', 'entropy': '4.207', 'num_tokens': '2144', 'mean_token_accuracy': '0.4', 'epoch': '1.047'}
+
+ 26%|██▌       | 67/256 [01:40<04:47,  1.52s/it]
+ 27%|██▋       | 68/256 [01:42<04:47,  1.53s/it]
+
+{'loss': '3.745', 'grad_norm': '16.59', 'learning_rate': '0.0002', 'entropy': '3.764', 'num_tokens': '2176', 'mean_token_accuracy': '0.4', 'epoch': '1.062'}
+
+ 27%|██▋       | 68/256 [01:42<04:47,  1.53s/it]
+ 27%|██▋       | 69/256 [01:43<04:41,  1.51s/it]
+
+{'loss': '4.554', 'grad_norm': '20.4', 'learning_rate': '0.0002', 'entropy': '3.585', 'num_tokens': '2208', 'mean_token_accuracy': '0.3333', 'epoch': '1.078'}
+
+ 27%|██▋       | 69/256 [01:43<04:41,  1.51s/it]
+ 27%|██▋       | 70/256 [01:45<04:41,  1.51s/it]
+
+{'loss': '4.745', 'grad_norm': '29.57', 'learning_rate': '0.0002', 'entropy': '3.622', 'num_tokens': '2240', 'mean_token_accuracy': '0.3333', 'epoch': '1.094'}
+
+ 27%|██▋       | 70/256 [01:45<04:41,  1.51s/it]
+ 28%|██▊       | 71/256 [01:46<04:41,  1.52s/it]
+
+{'loss': '3.636', 'grad_norm': '11.14', 'learning_rate': '0.0002', 'entropy': '3.953', 'num_tokens': '2272', 'mean_token_accuracy': '0.2667', 'epoch': '1.109'}
+
+ 28%|██▊       | 71/256 [01:46<04:41,  1.52s/it]
+ 28%|██▊       | 72/256 [01:48<04:40,  1.53s/it]
+
+{'loss': '4.047', 'grad_norm': '10.6', 'learning_rate': '0.0002', 'entropy': '4.093', 'num_tokens': '2304', 'mean_token_accuracy': '0.4', 'epoch': '1.125'}
+
+ 28%|██▊       | 72/256 [01:48<04:40,  1.53s/it]
+ 29%|██▊       | 73/256 [01:49<04:39,  1.53s/it]
+
+{'loss': '4.006', 'grad_norm': '10.51', 'learning_rate': '0.0002', 'entropy': '4.044', 'num_tokens': '2336', 'mean_token_accuracy': '0.2667', 'epoch': '1.141'}
+
+ 29%|██▊       | 73/256 [01:49<04:39,  1.53s/it]
+ 29%|██▉       | 74/256 [01:51<04:34,  1.51s/it]
+
+{'loss': '4.315', 'grad_norm': '8.928', 'learning_rate': '0.0002', 'entropy': '3.932', 'num_tokens': '2368', 'mean_token_accuracy': '0.3333', 'epoch': '1.156'}
+
+ 29%|██▉       | 74/256 [01:51<04:34,  1.51s/it]
+ 29%|██▉       | 75/256 [01:52<04:34,  1.51s/it]
+
+{'loss': '3.57', 'grad_norm': '7.839', 'learning_rate': '0.0002', 'entropy': '3.919', 'num_tokens': '2400', 'mean_token_accuracy': '0.3333', 'epoch': '1.172'}
+
+ 29%|██▉       | 75/256 [01:52<04:34,  1.51s/it]
+ 30%|██▉       | 76/256 [01:54<04:34,  1.52s/it]
+
+{'loss': '4.516', 'grad_norm': '9.531', 'learning_rate': '0.0002', 'entropy': '3.933', 'num_tokens': '2432', 'mean_token_accuracy': '0.4', 'epoch': '1.188'}
+
+ 30%|██▉       | 76/256 [01:54<04:34,  1.52s/it]
+ 30%|███       | 77/256 [01:55<04:33,  1.53s/it]
+
+{'loss': '3.821', 'grad_norm': '11.24', 'learning_rate': '0.0002', 'entropy': '3.777', 'num_tokens': '2464', 'mean_token_accuracy': '0.3333', 'epoch': '1.203'}
+
+ 30%|███       | 77/256 [01:55<04:33,  1.53s/it]
+ 30%|███       | 78/256 [01:57<04:32,  1.53s/it]
+
+{'loss': '4.432', 'grad_norm': '11.77', 'learning_rate': '0.0002', 'entropy': '3.886', 'num_tokens': '2496', 'mean_token_accuracy': '0.3333', 'epoch': '1.219'}
+
+ 30%|███       | 78/256 [01:57<04:32,  1.53s/it]
+ 31%|███       | 79/256 [01:58<04:26,  1.51s/it]
+
+{'loss': '4.077', 'grad_norm': '9.91', 'learning_rate': '0.0002', 'entropy': '4.039', 'num_tokens': '2528', 'mean_token_accuracy': '0.4', 'epoch': '1.234'}
+
+ 31%|███       | 79/256 [01:58<04:26,  1.51s/it]
+ 31%|███▏      | 80/256 [02:00<04:26,  1.52s/it]
+
+{'loss': '4.329', 'grad_norm': '11.02', 'learning_rate': '0.0002', 'entropy': '4.016', 'num_tokens': '2560', 'mean_token_accuracy': '0.4', 'epoch': '1.25'}
+
+ 31%|███▏      | 80/256 [02:00<04:26,  1.52s/it]
+ 32%|███▏      | 81/256 [02:01<04:26,  1.52s/it]
+
+{'loss': '3.672', 'grad_norm': '9.344', 'learning_rate': '0.0002', 'entropy': '4.02', 'num_tokens': '2592', 'mean_token_accuracy': '0.4667', 'epoch': '1.266'}
+
+ 32%|███▏      | 81/256 [02:01<04:26,  1.52s/it]
+ 32%|███▏      | 82/256 [02:03<04:25,  1.53s/it]
+
+{'loss': '3.65', 'grad_norm': '7.952', 'learning_rate': '0.0002', 'entropy': '3.906', 'num_tokens': '2624', 'mean_token_accuracy': '0.4', 'epoch': '1.281'}
+
+ 32%|███▏      | 82/256 [02:03<04:25,  1.53s/it]
+ 32%|███▏      | 83/256 [02:04<04:24,  1.53s/it]
+
+{'loss': '3.564', 'grad_norm': '8.764', 'learning_rate': '0.0002', 'entropy': '4.008', 'num_tokens': '2656', 'mean_token_accuracy': '0.4286', 'epoch': '1.297'}
+
+ 32%|███▏      | 83/256 [02:04<04:24,  1.53s/it]
+ 33%|███▎      | 84/256 [02:06<04:19,  1.51s/it]
+
+{'loss': '4.133', 'grad_norm': '10.46', 'learning_rate': '0.0002', 'entropy': '3.719', 'num_tokens': '2688', 'mean_token_accuracy': '0.3333', 'epoch': '1.312'}
+
+ 33%|███▎      | 84/256 [02:06<04:19,  1.51s/it]
+ 33%|███▎      | 85/256 [02:08<04:27,  1.57s/it]
+
+{'loss': '3.841', 'grad_norm': '9.041', 'learning_rate': '0.0002', 'entropy': '3.97', 'num_tokens': '2720', 'mean_token_accuracy': '0.4286', 'epoch': '1.328'}
+
+ 33%|███▎      | 85/256 [02:08<04:27,  1.57s/it]
+ 34%|███▎      | 86/256 [02:09<04:25,  1.56s/it]
+
+{'loss': '3.596', 'grad_norm': '8.652', 'learning_rate': '0.0002', 'entropy': '3.794', 'num_tokens': '2752', 'mean_token_accuracy': '0.3333', 'epoch': '1.344'}
+
+ 34%|███▎      | 86/256 [02:09<04:25,  1.56s/it]
+ 34%|███▍      | 87/256 [02:11<04:22,  1.55s/it]
+
+{'loss': '3.512', 'grad_norm': '10.33', 'learning_rate': '0.0002', 'entropy': '3.741', 'num_tokens': '2784', 'mean_token_accuracy': '0.4', 'epoch': '1.359'}
+
+ 34%|███▍      | 87/256 [02:11<04:22,  1.55s/it]
+ 34%|███▍      | 88/256 [02:12<04:15,  1.52s/it]
+
+{'loss': '3.711', 'grad_norm': '10.29', 'learning_rate': '0.0002', 'entropy': '3.678', 'num_tokens': '2816', 'mean_token_accuracy': '0.4', 'epoch': '1.375'}
+
+ 34%|███▍      | 88/256 [02:12<04:15,  1.52s/it]
+ 35%|███▍      | 89/256 [02:14<04:14,  1.52s/it]
+
+{'loss': '3.637', 'grad_norm': '8.591', 'learning_rate': '0.0002', 'entropy': '3.805', 'num_tokens': '2848', 'mean_token_accuracy': '0.4', 'epoch': '1.391'}
+
+ 35%|███▍      | 89/256 [02:14<04:14,  1.52s/it]
+ 35%|███▌      | 90/256 [02:15<04:13,  1.53s/it]
+
+{'loss': '4.041', 'grad_norm': '9.729', 'learning_rate': '0.0002', 'entropy': '3.697', 'num_tokens': '2880', 'mean_token_accuracy': '0.3333', 'epoch': '1.406'}
+
+ 35%|███▌      | 90/256 [02:15<04:13,  1.53s/it]
+ 36%|███▌      | 91/256 [02:17<04:12,  1.53s/it]
+
+{'loss': '4.05', 'grad_norm': '11.3', 'learning_rate': '0.0002', 'entropy': '3.882', 'num_tokens': '2912', 'mean_token_accuracy': '0.4', 'epoch': '1.422'}
+
+ 36%|███▌      | 91/256 [02:17<04:12,  1.53s/it]
+ 36%|███▌      | 92/256 [02:18<04:11,  1.53s/it]
+
+{'loss': '3.959', 'grad_norm': '11.9', 'learning_rate': '0.0002', 'entropy': '3.962', 'num_tokens': '2944', 'mean_token_accuracy': '0.3571', 'epoch': '1.438'}
+
+ 36%|███▌      | 92/256 [02:18<04:11,  1.53s/it]
+ 36%|███▋      | 93/256 [02:20<04:05,  1.51s/it]
+
+{'loss': '4.167', 'grad_norm': '12', 'learning_rate': '0.0002', 'entropy': '3.885', 'num_tokens': '2976', 'mean_token_accuracy': '0.4', 'epoch': '1.453'}
+
+ 36%|███▋      | 93/256 [02:20<04:05,  1.51s/it]
+ 37%|███▋      | 94/256 [02:21<04:05,  1.51s/it]
+
+{'loss': '3.561', 'grad_norm': '10.17', 'learning_rate': '0.0002', 'entropy': '3.904', 'num_tokens': '3008', 'mean_token_accuracy': '0.4286', 'epoch': '1.469'}
+
+ 37%|███▋      | 94/256 [02:21<04:05,  1.51s/it]
+ 37%|███▋      | 95/256 [02:23<04:04,  1.52s/it]
+
+{'loss': '4.354', 'grad_norm': '11.46', 'learning_rate': '0.0002', 'entropy': '3.553', 'num_tokens': '3040', 'mean_token_accuracy': '0.3333', 'epoch': '1.484'}
+
+ 37%|███▋      | 95/256 [02:23<04:04,  1.52s/it]
+ 38%|███▊      | 96/256 [02:24<04:04,  1.53s/it]
+
+{'loss': '4.005', 'grad_norm': '9.898', 'learning_rate': '0.0002', 'entropy': '3.666', 'num_tokens': '3072', 'mean_token_accuracy': '0.4', 'epoch': '1.5'}
+
+ 38%|███▊      | 96/256 [02:24<04:04,  1.53s/it]
+ 38%|███▊      | 97/256 [02:26<04:02,  1.53s/it]
+
+{'loss': '3.984', 'grad_norm': '9.543', 'learning_rate': '0.0002', 'entropy': '3.741', 'num_tokens': '3104', 'mean_token_accuracy': '0.3333', 'epoch': '1.516'}
+
+ 38%|███▊      | 97/256 [02:26<04:02,  1.53s/it]
+ 38%|███▊      | 98/256 [02:27<03:57,  1.50s/it]
+
+{'loss': '3.665', 'grad_norm': '8.41', 'learning_rate': '0.0002', 'entropy': '3.653', 'num_tokens': '3136', 'mean_token_accuracy': '0.4', 'epoch': '1.531'}
+
+ 38%|███▊      | 98/256 [02:27<03:57,  1.50s/it]
+ 39%|███▊      | 99/256 [02:29<03:57,  1.52s/it]
+
+{'loss': '3.609', 'grad_norm': '10.3', 'learning_rate': '0.0002', 'entropy': '3.642', 'num_tokens': '3168', 'mean_token_accuracy': '0.4', 'epoch': '1.547'}
+
+ 39%|███▊      | 99/256 [02:29<03:57,  1.52s/it]
+ 39%|███▉      | 100/256 [02:30<03:56,  1.52s/it]
+
+{'loss': '3.716', 'grad_norm': '9.754', 'learning_rate': '0.0002', 'entropy': '3.646', 'num_tokens': '3200', 'mean_token_accuracy': '0.4', 'epoch': '1.562'}
+
+ 39%|███▉      | 100/256 [02:30<03:56,  1.52s/it]
+ 39%|███▉      | 101/256 [02:32<03:57,  1.53s/it]
+
+{'loss': '3.561', 'grad_norm': '8.172', 'learning_rate': '0.0002', 'entropy': '3.789', 'num_tokens': '3232', 'mean_token_accuracy': '0.4', 'epoch': '1.578'}
+
+ 39%|███▉      | 101/256 [02:32<03:57,  1.53s/it]
+ 40%|███▉      | 102/256 [02:33<03:56,  1.54s/it]
+
+{'loss': '3.396', 'grad_norm': '8.998', 'learning_rate': '0.0002', 'entropy': '3.79', 'num_tokens': '3264', 'mean_token_accuracy': '0.4', 'epoch': '1.594'}
+
+ 40%|███▉      | 102/256 [02:33<03:56,  1.54s/it]
+ 40%|████      | 103/256 [02:35<03:51,  1.51s/it]
+
+{'loss': '3.779', 'grad_norm': '10.25', 'learning_rate': '0.0002', 'entropy': '3.864', 'num_tokens': '3296', 'mean_token_accuracy': '0.4', 'epoch': '1.609'}
+
+ 40%|████      | 103/256 [02:35<03:51,  1.51s/it]
+ 41%|████      | 104/256 [02:36<03:50,  1.52s/it]
+
+{'loss': '3.915', 'grad_norm': '10.56', 'learning_rate': '0.0002', 'entropy': '3.748', 'num_tokens': '3328', 'mean_token_accuracy': '0.3333', 'epoch': '1.625'}
+
+ 41%|████      | 104/256 [02:36<03:50,  1.52s/it]
+ 41%|████      | 105/256 [02:38<03:49,  1.52s/it]
+
+{'loss': '3.717', 'grad_norm': '9.936', 'learning_rate': '0.0002', 'entropy': '3.843', 'num_tokens': '3360', 'mean_token_accuracy': '0.3333', 'epoch': '1.641'}
+
+ 41%|████      | 105/256 [02:38<03:49,  1.52s/it]
+ 41%|████▏     | 106/256 [02:40<03:49,  1.53s/it]
+
+{'loss': '3.743', 'grad_norm': '12.96', 'learning_rate': '0.0002', 'entropy': '3.988', 'num_tokens': '3392', 'mean_token_accuracy': '0.2857', 'epoch': '1.656'}
+
+ 41%|████▏     | 106/256 [02:40<03:49,  1.53s/it]
+ 42%|████▏     | 107/256 [02:41<03:46,  1.52s/it]
+
+{'loss': '3.902', 'grad_norm': '10.51', 'learning_rate': '0.0002', 'entropy': '3.827', 'num_tokens': '3424', 'mean_token_accuracy': '0.3333', 'epoch': '1.672'}
+
+ 42%|████▏     | 107/256 [02:41<03:46,  1.52s/it]
+ 42%|████▏     | 108/256 [02:43<03:43,  1.51s/it]
+
+{'loss': '4.144', 'grad_norm': '11.05', 'learning_rate': '0.0002', 'entropy': '3.826', 'num_tokens': '3456', 'mean_token_accuracy': '0.3333', 'epoch': '1.688'}
+
+ 42%|████▏     | 108/256 [02:43<03:43,  1.51s/it]
+ 43%|████▎     | 109/256 [02:44<03:43,  1.52s/it]
+
+{'loss': '4.304', 'grad_norm': '11.26', 'learning_rate': '0.0002', 'entropy': '3.745', 'num_tokens': '3488', 'mean_token_accuracy': '0.3333', 'epoch': '1.703'}
+
+ 43%|████▎     | 109/256 [02:44<03:43,  1.52s/it]
+ 43%|████▎     | 110/256 [02:46<03:40,  1.51s/it]
+
+{'loss': '3.899', 'grad_norm': '10.11', 'learning_rate': '0.0002', 'entropy': '3.774', 'num_tokens': '3520', 'mean_token_accuracy': '0.3333', 'epoch': '1.719'}
+
+ 43%|████▎     | 110/256 [02:46<03:40,  1.51s/it]
+ 43%|████▎     | 111/256 [02:47<03:36,  1.49s/it]
+
+{'loss': '4.108', 'grad_norm': '9.993', 'learning_rate': '0.0002', 'entropy': '3.77', 'num_tokens': '3552', 'mean_token_accuracy': '0.4', 'epoch': '1.734'}
+
+ 43%|████▎     | 111/256 [02:47<03:36,  1.49s/it]
+ 44%|████▍     | 112/256 [02:48<03:32,  1.48s/it]
+
+{'loss': '3.848', 'grad_norm': '11.15', 'learning_rate': '0.0002', 'entropy': '3.911', 'num_tokens': '3584', 'mean_token_accuracy': '0.3333', 'epoch': '1.75'}
+
+ 44%|████▍     | 112/256 [02:48<03:32,  1.48s/it]
+ 44%|████▍     | 113/256 [02:50<03:30,  1.47s/it]
+
+{'loss': '3.695', 'grad_norm': '10.62', 'learning_rate': '0.0002', 'entropy': '3.997', 'num_tokens': '3616', 'mean_token_accuracy': '0.3571', 'epoch': '1.766'}
+
+ 44%|████▍     | 113/256 [02:50<03:30,  1.47s/it]
+ 45%|████▍     | 114/256 [02:51<03:29,  1.48s/it]
+
+{'loss': '3.671', 'grad_norm': '8.719', 'learning_rate': '0.0002', 'entropy': '3.824', 'num_tokens': '3648', 'mean_token_accuracy': '0.3333', 'epoch': '1.781'}
+
+ 45%|████▍     | 114/256 [02:51<03:29,  1.48s/it]
+ 45%|████▍     | 115/256 [02:53<03:31,  1.50s/it]
+
+{'loss': '4.025', 'grad_norm': '10.78', 'learning_rate': '0.0002', 'entropy': '3.701', 'num_tokens': '3680', 'mean_token_accuracy': '0.4', 'epoch': '1.797'}
+
+ 45%|████▍     | 115/256 [02:53<03:31,  1.50s/it]
+ 45%|████▌     | 116/256 [02:54<03:27,  1.48s/it]
+
+{'loss': '3.756', 'grad_norm': '10.19', 'learning_rate': '0.0002', 'entropy': '3.819', 'num_tokens': '3712', 'mean_token_accuracy': '0.4', 'epoch': '1.812'}
+
+ 45%|████▌     | 116/256 [02:54<03:27,  1.48s/it]
+ 46%|████▌     | 117/256 [02:56<03:24,  1.47s/it]
+
+{'loss': '3.893', 'grad_norm': '9.11', 'learning_rate': '0.0002', 'entropy': '3.794', 'num_tokens': '3744', 'mean_token_accuracy': '0.3333', 'epoch': '1.828'}
+
+ 46%|████▌     | 117/256 [02:56<03:24,  1.47s/it]
+ 46%|████▌     | 118/256 [02:57<03:22,  1.46s/it]
+
+{'loss': '3.734', 'grad_norm': '8.539', 'learning_rate': '0.0002', 'entropy': '3.876', 'num_tokens': '3776', 'mean_token_accuracy': '0.4', 'epoch': '1.844'}
+
+ 46%|████▌     | 118/256 [02:57<03:22,  1.46s/it]
+ 46%|████▋     | 119/256 [02:59<03:19,  1.46s/it]
+
+{'loss': '3.888', 'grad_norm': '11.21', 'learning_rate': '0.0002', 'entropy': '4.057', 'num_tokens': '3808', 'mean_token_accuracy': '0.3571', 'epoch': '1.859'}
+
+ 46%|████▋     | 119/256 [02:59<03:19,  1.46s/it]
+ 47%|████▋     | 120/256 [03:00<03:18,  1.46s/it]
+
+{'loss': '3.917', 'grad_norm': '9.085', 'learning_rate': '0.0002', 'entropy': '3.899', 'num_tokens': '3840', 'mean_token_accuracy': '0.4', 'epoch': '1.875'}
+
+ 47%|████▋     | 120/256 [03:00<03:18,  1.46s/it]
+ 47%|████▋     | 121/256 [03:02<03:16,  1.46s/it]
+
+{'loss': '4.052', 'grad_norm': '8.065', 'learning_rate': '0.0002', 'entropy': '3.852', 'num_tokens': '3872', 'mean_token_accuracy': '0.4', 'epoch': '1.891'}
+
+ 47%|████▋     | 121/256 [03:02<03:16,  1.46s/it]
+ 48%|████▊     | 122/256 [03:03<03:14,  1.45s/it]
+
+{'loss': '3.451', 'grad_norm': '6.939', 'learning_rate': '0.0002', 'entropy': '3.875', 'num_tokens': '3904', 'mean_token_accuracy': '0.3333', 'epoch': '1.906'}
+
+ 48%|████▊     | 122/256 [03:03<03:14,  1.45s/it]
+ 48%|████▊     | 123/256 [03:05<03:13,  1.45s/it]
+
+{'loss': '4.171', 'grad_norm': '8.839', 'learning_rate': '0.0002', 'entropy': '3.841', 'num_tokens': '3936', 'mean_token_accuracy': '0.3333', 'epoch': '1.922'}
+
+ 48%|████▊     | 123/256 [03:05<03:13,  1.45s/it]
+ 48%|████▊     | 124/256 [03:06<03:11,  1.45s/it]
+
+{'loss': '3.558', 'grad_norm': '7.566', 'learning_rate': '0.0002', 'entropy': '3.818', 'num_tokens': '3968', 'mean_token_accuracy': '0.4', 'epoch': '1.938'}
+
+ 48%|████▊     | 124/256 [03:06<03:11,  1.45s/it]
+ 49%|████▉     | 125/256 [03:07<03:10,  1.46s/it]
+
+{'loss': '3.978', 'grad_norm': '9.063', 'learning_rate': '0.0002', 'entropy': '3.855', 'num_tokens': '4000', 'mean_token_accuracy': '0.3333', 'epoch': '1.953'}
+
+ 49%|████▉     | 125/256 [03:07<03:10,  1.46s/it]
+ 49%|████▉     | 126/256 [03:09<03:12,  1.48s/it]
+
+{'loss': '3.676', 'grad_norm': '9.64', 'learning_rate': '0.0002', 'entropy': '3.874', 'num_tokens': '4032', 'mean_token_accuracy': '0.4', 'epoch': '1.969'}
+
+ 49%|████▉     | 126/256 [03:09<03:12,  1.48s/it]
+ 50%|████▉     | 127/256 [03:10<03:09,  1.47s/it]
+
+{'loss': '3.472', 'grad_norm': '7.728', 'learning_rate': '0.0002', 'entropy': '3.926', 'num_tokens': '4064', 'mean_token_accuracy': '0.3571', 'epoch': '1.984'}
+
+ 50%|████▉     | 127/256 [03:10<03:09,  1.47s/it]
+ 50%|█████     | 128/256 [03:12<03:10,  1.49s/it]
+
+{'loss': '3.48', 'grad_norm': '8.348', 'learning_rate': '0.0002', 'entropy': '3.762', 'num_tokens': '4096', 'mean_token_accuracy': '0.4', 'epoch': '2'}
+
+ 50%|█████     | 128/256 [03:12<03:10,  1.49s/it]
+ 50%|█████     | 129/256 [03:13<03:07,  1.48s/it]
+
+{'loss': '3.321', 'grad_norm': '13.39', 'learning_rate': '0.0002', 'entropy': '3.59', 'num_tokens': '4128', 'mean_token_accuracy': '0.4', 'epoch': '2.016'}
+
+ 50%|█████     | 129/256 [03:13<03:07,  1.48s/it]
+ 51%|█████     | 130/256 [03:15<03:04,  1.47s/it]
+
+{'loss': '3.334', 'grad_norm': '7.815', 'learning_rate': '0.0002', 'entropy': '3.733', 'num_tokens': '4160', 'mean_token_accuracy': '0.4', 'epoch': '2.031'}
+
+ 51%|█████     | 130/256 [03:15<03:04,  1.47s/it]
+ 51%|█████     | 131/256 [03:16<03:06,  1.49s/it]
+
+{'loss': '3.412', 'grad_norm': '7.342', 'learning_rate': '0.0002', 'entropy': '3.752', 'num_tokens': '4192', 'mean_token_accuracy': '0.4', 'epoch': '2.047'}
+
+ 51%|█████     | 131/256 [03:16<03:06,  1.49s/it]
+ 52%|█████▏    | 132/256 [03:18<03:06,  1.51s/it]
+
+{'loss': '3.504', 'grad_norm': '9.228', 'learning_rate': '0.0002', 'entropy': '3.624', 'num_tokens': '4224', 'mean_token_accuracy': '0.3333', 'epoch': '2.062'}
+
+ 52%|█████▏    | 132/256 [03:18<03:06,  1.51s/it]
+ 52%|█████▏    | 133/256 [03:19<03:07,  1.52s/it]
+
+{'loss': '3.464', 'grad_norm': '10.35', 'learning_rate': '0.0002', 'entropy': '3.768', 'num_tokens': '4256', 'mean_token_accuracy': '0.4', 'epoch': '2.078'}
+
+ 52%|█████▏    | 133/256 [03:19<03:07,  1.52s/it]
+ 52%|█████▏    | 134/256 [03:21<03:03,  1.50s/it]
+
+{'loss': '3.887', 'grad_norm': '10.93', 'learning_rate': '0.0002', 'entropy': '3.645', 'num_tokens': '4288', 'mean_token_accuracy': '0.4', 'epoch': '2.094'}
+
+ 52%|█████▏    | 134/256 [03:21<03:03,  1.50s/it]
+ 53%|█████▎    | 135/256 [03:22<03:03,  1.51s/it]
+
+{'loss': '3.328', 'grad_norm': '10.01', 'learning_rate': '0.0002', 'entropy': '3.606', 'num_tokens': '4320', 'mean_token_accuracy': '0.4667', 'epoch': '2.109'}
+
+ 53%|█████▎    | 135/256 [03:22<03:03,  1.51s/it]
+ 53%|█████▎    | 136/256 [03:24<02:59,  1.50s/it]
+
+{'loss': '3.798', 'grad_norm': '9.519', 'learning_rate': '0.0002', 'entropy': '3.564', 'num_tokens': '4352', 'mean_token_accuracy': '0.4', 'epoch': '2.125'}
+
+ 53%|█████▎    | 136/256 [03:24<02:59,  1.50s/it]
+ 54%|█████▎    | 137/256 [03:25<02:59,  1.51s/it]
+
+{'loss': '3.344', 'grad_norm': '10.77', 'learning_rate': '0.0002', 'entropy': '3.591', 'num_tokens': '4384', 'mean_token_accuracy': '0.4', 'epoch': '2.141'}
+
+ 54%|█████▎    | 137/256 [03:25<02:59,  1.51s/it]
+ 54%|█████▍    | 138/256 [03:27<02:59,  1.52s/it]
+
+{'loss': '3.828', 'grad_norm': '13.87', 'learning_rate': '0.0002', 'entropy': '3.414', 'num_tokens': '4416', 'mean_token_accuracy': '0.3333', 'epoch': '2.156'}
+
+ 54%|█████▍    | 138/256 [03:27<02:59,  1.52s/it]
+ 54%|█████▍    | 139/256 [03:29<02:58,  1.53s/it]
+
+{'loss': '2.935', 'grad_norm': '8.84', 'learning_rate': '0.0002', 'entropy': '3.434', 'num_tokens': '4448', 'mean_token_accuracy': '0.4', 'epoch': '2.172'}
+
+ 54%|█████▍    | 139/256 [03:29<02:58,  1.53s/it]
+ 55%|█████▍    | 140/256 [03:30<02:54,  1.51s/it]
+
+{'loss': '3.24', 'grad_norm': '10.22', 'learning_rate': '0.0002', 'entropy': '3.462', 'num_tokens': '4480', 'mean_token_accuracy': '0.4', 'epoch': '2.188'}
+
+ 55%|█████▍    | 140/256 [03:30<02:54,  1.51s/it]
+ 55%|█████▌    | 141/256 [03:32<02:58,  1.55s/it]
+
+{'loss': '3.639', 'grad_norm': '13.81', 'learning_rate': '0.0002', 'entropy': '3.624', 'num_tokens': '4512', 'mean_token_accuracy': '0.4286', 'epoch': '2.203'}
+
+ 55%|█████▌    | 141/256 [03:32<02:58,  1.55s/it]
+ 55%|█████▌    | 142/256 [03:33<02:53,  1.52s/it]
+
+{'loss': '3.492', 'grad_norm': '12.47', 'learning_rate': '0.0002', 'entropy': '3.451', 'num_tokens': '4544', 'mean_token_accuracy': '0.4667', 'epoch': '2.219'}
+
+ 55%|█████▌    | 142/256 [03:33<02:53,  1.52s/it]
+ 56%|█████▌    | 143/256 [03:35<02:52,  1.53s/it]
+
+{'loss': '4.074', 'grad_norm': '16.5', 'learning_rate': '0.0002', 'entropy': '3.137', 'num_tokens': '4576', 'mean_token_accuracy': '0.3333', 'epoch': '2.234'}
+
+ 56%|█████▌    | 143/256 [03:35<02:52,  1.53s/it]
+ 56%|█████▋    | 144/256 [03:36<02:52,  1.54s/it]
+
+{'loss': '3.823', 'grad_norm': '12.63', 'learning_rate': '0.0002', 'entropy': '3.335', 'num_tokens': '4608', 'mean_token_accuracy': '0.3333', 'epoch': '2.25'}
+
+ 56%|█████▋    | 144/256 [03:36<02:52,  1.54s/it]
+ 57%|█████▋    | 145/256 [03:38<02:51,  1.54s/it]
+
+{'loss': '3.482', 'grad_norm': '12.33', 'learning_rate': '0.0002', 'entropy': '3.379', 'num_tokens': '4640', 'mean_token_accuracy': '0.4', 'epoch': '2.266'}
+
+ 57%|█████▋    | 145/256 [03:38<02:51,  1.54s/it]
+ 57%|█████▋    | 146/256 [03:39<02:46,  1.52s/it]
+
+{'loss': '3.608', 'grad_norm': '11.37', 'learning_rate': '0.0002', 'entropy': '3.461', 'num_tokens': '4672', 'mean_token_accuracy': '0.4', 'epoch': '2.281'}
+
+ 57%|█████▋    | 146/256 [03:39<02:46,  1.52s/it]
+ 57%|█████▋    | 147/256 [03:41<02:45,  1.52s/it]
+
+{'loss': '3.393', 'grad_norm': '9.681', 'learning_rate': '0.0002', 'entropy': '3.401', 'num_tokens': '4704', 'mean_token_accuracy': '0.3333', 'epoch': '2.297'}
+
+ 57%|█████▋    | 147/256 [03:41<02:45,  1.52s/it]
+ 58%|█████▊    | 148/256 [03:42<02:44,  1.53s/it]
+
+{'loss': '3.711', 'grad_norm': '10.98', 'learning_rate': '0.0002', 'entropy': '3.426', 'num_tokens': '4736', 'mean_token_accuracy': '0.4', 'epoch': '2.312'}
+
+ 58%|█████▊    | 148/256 [03:42<02:44,  1.53s/it]
+ 58%|█████▊    | 149/256 [03:44<02:43,  1.53s/it]
+
+{'loss': '3.48', 'grad_norm': '10.78', 'learning_rate': '0.0002', 'entropy': '3.547', 'num_tokens': '4768', 'mean_token_accuracy': '0.4', 'epoch': '2.328'}
+
+ 58%|█████▊    | 149/256 [03:44<02:43,  1.53s/it]
+ 59%|█████▊    | 150/256 [03:45<02:39,  1.50s/it]
+
+{'loss': '3.235', 'grad_norm': '11.7', 'learning_rate': '0.0002', 'entropy': '3.652', 'num_tokens': '4800', 'mean_token_accuracy': '0.3571', 'epoch': '2.344'}
+
+ 59%|█████▊    | 150/256 [03:45<02:39,  1.50s/it]
+ 59%|█████▉    | 151/256 [03:47<02:38,  1.51s/it]
+
+{'loss': '3.843', 'grad_norm': '10.66', 'learning_rate': '0.0002', 'entropy': '3.577', 'num_tokens': '4832', 'mean_token_accuracy': '0.4', 'epoch': '2.359'}
+
+ 59%|█████▉    | 151/256 [03:47<02:38,  1.51s/it]
+ 59%|█████▉    | 152/256 [03:48<02:37,  1.52s/it]
+
+{'loss': '3.589', 'grad_norm': '9.659', 'learning_rate': '0.0002', 'entropy': '3.555', 'num_tokens': '4864', 'mean_token_accuracy': '0.4', 'epoch': '2.375'}
+
+ 59%|█████▉    | 152/256 [03:48<02:37,  1.52s/it]
+ 60%|█████▉    | 153/256 [03:50<02:36,  1.52s/it]
+
+{'loss': '3.513', 'grad_norm': '8.89', 'learning_rate': '0.0002', 'entropy': '3.61', 'num_tokens': '4896', 'mean_token_accuracy': '0.4', 'epoch': '2.391'}
+
+ 60%|█████▉    | 153/256 [03:50<02:36,  1.52s/it]
+ 60%|██████    | 154/256 [03:51<02:33,  1.50s/it]
+
+{'loss': '3.464', 'grad_norm': '9.152', 'learning_rate': '0.0002', 'entropy': '3.52', 'num_tokens': '4928', 'mean_token_accuracy': '0.4', 'epoch': '2.406'}
+
+ 60%|██████    | 154/256 [03:51<02:33,  1.50s/it]
+ 61%|██████    | 155/256 [03:53<02:32,  1.51s/it]
+
+{'loss': '3.834', 'grad_norm': '14.55', 'learning_rate': '0.0002', 'entropy': '3.482', 'num_tokens': '4960', 'mean_token_accuracy': '0.3333', 'epoch': '2.422'}
+
+ 61%|██████    | 155/256 [03:53<02:32,  1.51s/it]
+ 61%|██████    | 156/256 [03:54<02:31,  1.52s/it]
+
+{'loss': '3.313', 'grad_norm': '10.89', 'learning_rate': '0.0002', 'entropy': '3.692', 'num_tokens': '4992', 'mean_token_accuracy': '0.4', 'epoch': '2.438'}
+
+ 61%|██████    | 156/256 [03:54<02:31,  1.52s/it]
+ 61%|██████▏   | 157/256 [03:56<02:30,  1.52s/it]
+
+{'loss': '3.982', 'grad_norm': '9.993', 'learning_rate': '0.0002', 'entropy': '3.535', 'num_tokens': '5024', 'mean_token_accuracy': '0.3333', 'epoch': '2.453'}
+
+ 61%|██████▏   | 157/256 [03:56<02:30,  1.52s/it]
+ 62%|██████▏   | 158/256 [03:57<02:29,  1.53s/it]
+
+{'loss': '3.61', 'grad_norm': '8.619', 'learning_rate': '0.0002', 'entropy': '3.665', 'num_tokens': '5056', 'mean_token_accuracy': '0.4', 'epoch': '2.469'}
+
+ 62%|██████▏   | 158/256 [03:57<02:29,  1.53s/it]
+ 62%|██████▏   | 159/256 [03:59<02:25,  1.50s/it]
+
+{'loss': '3.837', 'grad_norm': '9.585', 'learning_rate': '0.0002', 'entropy': '3.561', 'num_tokens': '5088', 'mean_token_accuracy': '0.4', 'epoch': '2.484'}
+
+ 62%|██████▏   | 159/256 [03:59<02:25,  1.50s/it]
+ 62%|██████▎   | 160/256 [04:00<02:25,  1.51s/it]
+
+{'loss': '3.728', 'grad_norm': '9.133', 'learning_rate': '0.0002', 'entropy': '3.733', 'num_tokens': '5120', 'mean_token_accuracy': '0.4', 'epoch': '2.5'}
+
+ 62%|██████▎   | 160/256 [04:00<02:25,  1.51s/it]
+ 63%|██████▎   | 161/256 [04:02<02:24,  1.52s/it]
+
+{'loss': '3.152', 'grad_norm': '10.35', 'learning_rate': '0.0002', 'entropy': '3.727', 'num_tokens': '5152', 'mean_token_accuracy': '0.4286', 'epoch': '2.516'}
+
+ 63%|██████▎   | 161/256 [04:02<02:24,  1.52s/it]
+ 63%|██████▎   | 162/256 [04:04<02:23,  1.52s/it]
+
+{'loss': '3.767', 'grad_norm': '9.53', 'learning_rate': '0.0002', 'entropy': '3.61', 'num_tokens': '5184', 'mean_token_accuracy': '0.3571', 'epoch': '2.531'}
+
+ 63%|██████▎   | 162/256 [04:04<02:23,  1.52s/it]
+ 64%|██████▎   | 163/256 [04:05<02:19,  1.50s/it]
+
+{'loss': '3.441', 'grad_norm': '10.48', 'learning_rate': '0.0002', 'entropy': '3.768', 'num_tokens': '5216', 'mean_token_accuracy': '0.5', 'epoch': '2.547'}
+
+ 64%|██████▎   | 163/256 [04:05<02:19,  1.50s/it]
+ 64%|██████▍   | 164/256 [04:07<02:19,  1.51s/it]
+
+{'loss': '4.308', 'grad_norm': '12.75', 'learning_rate': '0.0002', 'entropy': '3.518', 'num_tokens': '5248', 'mean_token_accuracy': '0.3333', 'epoch': '2.562'}
+
+ 64%|██████▍   | 164/256 [04:07<02:19,  1.51s/it]
+ 64%|██████▍   | 165/256 [04:08<02:18,  1.52s/it]
+
+{'loss': '3.745', 'grad_norm': '11.02', 'learning_rate': '0.0002', 'entropy': '3.553', 'num_tokens': '5280', 'mean_token_accuracy': '0.3571', 'epoch': '2.578'}
+
+ 64%|██████▍   | 165/256 [04:08<02:18,  1.52s/it]
+ 65%|██████▍   | 166/256 [04:10<02:17,  1.52s/it]
+
+{'loss': '3.716', 'grad_norm': '14.25', 'learning_rate': '0.0002', 'entropy': '3.414', 'num_tokens': '5312', 'mean_token_accuracy': '0.4', 'epoch': '2.594'}
+
+ 65%|██████▍   | 166/256 [04:10<02:17,  1.52s/it]
+ 65%|██████▌   | 167/256 [04:11<02:15,  1.53s/it]
+
+{'loss': '3.261', 'grad_norm': '8.805', 'learning_rate': '0.0002', 'entropy': '3.78', 'num_tokens': '5344', 'mean_token_accuracy': '0.4286', 'epoch': '2.609'}
+
+ 65%|██████▌   | 167/256 [04:11<02:15,  1.53s/it]
+ 66%|██████▌   | 168/256 [04:13<02:12,  1.50s/it]
+
+{'loss': '3.826', 'grad_norm': '10.73', 'learning_rate': '0.0002', 'entropy': '3.465', 'num_tokens': '5376', 'mean_token_accuracy': '0.3333', 'epoch': '2.625'}
+
+ 66%|██████▌   | 168/256 [04:13<02:12,  1.50s/it]
+ 66%|██████▌   | 169/256 [04:14<02:11,  1.51s/it]
+
+{'loss': '3.701', 'grad_norm': '9.082', 'learning_rate': '0.0002', 'entropy': '3.562', 'num_tokens': '5408', 'mean_token_accuracy': '0.3333', 'epoch': '2.641'}
+
+ 66%|██████▌   | 169/256 [04:14<02:11,  1.51s/it]
+ 66%|██████▋   | 170/256 [04:16<02:10,  1.52s/it]
+
+{'loss': '3.506', 'grad_norm': '8.922', 'learning_rate': '0.0002', 'entropy': '3.676', 'num_tokens': '5440', 'mean_token_accuracy': '0.3333', 'epoch': '2.656'}
+
+ 66%|██████▋   | 170/256 [04:16<02:10,  1.52s/it]
+ 67%|██████▋   | 171/256 [04:17<02:09,  1.52s/it]
+
+{'loss': '3.399', 'grad_norm': '12.77', 'learning_rate': '0.0002', 'entropy': '3.928', 'num_tokens': '5472', 'mean_token_accuracy': '0.4286', 'epoch': '2.672'}
+
+ 67%|██████▋   | 171/256 [04:17<02:09,  1.52s/it]
+ 67%|██████▋   | 172/256 [04:19<02:10,  1.56s/it]
+
+{'loss': '4.546', 'grad_norm': '13.38', 'learning_rate': '0.0002', 'entropy': '3.723', 'num_tokens': '5504', 'mean_token_accuracy': '0.3333', 'epoch': '2.688'}
+
+ 67%|██████▋   | 172/256 [04:19<02:10,  1.56s/it]
+ 68%|██████▊   | 173/256 [04:20<02:08,  1.55s/it]
+
+{'loss': '3.837', 'grad_norm': '9.589', 'learning_rate': '0.0002', 'entropy': '3.791', 'num_tokens': '5536', 'mean_token_accuracy': '0.3571', 'epoch': '2.703'}
+
+ 68%|██████▊   | 173/256 [04:20<02:08,  1.55s/it]
+ 68%|██████▊   | 174/256 [04:22<02:04,  1.52s/it]
+
+{'loss': '3.361', 'grad_norm': '9.255', 'learning_rate': '0.0002', 'entropy': '3.668', 'num_tokens': '5568', 'mean_token_accuracy': '0.4', 'epoch': '2.719'}
+
+ 68%|██████▊   | 174/256 [04:22<02:04,  1.52s/it]
+ 68%|██████▊   | 175/256 [04:23<02:03,  1.52s/it]
+
+{'loss': '3.894', 'grad_norm': '15.91', 'learning_rate': '0.0002', 'entropy': '3.568', 'num_tokens': '5600', 'mean_token_accuracy': '0.3333', 'epoch': '2.734'}
+
+ 68%|██████▊   | 175/256 [04:23<02:03,  1.52s/it]
+ 69%|██████▉   | 176/256 [04:25<02:02,  1.53s/it]
+
+{'loss': '4.064', 'grad_norm': '12.48', 'learning_rate': '0.0002', 'entropy': '3.72', 'num_tokens': '5632', 'mean_token_accuracy': '0.3333', 'epoch': '2.75'}
+
+ 69%|██████▉   | 176/256 [04:25<02:02,  1.53s/it]
+ 69%|██████▉   | 177/256 [04:26<02:01,  1.53s/it]
+
+{'loss': '3.908', 'grad_norm': '10.03', 'learning_rate': '0.0002', 'entropy': '3.732', 'num_tokens': '5664', 'mean_token_accuracy': '0.3333', 'epoch': '2.766'}
+
+ 69%|██████▉   | 177/256 [04:26<02:01,  1.53s/it]
+ 70%|██████▉   | 178/256 [04:28<01:59,  1.53s/it]
+
+{'loss': '3.739', 'grad_norm': '8.884', 'learning_rate': '0.0002', 'entropy': '3.676', 'num_tokens': '5696', 'mean_token_accuracy': '0.3333', 'epoch': '2.781'}
+
+ 70%|██████▉   | 178/256 [04:28<01:59,  1.53s/it]
+ 70%|██████▉   | 179/256 [04:29<01:56,  1.51s/it]
+
+{'loss': '3.92', 'grad_norm': '8.539', 'learning_rate': '0.0002', 'entropy': '3.772', 'num_tokens': '5728', 'mean_token_accuracy': '0.3333', 'epoch': '2.797'}
+
+ 70%|██████▉   | 179/256 [04:29<01:56,  1.51s/it]
+ 70%|███████   | 180/256 [04:31<01:55,  1.52s/it]
+
+{'loss': '3.861', 'grad_norm': '9.881', 'learning_rate': '0.0002', 'entropy': '3.698', 'num_tokens': '5760', 'mean_token_accuracy': '0.3333', 'epoch': '2.812'}
+
+ 70%|███████   | 180/256 [04:31<01:55,  1.52s/it]
+ 71%|███████   | 181/256 [04:32<01:54,  1.53s/it]
+
+{'loss': '3.718', 'grad_norm': '9.991', 'learning_rate': '0.0002', 'entropy': '3.831', 'num_tokens': '5792', 'mean_token_accuracy': '0.4', 'epoch': '2.828'}
+
+ 71%|███████   | 181/256 [04:32<01:54,  1.53s/it]
+ 71%|███████   | 182/256 [04:34<01:53,  1.53s/it]
+
+{'loss': '3.803', 'grad_norm': '10.21', 'learning_rate': '0.0002', 'entropy': '3.776', 'num_tokens': '5824', 'mean_token_accuracy': '0.4', 'epoch': '2.844'}
+
+ 71%|███████   | 182/256 [04:34<01:53,  1.53s/it]
+ 71%|███████▏  | 183/256 [04:36<01:51,  1.52s/it]
+
+{'loss': '3.713', 'grad_norm': '15.25', 'learning_rate': '0.0002', 'entropy': '3.853', 'num_tokens': '5856', 'mean_token_accuracy': '0.4', 'epoch': '2.859'}
+
+ 71%|███████▏  | 183/256 [04:36<01:51,  1.52s/it]
+ 72%|███████▏  | 184/256 [04:37<01:49,  1.52s/it]
+
+{'loss': '3.197', 'grad_norm': '7.855', 'learning_rate': '0.0002', 'entropy': '3.725', 'num_tokens': '5888', 'mean_token_accuracy': '0.3333', 'epoch': '2.875'}
+
+ 72%|███████▏  | 184/256 [04:37<01:49,  1.52s/it]
+ 72%|███████▏  | 185/256 [04:39<01:48,  1.53s/it]
+
+{'loss': '3.605', 'grad_norm': '13.76', 'learning_rate': '0.0002', 'entropy': '3.905', 'num_tokens': '5920', 'mean_token_accuracy': '0.4', 'epoch': '2.891'}
+
+ 72%|███████▏  | 185/256 [04:39<01:48,  1.53s/it]
+ 73%|███████▎  | 186/256 [04:40<01:47,  1.53s/it]
+
+{'loss': '3.899', 'grad_norm': '7.99', 'learning_rate': '0.0002', 'entropy': '3.774', 'num_tokens': '5952', 'mean_token_accuracy': '0.3333', 'epoch': '2.906'}
+
+ 73%|███████▎  | 186/256 [04:40<01:47,  1.53s/it]
+ 73%|███████▎  | 187/256 [04:42<01:45,  1.53s/it]
+
+{'loss': '3.589', 'grad_norm': '7.986', 'learning_rate': '0.0002', 'entropy': '3.777', 'num_tokens': '5984', 'mean_token_accuracy': '0.3333', 'epoch': '2.922'}
+
+ 73%|███████▎  | 187/256 [04:42<01:45,  1.53s/it]
+ 73%|███████▎  | 188/256 [04:43<01:42,  1.51s/it]
+
+{'loss': '3.462', 'grad_norm': '7.966', 'learning_rate': '0.0002', 'entropy': '3.764', 'num_tokens': '6016', 'mean_token_accuracy': '0.4', 'epoch': '2.938'}
+
+ 73%|███████▎  | 188/256 [04:43<01:42,  1.51s/it]
+ 74%|███████▍  | 189/256 [04:45<01:41,  1.51s/it]
+
+{'loss': '4.166', 'grad_norm': '9.266', 'learning_rate': '0.0002', 'entropy': '3.677', 'num_tokens': '6048', 'mean_token_accuracy': '0.3333', 'epoch': '2.953'}
+
+ 74%|███████▍  | 189/256 [04:45<01:41,  1.51s/it]
+ 74%|███████▍  | 190/256 [04:46<01:40,  1.52s/it]
+
+{'loss': '3.818', 'grad_norm': '17.89', 'learning_rate': '0.0002', 'entropy': '3.6', 'num_tokens': '6080', 'mean_token_accuracy': '0.4', 'epoch': '2.969'}
+
+ 74%|███████▍  | 190/256 [04:46<01:40,  1.52s/it]
+ 75%|███████▍  | 191/256 [04:48<01:38,  1.52s/it]
+
+{'loss': '3.373', 'grad_norm': '8.531', 'learning_rate': '0.0002', 'entropy': '3.672', 'num_tokens': '6112', 'mean_token_accuracy': '0.4', 'epoch': '2.984'}
+
+ 75%|███████▍  | 191/256 [04:48<01:38,  1.52s/it]
+ 75%|███████▌  | 192/256 [04:49<01:36,  1.51s/it]
+
+{'loss': '3.258', 'grad_norm': '7.796', 'learning_rate': '0.0002', 'entropy': '3.766', 'num_tokens': '6144', 'mean_token_accuracy': '0.4', 'epoch': '3'}
+
+ 75%|███████▌  | 192/256 [04:49<01:36,  1.51s/it]
+ 75%|███████▌  | 193/256 [04:51<01:35,  1.51s/it]
+
+{'loss': '3.363', 'grad_norm': '10.38', 'learning_rate': '0.0002', 'entropy': '3.798', 'num_tokens': '6176', 'mean_token_accuracy': '0.3571', 'epoch': '3.016'}
+
+ 75%|███████▌  | 193/256 [04:51<01:35,  1.51s/it]
+ 76%|███████▌  | 194/256 [04:52<01:34,  1.52s/it]
+
+{'loss': '3.424', 'grad_norm': '9.771', 'learning_rate': '0.0002', 'entropy': '3.603', 'num_tokens': '6208', 'mean_token_accuracy': '0.3333', 'epoch': '3.031'}
+
+ 76%|███████▌  | 194/256 [04:52<01:34,  1.52s/it]
+ 76%|███████▌  | 195/256 [04:54<01:31,  1.50s/it]
+
+{'loss': '2.893', 'grad_norm': '7.156', 'learning_rate': '0.0002', 'entropy': '3.57', 'num_tokens': '6240', 'mean_token_accuracy': '0.4', 'epoch': '3.047'}
+
+ 76%|███████▌  | 195/256 [04:54<01:31,  1.50s/it]
+ 77%|███████▋  | 196/256 [04:55<01:28,  1.48s/it]
+
+{'loss': '3.656', 'grad_norm': '9.628', 'learning_rate': '0.0002', 'entropy': '3.657', 'num_tokens': '6272', 'mean_token_accuracy': '0.3333', 'epoch': '3.062'}
+
+ 77%|███████▋  | 196/256 [04:55<01:28,  1.48s/it]
+ 77%|███████▋  | 197/256 [04:57<01:26,  1.47s/it]
+
+{'loss': '3.114', 'grad_norm': '10.81', 'learning_rate': '0.0002', 'entropy': '3.608', 'num_tokens': '6304', 'mean_token_accuracy': '0.5333', 'epoch': '3.078'}
+
+ 77%|███████▋  | 197/256 [04:57<01:26,  1.47s/it]
+ 77%|███████▋  | 198/256 [04:58<01:24,  1.46s/it]
+
+{'loss': '2.945', 'grad_norm': '9.386', 'learning_rate': '0.0002', 'entropy': '3.584', 'num_tokens': '6336', 'mean_token_accuracy': '0.4667', 'epoch': '3.094'}
+
+ 77%|███████▋  | 198/256 [04:58<01:24,  1.46s/it]
+ 78%|███████▊  | 199/256 [04:59<01:23,  1.46s/it]
+
+{'loss': '3.316', 'grad_norm': '10.36', 'learning_rate': '0.0002', 'entropy': '3.514', 'num_tokens': '6368', 'mean_token_accuracy': '0.3333', 'epoch': '3.109'}
+
+ 78%|███████▊  | 199/256 [04:59<01:23,  1.46s/it]
+ 78%|███████▊  | 200/256 [05:01<01:21,  1.45s/it]
+
+{'loss': '3.485', 'grad_norm': '9.91', 'learning_rate': '0.0002', 'entropy': '3.459', 'num_tokens': '6400', 'mean_token_accuracy': '0.4', 'epoch': '3.125'}
+
+ 78%|███████▊  | 200/256 [05:01<01:21,  1.45s/it]
+ 79%|███████▊  | 201/256 [05:02<01:19,  1.45s/it]
+
+{'loss': '3.439', 'grad_norm': '11.5', 'learning_rate': '0.0002', 'entropy': '3.521', 'num_tokens': '6432', 'mean_token_accuracy': '0.4286', 'epoch': '3.141'}
+
+ 79%|███████▊  | 201/256 [05:02<01:19,  1.45s/it]
+ 79%|███████▉  | 202/256 [05:04<01:18,  1.45s/it]
+
+{'loss': '3.425', 'grad_norm': '15.11', 'learning_rate': '0.0002', 'entropy': '3.58', 'num_tokens': '6464', 'mean_token_accuracy': '0.4', 'epoch': '3.156'}
+
+ 79%|███████▉  | 202/256 [05:04<01:18,  1.45s/it]
+ 79%|███████▉  | 203/256 [05:05<01:16,  1.45s/it]
+
+{'loss': '3.779', 'grad_norm': '11.93', 'learning_rate': '0.0002', 'entropy': '3.356', 'num_tokens': '6496', 'mean_token_accuracy': '0.4', 'epoch': '3.172'}
+
+ 79%|███████▉  | 203/256 [05:05<01:16,  1.45s/it]
+ 80%|███████▉  | 204/256 [05:07<01:15,  1.45s/it]
+
+{'loss': '3.29', 'grad_norm': '14.08', 'learning_rate': '0.0002', 'entropy': '3.207', 'num_tokens': '6528', 'mean_token_accuracy': '0.3333', 'epoch': '3.188'}
+
+ 80%|███████▉  | 204/256 [05:07<01:15,  1.45s/it]
+ 80%|████████  | 205/256 [05:08<01:13,  1.45s/it]
+
+{'loss': '3.389', 'grad_norm': '15.05', 'learning_rate': '0.0002', 'entropy': '3.205', 'num_tokens': '6560', 'mean_token_accuracy': '0.3333', 'epoch': '3.203'}
+
+ 80%|████████  | 205/256 [05:08<01:13,  1.45s/it]
+ 80%|████████  | 206/256 [05:10<01:12,  1.45s/it]
+
+{'loss': '3.586', 'grad_norm': '11.61', 'learning_rate': '0.0002', 'entropy': '3.286', 'num_tokens': '6592', 'mean_token_accuracy': '0.4', 'epoch': '3.219'}
+
+ 80%|████████  | 206/256 [05:10<01:12,  1.45s/it]
+ 81%|████████  | 207/256 [05:11<01:11,  1.45s/it]
+
+{'loss': '2.822', 'grad_norm': '12.4', 'learning_rate': '0.0002', 'entropy': '3.352', 'num_tokens': '6624', 'mean_token_accuracy': '0.5333', 'epoch': '3.234'}
+
+ 81%|████████  | 207/256 [05:11<01:11,  1.45s/it]
+ 81%|████████▏ | 208/256 [05:13<01:09,  1.46s/it]
+
+{'loss': '3.185', 'grad_norm': '14.43', 'learning_rate': '0.0002', 'entropy': '3.549', 'num_tokens': '6656', 'mean_token_accuracy': '0.4286', 'epoch': '3.25'}
+
+ 81%|████████▏ | 208/256 [05:13<01:09,  1.46s/it]
+ 82%|████████▏ | 209/256 [05:14<01:08,  1.46s/it]
+
+{'loss': '3.143', 'grad_norm': '11.22', 'learning_rate': '0.0002', 'entropy': '3.316', 'num_tokens': '6688', 'mean_token_accuracy': '0.4', 'epoch': '3.266'}
+
+ 82%|████████▏ | 209/256 [05:14<01:08,  1.46s/it]
+ 82%|████████▏ | 210/256 [05:15<01:07,  1.46s/it]
+
+{'loss': '3.374', 'grad_norm': '12.21', 'learning_rate': '0.0002', 'entropy': '3.3', 'num_tokens': '6720', 'mean_token_accuracy': '0.5333', 'epoch': '3.281'}
+
+ 82%|████████▏ | 210/256 [05:15<01:07,  1.46s/it]
+ 82%|████████▏ | 211/256 [05:17<01:05,  1.46s/it]
+
+{'loss': '3.615', 'grad_norm': '11.64', 'learning_rate': '0.0002', 'entropy': '3.348', 'num_tokens': '6752', 'mean_token_accuracy': '0.3571', 'epoch': '3.297'}
+
+ 82%|████████▏ | 211/256 [05:17<01:05,  1.46s/it]
+ 83%|████████▎ | 212/256 [05:18<01:04,  1.46s/it]
+
+{'loss': '2.925', 'grad_norm': '12.1', 'learning_rate': '0.0002', 'entropy': '3.362', 'num_tokens': '6784', 'mean_token_accuracy': '0.4286', 'epoch': '3.312'}
+
+ 83%|████████▎ | 212/256 [05:18<01:04,  1.46s/it]
+ 83%|████████▎ | 213/256 [05:21<01:12,  1.68s/it]
+
+{'loss': '3.81', 'grad_norm': '13.62', 'learning_rate': '0.0002', 'entropy': '3.327', 'num_tokens': '6816', 'mean_token_accuracy': '0.4', 'epoch': '3.328'}
+
+ 83%|████████▎ | 213/256 [05:21<01:12,  1.68s/it]
+ 84%|████████▎ | 214/256 [05:22<01:10,  1.67s/it]
+
+{'loss': '2.964', 'grad_norm': '22.01', 'learning_rate': '0.0002', 'entropy': '3.084', 'num_tokens': '6848', 'mean_token_accuracy': '0.4', 'epoch': '3.344'}
+
+ 84%|████████▎ | 214/256 [05:22<01:10,  1.67s/it]
+ 84%|████████▍ | 215/256 [05:24<01:05,  1.60s/it]
+
+{'loss': '3.237', 'grad_norm': '10.67', 'learning_rate': '0.0002', 'entropy': '3.29', 'num_tokens': '6880', 'mean_token_accuracy': '0.4', 'epoch': '3.359'}
+
+ 84%|████████▍ | 215/256 [05:24<01:05,  1.60s/it]
+ 84%|████████▍ | 216/256 [05:25<01:02,  1.56s/it]
+
+{'loss': '3.725', 'grad_norm': '14.02', 'learning_rate': '0.0002', 'entropy': '3.213', 'num_tokens': '6912', 'mean_token_accuracy': '0.3333', 'epoch': '3.375'}
+
+ 84%|████████▍ | 216/256 [05:25<01:02,  1.56s/it]
+ 85%|████████▍ | 217/256 [05:27<00:59,  1.53s/it]
+
+{'loss': '3.37', 'grad_norm': '13.06', 'learning_rate': '0.0002', 'entropy': '3.086', 'num_tokens': '6944', 'mean_token_accuracy': '0.4', 'epoch': '3.391'}
+
+ 85%|████████▍ | 217/256 [05:27<00:59,  1.53s/it]
+ 85%|████████▌ | 218/256 [05:28<00:57,  1.51s/it]
+
+{'loss': '3.562', 'grad_norm': '20.82', 'learning_rate': '0.0002', 'entropy': '3.322', 'num_tokens': '6976', 'mean_token_accuracy': '0.4286', 'epoch': '3.406'}
+
+ 85%|████████▌ | 218/256 [05:28<00:57,  1.51s/it]
+ 86%|████████▌ | 219/256 [05:29<00:55,  1.49s/it]
+
+{'loss': '3.621', 'grad_norm': '12.43', 'learning_rate': '0.0002', 'entropy': '3.45', 'num_tokens': '7008', 'mean_token_accuracy': '0.4', 'epoch': '3.422'}
+
+ 86%|████████▌ | 219/256 [05:29<00:55,  1.49s/it]
+ 86%|████████▌ | 220/256 [05:33<01:12,  2.02s/it]
+
+{'loss': '3.485', 'grad_norm': '12.68', 'learning_rate': '0.0002', 'entropy': '3.404', 'num_tokens': '7040', 'mean_token_accuracy': '0.4', 'epoch': '3.438'}
+
+ 86%|████████▌ | 220/256 [05:33<01:12,  2.02s/it]
+ 86%|████████▋ | 221/256 [05:35<01:11,  2.03s/it]
+
+{'loss': '3.73', 'grad_norm': '10.19', 'learning_rate': '0.0002', 'entropy': '3.387', 'num_tokens': '7072', 'mean_token_accuracy': '0.3333', 'epoch': '3.453'}
+
+ 86%|████████▋ | 221/256 [05:35<01:11,  2.03s/it]
+ 87%|████████▋ | 222/256 [05:36<01:03,  1.85s/it]
+
+{'loss': '3.745', 'grad_norm': '11.28', 'learning_rate': '0.0002', 'entropy': '3.384', 'num_tokens': '7104', 'mean_token_accuracy': '0.3333', 'epoch': '3.469'}
+
+ 87%|████████▋ | 222/256 [05:36<01:03,  1.85s/it]
+ 87%|████████▋ | 223/256 [05:38<00:57,  1.73s/it]
+
+{'loss': '3.419', 'grad_norm': '10.03', 'learning_rate': '0.0002', 'entropy': '3.495', 'num_tokens': '7136', 'mean_token_accuracy': '0.3333', 'epoch': '3.484'}
+
+ 87%|████████▋ | 223/256 [05:38<00:57,  1.73s/it]
+ 88%|████████▊ | 224/256 [05:39<00:52,  1.65s/it]
+
+{'loss': '3.596', 'grad_norm': '10.51', 'learning_rate': '0.0002', 'entropy': '3.469', 'num_tokens': '7168', 'mean_token_accuracy': '0.3333', 'epoch': '3.5'}
+
+ 88%|████████▊ | 224/256 [05:39<00:52,  1.65s/it]
+ 88%|████████▊ | 225/256 [05:41<00:49,  1.59s/it]
+
+{'loss': '3.518', 'grad_norm': '11.57', 'learning_rate': '0.0002', 'entropy': '3.431', 'num_tokens': '7200', 'mean_token_accuracy': '0.3333', 'epoch': '3.516'}
+
+ 88%|████████▊ | 225/256 [05:41<00:49,  1.59s/it]
+ 88%|████████▊ | 226/256 [05:42<00:46,  1.55s/it]
+
+{'loss': '3.152', 'grad_norm': '11.47', 'learning_rate': '0.0002', 'entropy': '3.447', 'num_tokens': '7232', 'mean_token_accuracy': '0.4', 'epoch': '3.531'}
+
+ 88%|████████▊ | 226/256 [05:42<00:46,  1.55s/it]
+ 89%|████████▊ | 227/256 [05:44<00:44,  1.54s/it]
+
+{'loss': '3.399', 'grad_norm': '12.39', 'learning_rate': '0.0002', 'entropy': '3.418', 'num_tokens': '7264', 'mean_token_accuracy': '0.3333', 'epoch': '3.547'}
+
+ 89%|████████▊ | 227/256 [05:44<00:44,  1.54s/it]
+ 89%|████████▉ | 228/256 [05:45<00:42,  1.51s/it]
+
+{'loss': '3.186', 'grad_norm': '11.61', 'learning_rate': '0.0002', 'entropy': '3.57', 'num_tokens': '7296', 'mean_token_accuracy': '0.4', 'epoch': '3.562'}
+
+ 89%|████████▉ | 228/256 [05:45<00:42,  1.51s/it]
+ 89%|████████▉ | 229/256 [05:46<00:40,  1.49s/it]
+
+{'loss': '3.547', 'grad_norm': '11.01', 'learning_rate': '0.0002', 'entropy': '3.452', 'num_tokens': '7328', 'mean_token_accuracy': '0.3333', 'epoch': '3.578'}
+
+ 89%|████████▉ | 229/256 [05:46<00:40,  1.49s/it]
+ 90%|████████▉ | 230/256 [05:48<00:38,  1.48s/it]
+
+{'loss': '3.707', 'grad_norm': '10.5', 'learning_rate': '0.0002', 'entropy': '3.514', 'num_tokens': '7360', 'mean_token_accuracy': '0.4', 'epoch': '3.594'}
+
+ 90%|████████▉ | 230/256 [05:48<00:38,  1.48s/it]
+ 90%|█████████ | 231/256 [05:49<00:36,  1.47s/it]
+
+{'loss': '3.265', 'grad_norm': '10.03', 'learning_rate': '0.0002', 'entropy': '3.535', 'num_tokens': '7392', 'mean_token_accuracy': '0.4', 'epoch': '3.609'}
+
+ 90%|█████████ | 231/256 [05:49<00:36,  1.47s/it]
+ 91%|█████████ | 232/256 [05:51<00:35,  1.47s/it]
+
+{'loss': '3.71', 'grad_norm': '12.58', 'learning_rate': '0.0002', 'entropy': '3.503', 'num_tokens': '7424', 'mean_token_accuracy': '0.4', 'epoch': '3.625'}
+
+ 91%|█████████ | 232/256 [05:51<00:35,  1.47s/it]
+ 91%|█████████ | 233/256 [05:52<00:33,  1.46s/it]
+
+{'loss': '2.793', 'grad_norm': '8.707', 'learning_rate': '0.0002', 'entropy': '3.453', 'num_tokens': '7456', 'mean_token_accuracy': '0.5', 'epoch': '3.641'}
+
+ 91%|█████████ | 233/256 [05:52<00:33,  1.46s/it]
+ 91%|█████████▏| 234/256 [05:54<00:32,  1.46s/it]
+
+{'loss': '3.468', 'grad_norm': '9.61', 'learning_rate': '0.0002', 'entropy': '3.508', 'num_tokens': '7488', 'mean_token_accuracy': '0.4', 'epoch': '3.656'}
+
+ 91%|█████████▏| 234/256 [05:54<00:32,  1.46s/it]
+ 92%|█████████▏| 235/256 [05:55<00:30,  1.46s/it]
+
+{'loss': '3.602', 'grad_norm': '10.62', 'learning_rate': '0.0002', 'entropy': '3.543', 'num_tokens': '7520', 'mean_token_accuracy': '0.4', 'epoch': '3.672'}
+
+ 92%|█████████▏| 235/256 [05:55<00:30,  1.46s/it]
+ 92%|█████████▏| 236/256 [05:57<00:29,  1.46s/it]
+
+{'loss': '3.279', 'grad_norm': '14.38', 'learning_rate': '0.0002', 'entropy': '3.638', 'num_tokens': '7552', 'mean_token_accuracy': '0.4286', 'epoch': '3.688'}
+
+ 92%|█████████▏| 236/256 [05:57<00:29,  1.46s/it]
+ 93%|█████████▎| 237/256 [05:58<00:27,  1.46s/it]
+
+{'loss': '4.015', 'grad_norm': '12.88', 'learning_rate': '0.0002', 'entropy': '3.244', 'num_tokens': '7584', 'mean_token_accuracy': '0.3333', 'epoch': '3.703'}
+
+ 93%|█████████▎| 237/256 [05:58<00:27,  1.46s/it]
+ 93%|█████████▎| 238/256 [06:00<00:26,  1.46s/it]
+
+{'loss': '3.419', 'grad_norm': '9.295', 'learning_rate': '0.0002', 'entropy': '3.403', 'num_tokens': '7616', 'mean_token_accuracy': '0.4', 'epoch': '3.719'}
+
+ 93%|█████████▎| 238/256 [06:00<00:26,  1.46s/it]
+ 93%|█████████▎| 239/256 [06:01<00:24,  1.46s/it]
+
+{'loss': '3.279', 'grad_norm': '9.919', 'learning_rate': '0.0002', 'entropy': '3.36', 'num_tokens': '7648', 'mean_token_accuracy': '0.4', 'epoch': '3.734'}
+
+ 93%|█████████▎| 239/256 [06:01<00:24,  1.46s/it]
+ 94%|█████████▍| 240/256 [06:02<00:23,  1.46s/it]
+
+{'loss': '3.217', 'grad_norm': '10.47', 'learning_rate': '0.0002', 'entropy': '3.509', 'num_tokens': '7680', 'mean_token_accuracy': '0.4', 'epoch': '3.75'}
+
+ 94%|█████████▍| 240/256 [06:02<00:23,  1.46s/it]
+ 94%|█████████▍| 241/256 [06:04<00:21,  1.46s/it]
+
+{'loss': '3.318', 'grad_norm': '11.99', 'learning_rate': '0.0002', 'entropy': '3.213', 'num_tokens': '7712', 'mean_token_accuracy': '0.3333', 'epoch': '3.766'}
+
+ 94%|█████████▍| 241/256 [06:04<00:21,  1.46s/it]
+ 95%|█████████▍| 242/256 [06:05<00:20,  1.46s/it]
+
+{'loss': '4.129', 'grad_norm': '11.65', 'learning_rate': '0.0002', 'entropy': '3.236', 'num_tokens': '7744', 'mean_token_accuracy': '0.4', 'epoch': '3.781'}
+
+ 95%|█████████▍| 242/256 [06:05<00:20,  1.46s/it]
+ 95%|█████████▍| 243/256 [06:07<00:18,  1.46s/it]
+
+{'loss': '3.13', 'grad_norm': '9.762', 'learning_rate': '0.0002', 'entropy': '3.433', 'num_tokens': '7776', 'mean_token_accuracy': '0.4', 'epoch': '3.797'}
+
+ 95%|█████████▍| 243/256 [06:07<00:18,  1.46s/it]
+ 95%|█████████▌| 244/256 [06:11<00:26,  2.20s/it]
+
+{'loss': '3.166', 'grad_norm': '8.547', 'learning_rate': '0.0002', 'entropy': '3.456', 'num_tokens': '7808', 'mean_token_accuracy': '0.4', 'epoch': '3.812'}
+
+ 95%|█████████▌| 244/256 [06:11<00:26,  2.20s/it]
+ 96%|█████████▌| 245/256 [06:12<00:22,  2.04s/it]
+
+{'loss': '3.59', 'grad_norm': '11.74', 'learning_rate': '0.0002', 'entropy': '3.494', 'num_tokens': '7840', 'mean_token_accuracy': '0.4', 'epoch': '3.828'}
+
+ 96%|█████████▌| 245/256 [06:12<00:22,  2.04s/it]
+ 96%|█████████▌| 246/256 [06:14<00:18,  1.86s/it]
+
+{'loss': '3.765', 'grad_norm': '9.658', 'learning_rate': '0.0002', 'entropy': '3.5', 'num_tokens': '7872', 'mean_token_accuracy': '0.3333', 'epoch': '3.844'}
+
+ 96%|█████████▌| 246/256 [06:14<00:18,  1.86s/it]
+ 96%|█████████▋| 247/256 [06:15<00:15,  1.74s/it]
+
+{'loss': '3.817', 'grad_norm': '15.13', 'learning_rate': '0.0002', 'entropy': '3.71', 'num_tokens': '7904', 'mean_token_accuracy': '0.3333', 'epoch': '3.859'}
+
+ 96%|█████████▋| 247/256 [06:15<00:15,  1.74s/it]
+ 97%|█████████▋| 248/256 [06:17<00:13,  1.65s/it]
+
+{'loss': '4.181', 'grad_norm': '13.35', 'learning_rate': '0.0002', 'entropy': '3.677', 'num_tokens': '7936', 'mean_token_accuracy': '0.3333', 'epoch': '3.875'}
+
+ 97%|█████████▋| 248/256 [06:17<00:13,  1.65s/it]
+ 97%|█████████▋| 249/256 [06:18<00:11,  1.59s/it]
+
+{'loss': '3.815', 'grad_norm': '10.63', 'learning_rate': '0.0002', 'entropy': '3.659', 'num_tokens': '7968', 'mean_token_accuracy': '0.3333', 'epoch': '3.891'}
+
+ 97%|█████████▋| 249/256 [06:18<00:11,  1.59s/it]
+ 98%|█████████▊| 250/256 [06:20<00:09,  1.55s/it]
+
+{'loss': '3.195', 'grad_norm': '12.16', 'learning_rate': '0.0002', 'entropy': '3.772', 'num_tokens': '8000', 'mean_token_accuracy': '0.4286', 'epoch': '3.906'}
+
+ 98%|█████████▊| 250/256 [06:20<00:09,  1.55s/it]
+ 98%|█████████▊| 251/256 [06:21<00:07,  1.52s/it]
+
+{'loss': '4.258', 'grad_norm': '12.95', 'learning_rate': '0.0002', 'entropy': '3.628', 'num_tokens': '8032', 'mean_token_accuracy': '0.3333', 'epoch': '3.922'}
+
+ 98%|█████████▊| 251/256 [06:21<00:07,  1.52s/it]
+ 98%|█████████▊| 252/256 [06:23<00:06,  1.51s/it]
+
+{'loss': '3.353', 'grad_norm': '9.618', 'learning_rate': '0.0002', 'entropy': '3.651', 'num_tokens': '8064', 'mean_token_accuracy': '0.4', 'epoch': '3.938'}
+
+ 98%|█████████▊| 252/256 [06:23<00:06,  1.51s/it]
+ 99%|█████████▉| 253/256 [06:24<00:04,  1.52s/it]
+
+{'loss': '3.598', 'grad_norm': '12.27', 'learning_rate': '0.0002', 'entropy': '3.543', 'num_tokens': '8096', 'mean_token_accuracy': '0.3333', 'epoch': '3.953'}
+
+ 99%|█████████▉| 253/256 [06:24<00:04,  1.52s/it]
+ 99%|█████████▉| 254/256 [06:26<00:03,  1.52s/it]
+
+{'loss': '3.431', 'grad_norm': '18.81', 'learning_rate': '0.0002', 'entropy': '3.574', 'num_tokens': '8128', 'mean_token_accuracy': '0.3333', 'epoch': '3.969'}
+
+ 99%|█████████▉| 254/256 [06:26<00:03,  1.52s/it]
+100%|█████████▉| 255/256 [06:27<00:01,  1.50s/it]
+
+{'loss': '3.739', 'grad_norm': '25.87', 'learning_rate': '0.0002', 'entropy': '3.502', 'num_tokens': '8160', 'mean_token_accuracy': '0.3333', 'epoch': '3.984'}
+
+100%|█████████▉| 255/256 [06:27<00:01,  1.50s/it]
+100%|██████████| 256/256 [06:29<00:00,  1.49s/it]
+
+{'loss': '3.349', 'grad_norm': '10.58', 'learning_rate': '0.0002', 'entropy': '3.653', 'num_tokens': '8192', 'mean_token_accuracy': '0.4', 'epoch': '4'}
+
+100%|██████████| 256/256 [06:29<00:00,  1.49s/it]
+
+{'train_runtime': '389.3', 'train_samples_per_second': '0.658', 'train_steps_per_second': '0.658', 'train_loss': '3.963', 'epoch': '4'}
+
+100%|██████████| 256/256 [06:29<00:00,  1.49s/it]
+100%|██████████| 256/256 [06:29<00:00,  1.52s/it]
+╭──────────────────────────────────────────────────────────────────────────────────────── Soup Training: /workspace/payload/benchmarks/harness/ds_compare/model ─────────────────────────────────────────────────────────────────────────────────────────╮
+│ Epoch 4.0/4   100%                                                                                                                                                                                                                                     │
+│ Step:  256/256                                                                                                                                                                                                                                         │
+│ Loss:  3.3487    LR: 2.00e-04                                                                                                                                                                                                                          │
+│ Speed: 0.66 it/s                                                                                                                                                                                                                                       │
+│ GPU peak: 2.0/79.2 GB                                                                                                                                                                                                                                  │
+│ Grad:  10.5752                                                                                                                                                                                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────── NVIDIA H100 80GB HBM3 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Training Complete! ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Loss: 5.8885 -> 3.3487                                                                                                                                                                                                                                 │
+│ Duration: 6m                                                                                                                                                                                                                                           │
+│ Output: output                                                                                                                                                                                                                                         │
+│ Run ID: run_20261107_094419_f3f1f73e                                                                                                                                                                                                                   │
+│                                                                                                                                                                                                                                                        │
+│ Quick test:  soup chat --model output                                                                                                                                                                                                                  │
+│ Push to HF:  soup push --model output                                                                                                                                                                                                                  │
+│ Merge LoRA:  soup merge --adapter output                                                                                                                                                                                                               │
+│ Export GGUF: soup export --model output                                                                                                                                                                                                                │
+│ Run details: soup runs show run_20261107_094419_f3f1f73e                                                                                                                                                                                               │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[W1107 09:50:58.100892600 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())

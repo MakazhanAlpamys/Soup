@@ -2,7 +2,10 @@
 
 import math
 import re
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+
+if TYPE_CHECKING:
+    from soup_cli.utils.hardware_fit import FitUnavailable
 
 # GPU memory lookup table (name → GB VRAM). Keys are normalized by
 # ``normalize_gpu_key``. Every laptop part has its own key, including those with
@@ -146,147 +149,6 @@ def get_model_arch(model_name: str, model_params_b: float) -> dict:
     }
 
 
-def estimate_model_memory(model_params_b: float, quantization: str) -> float:
-    """Estimate model weight memory in GB.
-
-    Args:
-        model_params_b: Model size in billions of parameters.
-        quantization: '4bit', '8bit', or 'none' (FP16).
-
-    Returns:
-        Estimated memory in GB.
-    """
-    bytes_per_param = {"4bit": 0.5, "8bit": 1.0, "none": 2.0}
-    bpp = bytes_per_param.get(quantization, 2.0)
-    return model_params_b * bpp
-
-
-def estimate_trainable_params(
-    model_params_b: float, lora_r: int, hidden_size: int
-) -> int:
-    """Estimate number of trainable LoRA parameters.
-
-    LoRA adds r × hidden_size × 2 params per target module.
-    Typical target modules: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
-    """
-    num_target_modules = 7  # typical for LLaMA-family
-    arch = get_model_arch("", model_params_b)
-    num_layers = arch["num_layers"]
-
-    # Each module: r * hidden_size (A) + hidden_size * r (B) = 2 * r * hidden_size
-    params_per_layer = num_target_modules * 2 * lora_r * hidden_size
-    return params_per_layer * num_layers
-
-
-def estimate_lora_memory(
-    model_params_b: float, lora_r: int, lora_alpha: int
-) -> float:
-    """Estimate LoRA adapter memory in GB (FP16 for trainable params)."""
-    arch = get_model_arch("", model_params_b)
-    trainable = estimate_trainable_params(model_params_b, lora_r, arch["hidden_size"])
-    # FP16 = 2 bytes per param
-    return trainable * 2 / (1024**3)
-
-
-def estimate_optimizer_memory(trainable_params: int, optimizer: str) -> float:
-    """Estimate optimizer state memory in GB.
-
-    Adam: 2 states per param (mean + variance) = 2 × param_bytes
-    SGD: 1 state (momentum) = 1 × param_bytes
-    8bit Adam: ~0.5 × normal Adam
-    """
-    bytes_per_param = 2  # FP16 trainable params
-
-    if "8bit" in optimizer or "bnb" in optimizer:
-        # 8-bit optimizer states
-        state_multiplier = 1.0  # reduced from 2.0
-    elif "sgd" in optimizer.lower():
-        state_multiplier = 1.0  # only momentum
-    else:
-        # AdamW and similar: mean + variance
-        state_multiplier = 2.0
-
-    total_bytes = trainable_params * bytes_per_param * state_multiplier
-    return total_bytes / (1024**3)
-
-
-def estimate_activation_memory(
-    batch_size: int,
-    seq_len: int,
-    hidden_size: int,
-    num_layers: int,
-    gradient_checkpointing: bool = False,
-) -> float:
-    """Estimate activation memory in GB.
-
-    Activations scale with batch_size × seq_len × hidden_size × num_layers.
-    Gradient checkpointing reduces this by ~sqrt(num_layers).
-    """
-    # ~2 bytes per activation value, ~4 activations per layer per position
-    activation_bytes = batch_size * seq_len * hidden_size * 4 * 2
-
-    if gradient_checkpointing:
-        # Only store activations at checkpoints (sqrt reduction)
-        effective_layers = max(1, int(math.sqrt(num_layers)))
-    else:
-        effective_layers = num_layers
-
-    total_bytes = activation_bytes * effective_layers
-    return total_bytes / (1024**3)
-
-
-def estimate_total(
-    model_name: str,
-    model_params_b: float,
-    quantization: str,
-    lora_r: int,
-    lora_alpha: int,
-    batch_size: int,
-    seq_len: int,
-    optimizer: str,
-    gradient_checkpointing: bool,
-    peft: str = "lora",
-) -> dict:
-    """Compute full memory profile from a parameter count.
-
-    The shared estimate (``utils/vram_estimate.py``) over a shape guessed from
-    ``model_params_b``, so the vocabulary and the logits term are unknown here.
-    ``soup profile`` reads the model's own shape instead (:func:`profile_from_config`).
-    """
-    from soup_cli.utils.hardware_fit import (
-        _VALID_OPTIMIZERS,
-        CONFIG_QUANT_TO_FIT,
-        HardwareFitInput,
-        estimate_peak_vram_gb,
-        validate_batch_size,
-        validate_seq_len,
-    )
-
-    quant = CONFIG_QUANT_TO_FIT.get(quantization, "none")
-    if peft == "full":
-        mode = "full"
-    else:
-        mode = "qlora" if quant == "4bit" else "lora"
-    inp = HardwareFitInput(
-        params_b=float(model_params_b),
-        seq_len=validate_seq_len(min(max(int(seq_len), 64), 1_048_576)),
-        batch_size=validate_batch_size(min(max(int(batch_size), 1), 1024)),
-        optimizer=optimizer if optimizer in _VALID_OPTIMIZERS else "adamw_torch",
-        quant=quant,
-        peft=mode,
-        gradient_checkpointing=gradient_checkpointing,
-        lora_r=int(lora_r),
-    )
-    result = profile_result(
-        estimate_peak_vram_gb(inp),
-        model_name=model_name,
-        gradient_checkpointing=gradient_checkpointing,
-    )
-    result["quantization"] = quantization
-    result["peft"] = peft
-    return result
-
-
 def checkpointing_tier(value: Any) -> str:
     """``off``, ``full``, ``medium`` or ``selective``: the checkpointing a run is priced with.
 
@@ -328,6 +190,7 @@ def profile_result(
         "activation_memory_gb": round(breakdown.activations_gb, 2),
         "logits_memory_gb": round(breakdown.logits_gb, 2),
         "dequant_memory_gb": round(breakdown.dequant_gb, 2),
+        "optimizer_step_memory_gb": round(breakdown.optimizer_step_gb, 2),
         "overhead_gb": round(breakdown.overhead_gb, 2),
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
@@ -353,25 +216,37 @@ def profile_result(
 
 
 def profile_from_config(
-    cfg: Any, *, allow_network: bool = True, gpu_memory_gb: Optional[float] = None
-) -> Optional[dict]:
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
+) -> Union[dict, "FitUnavailable"]:
     """The memory profile of a ``SoupConfig``, from the model's own shape.
 
     Built from the same input as the train pre-flight
     (``hardware_fit.hardware_fit_input_from_config``), so the two report the same
-    peak for the same config (#2049). ``None`` when the run cannot be priced.
-    ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto`` resolves on.
+    peak for the same config (#2049). When the run cannot be priced, the
+    :class:`~soup_cli.utils.hardware_fit.FitUnavailable` naming the field that stops
+    it (#2306). ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto``
+    resolves on. ``on_hub_request`` is called just before the first request to the
+    Hub, if one is made.
     """
     from soup_cli.utils.hardware_fit import (
+        FitUnavailable,
         estimate_peak_vram_gb,
-        hardware_fit_input_from_config,
+        hardware_fit_input_or_reason,
     )
 
-    inp = hardware_fit_input_from_config(
-        cfg, allow_network=allow_network, profile_defaults=True, gpu_memory_gb=gpu_memory_gb
+    inp = hardware_fit_input_or_reason(
+        cfg,
+        allow_network=allow_network,
+        profile_defaults=True,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=on_hub_request,
     )
-    if inp is None:
-        return None
+    if isinstance(inp, FitUnavailable):
+        return inp
     result = profile_result(
         estimate_peak_vram_gb(inp),
         model_name=cfg.base,
@@ -435,6 +310,7 @@ def profile_from_model(
     gradient_checkpointing: str = "off",
     allow_network: bool = True,
     gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
 ) -> dict:
     """The memory profile of a model id or directory, with no soup.yaml (#2049).
 
@@ -442,7 +318,8 @@ def profile_from_model(
     come from the model's own config.json (a local directory, the Hugging Face cache,
     then the Hub unless offline); a shape guessed from the name is not an answer to
     "will it fit", so that raises :class:`ModelShapeUnavailableError`. Out-of-range
-    numbers raise ``ValueError``.
+    numbers raise ``ValueError``. ``on_hub_request`` is called just before the first
+    request to the Hub, if one is made.
     """
     from soup_cli.utils.hardware_fit import (
         HardwareFitInput,
@@ -454,7 +331,9 @@ def profile_from_model(
     from soup_cli.utils.model_shape import read_model_shape
 
     quant, peft = MODEL_QUERY_METHODS[method]
-    shape = read_model_shape(model, allow_network=allow_network)
+    shape = read_model_shape(
+        model, allow_network=allow_network, on_hub_request=on_hub_request
+    )
     if shape.guessed:
         raise ModelShapeUnavailableError(_unreadable_reason(model, allow_network=allow_network))
     inp = HardwareFitInput(

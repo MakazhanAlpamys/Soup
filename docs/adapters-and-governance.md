@@ -33,6 +33,8 @@
 
 v0.57 shipped `adapters diff / merge / blame / branch`. v0.67 finishes the lifecycle: evolutionary merge driven by your eval, GitHub-shaped PRs for adapter review, a shared `soup.lock` for team reproducibility, and binary-search bisect over training history.
 
+`adapters merge` and `adapters arithmetic` refuse an `--output` that names one of their input adapters (including `./A`, an absolute path, a case alias on Windows or a hard link) and exit before touching it; write to a new directory instead.
+
 ```bash
 # 1. Evolutionary merge: search the simplex of merge weights via CMA-ES.
 #    v0.71.4 makes this a LIVE loop — each candidate is merged, scored against
@@ -123,7 +125,8 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# the latest thumbs-up and thumbs-down answer per prompt. Matching answer
+# texts yield no pair, even when older distinct answers exist. The database must
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db

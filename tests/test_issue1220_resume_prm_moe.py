@@ -24,7 +24,6 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.train import UNSUPPORTED_RESUME_TASKS
-from tests._windows_ci import skip_on_windows_ci
 
 
 def _local_base_model_dir() -> str:
@@ -252,11 +251,10 @@ class TestResumeRefusalForUnsupportedTasks:
         assert "--hf-resume is not supported for task 'unlearn'" in clean_output
 
 
-@skip_on_windows_ci
 class TestPRMResume:
     """Functional verification of PRM resume with tiny model."""
 
-    def test_prm_resume_execution_and_checkpoints(self, tmp_path, monkeypatch):
+    def test_prm_resume_execution_and_checkpoints(self, tmp_path, monkeypatch, aten_half_matmuls):
         import transformers
 
         steps = []
@@ -339,11 +337,12 @@ class TestPRMResume:
         assert (ckpt2 / "trainer_state.json").stat().st_mtime == mtime2_before
 
 
-@skip_on_windows_ci
 class TestMoleRoutingResume:
     """Functional verification of MoLE resume with tiny model and task adapters."""
 
-    def test_mole_resume_execution_checkpoints_and_gate(self, tmp_path, monkeypatch):
+    def test_mole_resume_execution_checkpoints_and_gate(
+        self, tmp_path, monkeypatch, aten_half_matmuls
+    ):
         import torch
         import transformers
         from peft import LoraConfig, get_peft_model

@@ -1,0 +1,174 @@
+{
+  "timestamp_utc": "2026-11-08T12:42:00.993420+00:00",
+  "git_sha": "26e7098e01abd96c2f22933a2111aea44b6aba85",
+  "runtime": {
+    "python": "3.13.16",
+    "platform": "Linux-6.6.159+-x86_64-with-glibc2.39",
+    "torch": "2.14.1+cu130",
+    "torch_cuda": "13.0",
+    "gpu": "Tesla T4",
+    "compute_capability": "7.5",
+    "gpu_memory_bytes": 15637086208,
+    "driver": "580.82.07",
+    "packages": {
+      "transformers": "5.22.1",
+      "peft": "0.21.2",
+      "bitsandbytes": "0.50.2",
+      "liger-kernel": "0.8.5"
+    }
+  },
+  "protocol": {
+    "shape": {
+      "tokens": 2048,
+      "hidden": 4096,
+      "intermediate": 14336,
+      "rank": 64
+    },
+    "warmup_per_arm": 5,
+    "measured_repeats_per_arm": 30,
+    "timer": "CUDA events, forward plus backward",
+    "arms_interleaved": [
+      "fast",
+      "plain",
+      "liger"
+    ],
+    "balanced_arm_order_permutations": [
+      ["fast", "plain", "liger"],
+      ["fast", "liger", "plain"],
+      ["liger", "fast", "plain"],
+      ["liger", "plain", "fast"],
+      ["plain", "liger", "fast"],
+      ["plain", "fast", "liger"]
+    ],
+    "dtype_order": [
+      "bf16",
+      "nf4"
+    ],
+    "dtype_process_isolation": "one fresh process per dtype cell; arms paired and interleaved inside each process",
+    "fixture_settings": {
+      "target_projections": ["gate_proj", "up_proj", "down_proj"],
+      "lora_alpha": "2 * rank",
+      "lora_dropout": 0.0,
+      "seed": 837,
+      "nf4_double_quantization": true,
+      "nf4_compute_dtype": "bfloat16"
+    },
+    "saved_tensor_bytes": "unique saved tensor views, deduplicated by storage and view metadata; raw counts are not like-for-like for NF4 because Fast-LoRA saves packed weights and quant state through save_for_backward while bitsandbytes MatMul4Bit stores these on ctx",
+    "activation_only_saved_tensor_bytes_derived": {
+      "bf16_emulated_sm75": {
+        "fast": 141819904,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "nf4": {
+        "fast": 141819904,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "method": "derived arithmetic, not separately measured; subtract 352321536 common BF16 base-weight bytes from each arm and subtract 90879180 packed-weight plus quant-state bytes from Fast-LoRA NF4"
+    },
+    "peak_memory": "torch.cuda.max_memory_allocated",
+    "noise_rule": "No threshold was specified before the timed run; medians and within-process IQRs are descriptive only, with no significance claim.",
+    "scope": "single synthetic SwiGLU MLP block; no model download; not end-to-end training"
+  },
+  "results": {
+    "bf16_emulated_sm75": {
+      "saved_tensor_bytes": {
+        "fast": 494141440,
+        "plain": 611844096,
+        "liger": 553123840
+      },
+      "median_forward_backward_ms": {
+        "fast": 595.258056640625,
+        "plain": 582.2525634765625,
+        "liger": 582.8645629882812
+      },
+      "p25_p75_ms": {
+        "fast": [
+          582.6103057861328,
+          610.797607421875
+        ],
+        "plain": [
+          569.5727081298828,
+          595.8716430664062
+        ],
+        "liger": [
+          566.6428070068359,
+          595.3636932373047
+        ]
+      },
+      "peak_memory_allocated_bytes": {
+        "fast": 1369702400,
+        "plain": 781975552,
+        "liger": 723255296
+      },
+      "max_gradient_relative_l2_vs_plain": {
+        "fast": 0.004315595181889909,
+        "liger": 0.004676141711634789
+      },
+      "output_equal_to_plain": {
+        "fast": true,
+        "liger": true
+      },
+      "path_proof": {
+        "fast": "30/30",
+        "plain": "30/30",
+        "liger": "30/30"
+      },
+      "sm_clock_mhz": {
+        "min": 855,
+        "median": 945,
+        "max": 1470
+      }
+    },
+    "nf4": {
+      "saved_tensor_bytes": {
+        "fast": 232699084,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "median_forward_backward_ms": {
+        "fast": 673.5637512207031,
+        "plain": 652.1775207519531,
+        "liger": 656.8898315429688
+      },
+      "p25_p75_ms": {
+        "fast": [
+          654.9317626953125,
+          688.3938293457031
+        ],
+        "plain": [
+          640.0177459716797,
+          667.0416259765625
+        ],
+        "liger": [
+          637.2090148925781,
+          668.2589111328125
+        ]
+      },
+      "peak_memory_allocated_bytes": {
+        "fast": 1183761408,
+        "plain": 755418112,
+        "liger": 696697856
+      },
+      "max_gradient_relative_l2_vs_plain": {
+        "fast": 0.0043144884988880056,
+        "liger": 0.004670710817751713
+      },
+      "output_equal_to_plain": {
+        "fast": true,
+        "liger": true
+      },
+      "path_proof": {
+        "fast": "30/30",
+        "plain": "30/30",
+        "liger": "30/30"
+      },
+      "sm_clock_mhz": {
+        "min": 735,
+        "median": 870,
+        "max": 960
+      }
+    }
+  }
+}

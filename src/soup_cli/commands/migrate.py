@@ -7,8 +7,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -53,8 +54,9 @@ def migrate(
     # Validate source
     if source not in SUPPORTED_SOURCES:
         console.print(
-            f"[red]Unknown source: {source}[/]\n"
-            f"Supported: {', '.join(SUPPORTED_SOURCES)}"
+            f"[red]Unknown source: {for_terminal(source)}[/]\n"
+            f"Supported: {', '.join(SUPPORTED_SOURCES)}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -63,7 +65,7 @@ def migrate(
     try:
         input_path = validate_input_path(input_path)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Keep the permissive content check for explicit .jsonl files. For every
@@ -79,7 +81,8 @@ def migrate(
     if is_jsonl:
         console.print(
             f"[red]Expected a {source} YAML config; got JSONL "
-            f"({input_path.name}) — did you pass the wrong file?[/]"
+            f"({for_terminal(input_path.name)}) — did you pass the wrong file?[/]",
+            emoji=False,
         )
         console.print(
             "[dim]Tip: `soup migrate` migrates competitor *configs*, not "
@@ -93,7 +96,7 @@ def migrate(
         try:
             output_path = validate_output_path(output_path)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1)
 
     # Run migration
@@ -108,16 +111,16 @@ def migrate(
             from soup_cli.migrate.unsloth import migrate_unsloth
             result = migrate_unsloth(input_path)
     except ValueError as exc:
-        console.print(f"[red]Migration failed:[/] {for_terminal(exc)}")
+        console.print(f"[red]Migration failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1)
 
-    # Show warnings (escape Rich markup from untrusted config values)
+    # Show warnings (untrusted config values: a Panel body is parsed as markup and
+    # emoji codes, which console.print(emoji=False) does not reach)
     migration_warnings = result.get("_warnings", [])
     if migration_warnings:
-        from rich.markup import escape
-        warning_text = "\n".join(f"  [yellow]![/] {escape(w)}" for w in migration_warnings)
+        warning_text = "\n".join(f"  [yellow]![/] {for_terminal(w)}" for w in migration_warnings)
         console.print(Panel(
-            warning_text,
+            Text.from_markup(warning_text, emoji=False),
             title="[yellow]Migration Warnings[/]",
             border_style="yellow",
         ))
@@ -131,7 +134,10 @@ def migrate(
     try:
         loaded_cfg = load_config_from_string(yaml_str)
     except Exception as exc:
-        console.print(f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]")
+        console.print(
+            f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]",
+            emoji=False,
+        )
         raise typer.Exit(1)
 
     task_val = getattr(loaded_cfg, "task", "unknown")
@@ -155,8 +161,9 @@ def migrate(
 
     # Check for existing file
     if output_path.exists() and not yes:
+        # Click prints the prompt as plain text, so only the controls are stripped.
         confirm = typer.confirm(
-            f"File '{output}' already exists. Overwrite?"
+            f"File '{strip_control(output)}' already exists. Overwrite?"
         )
         if not confirm:
             console.print("[yellow]Aborted.[/]")
@@ -164,8 +171,9 @@ def migrate(
 
     # Write output
     output_path.write_text(yaml_str, encoding="utf-8")
-    console.print(f"[green]\u2713[/] Config written to [bold]{output}[/]")
-    console.print(f"[dim]Next: soup train --config {output}[/]")
+    display_output = for_terminal(output)
+    console.print(f"[green]\u2713[/] Config written to [bold]{display_output}[/]", emoji=False)
+    console.print(f"[dim]Next: soup train --config {display_output}[/]", emoji=False)
 
 
 def _looks_like_jsonl(path: Path, *, require_multiple_objects: bool = False) -> bool:

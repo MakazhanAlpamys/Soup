@@ -12,6 +12,468 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.77.2] - 2026-11-05
+
+### Upgrade notes
+
+A `soup.yaml` that loads on 0.77.1 loads on 0.77.2, unless it is a `task: sft` config that sets
+one of four settings on a path that never applied it (second item). Coming from 0.76.x or older,
+read the 0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the
+first run of an existing config.
+
+- **`soup serve --tool-auth-token` follows the token rule of `soup ui` and `soup mcp serve`:**
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. 0.77.1 accepted any non-empty
+  value; 0.77.2 exits 2 before the model loads, on every bind, whether the value comes from the
+  option or from `SOUP_TOOL_AUTH_TOKEN`, and the message names the rule, never the value. All
+  three commands now match the whole value, so a token with a trailing newline is refused too.
+  Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` and send the
+  same value as `Authorization: Bearer <token>` (#2329).
+- **`task: sft` refuses four settings on the paths that never applied them** (#2278). 0.77.1
+  loaded them and trained without them; 0.77.2 refuses the config at load and names the field,
+  the setting that selects the path and what to change. A value of `false` or `null` loads.
+
+  | Path | Refused when set |
+  |---|---|
+  | `modality: vision` or `modality: audio` | `reasoning_effort`, `train_on_eot`, `use_flash_attn`, `use_liger` |
+  | `backend: mlx` | `reasoning_effort`, `train_on_eot` (`use_flash_attn` / `use_liger` keep their ignore warning) |
+  | `backend: unsloth` | `use_flash_attn`, `use_liger` |
+  | `data.format: raft` | `reasoning_effort`, `train_on_eot` |
+  | `data.format: pre_tokenized` | `reasoning_effort` (`train_on_eot` loads: the cache is keyed on it) |
+
+  Remove the key, or move the run to the path the message names. `stream_layers: true` and the
+  other tasks are unchanged.
+- **More commands refuse an output that names one of their inputs**, before reading (exit 1).
+  `soup data ingest <document> --output <same document>` replaced the document with JSONL;
+  `soup data persona-mix`, `generate`, `canary check`, `mix --optimize`, `forge` and
+  `recipe --execute`, and `soup adapters arithmetic` and `merge` with an `--output` that is an
+  input adapter, overwrote their input. Write to a new path. The shared refusal no longer starts
+  with `Error:` (`soup data doctor`, `lint`) or `Plan failed:` (`soup data forge`); exit codes
+  are unchanged (#2274, #2349, #2379).
+- **MLX: two refusals are lifted, one is added (Apple Silicon only).** `backend: mlx` with
+  `task: preference` and `training.preference_loss: dpo`, `orpo` or `simpo` was refused at load;
+  it now runs the native trainer, the config keeps `task: preference`, and `adapter_config.json`
+  records the native task, so a resume matches whichever of the two spellings the config uses.
+  `ipo`, `bco` and `preference_loss_weights` blends stay refused (#2333). `task: grpo` now trains
+  on a base pre-quantized by mlx-lm at 4 bits in `affine` mode (`mlx-community/...-4bit`,
+  `mlx_lm.convert -q`); any other quantized base is refused right after the load, naming the
+  first layer outside the rule; `quantization: 8bit` stays refused at load, reworded; and
+  `adapter_config.json` gains `base_quantization` (#2386). MLX DPO `--resume` now refuses an
+  adapter of another task or base, an MLX SFT adapter included (#2321).
+- **Exit codes that changed:**
+
+  | Command and case | 0.77.1 | 0.77.2 |
+  |---|---|---|
+  | `soup eval quant-check`, unparseable `--tasks` file | 1, after loading both models | 3, before (#2185) |
+  | `soup distill-prompt`, no trace row has a prompt | 0, empty output written | 3, output untouched (#2209) |
+  | `soup data evolve` / `gen-magpie`, every provider call failed, no row | 0, output emptied | 1, output kept (#2348) |
+  | `soup data filter --perplexity` / `--score-only` without torch or transformers | 0, unfiltered or partial | 1 (#2377) |
+  | `soup data dedup --field <key>` absent from every row | 0, distinct rows dropped | 1 (#2336) |
+  | `soup registry push --run-id` on a run that is not `completed` | 0, entry registered | 1 (#2248) |
+  | `soup plan` / `soup apply`, malformed YAML or a config that cannot be read | 1, with the raw parser or OS error | 2, naming the config and the YAML location (#2323) |
+  | `soup quantize --to "[/]"` (a value Rich read as markup) | 1 | 2 (#2217) |
+  | `soup ship --progress jsonl`, Ctrl+C | 1 | 130 (#2417) |
+  | `soup loop status`, stored spend `NaN` or `Infinity` | 0, printed `$nan` | 2 (#2424) |
+
+- **The VRAM pre-flight prices some runs differently.** A short full fine-tune with
+  `adamw_torch` is priced higher (the optimizer step is its own phase), so inside the fitted range
+  the pre-flight can now refuse one it let through; `--allow-oom-attempt` still launches it
+  (#2338). A run sharded with `--fsdp full_shard`, `full_offload`, `shard_grad` or DeepSpeed
+  ZeRO-2/3 is priced per card and only warned about (#2313). A `task: prm` step is priced lower
+  (#2337, #2372); a `stream_loss_chunk` step higher (#2290); `backend: unsloth` is priced with its
+  seven automatic LoRA targets and 16-bit embeddings and output head (#2376).
+- **Server replies.** On the transformers backend and MoLE, a reply cut at `max_tokens` without
+  an end token now ends with `finish_reason: "length"` (`/v1/chat/completions`) or
+  `stop_reason: "max_tokens"` (`/v1/messages`) (#2380). `/v1/messages` applies the request's
+  `temperature` and `top_p`; a value out of range or `null` is 400 instead of the default (#2388).
+  The vLLM, SGLang and MII servers answer a generation request whose `Origin` names another site
+  with 403, as the transformers server did (#2329).
+- **Shell completion:** scripts written by `soup completions bash|zsh|fish` before 0.77.2 do not
+  complete; run the command again and replace the installed script (#2283).
+- **Python API:** `soup_cli.utils.profiler` no longer has `estimate_model_memory`,
+  `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`,
+  `estimate_activation_memory` or `estimate_total` (no caller since #2146 in 0.77.1, so their
+  numbers were not what `soup profile` printed). Use `soup profile --json`; the estimate itself is
+  `soup_cli.utils.vram_estimate.estimate_vram` (#2369).
+- **Smaller changes that alter a result:**
+  - `soup data from-traces --signal thumbs_up`, and the harvest stage of `soup loop`, pair a
+    thumbs-up and a thumbs-down answer that differ, and skip a prompt whose answers are all the
+    same text; 0.77.1 could write a pair whose `chosen` and `rejected` were identical, so the
+    number of pairs from the same logs can change (#2495).
+  - MLX Adafactor (`backend: mlx`, `training.optimizer: adafactor`) applies the configured learning
+    rate, warmup and schedule, so an existing run trains differently (#2484).
+  - Both `soup merge` paths load the base at the Hub commit recorded in the adapter's training
+    provenance, not the latest one. With `HF_HUB_OFFLINE` set and that commit not cached, the
+    merge now fails where 0.77.1 merged whatever was cached (#2485).
+  - `soup ci init --python` refuses a version outside 3.11 to 3.13 with exit 1 (#2249).
+  - `soup eval compare` and `soup eval leaderboard` refuse a stored score that is not finite, with
+    exit 1 (#2477); `ensure_judge_calibrated` (Python API) refuses a non-finite `min_agreement` or
+    `max_bias` (#2493); a judge task refuses a JSONL row that is not an object or whose `prompt` is
+    not a string, naming the file and line (#2494).
+  - `soup ship --adapter` returns DON'T SHIP with the rule `adapter_noop` for an adapter whose
+    `lora_B` tensors are all zero (#2434).
+  - On Windows, `soup adapters bisect --eval-command` splits the template without POSIX quoting:
+    single quotes and a quote inside a word no longer group words, so write `"{ckpt}"` in double
+    quotes (#2314).
+
+### Added
+
+- Add the `qwen3.5-0.8b-dpo` text-preference recipe for `Qwen/Qwen3.5-0.8B`, using inherited Qwen3.5 DPO settings rather than hyperparameters tuned for 0.8B. (#275 by @kok-o in #2184)
+
+- **`soup profile --model` answers whether a model fits without a `soup.yaml`, and Apple Silicon is checked against Metal's working set (#2049 by @abdulwaarith0 in #2285).** `soup profile --model <id or directory>` prices the run set by `--seq`, `--batch`, `--method lora|qlora|full`, `--lora-r`, `--optimizer` and `--gradient-checkpointing`, with the same estimate and the same bytes as a `soup.yaml` describing that run. It reads the model's `config.json` from a local directory, the Hugging Face cache or the Hub, so it works offline once the config is cached; when none can be read it exits 1 with the reason instead of pricing a shape guessed from the name. `--model` with `--config`, the run flags without `--model`, and `--lora-r` with `--method full` are refused. `soup profile --json` and the MCP `profile` tool now return a `lora_r` field on every platform: the LoRA rank priced, or `null` for a full fine-tune (including Spectrum and LISA). On Apple Silicon, `soup profile` and the MCP `profile` tool now compare the estimate to Metal's recommended working-set size from mlx, not the whole unified memory, and report the memory as assumed when mlx cannot read it. The `soup train` pre-flight still skips `backend: mlx`.
+
+- **On-policy MiniLLM planning.** Add `--minillm-on-policy` to `soup plan` and `soup apply`, validating and hashing the effective configuration without rewriting YAML. Apply preserves the supplied flag in its suggested train command and states that it records the plan without starting training. (#2303 by @Nari-Ab in #2315)
+
+- MLX accepts `task: preference` with `training.preference_loss: dpo`, `orpo` or `simpo`, using the corresponding native trainer, config restrictions and doctor support report while keeping the native task in saved adapter metadata (#2202 by @vaputa in #2333).
+
+- **MLX GRPO trains on pre-quantized 4-bit bases (#1976 by @ybai08 in #2386).** `task: grpo` with
+  `backend: mlx` refused any base that loaded quantized. It now also trains on a base
+  pre-quantized by mlx-lm at 4 bits in `affine` mode, as `mlx_lm.convert -q` and the
+  `mlx-community/...-4bit` repos write it, with the same loop and objective as on a dense
+  base. The quantized `QuantizedLinear` and `QuantizedEmbedding` layers (a tied output head
+  included) stay frozen and only the LoRA adapter trains; a quantized tensor left trainable is
+  refused before the first update, and the reference is the same quantized base with the
+  adapter off. Any other quantized base is refused right after the load, naming the first
+  layer outside the rule with its bits and mode: 8-bit and mixed-bit recipes, `mxfp4`,
+  `mxfp8`, `nvfp4`, quantized MoE layers and BitNet `BitLinear` layers. `quantization: 8bit` stays refused at load.
+  `adapter_config.json` records the base's quantization as `base_quantization` (bits, group
+  size, mode and the number of quantized linear and embedding layers; `null` for a dense
+  base). Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx`,
+  `quantization: 4bit` and a `mlx-community/...-4bit` base.
+
+- Add `qwen3.5-27b-dpo`, a text-only preference-training starting configuration for `Qwen/Qwen3.5-27B`, with inherited Qwen3.5 DPO settings, LoRA and 4-bit quantization. Register it in the language-decoder family audit and synchronize the catalog count and configuration snapshot (#275 by @kok-o in #2445).
+
+### Changed
+
+- Use the supported `dtype` argument throughout Transformers model loading instead of deprecated `torch_dtype`, preserving existing precision and quantization choices (#2200 by @Nari-Ab in #2257).
+
+- **`benchmarks/gate-h100-validation.md` now says under finding 9 that the pinned arm in the 6.56x comparison was the WRONG one.** The item read "measured with correctness asserted in the same process", which reads as both arms having passed; STEP 8 records `pin=True` as WRONG 8/256 on all three repetitions against an exact 256/256 for `pin=False`, so the 6.56x is a defective fast arm over a correct slow one. The sentence and every number are unchanged; the note is added in the record's existing dated-clarification form, and a CPU test pins the table rows, the two medians and the note. (#2224 by @xiemocun in #2271)
+
+- **`soup serve` checks `--tool-auth-token` with the rule `soup ui` and `soup mcp serve` use**:
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. A value from the option or from
+  `SOUP_TOOL_AUTH_TOKEN` that does not match stops the command with exit 2 before the model
+  loads, on every bind; the message names the rule, never the value. The shared check now
+  matches the whole value, so a valid token followed by a newline is refused by all three
+  commands. Upgrade note: a token shorter than 16 or longer than 128 characters, or with other
+  characters, now stops `soup serve` at start; generate one with
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+  The notice `soup serve` prints for a non-loopback bind now also says that requests travel as
+  plain HTTP and that TLS belongs in a proxy in front. The `--backend vllm`, `sglang` and `mii`
+  servers answer a generation request whose `Origin` names another site with 403, as the
+  transformers server already did, so on a LAN or wildcard bind a browser page from another
+  origin now gets 403 from these apps too; requests without an `Origin` header are served as
+  before. `/v1/tools/python` compiles the caller's code under the file name `<code>`, so
+  tracebacks give the caller's own line numbers (the first line was reported as line 7). When
+  the sandbox cannot start, `/v1/tools/bash` answers 501 with
+  `bash sandbox requires OS-level isolation`, as `/v1/tools/python` answers with its own fixed
+  sentence (#2329).
+
+- Data commands share one terminal-safe refusal for outputs that alias an input, including links and alternate path spellings, while preserving each command's exit code; the refusal no longer starts with `Error:` in `soup data doctor` and `lint` or `Plan failed:` in `soup data forge`. `soup data ingest` also refuses an output that names its source document before reading or writing it (#2298 by @kok-o in #2349; #2359 reported by @Batyrkhantzy111, fixed by @kok-o in #2349).
+
+- `soup ship --progress jsonl` reports live evaluation items after each generation chunk, before generating the next chunk, instead of waiting for the whole suite. Failed chunks retry only their own items; scores and event schema are unchanged. `soup eval custom` and the forgetting probe use the same path and also generate in chunks of the generator's `batch_size` when it has one, with unchanged results (#2288 reported by @abdulwaarith0, fixed by @kok-o in #2421).
+
+### Removed
+
+- Remove `utils/profiler.py`'s unused `estimate_model_memory`, `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`, `estimate_activation_memory` and `estimate_total`, along with their tests; they had had no caller in `src/` since #2146 moved every estimate onto `utils/vram_estimate.py`, and `soup profile` output is unchanged (#2305 by @qwist1233-cpu in #2369).
+
+- Remove the unreachable `minillm_enabled` check and redundant assignment in `soup train` when `--minillm-on-policy` is supplied, as the prerequisite is enforced at config load time (#2367 by @Shubham-dev-stack in #2422).
+
+### Fixed
+
+- Restored `data.max_length` enforcement for SimPO and KTO on TRL releases that removed `max_prompt_length`, rebuilding the KTO/BCO completion from the untruncated `answer_input_ids` so an over-length prompt no longer discards it, and covering the same measured over-length path for IPO and BCO. For SimPO, KTO, IPO and BCO a prompt is cut only when the row does not fit in `data.max_length`, which replaces the unconditional cut that #2116 introduced (#1185 by @ousamabenyounes in #1196).
+
+- User paths and flags in `soup data` are rendered as text, so a `[/]` in a path or `--format` / `--to` no longer raises `MarkupError` (#1859 by @mvanhorn in #1882).
+
+- `soup infer --cuda-graphs` and `soup bench infer --cuda-graphs` on a local
+  adapter given without `--base` now inspect the base its `adapter_config.json`
+  records, when that names a local directory, and refuse a non-Qwen2/Llama or
+  quantized base before the model loads; an explicit `--base` still wins, and a
+  Hub id or an unreadable value is left to the loader (#1817 by @Nick-800 in #1942).
+
+- **`soup eval quant-check` now reports an unparseable `--tasks` file as the usage error 3, before any model is loaded (#2053 by @Faisal-Fayaz in #2185).** The command validated the `--tasks` path up front but parsed the file only inside `run_quant_check`, after both models had been loaded, and the loader's `ValueError` then escaped as `Error: ValueError: ...` with exit 1 — while the command's docstring, `docs/commands.md` and the `[0.76.0]` entry already promise exit 3 for unparseable inputs. The input check now pre-parses the file: every loader failure — a suffix that is not `.jsonl`, an invalid JSON line, a row without `prompt`, a file with no tasks, and a file over `MAX_EVAL_TASKS`, plus any `OSError` or `ValueError` edge (`FileNotFoundError`, a path that exists but cannot be read, a decoding failure) — prints the loader's own message through `for_terminal` and exits 3, exactly like the already-refused missing file, so the mistake no longer costs the full model load. The pre-parsed list is also handed to `run_quant_check`, whose command path no longer reads the file once per model; its existing `tasks_file` parameter keeps working for other callers and `soup eval custom` is deliberately untouched, as the issue scopes.
+
+- Report when `CUDA_VISIBLE_DEVICES=-1` or an invalid device list hides every detected NVIDIA GPU in `soup doctor`, with the actual setting safely displayed and advice to unset it instead of reinstalling PyTorch (#2191 by @Nari-Ab in #2206).
+
+- `soup distill-prompt` now exits 3 when no trace row has a prompt it recognises, before any
+  provider call and without touching the output, and names the row count and the keys it
+  looked for. It used to print "done" with `Rows: 0`, exit 0 and replace an existing output
+  with an empty file. When only some rows have no prompt, the done panel shows how many were
+  skipped (#1854 by @akkupratap323 in #2209).
+
+- Keep the Docker image's `latest` tag on the highest stable release when publishing an older release line. Full-version and major/minor image tags are still published for every release. Maintenance lines need `docker.yml` and `scripts/docker_release_tags.py` backported before their next tag (#2195 by @Nari-Ab in #2214).
+
+- **`soup bench train` could not measure any 4-bit or 8-bit config: it crashed before the first step with `TypeError: Got unsupported ScalarType BFloat16`, and on a T4 or V100 it then failed in the GradScaler (#2215 by @VanshSharmaPES in #2216).**
+  TRL 0.29 casts the adapters of every 4-bit and 8-bit model to bf16, on every card. The bench fingerprint hashed parameters through numpy, which has no bf16; it now hashes their raw bytes, unchanged for every other dtype. On fp16 cards `soup train` casts those adapters back to fp32 before training, and `bench train` now does the same, so it measures the run `soup train` makes. `soup train` itself was not affected.
+
+- `soup quantize --to awq` and `--to gptq` (any case) now add `--to awq was removed in v0.77.0.` (or `gptq`) after the "must be one of" line, as `soup export --format` already does, and a rejected `--to` value is printed as typed instead of being read as Rich markup, so `--to "[/]"` exits 2 with the usage message rather than 1 with a `MarkupError` (#2210 by @ColumbusLabs in #2217).
+
+- In `soup registry push --run-id`, refuse runs whose status is not `completed` (such as `failed`, `running`, `terminated`, or `launching`) with exit 1 instead of registering an unusable entry (#2236 by @Guts1005 in #2248).
+
+- In `soup ci init --python`, validate the Python version against the supported range (3.11 to 3.13) with exit 1 and a diagnostic naming the running Soup version instead of writing a workflow that fails or installs an older release in CI (#2233 by @Guts1005 in #2249).
+
+- In `soup train --gpus N` without `--yes`, ask the `Start training?` confirmation once in the parent launcher process before spawning `accelerate launch` and forward `--yes` to the child ranks so they do not re-prompt (#2239 by @CG-5228 in #2250).
+
+- `soup adapters audit` rebuilds an MLX rsLoRA alpha as `scale * sqrt(rank)` when `lora.use_rslora` is set. A run that wrote `scale = alpha / sqrt(rank)` now agrees. The old `scale * rank` reading reported that run DIVERGED (rank 8, alpha 16 came back as about 45.25). A plain scale checked against an rsLoRA config still diverges (#2228 by @MbappeWU in #2255).
+
+- Preserve the last 50 lines, at most 50 KB, of failed RunPod remote stderr and training logs before verified Pod deletion, strip unsafe terminal controls, redact URL credentials and common token patterns, and distinguish SSH-readiness timeouts from remote training-command timeouts (#2193 by @Nari-Ab in #2256).
+
+- `soup doctor --config` now excludes MLX support-table settings that config loading refuses, so its all-clear counts include only settings that can reach the doctor (#2238 by @Samearth17 in #2258).
+
+- `soup mcp serve`, `soup ab`, `soup train --gpu` and `soup serve --tool-auth-token` help, and the `training.kv_cache_type` description, now say what each does today (#2221 by @TejasS1233 in #2268).
+
+- Refuse input/output aliases in `soup data persona-mix`, `generate`,
+  `canary check`, `mix --optimize`, `forge` and `recipe --execute` before
+  destructive writes. Protect optional persona/style/context files, live mix
+  configuration, forge provenance and recipe seed/checkpoint/sidecar targets;
+  keep distinct outputs working (#2226 by @kok-o in #2274).
+
+- **`task: sft` now refuses `reasoning_effort`, `train_on_eot`, `use_flash_attn` and
+  `use_liger` on the paths that never read them.**
+  `task: sft` is several code paths. The vision and audio setups, `data.format: raft`,
+  a pre-tokenised cache, `backend: mlx` and `backend: unsloth` loaded these fields and
+  applied none or only some of them, so a run trained with a setting that was silently
+  dropped. Each refused config names the field, the path and what to change, from one
+  table of the sft dispatch that the `freeze_layers` / `freeze_ratio` refusal reads too.
+  `train_on_eot` still loads with `data.format: pre_tokenized`, where
+  `soup data preprocess` keys the cache on it. Streaming keeps the kernel flags refused
+  by #1692 and MLX keeps its own ignore warning. (#1698 by @abdulwaarith0 in #2278)
+
+- Stop and remove the Aider benchmark Docker container on timeout or Ctrl-C (#1464 by @ShivanshShukla in #2280).
+
+- **A row Soup cannot interpret is named, not silently dropped.** `soup data clean` now warns that the rows are in no recognised format and prints the detection error with the first offending key set (on stderr under `--json`) before it sanitises them as plaintext; it used to fall back without a word, so its `No issues found` read as a checked file; `soup ab` counts the rows it could not use by reason (invalid JSON, not an object, arm missing or not control/treatment, metric missing or non-numeric, metric not finite) and prints them when the usable total is below the threshold; and `soup rewind --json` writes a non-finite loss, baseline or ratio as `null` with `non_finite: true`, so the file parses as strict JSON instead of carrying bare `NaN` / `Infinity` (#1818 by @EtherealMelon in #2281).
+
+- **`soup train --cloud lambda` shows the install steps when they fail.** The generated cloud-init script now creates `/home/ubuntu/soup/train.log` before the first step that can fail and appends the `apt-get` and `pip install` output to it, so a failure before training starts (for example a `Requires-Python` mismatch) appears in the tail the controller prints instead of `Could not fetch remote log tail` (#2234 by @EtherealMelon in #2282).
+
+- Restored command and option completion in scripts emitted by `soup completions bash|zsh|fish` by using the installed Typer's matching completion protocol and response format. Regenerate previously installed completion scripts after upgrading. (#2283 by @Nari-Ab)
+
+- `soup init` now displays bracketed output paths literally instead of failing after writing the config or hiding part of the path; unknown template names are escaped and stripped of terminal controls. (#2284 by @Nari-Ab)
+
+- **The layer-streaming VRAM pre-flight no longer under-predicts a `training.stream_loss_chunk`
+  step.** Such a step peaks in the backward of the last decoder layer, at the end of its
+  checkpoint recompute, not in the loss: on the NF4 dequantise + linear path all seven of that
+  layer's weights are live as dense bf16 copies (436 MB on Llama-3.1-8B), beside its recomputed
+  activations. The pre-flight now charges the larger of the loss and that recompute phase, on top
+  of the resident weights and the checkpoint boundaries. On the measured Llama-3.1-8B NF4 rows
+  (RTX 3060 Laptop) the chunked predictions go from 0.848-0.890 to 1.037-1.050 of the real peak
+  at 512, 1024 and 2048 tokens; the unchunked ones do not move. A short NF4 run without the
+  option can be predicted higher. Separate q/k/v/o and gate/up/down projections only: fused
+  `gate_up`, MoE layers and LoRA on MLP modules are not covered (#1693 by @ybai08 in #2290).
+
+- The `soup train` VRAM pre-flight now prices a run sharded across more than one process per card, so FSDP-QLoRA of a 70B model in 4-bit on two 24 GB cards is no longer refused before it starts (#2300 by @ybai08 in #2313).
+  Under `--fsdp full_shard` / `full_offload` and DeepSpeed ZeRO-3 the weights and the adapters in the floor are divided by the process count, and under those and `--fsdp shard_grad` / ZeRO-2 the gradients and optimizer state; the CUDA context is not. The DeepSpeed stage is read from the resolved preset or JSON, and the process count is `WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`. The estimate is fitted on one card, so for a sharded run it only warns, and the panel says the run is sharded and that the floor is per card. Data-parallel `--gpus N` without sharding, and every single-process run, are checked as before.
+
+- **Reliable adapter-bisect commands.** Preserve Windows paths and checkpoint argument boundaries in `--eval-command`, including Windows executable paths that omit `.exe`. Refuse missing or unstartable programs without reporting a broken checkpoint or writing a result; actual failed evaluations and timeouts still count as failed probes. (#2293 by @Nari-Ab in #2314)
+
+- `task: ppo` no longer crashes at the first rollout with `AttributeError: 'PolicyAndValueWrapper' object has no attribute 'gradient_checkpointing_disable'` when the policy has gradient checkpointing on, as `quantization: 4bit` / `8bit` with `gradient_checkpointing: true` sets it. trl's wrapper copies `is_gradient_checkpointing` from the policy but has neither method its rollout calls, so Soup gives the trainer's own wrapper instance both, forwarding to the policy, and keeps the checkpoint kwargs the policy had before the rollout instead of letting transformers reset them (#2311 by @ybai08 in #2319).
+
+- MLX DPO `--resume` now refuses an adapter of another task or another base
+  model, or one without `adapter_config.json`, before any tensor loads, as ORPO,
+  SimPO and KTO already did. This means a DPO run can no longer resume from an
+  MLX SFT adapter: its `adapter_config.json` has no `task` key, so it is refused
+  with `was trained with task=None, not 'dpo'` (#2232 by @mayuriphad in #2321).
+
+- **Terminal-safe environment reports.** Strip terminal controls and bidi marks from `soup env` metadata, package versions, drift descriptions, displayed install plans and paths while keeping markup literal. Lock files and generated requirements keep their original contents. (#2322 by @Nari-Ab)
+
+- **Actionable plan/apply read errors.** Report the config path and YAML location, UTF-8 byte offset or OS read failure before changing state. Invalid inputs exit 2 with terminal-safe diagnostics; a missing config retains exit 1. (#2323 by @Nari-Ab)
+
+- `training.activation_offloading` now reaches the VRAM estimate: the `soup train`
+  pre-flight, `soup profile` (text and `--json`), `soup plan` and the layer-streaming
+  plan panel say, when it is set, that the activation term is still charged as if every
+  saved tensor stayed on the card, since what `cpu` or `disk` offloading moves off it
+  is not modelled. The estimate and the pre-flight's refuse or warn decision are
+  unchanged (#2327 by @ybai08 in #2331).
+
+- Ship the corrected DPO and chat preference demo pairs in package data, keeping their quality signal independent of response length. (#2324 by @kok-o in #2335)
+
+- Refuse `soup data dedup --field` when a nonempty selected key is absent from every row, before either backend runs or an output is written; an empty field keeps the all-text default. (#2325 by @kok-o in #2336)
+
+- The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool no longer charges a `task: prm` step the cross-entropy chain it never builds: the PRM trainer runs the causal-LM forward without labels and takes its loss from the reward head, so its `logits` term is now the logits alone, 6 bytes an element (`LOGITS_TENSOR_BYTES_PER_ELEMENT`: the half-precision output and the fp32 copy Accelerate makes of it), where it was 12. With #2372 below, most bases are charged that on one position; the model types without `logits_to_keep` and remote-code bases keep every position: at 2,048 tokens, batch 4 and a 32,000-token vocabulary, 1.57 GB in place of 3.15 GB. Every other task with an LM head is charged as before (#2332 by @ybai08 in #2337).
+
+- **The VRAM estimate prices the optimizer step as its own phase of the peak.**
+  On a short full fine-tune with `adamw_torch` the step, not the forward and backward
+  pass, sets the peak: the weights, gradients and AdamW state stay resident while the
+  foreach update allocates one fp32 copy of `exp_avg_sq`. The estimate now takes the
+  larger of the two phases, through a new `optimizer_step` term shown by the train
+  pre-flight and `soup profile` (`optimizer_step_memory_gb`); a 64-token SmolLM2-135M
+  full fine-tune went from 0.810 of its measured peak to 0.976. (#2277 by
+  @abdulwaarith0 in #2338)
+
+- `task: ppo` now switches gradient checkpointing on for the policy when `training.gradient_checkpointing` asks for it. trl's PPO trainer runs its own loop instead of `Trainer.train()`, so outside `quantization: 4bit` / `8bit`, where `prepare_model_for_kbit_training` already turned it on, the setting reached `PPOConfig` and nothing else and the policy trained without checkpointing. Soup now calls `gradient_checkpointing_enable()` on the policy after LoRA is attached; 4-bit and 8-bit runs keep what kbit prep set, with its own kwargs, and the value and reward models are unchanged (#2197 by @ybai08 in #2340).
+
+- `soup recipes show` and `use` display recipe names and output paths literally, strip terminal controls from diagnostics and overwrite prompts, keep the requested filenames, and write the recipe's YAML unchanged (#2343 by @Nari-Ab).
+
+- `soup why` preserves recorded zero losses and step counts in its run summary; only absent measurements display as `-` (#2344 by @Nari-Ab).
+
+- `soup cost --json` sends configuration and GPU-filter diagnostics to stderr, leaving stdout for successful JSON estimates while preserving refusal exit codes and human-readable output (#2345 by @Nari-Ab).
+
+- `soup data evolve` and `soup data gen-magpie` now exit 1 and preserve their output when no rows survive failed provider calls. Empty completions count as failed calls. Partial failures report counts and the first error while retaining usable rows (#2294 by @kok-o in #2348).
+
+- RunPod jobs create a virtual environment with access to the image's system packages, install Soup with its Python and run the environment's `soup` by absolute path, avoiding system-pip restrictions and SSH PATH dependence (#2352 by @kok-o).
+
+- A `task: prm` step no longer builds full-vocabulary logits that nothing reads: the PRM trainer's forward and the two forwards of the GRPO PRM reward (`prm_reward`) pass `logits_to_keep=1` where the model's `forward` takes it, so the LM head runs on the last position only and the `[batch, seq_len, vocab]` tensor (and Accelerate's fp32 copy of it) shrinks to `[batch, 1, vocab]`; the hidden states the reward head reads, the loss and every gradient are unchanged. A forward without the argument keeps the old call. The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool charges a PRM step's `logits` term on one position, `vocab × batch × 6` bytes, except for the eight causal-LM model types whose forward has no `logits_to_keep` (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and remote-code bases (`auto_map` in `config.json`), which keep the full-sequence charge. At 2,048 tokens, batch 4 and a 32,000-token vocabulary the term drops from 3.15 GB in 0.77.1 to 0.77 MB (#2368 by @ybai08 in #2372).
+
+- `task: ppo`, `grpo` and `online_dpo` with `gradient_checkpointing` on no longer add a forward hook to the policy's input embedding at every step. The trl loops switch checkpointing off and back on around generation, and each switch registered one more input-gradient hook that transformers never removed, so every generated token ran one more hook per step already taken. Soup now makes each registration remove the previous hook first, so the count stays at its value after the first step and the embedding output still requires grad (#2365 by @ybai08 in #2373).
+
+- Price Unsloth's automatic LoRA targets with the same seven projections as its
+  loader, and its 4-bit embeddings and output head at the measured 16-bit precision.
+  This corrects the hardware-fit floor and charges saved activation inputs for all
+  seven projections when checkpointing is off or medium, while preserving
+  Transformers estimates (#2301 by @ryznren in #2376).
+
+- `soup data filter --perplexity` and `--score-only` now exit 1 with installation instructions if torch or transformers cannot be imported, preserving any existing output instead of silently writing unfiltered rows or incomplete scores. Coherence-only filtering still works without those dependencies (#2360 reported by @Batyrkhantzy111, fixed by @kok-o in #2377).
+
+- Refuse `soup adapters arithmetic` and `soup adapters merge` runs whose `--output` names one of the input adapters, instead of overwriting that adapter's weights and config in place (#2358 by @ShryukGrandhi in #2379).
+
+- Report why Transformers-backend generation stopped: a reply cut off at `max_tokens` without an end token now ends with `finish_reason` `length` on `/v1/chat/completions` and `stop_reason` `max_tokens` on `/v1/messages`, in the reply and the last stream frame, and the MoLE runtime does the same; an end token, even the last one the budget allows, still reports `stop` / `end_turn` (#2361 by @abdulwaarith0 in #2380).
+
+- **`soup loop watch` resets the monthly spend when the UTC month changes.** The
+  spend kept growing across month ends, so a loop that reached its
+  `monthly_budget_usd` stayed skipped for good. The reset reads the previous
+  `last_run_date` in the same step as the daily counter reset, so the year change
+  is covered too. (#2362 by @abdulwaarith0 in #2387)
+
+- `/v1/messages` forwards `temperature` and `top_p` from the request (defaults only when omitted), matching `/v1/chat/completions`; out-of-range or `null` values now return 400 instead of being served with defaults (#2381 by @MbappeWU in #2388).
+
+- **`soup train --resume` says which path it searched when it finds no checkpoint.** The message now names the path and the reason: an explicit `--resume` path that does not exist or is not a directory, an `auto` output directory that does not exist or holds no `checkpoint-N` directory (with `experiment_name` applied), and the MLX adapter-file variants. The successful path is unchanged (#2296 by @EtherealMelon in #2389).
+
+- In `resolve_device`, resolve `"auto"` to `"cuda"` when available else `"cpu"` instead of returning `"auto"` verbatim, preventing PyTorch `RuntimeError` on `nn.Module.to("auto")` in `embed_texts` and default-device commands (`soup data topics`, `soup data dedup --semantic`) (#2279 by @harshitthek in #2396).
+
+- `soup profile --json` sends configuration, flag and model refusals to stderr, leaving stdout for the JSON estimate while preserving exit codes and human-readable output (#2398 by @Nari-Ab).
+
+- `soup migrate` now shows the paths in its success, refusal, JSONL and overwrite-prompt messages as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2399 by @Nari-Ab).
+
+- `soup push` now shows the model path in the upload plan and refusals, repo id, hub, collection slug and upload errors as typed: brackets, `:name:` text and `[/]` in an error no longer change or break the message, and terminal control characters are stripped from the display only (#2400 by @Nari-Ab).
+
+- `soup runs delete`, `clean` and `compare` now show run ids and checkpoint paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2401 by @Nari-Ab).
+
+- `soup quickstart` now shows the directory and the data and config paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2402 by @Nari-Ab).
+
+- `soup sweep` now shows the config path, parameters and run names as typed in its plan, per-run lines, errors and result tables: brackets, `[/]` and `:name:` text are kept, and terminal control characters are stripped from the display only (#2403 by @Nari-Ab).
+
+- `soup deploy ollama` now shows the model name, GGUF path, system prompt, parameters and Ollama messages as typed: a system prompt with `[/INST]` no longer breaks the deploy plan, brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2404 by @Nari-Ab).
+
+- **`soup data lint` no longer reports a check that never ran as `OK` (#2408 by @harryc295 in #2411).** When `datasketch` is not installed, the near-duplicate check now reports `SKIPPED` (yellow) and the summary line says how many checks were skipped. A skipped check does not change the overall verdict or the exit code.
+
+- `soup ship --progress jsonl` now prints an unexpected exception's sanitized type and message on stdout while keeping stderr exclusively JSONL, and Ctrl+C now exits 130 instead of 1, after the same `error` progress events (#2297 by @vaputa in #2417).
+
+- **`soup loop status` shows the spend and run count the next iteration will
+  see.** After a UTC month or day change it showed the stored values until the
+  loop next ran; it now applies the same resets as `soup loop watch` from the
+  saved `last_run_date`, without writing `loop.yaml`. A hand-edited state with an
+  `Infinity` or `NaN` spend is reported as invalid (exit 2). (#2390 by
+  @abdulwaarith0 in #2424)
+
+- `soup deploy ollama --list` and the "Ollama v... detected" line now show what `ollama list` and `ollama --version` printed as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2425 by @Nari-Ab).
+
+- `soup push --card` now shows an unknown or ambiguous registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2426 by @Nari-Ab).
+
+- `soup migrate` now shows an unknown `--from` value, a failed migration, a schema-validation failure and the migration warnings as typed: `:name:` text is kept instead of becoming an emoji, a warning in the panel no longer turns into an emoji, and terminal control characters are stripped from the display only (#2427 by @Nari-Ab).
+
+- `soup runs show`, `soup runs replay` and `soup runs curriculum-curve` now name a missing run as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2428 by @Nari-Ab).
+
+- `soup runs` now shows run ids, names, base models and tasks in the table, and a curriculum-history file name in `runs curriculum-curve` errors, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2429 by @Nari-Ab).
+
+- `soup bom emit` now shows the `--format` value, energy-file and output paths, energy-file errors and the registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2430 by @Nari-Ab).
+
+- `soup fetch` now shows an unknown namespace or entry name and the output path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2431 by @Nari-Ab).
+
+- `soup data topics` now shows the dataset path, the embedding model, an embedding error and the report path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2432 by @Nari-Ab).
+
+- **`soup ship --adapter` refuses an adapter whose `lora_B` tensors are all zero.** Ship now reads a local adapter's weights before loading either model; an adapter that adds nothing to the base (an untrained one, or a DPO run's `ref/` folder) is DON'T SHIP with its own failed rule, `adapter_noop`, instead of failing later as "task did not improve". Adapters with no `lora_B` keys are left alone, and unreadable weights print a warning (#2410 by @ShryukGrandhi in #2434).
+
+- `soup runs show` now prints a run's stored name, model, task, device, GPU memory, output directory, error, config and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, `[...]` in the config JSON is no longer read as markup, and terminal control characters are stripped from the display only (#2436 by @Nari-Ab).
+
+- `soup runs compare` now prints the run ids, names, models, tasks, devices and config values it compares as typed: a model name with `[/]` no longer crashes the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2437 by @Nari-Ab).
+
+- `soup plugins install` now names the typed plugin as typed, and `soup plugins` lists a plugin's description, its version (for an installed plugin that is not enabled yet, it comes from package metadata) and its template and model-group names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2438 by @Nari-Ab).
+
+- The output-over-input refusal shared by `soup data` and `soup ingest` commands now keeps `:name:` text in the refused file name instead of turning it into an emoji (#2439 by @Nari-Ab).
+
+- `soup deploy hf-space` now shows the unknown template, a refused `--space` or `--model` id, the `--template-dir` path (in the error and in the plan panel) and the Hub's error text as typed: `[...]` in a value no longer breaks or hides the message, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2440 by @Nari-Ab).
+
+- `soup data mix` now shows the dataset paths in the echoed recipe, the recipe and output paths it names, the dataset list of `--apply` and its error messages as typed: `[...]` in a path no longer hides part of the recipe, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2441 by @Nari-Ab).
+
+- `soup runs delete`, `soup runs replay` and the fallback note of `soup runs clean` now show a run id and a stored status as typed: `[...]` in an id no longer hides part of the line or stops the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only, delete's confirmation prompt included (#2442 by @Nari-Ab).
+
+- `soup lock write`, `soup lock show` and `soup lock check` now show the typed paths and base model, the text read from a lock file (soup version, base model, date) and their error messages as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2446 by @Nari-Ab).
+
+- `soup expect` now shows the dataset path in its table title and the text of its loader, suite, `--judge` and judge errors (a YAML error quoting a line of the suite, the judge's own reply) as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2447 by @Nari-Ab).
+
+- `soup card` now shows the registry reference it could not find, the output path it names in its panel and its write errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2448 by @Nari-Ab).
+
+- `soup airgap-bundle` now shows the output and model paths of its summary panel, the `--repro-receipt` path and the build and receipt errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2449 by @Nari-Ab).
+
+- `soup ab` now shows an unknown `--metric` and the `--input` path it cannot read as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2450 by @Nari-Ab).
+
+- `soup registry` now shows a reference, run id, name, tag, `--data` path and search query that you typed, and the messages that quote them, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2451 by @Nari-Ab).
+
+- `soup history` now shows a name that it refuses and the file name of an attached branch as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2452 by @Nari-Ab).
+
+- `soup reward synth` and `soup reward stress` now show the typed `--kind`, attack names, paths and verifier target, the text induced from the references (schema keys, rejected references) and the errors of the reward file as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2454 by @Nari-Ab).
+
+- `soup license-advisor` now shows an unknown `--target`, and the `--license` you typed in the title and the reason of its risk check, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2455 by @Nari-Ab).
+
+- `soup registry list`, `show`, `search` and `diff` now show the stored base model, task, run id, notes, artifact paths, config keys and values and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2456 by @Nari-Ab).
+
+- `soup audit-log tail` now shows the timestamp, command, exit code, operator and host of each record, and `soup audit-log rotate` the path it rotated, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2457 by @Nari-Ab).
+
+- `soup apple-adapter` now shows a direction it refuses, the source and output paths of its plan and summary panels, and the errors of the conversion as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2458 by @Nari-Ab).
+
+- `soup compile` now shows an optimizer it refuses, the program, eval-suite and output paths of its plan and result panels, and the errors of the compile and the write as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2459 by @Nari-Ab).
+
+- `soup spectrum scan` now shows the model in its table title, the layer groups of the table, the layer names of the YAML block, the `--output` path and the errors of the scan as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2461 by @Nari-Ab).
+
+- Keep evaluation task counts and scalar retry order intact when a custom batch callable mutates or consumes its input list, including chunked batches (#2009 by @taljeon in #2463).
+
+- The `run_gate` SDK refuses NaN, infinite and out-of-float-range integer `regression_threshold` values before generation, preserving baseline/suite validation priority, finite tolerance semantics, and CLI/config bounds (#1844 by @taljeon in #2464).
+
+- `soup cost` shows missing config paths and unmatched GPU filters literally, keeps emoji aliases as typed, and strips terminal control characters from these diagnostics while preserving exit codes and JSON-mode stderr routing (#2468 by @Nari-Ab).
+
+- `soup why` keeps emoji aliases literal and strips terminal controls when reporting a refused run reference, preserving the lookup and exit code (#2469 by @Nari-Ab).
+
+- `soup init` strips terminal controls only from the overwrite confirmation, keeping literal brackets and the original file target (#2472 by @Nari-Ab).
+
+- `soup shrink` keeps emoji aliases literal and strips terminal controls from friendly validation errors without changing exit codes (#2473 by @Nari-Ab).
+
+- `soup draft` keeps emoji aliases literal and strips terminal controls from early refusals while preserving exit codes and avoiding model work (#2474 by @Nari-Ab).
+
+- `soup drift-alarm` keeps emoji aliases literal and strips terminal controls in external diagnostics and displayed drift tokens, preserving drift results, exit codes and original webhook payloads (#2475 by @Nari-Ab).
+
+- Refuse selected non-finite stored scores before eval comparison or leaderboard output, with a named diagnostic and CLI exit 1 instead of a NaN delta or invalid JSON (#2466 by @taljeon in #2477).
+
+- `soup init` preserves typed emoji aliases in link refusals, unknown-template errors, and saved-config paths (#2478 by @Nari-Ab).
+
+- `soup shrink` keeps typed emoji aliases and strips terminal controls in registry attachment warnings (#2479 by @Nari-Ab).
+
+- `soup draft distill --plan-only` strips terminal controls from distillation preview headers and preserves emoji aliases and backslashes in preview YAML (#2480 by @Nari-Ab).
+
+- `soup doctor --config` shows missing config paths literally while stripping terminal control characters from the diagnostic (#2481 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in missing explicit `--llama-cpp` paths while stripping terminal controls (#2482 by @Nari-Ab).
+
+- `soup prune-prompt` shows emoji aliases and a backslash before an unmatched `[` literally in the detected prefix preview, and strips terminal controls from it (#2483 by @Nari-Ab).
+
+- MLX Adafactor now applies the configured learning rate, warmup and schedule instead of its default relative steps and parameter scaling (#1811 by @vaputa in #2484).
+
+- Both `soup merge` paths now load a matching base at the Hub commit recorded in the adapter's training provenance, while preserving legacy, local and differing-base override behavior (#1902 by @vaputa in #2485).
+
+- Refuse non-finite judge calibration SDK recheck limits, including integers beyond float range, while preserving report-error priority, finite custom limits and equality boundaries (#2467 by @taljeon in #2493).
+
+- Refuse non-object judge JSONL rows and non-string prompt fields before that row is generated, with task, file and physical-line diagnostics while preserving existing fail-closed CLI behavior (#1949 by @taljeon in #2494).
+
+- `soup data from-traces --signal thumbs_up` now pairs distinct responses and skips prompts with no distinct pair. (#2495 by @kok-o)
+
+- `soup env lock` keeps emoji aliases literal in the lock receipt (#2497 by @Nari-Ab).
+
+- `soup lock check` preserves a backslash before an unmatched `[` in the displayed lock path (#2498 by @Nari-Ab).
+
+- `soup draft list` keeps emoji aliases and backslashes before unmatched opening brackets in the registry table (#2499 by @Nari-Ab).
+
+- `soup ingest --logs` keeps emoji aliases and backslashes before unmatched opening brackets and strips terminal controls when reporting refused or unreadable offline paths (#2500 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in the missing `--model` diagnostic while stripping terminal controls (#2501 by @Nari-Ab).
+
+- `soup data mix --apply` quotes list-form `data.train` paths so pasted YAML preserves punctuation, Unicode and long paths (#2502 by @Nari-Ab).
+
 ## [0.77.1] - 2026-10-28
 
 ### Upgrade notes

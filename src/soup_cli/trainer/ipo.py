@@ -8,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -78,7 +79,11 @@ class IPOTrainerWrapper:
         from datasets import Dataset
         from trl import DPOConfig, DPOTrainer
 
-        from soup_cli.trainer._trl_compat import prompt_length_kwargs
+        from soup_cli.trainer._trl_compat import (
+            config_accepts,
+            enforce_preference_sequence_limit,
+            prompt_length_kwargs,
+        )
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
         _enable_hf_transfer_progress()
@@ -188,6 +193,20 @@ class IPOTrainerWrapper:
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if not config_accepts(DPOConfig, "max_prompt_length"):
+            cap_kwargs = {
+                "max_length": cfg.data.max_length,
+                "max_prompt_length": cfg.data.max_length // 2,
+                "truncation_mode": dpo_config.truncation_mode,
+                "only_when_overflow": True,
+            }
+            self.trainer.train_dataset = enforce_preference_sequence_limit(
+                self.trainer.train_dataset, **cap_kwargs
+            )
+            if self.trainer.eval_dataset is not None:
+                self.trainer.eval_dataset = enforce_preference_sequence_limit(
+                    self.trainer.eval_dataset, **cap_kwargs
+                )
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -397,7 +416,8 @@ class IPOTrainerWrapper:
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:

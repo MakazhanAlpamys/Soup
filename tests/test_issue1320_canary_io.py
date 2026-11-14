@@ -203,7 +203,7 @@ def test_late_old_rollout_completion_cannot_replace_new_statistics(tmp_path, mon
         state = loop_state.read_state(str(state_path))
         if state.canary_rollout_id == "old":
             write_state(replace(state, canary_rollout_id="new"), str(state_path))
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     request = {"messages": [{"role": "user", "content": "hi"}], "conversation_id": "k"}

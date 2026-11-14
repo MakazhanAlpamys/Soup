@@ -18,6 +18,8 @@ from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.experiment.row_kinds import ROW_KIND_TRAIN
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -31,6 +33,17 @@ from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
+
+#: The refusal behind ``--resume`` / ``--hf-resume`` for ``task: ppo``. trl's
+#: experimental ``PPOTrainer.train()`` takes no checkpoint, so a resume request
+#: used to train again from step 0 over the files already in ``output``.
+RESUME_REFUSAL = (
+    "soup train --resume is not supported for task 'ppo': trl's PPOTrainer.train() takes "
+    "no checkpoint, so the run would start over from step 0 and write over the files "
+    "in the output directory. "
+    "Remove --resume to start a new run, or point output at a new directory to keep "
+    "the old one."
+)
 
 
 def _set_ppo_training_kwargs(
@@ -786,6 +799,17 @@ class PPOTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
 
+        # #2197: TRL's PPO loop has no Trainer.train(), so nothing else switches
+        # checkpointing on for the policy. 4bit/8bit already got it from
+        # prepare_model_for_kbit_training above, with its own kwargs.
+        if tcfg.quantization not in ("4bit", "8bit"):
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            if should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ):
+                self.model.gradient_checkpointing_enable()
+
         # QAT — insert fake quantization ops after LoRA. The "fp8" variant
         # is FP8 training (handled by apply_v028_speed_memory), not int8 QAT.
         # PPO has its own forward loop, so use_cut_ce will degrade gracefully.
@@ -800,6 +824,17 @@ class PPOTrainerWrapper:
             model=self.model, tcfg=tcfg, base_model=cfg.base,
             console=console, device=self.device, backend=cfg.backend,
         )
+
+        # #2365: every rollout switches checkpointing off and on, and each enable
+        # adds an input-grad hook that is never removed. Keep only the latest.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            from soup_cli.utils.gradient_ckpt import keep_one_input_grad_hook
+
+            keep_one_input_grad_hook(self.model)
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
@@ -846,10 +881,23 @@ class PPOTrainerWrapper:
 
         if has_builtin_train:
             return self._train_builtin(display, tracker, run_id, resume_from_checkpoint)
+        if resume_from_checkpoint:
+            # The manual loop never reads a checkpoint: refuse, do not drop it.
+            raise ValueError(RESUME_REFUSAL)
         return self._train_manual(display, tracker, run_id)
 
     def _train_builtin(self, display, tracker, run_id, resume_from_checkpoint):
         """Train using trl >=0.28 built-in trainer.train() method."""
+        import inspect
+
+        # trl's experimental PPOTrainer.train() does not accept resume_from_checkpoint.
+        # `soup train` refuses a resume request for task: ppo before it loads anything
+        # (commands/train.py:_resume_refusal); a direct caller is refused here, before
+        # any state is touched, instead of being restarted from step 0.
+        train_params = inspect.signature(self.trainer.train).parameters
+        if resume_from_checkpoint and "resume_from_checkpoint" not in train_params:
+            raise ValueError(RESUME_REFUSAL)
+
         start = time.time()
 
         # If dataset wasn't accepted by constructor, set it on the trainer
@@ -872,12 +920,8 @@ class PPOTrainerWrapper:
                 )
             )
 
-        # trl experimental PPOTrainer.train() does not accept resume_from_checkpoint
-        import inspect
-
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        train_params = inspect.signature(self.trainer.train).parameters
         with activation_offloading_context(
             self.config.training, self._output_dir,
         ):
@@ -887,19 +931,16 @@ class PPOTrainerWrapper:
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+                with manual_save_context(self.trainer, stop_after_save=True):
+                    self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
-                if resume_from_checkpoint:
-                    console.print(
-                        "[yellow]Warning: This PPOTrainer does not support "
-                        "resume_from_checkpoint -- starting from scratch.[/]"
-                    )
                 align_trainable_dtype_for_fp16(
                     self.trainer.model,
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                self.trainer.train()
+                with manual_save_context(self.trainer, stop_after_save=True):
+                    self.trainer.train()
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:
@@ -1002,6 +1043,7 @@ class PPOTrainerWrapper:
                         epoch=epoch + 1,
                         loss=log_entry["loss"],
                         lr=log_entry["lr"],
+                        kind=ROW_KIND_TRAIN,
                     )
 
         duration = time.time() - start

@@ -25,6 +25,8 @@ Public surface:
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
+- ``hardware_fit_input_or_reason(cfg, ...)`` -> ``HardwareFitInput | FitUnavailable``:
+  the same input, or the field that stops the estimate and why (#2306).
 """
 
 from __future__ import annotations
@@ -108,8 +110,16 @@ class HardwareFitInput:
     target_modules: Any = "auto"
     #: False for a task whose model has no LM head (``NO_LM_HEAD_TASKS``).
     lm_head: bool = True
+    #: False for a task that builds the logits but no loss over them
+    #: (``LOGITS_ONLY_TASKS``).
+    logits_loss: bool = True
     #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``); not modelled,
+    #: so the estimate only says so.
+    activation_offloading: Optional[str] = None
+    #: The loader whose default LoRA targets and weight dtypes are being estimated.
+    backend: str = "transformers"
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -165,6 +175,8 @@ class VRAMBreakdown:
     adapters_gb: float = 0.0
     logits_gb: float = 0.0
     dequant_gb: float = 0.0
+    #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
+    optimizer_step_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -172,6 +184,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
+            "optimizer_step_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -194,6 +207,7 @@ class VRAMBreakdown:
             + self.adapters_gb
             + self.logits_gb
             + self.dequant_gb
+            + self.optimizer_step_gb
         )
 
 
@@ -445,6 +459,13 @@ NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
     {"classifier", "reranker", "cross_encoder", "embedding", "reward_model"}
 )
 
+#: Tasks whose step builds the logits but no loss over them, so the estimate charges
+#: the logits tensor alone: prm runs the causal-LM forward without labels and takes
+#: its loss from ``reward_head`` (``trainer/prm.py``), with ``logits_to_keep=1``
+#: where the forward takes it, so on one position (#2368,
+#: ``vram_estimate.logits_positions``).
+LOGITS_ONLY_TASKS: frozenset[str] = frozenset({"prm"})
+
 #: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
 #: ``plan_gradient_checkpointing``, inherited by tts. Every other trainer hands any
 #: truthy ``gradient_checkpointing`` to HF as plain checkpointing, which is ``full``.
@@ -468,6 +489,19 @@ def checkpointing_for_task(
     return resolve_granularity(value, gpu_memory_gb=gpu_memory_gb) or False
 
 
+@dataclass(frozen=True)
+class FitUnavailable:
+    """Why the estimate cannot price a run (#2306).
+
+    ``field`` is the soup.yaml field that stops it (``None`` when no one field does);
+    ``reason`` is one line naming that field and the limit. Neither holds a value read
+    from the config (a model id, a path), so a caller can print the reason as it is.
+    """
+
+    field: Optional[str]
+    reason: str
+
+
 def hardware_fit_input_from_config(
     cfg: Any,
     *,
@@ -481,11 +515,35 @@ def hardware_fit_input_from_config(
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, a quantization with no memory model, out-of-range dims), in which
-    case the pre-flight skips rather than guess. ``profile_defaults`` is ``soup
-    profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
-    with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
-    is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
-    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
+    case the pre-flight skips rather than guess; :func:`hardware_fit_input_or_reason`
+    says which of those it is. ``profile_defaults`` is ``soup profile``'s reading
+    instead: ``auto`` is priced at batch 4 and a quantization with no memory model at
+    bf16, as ``soup profile`` always did. ``gpu_memory_gb`` is the card's memory in
+    GiB, which ``gradient_checkpointing: auto`` resolves on. ``on_hub_request`` is
+    called just before the first request to the Hub, if one is made.
+    """
+    result = hardware_fit_input_or_reason(
+        cfg,
+        allow_network=allow_network,
+        profile_defaults=profile_defaults,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=on_hub_request,
+    )
+    return result if isinstance(result, HardwareFitInput) else None
+
+
+def hardware_fit_input_or_reason(
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    profile_defaults: bool = False,
+    gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
+) -> Union[HardwareFitInput, FitUnavailable]:
+    """:func:`hardware_fit_input_from_config`, or the one cause that stops it (#2306).
+
+    The batch size, the sequence length and the quantization are checked before the
+    model is read, so a run the estimate cannot price makes no request to the Hub.
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -493,23 +551,54 @@ def hardware_fit_input_from_config(
     bs = getattr(tcfg, "batch_size", None)
     if not isinstance(bs, int) or isinstance(bs, bool):
         if not profile_defaults:
-            return None  # "auto" resolves later — can't predict yet
+            # "auto" resolves later, once the model is loaded: can't predict yet.
+            return FitUnavailable(
+                "training.batch_size",
+                "training.batch_size is auto, which is chosen after the model loads",
+            )
         bs = PROFILE_AUTO_BATCH
+    if not _MIN_BATCH <= bs <= _MAX_BATCH:
+        # The schema asks only for 1 or more.
+        return FitUnavailable(
+            "training.batch_size",
+            f"training.batch_size is outside {_MIN_BATCH} to {_MAX_BATCH:,}, the range "
+            "the estimate prices",
+        )
     seq_len = getattr(cfg.data, "max_length", None)
-    if not isinstance(seq_len, int) or isinstance(seq_len, bool):
-        return None
-    if profile_defaults:
+    if profile_defaults and isinstance(seq_len, int) and not isinstance(seq_len, bool):
         seq_len = min(max(seq_len, _MIN_SEQ_LEN), _MAX_SEQ_LEN)
+    if (
+        not isinstance(seq_len, int)
+        or isinstance(seq_len, bool)
+        or not _MIN_SEQ_LEN <= seq_len <= _MAX_SEQ_LEN
+    ):
+        # A guard: the schema already bounds data.max_length to this range, so a
+        # validated config does not reach it.
+        return FitUnavailable(
+            "data.max_length",
+            f"data.max_length is outside {_MIN_SEQ_LEN} to {_MAX_SEQ_LEN:,}, the range "
+            "the estimate prices",
+        )
     quant = CONFIG_QUANT_TO_FIT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         if not profile_defaults:
-            return None
+            return FitUnavailable(
+                "training.quantization",
+                "training.quantization has no memory model in the estimate",
+            )
         quant = "none"
     shape = read_model_shape(
         getattr(cfg, "base", "") or "",
         allow_network=allow_network,
         on_hub_request=on_hub_request,
     )
+    # Compared as is: dividing a count too large for a float would raise here.
+    if shape.params > _MAX_PARAMS_B * GB:
+        return FitUnavailable(
+            "base",
+            f"the model in base has over {_MAX_PARAMS_B:,.0f}B parameters, the most the "
+            "estimate prices",
+        )
     peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _VALID_OPTIMIZERS:
@@ -542,10 +631,14 @@ def hardware_fit_input_from_config(
             lora_r=int(getattr(lora, "r", 64) or 0),
             target_modules=getattr(lora, "target_modules", "auto"),
             lm_head=task not in NO_LM_HEAD_TASKS,
+            logits_loss=task not in LOGITS_ONLY_TASKS,
             fused_loss=fused_loss,
+            backend=getattr(cfg, "backend", "transformers"),
+            activation_offloading=getattr(tcfg, "activation_offloading", None),
         )
     except (ValueError, TypeError, ArithmeticError):
-        return None  # dims out of the predictor's supported range
+        # Any other input the estimate refuses: no one field is known to be the cause.
+        return FitUnavailable(None, "the run's inputs are outside the range the estimate prices")
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
@@ -569,7 +662,10 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             lora_r=inp.lora_r,
             target_modules=inp.target_modules,
             lm_head=inp.lm_head,
+            logits_loss=inp.logits_loss,
             fused_loss=inp.fused_loss,
+            backend=inp.backend,
+            activation_offloading=inp.activation_offloading,
         ),
     )
     return breakdown_from_estimate(est)
@@ -585,6 +681,7 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         adapters_gb=est.gb("adapters"),
         logits_gb=est.gb("logits"),
         dequant_gb=est.gb("dequant"),
+        optimizer_step_gb=est.gb("optimizer_step"),
         estimate=est,
     )
 
@@ -644,6 +741,7 @@ def decide_hardware_fit(
 
 __all__ = [
     "VRAM_SAFETY_MARGIN",
+    "FitUnavailable",
     "HardwareFitInput",
     "HardwareFitReport",
     "VRAMBreakdown",
@@ -651,6 +749,7 @@ __all__ = [
     "decide_hardware_fit",
     "estimate_peak_vram_gb",
     "hardware_fit_input_from_config",
+    "hardware_fit_input_or_reason",
     "outside_calibrated_range",
     "validate_batch_size",
     "validate_seq_len",

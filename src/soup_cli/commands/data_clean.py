@@ -21,12 +21,13 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils.data_clean import CleanReport, clean_dataset
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -88,7 +89,7 @@ def _report_undetected_format(exc: ValueError, *, json_output: bool) -> None:
     """
     target = Console(stderr=True) if json_output else console
     target.print(f"[yellow]Warning:[/] {UNDETECTED_FORMAT_NOTE}.")
-    target.print(f"[dim]{for_terminal(str(exc))}[/]")
+    target.print(Text(strip_control(str(exc)), style="dim"))
 
 
 def clean(
@@ -156,12 +157,13 @@ def clean(
 
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found:[/] {file_path}")
+        console.print(Text.assemble(("File not found:", "red"), f" {strip_control(file_path)}"))
         raise typer.Exit(1)
 
     if not is_under_cwd(file_path):
         console.print(
-            f"[red]Input path must be under the current working directory:[/] {file_path}"
+            Text.assemble(("Input path must be under the current working directory:", "red"),
+                          f" {strip_control(file_path)}")
         )
         raise typer.Exit(1)
 
@@ -169,7 +171,8 @@ def clean(
         with _loader_warnings_to_stderr(json_output):
             data = load_raw_data(file_path)
     except Exception as exc:
-        console.print(f"[red]Failed to load dataset:[/] {for_terminal(str(exc))}")
+        console.print(Text.assemble(("Failed to load dataset:", "red"),
+                                    f" {strip_control(str(exc))}"))
         raise typer.Exit(1) from exc
 
     if not data:
@@ -208,21 +211,23 @@ def clean(
 
         if not is_under_cwd(output_path):
             console.print(
-                f"[red]Output path must be under the current working directory:[/] {output_path}"
+                Text.assemble(("Output path must be under the current working directory:", "red"),
+                              f" {strip_control(output_path)}")
             )
             raise typer.Exit(1)
 
         if output_path.resolve() == file_path.resolve():
             console.print(
-                f"[red]Output path cannot be the same as input path:[/] {output_path} "
-                "(soup data clean never modifies its input file in place)"
+                Text.assemble(("Output path cannot be the same as input path:", "red"),
+                              f" {strip_control(output_path)} "
+                              "(soup data clean never modifies its input file in place)")
             )
             raise typer.Exit(1)
 
         if output_path.exists() and not force:
             console.print(
-                f"[red]Output file already exists:[/] {output_path} "
-                "(use --force / -f to overwrite)"
+                Text.assemble(("Output file already exists:", "red"),
+                              f" {strip_control(output_path)} (use --force / -f to overwrite)")
             )
             raise typer.Exit(1)
 
@@ -231,7 +236,8 @@ def clean(
             content = "\n".join(jsonl_lines) + ("\n" if jsonl_lines else "")
             atomic_write_text(content, str(output_path))
         except Exception as exc:
-            console.print(f"[red]Failed to write output file:[/] {for_terminal(str(exc))}")
+            console.print(Text.assemble(("Failed to write output file:", "red"),
+                                        f" {strip_control(str(exc))}"))
             raise typer.Exit(1) from exc
 
     if json_output:
@@ -264,6 +270,6 @@ def clean(
 
     if output_path is not None:
         console.print(
-            f"\n[bold green]✓ Cleaned dataset saved to:[/] {output_path} "
-            f"({len(cleaned_data)} rows)"
+            Text.assemble("\n", ("✓ Cleaned dataset saved to:", "bold green"),
+                          f" {strip_control(output_path)} ({len(cleaned_data)} rows)")
         )

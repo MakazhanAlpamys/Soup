@@ -10,6 +10,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -43,7 +46,10 @@ def _resolve_repro_receipt(explicit: Optional[str], model_dir: str) -> Optional[
         try:
             return _load_receipt_json(explicit)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            console.print(f"[red]--repro-receipt {escape(explicit)}: {escape(str(exc))}[/]")
+            console.print(
+                f"[red]--repro-receipt {for_terminal(explicit)}: {for_terminal(exc)}[/]",
+                emoji=False,
+            )
             raise typer.Exit(2) from exc
     # Auto-detect — best-effort. Note: when the receipt lives inside the model
     # dir it is embedded twice (top-level ``repro-receipt.json`` AND
@@ -129,24 +135,27 @@ def airgap_bundle(
     try:
         manifest = build_airgap_bundle(plan)
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Output:      [bold]{escape(output)}[/]\n"
-            f"Model:       [bold]{escape(manifest.model_dir)}[/]\n"
-            f"Datasets:    {len(manifest.datasets)}\n"
-            f"Wheels:      {len(manifest.wheels)}\n"
-            f"Kernels:     {len(manifest.kernels)}\n"
-            f"Files:       {len(manifest.files)}\n"
-            f"Total bytes: {manifest.total_bytes}\n"
-            f"Cap (GiB):   {bundle_size_cap}\n"
-            f"Soup ver:    {escape(manifest.soup_version)}\n"
-            f"Created:     [dim]{escape(manifest.created_at)}[/]",
+            Text.from_markup(
+                f"Output:      [bold]{for_terminal(output)}[/]\n"
+                f"Model:       [bold]{for_terminal(manifest.model_dir)}[/]\n"
+                f"Datasets:    {len(manifest.datasets)}\n"
+                f"Wheels:      {len(manifest.wheels)}\n"
+                f"Kernels:     {len(manifest.kernels)}\n"
+                f"Files:       {len(manifest.files)}\n"
+                f"Total bytes: {manifest.total_bytes}\n"
+                f"Cap (GiB):   {bundle_size_cap}\n"
+                f"Soup ver:    {escape(manifest.soup_version)}\n"
+                f"Created:     [dim]{escape(manifest.created_at)}[/]",
+                emoji=False,
+            ),
             title="Airgap bundle",
         )
     )

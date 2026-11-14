@@ -1,0 +1,24 @@
+{
+  "arm": "D3",
+  "stats": {
+    "arm": "D3",
+    "budget_gb": 80,
+    "final_loss_median": 3.841644763946533,
+    "max_memory_reserved_gib_median": 15.4375,
+    "peak_vram_mib_median": 17515.0,
+    "runs_found": 3,
+    "runs_valid": 3,
+    "shape": "A",
+    "spread": 0.004465821755431338,
+    "status": "measured",
+    "steady_tok_per_s_median": 284.3810236614359,
+    "tok_per_s_max": 281.5855687396021,
+    "tok_per_s_median": 280.717144580295,
+    "tok_per_s_min": 280.33193600821284,
+    "tok_per_s_values": [
+      281.5855687396021,
+      280.33193600821284,
+      280.717144580295
+    ]
+  }
+}

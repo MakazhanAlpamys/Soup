@@ -1,0 +1,14 @@
+{
+ "path": "/workspace/tco-shared/data/1/train.jsonl",
+ "rows": 840,
+ "scanned": 1104,
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "synthetic": false,
+ "max_length": 512,
+ "sha256": "eba8a5bc6074eced5adb255f3f8872d942779978171421e13f9c670494479c8a",
+ "dataset": "HuggingFaceH4/ultrachat_200k",
+ "split": "train_sft",
+ "rule": "first N rows, in stored order, whose chat-templated length under the case's own tokenizer is >= max_length tokens AND whose first user turn (with the generation prompt) is <= max_length - 128 tokens (Soup refuses rows whose answer is truncated away); every framework truncates on the right to max_length, so every training row is EXACTLY max_length tokens and tokens/step is batch x max_length with no padding in any arm",
+ "built_utc": "2026-11-08T11:50:37Z",
+ "build_s": 13.5
+}

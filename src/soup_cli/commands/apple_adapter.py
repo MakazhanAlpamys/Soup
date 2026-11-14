@@ -9,12 +9,14 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.apple_adapter import (
     SUPPORTED_ADAPTER_DIRECTIONS,
     build_apple_adapter_plan,
     convert_apple_adapter,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -45,15 +47,18 @@ def apple_adapter_cmd(
             sign=sign,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Source:    [bold]{escape(plan.source_dir)}[/]\n"
-            f"Output:    [bold]{escape(plan.output_dir)}[/]\n"
-            f"Direction: [bold]{escape(plan.direction)}[/]\n"
-            f"Sign:      [bold]{plan.sign}[/]",
+            Text.from_markup(
+                f"Source:    [bold]{for_terminal(plan.source_dir)}[/]\n"
+                f"Output:    [bold]{for_terminal(plan.output_dir)}[/]\n"
+                f"Direction: [bold]{escape(plan.direction)}[/]\n"
+                f"Sign:      [bold]{plan.sign}[/]",
+                emoji=False,
+            ),
             title="soup apple-adapter — plan",
         )
     )
@@ -75,7 +80,7 @@ def apple_adapter_cmd(
         )
         raise typer.Exit(3) from exc
     except (ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
     except ImportError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -88,9 +93,12 @@ def apple_adapter_cmd(
     )
     console.print(
         Panel(
-            f"Converted LoRA keys: [bold]{report.converted_keys}[/]\n"
-            f"Output:              [bold]{escape(report.output_dir)}[/]\n"
-            f"Signed:              [bold]{report.signed}[/]{skipped_note}",
+            Text.from_markup(
+                f"Converted LoRA keys: [bold]{report.converted_keys}[/]\n"
+                f"Output:              [bold]{for_terminal(report.output_dir)}[/]\n"
+                f"Signed:              [bold]{report.signed}[/]{skipped_note}",
+                emoji=False,
+            ),
             title="soup apple-adapter — converted",
             border_style="green",
         )

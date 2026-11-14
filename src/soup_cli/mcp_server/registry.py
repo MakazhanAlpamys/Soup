@@ -402,11 +402,19 @@ def tool_runs_list(args: dict) -> dict:
 
 def tool_runs_show(args: dict) -> dict:
     """`soup runs show` — one run's full record."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
-    run = ExperimentTracker().get_run(_require_str(args, "run_id"))
-    if run is None:
-        raise McpToolError("run not found")
+    run_id = _require_str(args, "run_id")
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            # get_run answers None for an ambiguous prefix too (#2470).
+            if tracker.count_run_id_matches(run_id) > 1:
+                raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
+            raise McpToolError("run not found")
+    finally:
+        tracker.close()
     return run
 
 
@@ -489,11 +497,9 @@ def tool_profile(args: dict) -> dict:
         allow_network=False,
         gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
     )
-    if result is None:
-        raise McpToolError(
-            "batch_size, max_length or the model's size (over 1,000B parameters) is "
-            "outside the estimate's range"
-        )
+    if not isinstance(result, dict):
+        # The reason names a field and a limit, never a value from the config (#2306).
+        raise McpToolError(result.reason)
     return finish_profile(
         result,
         seq_len=cfg.data.max_length,

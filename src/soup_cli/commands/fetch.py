@@ -17,6 +17,7 @@ from soup_cli.utils.fetch_examples import (
     list_entries,
 )
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -47,7 +48,9 @@ def fetch(
         try:
             entries = list_entries(namespace)
         except ValueError as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            # The message quotes the namespace with repr(), which already shows
+            # control characters as escapes.
+            console.print(f"[red]{escape(str(exc))}[/]", emoji=False)
             raise typer.Exit(code=2) from exc
         if not entries:
             console.print(f"[yellow]No entries in namespace {namespace!r}.[/]")
@@ -67,7 +70,8 @@ def fetch(
     entry = get_entry(name)
     if entry is None or entry.namespace != namespace:
         console.print(
-            f"[red]Unknown {escape(namespace)} entry: {escape(str(name))}.[/]"
+            f"[red]Unknown {for_terminal(namespace)} entry: {for_terminal(name)}.[/]",
+            emoji=False,
         )
         raise typer.Exit(code=2)
     bundled_root = os.path.realpath(fetch_examples_dir())
@@ -87,7 +91,8 @@ def fetch(
     if not is_under_cwd(target_path):
         console.print(
             f"[red]--output must stay under cwd: "
-            f"{escape(os.path.basename(target_path))}.[/]"
+            f"{for_terminal(os.path.basename(target_path))}.[/]",
+            emoji=False,
         )
         raise typer.Exit(code=2)
     real_target = os.path.realpath(target_path)
@@ -103,20 +108,23 @@ def fetch(
         link_stat = None
     except OSError as exc:
         console.print(
-            f"[red]Cannot stat target {escape(os.path.basename(real_target))}: "
-            f"{escape(type(exc).__name__)}[/]"
+            f"[red]Cannot stat target {for_terminal(os.path.basename(real_target))}: "
+            f"{escape(type(exc).__name__)}[/]",
+            emoji=False,
         )
         raise typer.Exit(code=1) from exc
     if link_stat is not None and stat.S_ISLNK(link_stat.st_mode):
         console.print(
             f"[red]Refusing to overwrite symlink at "
-            f"{escape(os.path.basename(real_target))}[/]"
+            f"{for_terminal(os.path.basename(real_target))}[/]",
+            emoji=False,
         )
         raise typer.Exit(code=1)
     if link_stat is not None and not force:
         console.print(
-            f"[red]{escape(os.path.basename(real_target))} already exists. "
-            "Use --force to overwrite.[/]"
+            f"[red]{for_terminal(os.path.basename(real_target))} already exists. "
+            "Use --force to overwrite.[/]",
+            emoji=False,
         )
         raise typer.Exit(code=1)
     parent = os.path.dirname(real_target)
@@ -124,6 +132,7 @@ def fetch(
         os.makedirs(parent, exist_ok=True)
     shutil.copyfile(src, real_target)
     console.print(
-        f"[green]Wrote[/] {escape(real_target)}\n"
-        f"[dim]{escape(entry.description)}[/]"
+        f"[green]Wrote[/] {for_terminal(real_target)}\n"
+        f"[dim]{escape(entry.description)}[/]",
+        emoji=False,
     )

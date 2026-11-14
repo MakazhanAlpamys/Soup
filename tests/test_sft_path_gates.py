@@ -351,7 +351,10 @@ class TestTheRowsFollowTheSetups:
     def test_the_formatter_has_one_call_site_in_the_text_branch(self):
         """``pre_tokenized`` and ``raft`` skip ``build_format_row``; the text
         branch is the only place it is built."""
-        source = inspect.getsource(SFTTrainerWrapper.setup)
+        # #1464 moved the dataset branches out of setup() into _finish_setup().
+        source = inspect.getsource(SFTTrainerWrapper.setup) + inspect.getsource(
+            SFTTrainerWrapper._finish_setup
+        )
 
         assert source.count("build_format_row(") == 1, (
             "build_format_row is built more than once in setup: the rows that "

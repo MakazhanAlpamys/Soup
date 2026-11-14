@@ -205,17 +205,27 @@ class TestHostHelp:
 
 
 class TestToolAuthTokenHelp:
-    def test_help_names_every_tool_route_the_token_gates(self, monkeypatch):
+    def test_help_names_every_route_the_token_gates(self, monkeypatch):
         monkeypatch.setenv("COLUMNS", "200")
         # Read the routes off the source so a fourth tool route cannot slip past; the
         # floor keeps a changed decorator spelling from turning the loop into a no-op.
-        routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', inspect.getsource(serve_cmd))
-        assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(routes)
+        source = inspect.getsource(serve_cmd)
+        tool_routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', source)
+        thumbs_routes = re.findall(r'@app\.post\("(/v1/thumbs)"', source)
+        adapter_routes = re.findall(r'@app\.(?:get|post)\("(/v1/adapters[^"]*)"', source)
+        assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(tool_routes)
+        assert {"/v1/thumbs"} <= set(thumbs_routes)
+        assert {
+            "/v1/adapters",
+            "/v1/adapters/activate/{name}",
+            "/v1/adapters/deactivate",
+        } <= set(adapter_routes)
 
         result = runner.invoke(app, ["serve", "--help"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output.replace("│", " "))
-        for route in routes:
-            assert route in out, f"{route} is gated by --tool-auth-token but not in --help"
+        for route in [*tool_routes, *thumbs_routes, *adapter_routes]:
+            expected = route.replace("{name}", "<name>")
+            assert expected in out, f"{expected} is gated by --tool-auth-token but not in --help"
         assert "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search)" in out

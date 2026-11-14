@@ -11,6 +11,13 @@ import pytest
 
 from tests import _source_scan
 
+# MLX runs float32 matmuls at TF32 precision by default (``MLX_ENABLE_TF32``,
+# ml-explore/mlx#3860). On an Apple M6 GPU that puts a float32 matmul about 1e-2
+# off, so the native MLX tests' float32 oracles fail there (#2385). MLX reads the
+# variable once, at its first matmul, so it is set here, before any test runs one;
+# an explicit MLX_ENABLE_TF32=1 is left alone.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 
@@ -196,6 +203,21 @@ def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (None, None))
     monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_windows_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep layer streaming's Windows commit pre-flight off this machine's real counters.
+
+    ``utils.windows_commit.read_commit_info`` reads the system commit total and limit,
+    and the staging pre-flight falls back to pageable staging when they are tight. A
+    test that drives the setup path with a simulated CUDA device would otherwise get a
+    different ``pin=`` on a Windows box with little commit left than on one with plenty.
+    A test of the check patches the reader (and ``_on_windows``) itself.
+    """
+    from soup_cli.utils import windows_commit
+
+    monkeypatch.setattr(windows_commit, "read_commit_info", lambda: None)
 
 
 @pytest.fixture(autouse=True)
