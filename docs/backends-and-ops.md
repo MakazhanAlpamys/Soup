@@ -1584,6 +1584,53 @@ Every completed run also stores an estimated cost (`$` per run) computed from th
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
+A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
+`runs.final_loss`: when a trainer's summary says `loss_summary_kind: unavailable`
+(its numeric `initial_loss` / `final_loss` are a `0.0` placeholder), `soup train` and
+`soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
+`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged `inf` tail is
+kept as logged, a NaN end stores NULL for both (SQLite cannot hold a NaN, and a half-NULL pair would contradict the kind below; the completion panel still prints it), and a run-level `train_loss` mean on a run too short to log a step is stored as
+before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
+below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
+with no loss cannot be the best run.
+
+Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
+omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; an infinity is kept), and HF's final runtime-summary event (`train_runtime`, the
+`train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
+no training row and pushes no live event, while the terminal panel keeps showing the last
+real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm` and
+`val_loss` NULL and `speed` set (#2810), so a reader that wants the training curve skips
+rows whose `kind` is `summary`. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
+row written, so a later measurement at the same or a lower step is a new row with a larger
+`id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
+come back ordered by step; sort by `id` for arrival order).
+
+Two nullable columns say what a stored number is, so a reader need not guess. Both are
+added in place to an existing `~/.soup/experiments.db` and are NULL on every row written
+before they existed; nothing is backfilled. Their values are module constants in
+`soup_cli.experiment.row_kinds` and are exactly these:
+
+- `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
+  and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
+  step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
+  `unavailable`: the run observed no loss (or only a NaN one) and both columns are NULL; a
+  pair is never stored with one NULL end. `soup train` and
+  `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
+  from the trainer's summary (`delta` and `single` are `per_step`).
+- `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the
+  same `kind`. `train`: a training log, whose loss / lr / grad norm that log measured.
+  `eval`: an evaluation, carrying a `val_loss` or `val_reward`; its `loss` / `lr` are the
+  last measured training values carried into the row, not a measurement of the evaluation.
+  `summary`: a run-level summary row, written by the HF callback for HF's final runtime
+  event when it carries `train_steps_per_second`: `loss`, `lr`, `grad_norm` and the
+  validation columns are NULL, `speed` is the throughput, and `step` is the last step. Every
+  in-repo writer (the HF callback and the MLX and PPO loops) states its kind through
+  `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
+  and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
+  `ValueError` before anything is written.
+
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
 rows — so you can plot a benchmark-score curve (e.g. `mmlu`, `gsm8k`) the same way

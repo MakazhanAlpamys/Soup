@@ -18,6 +18,7 @@ from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.experiment.row_kinds import ROW_KIND_TRAIN
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
@@ -1042,6 +1043,7 @@ class PPOTrainerWrapper:
                         epoch=epoch + 1,
                         loss=log_entry["loss"],
                         lr=log_entry["lr"],
+                        kind=ROW_KIND_TRAIN,
                     )
 
         duration = time.time() - start

@@ -122,9 +122,10 @@ def list_runs(
             # no longer running.
             status_str = f"[yellow]{status}[/]"
 
-        # Format loss
+        # Format loss. `is not None`, not truthiness: a measured 0.0 is a loss and must
+        # show, while NULL (a run that observed none) shows nothing.
         loss_str = ""
-        if run.get("initial_loss") and run.get("final_loss"):
+        if run.get("initial_loss") is not None and run.get("final_loss") is not None:
             loss_str = f"{run['initial_loss']:.3f} -> {run['final_loss']:.3f}"
 
         # Format duration

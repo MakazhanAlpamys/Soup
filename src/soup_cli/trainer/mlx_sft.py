@@ -25,6 +25,7 @@ from pathlib import Path
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.experiment.row_kinds import ROW_KIND_EVAL, ROW_KIND_TRAIN
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.terminal import for_terminal
 
@@ -1199,6 +1200,7 @@ class MLXSFTTrainerWrapper:
                             lr=type(self)._last_lr,
                             speed=type(self)._last_speed,
                             val_loss=val_loss,
+                            kind=ROW_KIND_EVAL,
                         )
                     except Exception:  # noqa: BLE001 — telemetry must not kill a run
                         pass
@@ -1282,6 +1284,7 @@ class MLXSFTTrainerWrapper:
                         lr=lr_value,
                         speed=speed,
                         gpu_mem=gpu_mem,
+                        kind=ROW_KIND_TRAIN,
                     )
 
                 # Feed the SSE buffer so `soup ui` and GET /api/train/stream
