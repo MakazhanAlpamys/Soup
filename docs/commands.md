@@ -180,6 +180,7 @@ soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>
 soup loop status                              Counters + status + pre_wired flag + a daemon row (running (pid N) / not running / stale pid file) + for an sft loop an sft_recipe row (the effective recipe and which keys come from loop.yaml) + a waiting row while the loop waits for corrections (Waiting: 4/5 trainable corrections ...) + new_data_since, the cursor of the version in production
 soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing); --detach writes .soup/loop.pid (JSON: pid, started_at, log), appends the child's output to .soup/loop.log (rotated at 10 MB, one old file kept as .soup/loop.log.1), and is refused (exit 2) while that pid is alive
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
+soup loop set <key> <value>                  Change one setting of an existing loop without `init --force`: base_model, trace_dir or verify
 soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
 soup loop rollback                           Return to the production version before the last promotion, and the data cursor to its cursor (with none yet, withdraw a running canary)
