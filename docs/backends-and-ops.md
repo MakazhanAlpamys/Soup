@@ -87,12 +87,13 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
-It can also be installed with `[train]` when the same environment needs the
-PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
-streaming dataset still needs `datasets` because that data source owns the
-dependency; the local file path below does not.
+`[mlx]` is the standalone extra for all MLX tasks listed in the [optional extras
+table](models.md#optional-extras). For local data, it is sufficient on its own;
+MLX training does not require `[train]`. Add `[train]` only when the same
+environment also needs the PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or streaming
+dataset still needs `datasets` because that data source owns the dependency; the
+local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -126,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -156,6 +165,33 @@ ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
+#### Vocabulary Expansion on MLX
+
+On `backend: mlx`, text SFT supports vocabulary expansion via `data.add_new_tokens` and
+`data.new_special_tokens` on dense models (`training.quantization: none`) with Llama-style
+architecture (`model.model.embed_tokens` and `model.lm_head`) matching tokenizer length ([#1994](https://github.com/MakazhanAlpamys/Soup/issues/1994)).
+
+The mechanism uses zero-allocation additive parameter slices rather than resizing the base
+embedding matrix in-place:
+- **Base weights frozen:** The base embedding table and LM head remain untouched and frozen.
+- **Registration order:** Special tokens are registered first to ensure semantic precedence,
+  whereas `backend: transformers` (`apply_vocab_expansion`) registers ordinary tokens first.
+- **Additive slice:** Only a new weight matrix $\Delta V \times D$ is allocated and registered
+  as trainable parameters with the optimizer, initialized with a normal distribution
+  matching the base embedding's standard deviation and dtype. The draw is always seeded via
+  `resolve_training_seed` (defaulting to 42 when unset), which reseeds `mx.random.seed`
+  before initialization.
+- **Zero-allocation gather:** The forward pass computes base and extended embeddings separately
+  and merges them via `mx.where(is_new, new_out, base_out)`, avoiding concatenation of large
+  weight tensors.
+- **Memory footprint:** Minimal additional memory during training and on disk:
+  $\Delta V \times D \times \text{sizeof(dtype)}$ bytes for tied embeddings (doubled for untied models).
+  For example, adding 100 tokens to a 4096-dim bf16 model takes only 800 KB of parameters.
+- **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
+  of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
+  Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
+
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
@@ -183,13 +219,13 @@ training:
 ```
 
 - **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model. `--resume` refuses a checkpoint without `adapter_config.json`, from another task (an MLX SFT adapter included), or from another base, before any tensor loads.
-- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, even when the row would fit; the transformers backend makes that cut only on a row that does not fit `data.max_length` (#1209). Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
+- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template. Both backends keep the whole prompt when both complete inputs fit `data.max_length`; only an overflowing pair has its prompt capped at `max_length // 2` (keeping the start) and completions at what remains. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
 - **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
 - **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
 - **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
-- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows), `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), DoRA, `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
 - **Not applied on MLX:** per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
 
 #### ORPO on MLX
@@ -229,11 +265,11 @@ training:
   TRL's ORPO trainer does: rendered to text with the chat template (keeping
   only the prefix the prompt and `prompt + answer` renderings share), the
   answer located even when the tokenizer merges the last prompt token into it,
-  BOS prepended and EOS appended when missing. A prompt longer than
-  `max_length // 2` tokens is cut to that many, keeping its end, with the BOS
-  in front, and the answers to the remaining room, even when the row would fit;
-  the transformers backend makes that cut only on a row that does not fit
-  `data.max_length` (#1209). TRL's own earlier answer cut, which can leave the shorter
+  BOS prepended and EOS appended when missing. Both backends keep the whole
+  prompt when both complete inputs, including BOS/EOS, fit `data.max_length`.
+  If either input overflows, both prompts are capped at `max_length // 2`,
+  keeping their ends with the BOS in front, and each answer to its remaining room.
+  TRL's own earlier answer cut, which can leave the shorter
   answer empty, is not reproduced. A pair the template cannot split is skipped
   with a count; a row with no room for an answer is refused.
 - **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
@@ -255,7 +291,7 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `modality`, DoRA, LoRA+ and `data.chat_template`. `task: preference` with
   `training.preference_loss: orpo` uses this same native trainer and these
   same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -289,15 +325,10 @@ That shows the objective moving, not alignment quality.
   micro-batch and the micro-batches are averaged with equal weight, as the
   transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
-  the same code. MLX SimPO, like MLX DPO and ORPO, cuts by the prompt alone: a
-  prompt longer than `max_length // 2` tokens is cut to that many, keeping its
-  end, and the answers to the remaining room, even when the row would fit. The
-  transformers SimPO path applies the same cap only when a row does not fit
-  `data.max_length` (TRL 0.29.1 cuts only the answers, so a long prompt reached
-  the model whole); Soup refuses a row whose shorter answer that cut empties.
-  Rows that fit with a prompt of at most `max_length // 2` tokens train on the
-  same tokens on either backend; a row that fits with a longer prompt keeps its
-  whole prompt on transformers and loses its start on MLX.
+  the same code. Both backends keep the whole prompt when both complete inputs
+  fit `data.max_length`. If either input overflows, both prompts are capped at
+  `max_length // 2`, keeping their ends with the BOS in front, and each answer
+  to its remaining room. Soup refuses a row with no room for an answer.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
@@ -318,7 +349,7 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `modality`, DoRA, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -757,8 +788,18 @@ training:
 ## Cloud GPU Training
 
 No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
-from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
-the environment only when a live submission starts.
+from your `soup.yaml`. The **effective** config — the loaded object with every CLI override
+already applied — is base64-embedded as **data**; credentials are read from the environment only
+when a live submission starts.
+
+`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
+local HF repo, so a cloud run would silently ignore them.
+
+A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
+id (every built-in template sets one, so users hit this first). The same applies to local model
+paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
+time rather than silently shipped. Uploading local input files is tracked in
+[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -957,7 +998,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -977,6 +1022,28 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
+
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
@@ -1019,6 +1086,8 @@ from step 0 regardless of how far the checkpoint got.
 
 `task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
+`task: ppo` refuses `--resume` / `--hf-resume` too, before it reads the dataset or loads a model: trl's PPO trainer cannot continue from a checkpoint, so a resumed run would start again from step 0 and write over the files already in `output`. `--hf-resume` is refused even when the Hub has no checkpoint branch, where it would have trained fresh. Remove the flag to start a new run, or point `output` at a new directory to keep the old one.
+
 
 ## Run Management & Cleanup
 
@@ -1039,7 +1108,21 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
+
+`soup runs compare` keeps the side-by-side run summary and lists all differences
+in the stored config, including nested settings such as `training.lora.dropout`
+and `training.seed`. Lists are compared as whole values. `<not stored>` means a key
+is absent; `null` is a recorded JSON null. Missing or invalid historical configs
+are reported as unavailable rather than identical. The summary also shows the
+recorded training-data SHA-256, or `unknown` when no hash was captured.
+Evaluation comparison uses the latest stored score for each benchmark and run,
+with the signed difference **right minus left**; `-` means that side has no score.
+This reads local experiment records without a registry push, rerunning evaluation
+or hashing the current dataset. It does not establish that two evaluation runs
+used the same scorer or data. The `Code commit` and `Code state` rows show the
+startup observation described under [Recorded project code](#recorded-project-code),
+not proof that the code was identical.
 
 
 ## Alternative Model Hubs
@@ -1317,6 +1400,7 @@ field has been a hard error since v0.74:
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
 # sweep parameter does not match any config field: unknown config key 'lora_rank' - refused.
+# Check the spelling against the docs or a `soup init` template; a key from a newer Soup needs an upgrade (`pip install -U soup-cli`).
 echo $?   # 1
 ```
 
@@ -1349,8 +1433,12 @@ macOS. A value already set is kept, and Windows leaves the current directory out
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
 the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
 directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
-POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
-`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+POSIX quoting on Linux/macOS and Microsoft C runtime quoting rules on Windows (where
+double quotes group arguments anywhere within an option like `--opt="a b"`, a single quote
+opens a group only at the start of a word like `'{ckpt}'` whereas inside a word it is an ordinary
+character, and backslashes are literal unless preceding a double quote; use double quotes for
+`--opt="a b"`), preserving backslashes in `.\tool.bat` and `C:\tools\tool.bat`.
+Quote a program path containing spaces.
 The template is split once before checkpoint substitution; checkpoint text remains one
 argument even when it contains spaces or quotes. No shell interprets that text. A missing
 or unstartable program is an invocation error (exit 2), with no bisect verdict or result
@@ -1360,6 +1448,43 @@ file; a program that starts and exits nonzero still means a failing checkpoint.
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+### Recorded project code
+
+For local `soup train` execution, Soup records the full Git HEAD commit of the
+directory the command starts in, plus `clean`, `dirty` or `unknown`. The observation
+is taken before dataset/model setup writes artifacts. It follows Git discovery
+from that directory, including subdirectories, detached HEADs and linked worktrees;
+it is not the commit of Soup's installation, the config file's directory or the
+model's Hugging Face repository. `dirty` includes staged, unstaged and untracked
+files; ignored files do not count. `soup runs show` and `soup runs compare` show the
+saved values even after the working tree has moved on. In particular, an untracked
+`soup.yaml` or output directory makes the observation dirty.
+
+Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
+failed probes or a changing HEAD record `unknown` without stopping training. The
+read-only local probe has a two-second total deadline and makes no network calls.
+A large repository whose status scan exceeds that deadline also records `unknown`.
+`soup sweep` arms call `start_run` directly and leave both code fields unknown.
+If repository-local or worktree configuration (including its includes) defines a
+content-filter driver, Soup skips status and records an unknown state while keeping
+the commit, so observing a run does not execute that filter.
+Every Git call disables repository-configured filesystem monitoring and optional
+index updates; Git's `safe.directory` ownership checks are not overridden. Only a
+bounded prefix of status output is read, and the child is stopped as soon as a
+change is observed. Soup stores only the full 40- or 64-digit hexadecimal commit
+and the dirty flag, never a remote URL, branch name, file name or diff. The commit
+is validated before recording and again before display; malformed observations
+in an edited database display as unknown.
+
+The nullable `runs.code_commit` and `runs.code_dirty` columns are added to existing
+databases in place; older rows remain unknown, never backfilled from today's
+checkout. Restarting a preallocated run ID clears its previous code observation.
+This is startup provenance, not a reproducibility guarantee: Soup does not archive
+the diff or untracked file contents, freeze concurrent edits, or add these fields
+to portable model artifacts or reproducibility receipts in this version. Remote
+cloud submission and direct trainer-wrapper calls do not establish this local
+CLI observation.
 
 ### Recorded base identity
 
@@ -1404,6 +1529,15 @@ Loading a local adapter folder directly also reuses that commit when its
 `adapter_config.json` names the same base and has no conflicting explicit revision;
 the tokenizer still comes from the adapter folder.
 
+Single-process Hugging Face Transformers `soup sweep` arms use the same identity
+contract. Each arm resolves its own base once, immediately before its first base
+load, and pins that arm's model, tokenizer, config, processor and training-time
+base loads to that outcome. Arms may name different bases or record different
+commits if the Hub moves during a sweep; each arm's `runs` row shows which one it
+used. Each completed arm writes `soup_run.json` beside its final artifact, so a
+copied adapter retains the commit for `soup merge` and `soup export`. A sweep arm's
+training-data hash stays unknown in both its row and file.
+
 For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
 resolves the base once and broadcasts its nullable result before trainer setup.
 Soup initializes or reuses Accelerate's shared process group with Trainer's default
@@ -1422,8 +1556,8 @@ not established by those tests.
 
 **Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
-wrapper/sweep invocations do not automatically establish a run scope. Metadata is
-written for the final artifact, not each intermediate checkpoint. Other exporters
+wrapper invocations and distributed sweep launches do not gain a binding guarantee.
+Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
 and independent teacher/reward/scorer repositories do not gain a binding guarantee.
 Evaluation engines that bypass the shared live-eval loader (including lm-eval's
@@ -1640,16 +1774,31 @@ LIVE (v0.71.21): reshapes fused Llama-4 expert weights `[E*din, dout]` → `[E, 
 
 ## Ctrl+C Graceful Save
 
-First SIGINT → trainer writes a checkpoint and continues. Second SIGINT → trainer stops cleanly after the next save. No-state fallback raises `KeyboardInterrupt` so the user never gets stuck. `GracefulSaveHandler.install()` is idempotent and swallows `signal.signal` failures on non-main threads.
+For HF Trainer-backed runs, the first SIGINT requests a checkpoint after the
+next completed optimizer step and training continues. The second requests a
+checkpoint and stops after that save. A third SIGINT restores the prior signal
+handler and raises `KeyboardInterrupt` immediately, without waiting for a safe
+step or a checkpoint to finish. Requests survive gradient accumulation
+and TrainerControl resets. Initialized distributed ranks share the save/stop
+decision at the safe step. The prior signal handler is restored on normal
+completion and on startup, training or checkpoint errors. The controls work
+without a live display. Signal installation is unavailable on non-main threads;
+the file trigger still works there.
+
+Native MLX training and custom loops that do not use HF Trainer (including
+`task: unlearn`) do not implement these manual-save controls.
 
 
 ## Checkpoint-Now Trigger File
 
 ```bash
-touch ./out/.checkpoint_now    # trainer saves on the next step, then deletes the trigger
+touch ./out/.checkpoint_now    # save after the next optimizer step; remove after success
 ```
 
-Path containment via `is_under_cwd`; `os.lstat + S_ISLNK` rejection at the trigger target so a pre-placed symlink can't redirect the write.
+The HF Trainer lifecycle polls this file at optimizer-step boundaries. A failed
+save leaves the trigger in place for a retry. The saving rank consumes it only
+after the checkpoint succeeds. Path containment uses `is_under_cwd`; trigger
+symlinks and non-regular files are neither followed nor consumed.
 
 
 ## Onboarding Wizard Helper
@@ -1921,7 +2070,7 @@ start training or rewrite the config.
 
 The state file is a thin JSON envelope; the actual training is still driven by `soup train`. The gate prevents the "wait, why did I spend another $0.50 on the wrong config" surprise.
 
-`peak_vram_gb` is the `soup train` pre-flight's own estimate for the run, before its 10% margin ([Hardware-Fit Calculator](#hardware-fit-calculator)). When the plan cannot price the run, it records `null` and says why in `peak_vram_reason`: the model's `config.json` could not be read, `batch_size: auto`, a quantization with no memory model, layer streaming (sized by the streaming planner when it starts) or `backend: mlx`. Until #2049 it recorded a fixed 8.0 GB for every run. A state file written before that still loads, and `peak_vram_gb` is not part of the drift check.
+`peak_vram_gb` is the `soup train` pre-flight's own estimate for the run, before its 10% margin ([Hardware-Fit Calculator](#hardware-fit-calculator)). When the plan cannot price the run, it records `null` and says why in `peak_vram_reason`, naming the field that stops the estimate where one does: `training.batch_size` (`auto`, or outside 1 to 1,024), `training.quantization` (no memory model) or `base` (over 1,000B parameters); otherwise the model's `config.json` could not be read, layer streaming (sized by the streaming planner when it starts) or `backend: mlx`. Until #2049 it recorded a fixed 8.0 GB for every run. A state file written before that still loads, and `peak_vram_gb` is not part of the drift check.
 
 
 ## Hermetic Env Lockfile (`soup env`)
@@ -1968,7 +2117,7 @@ The coefficients come from 42 two-step `soup train` runs on an RTX 3060 Laptop a
 
 What those numbers do not cover: the rows are seven dense decoders of 135M to 3B parameters, at up to 4,096 tokens and batch 4, on one 6 GB card under WSL2 with one software stack (torch 2.14.0+cu130, transformers 5.17.0). The coefficients are fitted on 39 of the 42 rows the test checks, so the bands show how well they fit those rows, not an error on runs they were not fitted to. Mixture-of-experts models are sized as dense ones, no model of 7B or more was measured, and neither were the `medium` and `selective` checkpointing tiers, the fused losses (`use_liger`, `use_cut_ce`) or `backend: unsloth`, which replaces the loss and the checkpointing. So the pre-flight refuses a peak that does not fit only inside the measured range, dense models of 3.5B parameters and below. A run above that size, a mixture-of-experts model, a `medium` or `selective` tier, a fused-loss flag or `backend: unsloth` that does not fit gets the estimate as a warning ("outside the calibrated range ...; the estimate may overstate the peak") and starts, unless its floor alone is more than the card holds, and that run is refused. The floor is the weights, the CUDA context and the state of the parameters the run trains (adapters, gradients and optimizer state): each is bytes per parameter times a count, or a constant, so none is an extrapolation (a full fine-tune of a 7B model holds 27 GB of weights, as much again in gradients and twice that in AdamW state, whatever its sequence length). A term is left out where the estimate prices more than the run holds or has no exact figure. On a full fine-tune, Spectrum, LISA, `freeze_layers`, `freeze_ratio` and `expand_layers` train a subset of the parameters, so only the weights and the CUDA context count; with LoRA these settings change nothing in the floor, and the adapters with their gradients and optimizer state count as usual. `lomo` and `adalomo` keep no full gradient. Optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`. Adafactor, `lion_8bit` and `adalomo` hold less than the estimate's figure, a paged optimizer moves its state to host memory, and an optimizer without a figure is priced as AdamW, so none of them has a state term. On `sft`, `tts` and `pretrain`, `use_galore` replaces the optimizer with `galore_adamw`, which keeps low-rank state for the attention and MLP projections and full AdamW state for the other parameters (embeddings, output head, norms); the estimate has no figure for that mix, so the floor counts no optimizer state there, which can only understate it. On other tasks `use_galore` changes nothing and the optimizer's state counts as usual. Activations, logits and the allocator slack never enter the floor. A run sharded across more than one process (`WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`) is checked against its floor per card: `--fsdp full_shard`, `full_offload` and DeepSpeed ZeRO-3 divide the weights and the adapters by the process count, those and `--fsdp shard_grad` and ZeRO-2 divide the gradients and optimizer state, and the CUDA context is not divided. The stage is read from `zero_optimization.stage` of the preset or JSON given to `--deepspeed`, and an offload preset is priced as its stage without offload. The estimate is fitted on one card, so for such a run it is a warning, and the panel says the run is sharded and that only the floor is per card (#2300). `--gpus N` without `--fsdp` or `--deepspeed` is checked as one card. Inside the range the refusal says so and names `--allow-oom-attempt`, which launches the run anyway. The shipped `longcontext` template (an 8B model at 131,072 tokens) is outside the range: it warns and launches, and its header says how to turn on the fused loss.
 
-The model's shape comes from its `config.json` (a local directory, then the Hugging Face cache, then the Hub unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set), and its exact parameter count from the safetensors headers (local files, a cached snapshot, or the Hub's header-only metadata call on `huggingface-hub` 0.20 or later; otherwise it is counted from `config.json`). No weight is downloaded and torch is not imported. Reaching the Hub writes the model's `config.json` into the Hugging Face cache; the size is checked with a HEAD request first, each request has a timeout, and the metadata lookup as a whole has a deadline. The MCP `profile` tool never reaches the Hub: it reads a local directory or the local cache, and prices any other model from a guessed shape. When no `config.json` can be read, the shape is guessed from the parameter count (`model_size_from_name`), the logits term is not counted, and the output says so. That count:
+The model's shape comes from its `config.json` (a local directory, then the Hugging Face cache, then the Hub unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set), and its exact parameter count from the safetensors headers (local files, a cached snapshot, or the Hub's header-only metadata call on `huggingface-hub` 0.20 or later; otherwise it is counted from `config.json`). No weight is downloaded and torch is not imported. Reaching the Hub writes the model's `config.json` into the Hugging Face cache; the size is checked with a HEAD request first, each request has a timeout, and the metadata lookup as a whole has a deadline. `soup plan`, `soup profile` and the `soup train` pre-flight print one line before the first request to the Hub, and nothing offline, for a local directory or for a cached snapshot with its weights (#2306). The line says "Reading the model's details from the Hub to size the run (HF_HUB_OFFLINE=1 skips this)..."; the train pre-flight leaves out the offline hint because the model download comes next. The MCP `profile` tool never reaches the Hub: it reads a local directory or the local cache, and prices any other model from a guessed shape. When no `config.json` can be read, the shape is guessed from the parameter count (`model_size_from_name`), the logits term is not counted, and the output says so. That count:
 - A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.

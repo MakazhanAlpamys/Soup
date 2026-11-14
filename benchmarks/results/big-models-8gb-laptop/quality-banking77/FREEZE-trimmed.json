@@ -1,0 +1,102 @@
+{
+  "data_files_sha256": {
+    "data/DATA_MANIFEST.json": "26d489e67207cab66e179dd328e0a4ffd43539dfcb6563fd395389bad67d8024",
+    "data/b77_dev.jsonl": "d888c837d1b695c9c28b78e46e75ad4f167dfede8dedd84ee8177fb652b1091c",
+    "data/b77_probe.jsonl": "80d378507d0d5de557a0597e46bf5902d3f6041f43bd5e317a99af1c8095074a",
+    "data/b77_test.jsonl": "08b1d731710dfcff6317b7cf83188f4779479279b3f17c6e9f6c687db537ef5f",
+    "data/banking77_labels.json": "fd68505da597679e13aa16dae17647a30b0e0470cb9b9cb8f4904dd53e75bfff",
+    "data/gsm8k400.jsonl": "595d5c72cac50512ab386e51882558ba391f767192c34b2b86cd09e023b89dde",
+    "data/mmlu500.jsonl": "75b151f597d64b2c712cb2382914a476a7933c1d445389a3c325e5bcbcbf8949",
+    "data/soup_train_n300.jsonl": "020fb74b73f4a702ebed9b58b6f1877ee929853c821b5f9f8773e2180d3862d9"
+  },
+  "data_manifest_sha256": "26d489e67207cab66e179dd328e0a4ffd43539dfcb6563fd395389bad67d8024",
+  "datasets": {
+    "PolyAI/banking77": "1846984189f2bc0ac51c6fc3a600fa9e1714e0c6",
+    "cais/mmlu": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "openai/gsm8k": "740312add88f781978c0658806c59bc2815b9866"
+  },
+  "engine": {
+    "files_sha256": {
+      "code/check_v5.py": "d9bb87f1be3b82148a3f401bf4aaabf1ad1a275911fea4130af37742d32b2a9c",
+      "code/make_soup_yaml.py": "75a574c4a1444de41c63a3e7fbfbfeb551812c35eac31d605708358c23085def",
+      "code/make_train_jsonl.py": "2d2fb5382bd4afd0851bc336f6db6265686d3d862fcfdd94b254790ea00ab25a",
+      "code/nf4_compare.py": "e842f43fc3939cb8c7ea1c2d6a69ddb59f401cb1680b2a0724a289f12787b820",
+      "code/soup_b77.yaml.in": "76b80bdb83339f5fe423926a7da83a956a849ebea06c30746cb230bc55c45f1c",
+      "code/soup_capped.py": "b88a22e1fba7de4ac38910afba588284d576e13ad8a443c9eaf5b53d45fedba7",
+      "code/stream_ce.py": "6bb84a36aad347cf367db60cfa2c853a8f3d9c2f0fb619da453712ed2910c5f0",
+      "code/train_resident.py": "50ec67913a7a8530797a2a4481bb5943e845ce47480fe0443a452bf0f25c7ebc",
+      "code/verify_train_ids.py": "cda07f33be7079b45faf38b9fda153905638f44b4b9ce97cbdba447153c207c6"
+    },
+    "kind": "soup-main",
+    "launcher": "soup_capped.py, a launcher outside the Soup tree that applies run-time shims; its output lines are in launcher-shim-lines-main-run.txt",
+    "soup_commit": "74e6628fc27454a6d82502b2d8b2e68b6bf159da",
+    "soup_src_tree_sha256": "94b0d386b6a8251594ed85a1ba0a6a6cfbf983d251c299793fb52a369ea3904e"
+  },
+  "environment": {
+    "accelerate": "1.15.0",
+    "bitsandbytes": "0.50.2",
+    "peft": "0.20.0",
+    "python_instance": "3.12.x (system python of the image)",
+    "torch": "2.14.0+cu130",
+    "transformers": "5.17.0",
+    "trl": "0.29.1"
+  },
+  "eval_harness_sha256": {
+    "code/eval_hf.py": "b894106d2732851e263b1becfcceb12a38f2e56cce8f7e9a7366da06cf39bce9",
+    "code/eval_many.py": "83acf5e6a61fd725f07e0d0f6cc3211a633509494583e9ea3d5ea9281be4ec1a",
+    "code/g0_check.py": "6f102245357142b1dbe493c86d338f2265dbde0f2ee7d7d2917fb16a8804b30d",
+    "code/parsers.py": "2d552befed2de537a0a4df735a4a941c38704ab2ba31f5af56412cd8dc02cb26",
+    "code/prompts.py": "2ce7ee552439c9f0cc5fdef1ba209252e6f86075bd0463cca7c163b3b2579537",
+    "code/score.py": "9bfcc9e504b0131d02ff2ab8ae2c69e337702580eb39c89a46bf0d15b2a9ff36",
+    "soup/src/soup_cli/data/traces/parsers.py": "500e9bfee1bbedd2e9d0d2a44c750186e2c730b27705da1c8d3d7dee08af30ef"
+  },
+  "job_sh_sha256": "dc496dadd8a1e5750071c37704c4086ff463b273b463afd25e38f3745fe301f5",
+  "main_job_sh_sha256": "f252d33e1417b7d00eaaf343c326ff7cd1cb65b2b30508cc6a137ef6b509ede4",
+  "model": {
+    "evaluation_base": {
+      "files_sha256": {
+        "config.json": "918fe2d123e79abf8ed4688278cc7d9c6c54d25fbea35e5f0870985f4d663000",
+        "model-00001-of-00004.safetensors": "8ae891023702413f05a85e3d20975a09505b8dcb9ae91fc457ea88d910e7d6b6",
+        "model-00002-of-00004.safetensors": "1c15182c6cdc9a849e9ac36149b256e684a2f117242d5db5fea80b74bb8ffe2b",
+        "model-00003-of-00004.safetensors": "d8edd9dbceafe1ee56280b935e2bc8273c615f22105a80a5f0cde5e04a0b734f",
+        "model-00004-of-00004.safetensors": "9488e8b825458b051e55e0d6b4be3a514a0111db5f35399df097d31d55942604",
+        "model.safetensors.index.json": "2771f7e67bacc73ceb4ee0dfe6027d49fc9a4390d17eda517a4f7f48923d6a61"
+      },
+      "repo": "unsloth/Qwen3-32B-bnb-4bit",
+      "revision": "7f721e74a6a8cc9ee352f7e49303a2c1705f9083"
+    },
+    "training_source": {
+      "files_sha256": {
+        "model-00001-of-00017.safetensors": "52562b2ff97b61764260273e71bf5b4cf8a66f569399398f26dec0300fcf1316",
+        "model-00002-of-00017.safetensors": "e26764b2c6878e3fb7198895fa833ec62838d84a19665e6abfbae43c6daf02b3",
+        "model-00003-of-00017.safetensors": "6c5ba7bed9c52bc121e75cbe8a7be46936d0006cc80f42a6d5886ed40b4c2a62",
+        "model-00004-of-00017.safetensors": "f736f6ac4d8c30866107fb1185a05b3c3cfce9717720082f466fa44e691bcec8",
+        "model-00005-of-00017.safetensors": "a52ed375c083209c54d42ac510afeb1fbb5af4f193be2dc7d103f665a0f212d3",
+        "model-00006-of-00017.safetensors": "37fae28990b0e4a70228549d040c0393e87bee3820d59e58e47844974d8dff5b",
+        "model-00007-of-00017.safetensors": "37776006aeaba29eca8bc73b2b963fe3477e1c2e3f6a27cb9527be75b905e1bf",
+        "model-00008-of-00017.safetensors": "73e74e9129674fe330948005075d70ab4fa0b92b68fb220c5a693f9cea553730",
+        "model-00009-of-00017.safetensors": "a044b3602a01bd8ea62ff51badf9cc038ab1d73d97399480e6a55b4c86fa7fa6",
+        "model-00010-of-00017.safetensors": "9966612ba7ecfc2cd2e592fb95224b86d743271ff88e172cc272a4b26382aa75",
+        "model-00011-of-00017.safetensors": "e2a058a0ac7d4b992b731c29221ecfb4b76b8a48d9004d0e8a62ba44f699845c",
+        "model-00012-of-00017.safetensors": "58a1aa89093fea07325f787072a468e3482a470ff4b7fe5ead5f749683907c40",
+        "model-00013-of-00017.safetensors": "35f3381bab31a23370c37d922290aeecdf603418336058fb86fe42d8f51ac40c",
+        "model-00014-of-00017.safetensors": "8713b062ddc178acf5917610b7f4b64eede833b2ea4aa37bd562dcf2f3a3339d",
+        "model-00015-of-00017.safetensors": "bec439d23931821a236d8f62fa79deecf5551bd25602278aa2ae0ce432b378cf",
+        "model-00016-of-00017.safetensors": "e569139fadd61fe7c8f9eb1c976d9a627cae48c57ddf228cfbd0593c59c64ff7",
+        "model-00017-of-00017.safetensors": "1f47c318fcd7797c0f85b4233cb754438b10e795b8bc874889090c416a94bd38"
+      },
+      "repo": "Qwen/Qwen3-32B",
+      "revision": "9216db5781bf21249d130ec9da846c4624c16137"
+    }
+  },
+  "note": "written after R1 (E1 base dev + 3-step smoke) and before any fine-tuned model exists",
+  "protocol_sha256": "a00f1c1f29b2657ffc7c311b75bc09e86514d2c3c78872906ee600b032c8f120",
+  "seeds": {
+    "bootstrap": 77077,
+    "data": 20261107,
+    "gsm8k": 20261109,
+    "lora_init": 32017,
+    "mmlu": 20261108
+  },
+  "_trimmed_for_publication": "three keys removed from the original (they named unpublished documents)"
+}

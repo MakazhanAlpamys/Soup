@@ -1,0 +1,788 @@
+{
+ "schema": "tco-result/1",
+ "case": "1",
+ "framework": "soup",
+ "repeat": 1,
+ "seed": 3407,
+ "mode": "window",
+ "status": "complete",
+ "reason": null,
+ "worker_rc": 0,
+ "partial_note": null,
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "batch": 8,
+ "max_length": 512,
+ "window": {
+  "warmup_steps": 5,
+  "planned_measured_steps": 100,
+  "measured_steps": 100
+ },
+ "tokens": {
+  "total": 430080,
+  "measured": 409600,
+  "expected_per_step": 4096,
+  "total_vs_expected_rel": 0.0
+ },
+ "throughput": {
+  "tok_s_wall": 2402.616620737957,
+  "tok_s_step": 2415.0896794831165,
+  "median_step_s": 1.6964916864963016,
+  "wall_s_measured": 170.48079850300564,
+  "second_half_over_first_half": 0.9987566036685988
+ },
+ "usd_per_million_tokens": null,
+ "memory": {
+  "peak_alloc_mib": 13519.9,
+  "peak_reserved_mib": 17942.0,
+  "nvidia_smi": {
+   "available": true,
+   "n": 366,
+   "peak_used_mib": 18424.0,
+   "baseline_mib": 1.0,
+   "peak_over_baseline_mib": 18423.0,
+   "sm_clock_mhz_median": 2700.0,
+   "sm_clock_mhz_min": 210.0,
+   "power_w_max": 451.81,
+   "temp_c_max": 79.0
+  },
+  "gpu_total_mib": 24564.0
+ },
+ "loss": {
+  "first_step": 1.504998803138733,
+  "final_window_mean": 1.0938705205917358,
+  "final_window_n": 16,
+  "n_logged": 105,
+  "curve": [
+   [
+    1,
+    1.504998803138733
+   ],
+   [
+    2,
+    1.4824625253677368
+   ],
+   [
+    3,
+    1.493080973625183
+   ],
+   [
+    4,
+    1.2707139253616333
+   ],
+   [
+    5,
+    1.3235933780670166
+   ],
+   [
+    6,
+    1.1400251388549805
+   ],
+   [
+    7,
+    1.275620698928833
+   ],
+   [
+    8,
+    1.1778817176818848
+   ],
+   [
+    9,
+    1.0456141233444214
+   ],
+   [
+    10,
+    1.0317696332931519
+   ],
+   [
+    11,
+    1.069946050643921
+   ],
+   [
+    12,
+    1.1126925945281982
+   ],
+   [
+    13,
+    0.9603749513626099
+   ],
+   [
+    14,
+    1.1537476778030396
+   ],
+   [
+    15,
+    1.1697202920913696
+   ],
+   [
+    16,
+    1.1327177286148071
+   ],
+   [
+    17,
+    1.1515527963638306
+   ],
+   [
+    18,
+    1.0309793949127197
+   ],
+   [
+    19,
+    1.0821927785873413
+   ],
+   [
+    20,
+    1.0524711608886719
+   ],
+   [
+    21,
+    1.1179786920547485
+   ],
+   [
+    22,
+    0.9820278286933899
+   ],
+   [
+    23,
+    1.0393301248550415
+   ],
+   [
+    24,
+    1.2568354606628418
+   ],
+   [
+    25,
+    0.913801372051239
+   ],
+   [
+    26,
+    0.92689049243927
+   ],
+   [
+    27,
+    1.0606602430343628
+   ],
+   [
+    28,
+    1.280403971672058
+   ],
+   [
+    29,
+    1.114183783531189
+   ],
+   [
+    30,
+    0.9608765840530396
+   ],
+   [
+    31,
+    1.0432226657867432
+   ],
+   [
+    32,
+    0.8480117321014404
+   ],
+   [
+    33,
+    1.0011879205703735
+   ],
+   [
+    34,
+    1.015430212020874
+   ],
+   [
+    35,
+    1.0368191003799438
+   ],
+   [
+    36,
+    1.072986125946045
+   ],
+   [
+    37,
+    0.9936020970344543
+   ],
+   [
+    38,
+    0.9801084995269775
+   ],
+   [
+    39,
+    1.138918399810791
+   ],
+   [
+    40,
+    0.7917974591255188
+   ],
+   [
+    41,
+    1.158552885055542
+   ],
+   [
+    42,
+    1.1225676536560059
+   ],
+   [
+    43,
+    1.2927645444869995
+   ],
+   [
+    44,
+    0.9649708271026611
+   ],
+   [
+    45,
+    0.8870645761489868
+   ],
+   [
+    46,
+    1.0991946458816528
+   ],
+   [
+    47,
+    1.1669857501983643
+   ],
+   [
+    48,
+    1.0457147359848022
+   ],
+   [
+    49,
+    1.1823749542236328
+   ],
+   [
+    50,
+    1.1253718137741089
+   ],
+   [
+    51,
+    1.2069486379623413
+   ],
+   [
+    52,
+    1.0662779808044434
+   ],
+   [
+    53,
+    1.05195152759552
+   ],
+   [
+    54,
+    0.9092555642127991
+   ],
+   [
+    55,
+    1.0190922021865845
+   ],
+   [
+    56,
+    1.0260100364685059
+   ],
+   [
+    57,
+    1.2532249689102173
+   ],
+   [
+    58,
+    1.2028180360794067
+   ],
+   [
+    59,
+    1.0181000232696533
+   ],
+   [
+    60,
+    1.077453374862671
+   ],
+   [
+    61,
+    1.0832072496414185
+   ],
+   [
+    62,
+    1.0032775402069092
+   ],
+   [
+    63,
+    0.8498884439468384
+   ],
+   [
+    64,
+    1.127557396888733
+   ],
+   [
+    65,
+    1.1472744941711426
+   ],
+   [
+    66,
+    0.9503911137580872
+   ],
+   [
+    67,
+    1.1913917064666748
+   ],
+   [
+    68,
+    1.166536808013916
+   ],
+   [
+    69,
+    1.018358826637268
+   ],
+   [
+    70,
+    0.83834308385849
+   ],
+   [
+    71,
+    1.0354135036468506
+   ],
+   [
+    72,
+    1.1291687488555908
+   ],
+   [
+    73,
+    1.086188554763794
+   ],
+   [
+    74,
+    1.0226529836654663
+   ],
+   [
+    75,
+    1.1075868606567383
+   ],
+   [
+    76,
+    0.9504413604736328
+   ],
+   [
+    77,
+    1.11504065990448
+   ],
+   [
+    78,
+    0.9743057489395142
+   ],
+   [
+    79,
+    0.9705613255500793
+   ],
+   [
+    80,
+    0.9215745329856873
+   ],
+   [
+    81,
+    1.0041993856430054
+   ],
+   [
+    82,
+    0.9184947609901428
+   ],
+   [
+    83,
+    1.1640851497650146
+   ],
+   [
+    84,
+    1.0531022548675537
+   ],
+   [
+    85,
+    0.9429417848587036
+   ],
+   [
+    86,
+    1.0332788228988647
+   ],
+   [
+    87,
+    1.2375717163085938
+   ],
+   [
+    88,
+    0.8058527708053589
+   ],
+   [
+    89,
+    1.1174920797348022
+   ],
+   [
+    90,
+    0.9973214864730835
+   ],
+   [
+    91,
+    1.0528175830841064
+   ],
+   [
+    92,
+    1.0300681591033936
+   ],
+   [
+    93,
+    1.1517586708068848
+   ],
+   [
+    94,
+    1.1812411546707153
+   ],
+   [
+    95,
+    1.0685498714447021
+   ],
+   [
+    96,
+    1.17714262008667
+   ],
+   [
+    97,
+    0.9843677282333374
+   ],
+   [
+    98,
+    1.2815358638763428
+   ],
+   [
+    99,
+    0.9229030609130859
+   ],
+   [
+    100,
+    1.202795147895813
+   ],
+   [
+    101,
+    1.1182563304901123
+   ],
+   [
+    102,
+    1.1138490438461304
+   ],
+   [
+    103,
+    1.0734485387802124
+   ],
+   [
+    104,
+    1.026233196258545
+   ],
+   [
+    105,
+    1.1196398735046387
+   ]
+  ]
+ },
+ "order_fingerprint": [
+  "5f1fce5620eeb66e",
+  "b2b5e1a7284453a7",
+  "1b4f3aeedeabf14a",
+  "44b2a889c0246eea",
+  "7cdcbdb9b68e5e24",
+  "57168eccfefae37c",
+  "c4d5cd21c7e97114",
+  "ed4c0e87328203ba",
+  "ca83d57e08d2edb3",
+  "bdd4be95896075dd",
+  "be2b905cb01d87a1",
+  "f7dda2e16e151074",
+  "6c4dd3dd0774771d",
+  "7d45f646ef107c50",
+  "c96f85d068cdf36f",
+  "c70a541b270095a2",
+  "1d91e7757915379c",
+  "3d492a1d716184e3",
+  "b17ba0ebb2820d2e",
+  "fe00dac8485b5115",
+  "c983d2da9ac6b133",
+  "430f7d4f1ff76b00",
+  "b26b86188f248ad4",
+  "60935ce2417e3e78",
+  "08a0cbf1e65bdd09",
+  "41f25f5e1ef2ff62",
+  "8b96626ccc6a05db",
+  "a03d7ed6406e5648",
+  "ddc4bcd9ffe0eeb6",
+  "2b2ae65ef05f1139",
+  "5cdfdfcbb51866b4",
+  "2020fffc275f8216",
+  "c24e468fdc13d381",
+  "dba0c3a91e4f5135",
+  "ba7a42adfc2b96a3",
+  "4c43efdcd2e44f78",
+  "b2d9b1a3c77e6727",
+  "f57e2a462b865199",
+  "b4e28bd05c4edfd7",
+  "196554350ca0710b",
+  "3871d872d9995ff2",
+  "6848dd484c3cc634",
+  "3fdab145f9e7f005",
+  "1c413ceaaf13c032",
+  "cd0578450257efb7",
+  "5c3d255793742af8",
+  "f1e92a4202a53f76",
+  "d9b8d4f17fc34de0",
+  "b485af5af2ac32d2",
+  "9017a97e06a03dd0",
+  "6abfa7dca2e50c32",
+  "02bd17e5b65a6709",
+  "44e5033d30756de6",
+  "ac67b84f1aad40b2",
+  "d8f5cbfee7281098",
+  "28597474e386e801",
+  "0c16f875cc8d8832",
+  "560eec6219ba217a",
+  "6a5e2f476e55ba40",
+  "dbdf561e9f2b28f6",
+  "1fbdb267223a9b2a",
+  "8254013ec7da8a8a",
+  "d0c68cfb5d48d70a",
+  "51045ca97b676b60",
+  "2b8eef4d6615a414",
+  "9f5f98919e9f9d91",
+  "d71c72ce9a990043",
+  "74dc7d8c464f9d52",
+  "2a4b5d1d634c7078",
+  "e64a8a7d3ee82bca",
+  "d68407a0f75cee8f",
+  "7607514d2d66c000",
+  "881b38245044498e",
+  "c14bdd494249a808",
+  "d33d950f6f562679",
+  "5ba93fb0edf531a1",
+  "326a3de56a6464f8",
+  "c5f466899d3a199a",
+  "263fca6e2ddc6692",
+  "7397001e2bae52da",
+  "bc53f29ea8d20110",
+  "d939fe402c906b4b",
+  "d6f9e1ed3da9ea5d",
+  "4c35c862496e6415",
+  "a62386b4257d0e8b",
+  "2a05def0c951c324",
+  "d48296529956a4b8",
+  "06f6641cf4b69d00",
+  "6157ae372d5a5422",
+  "d65f20ac81554d21",
+  "65a41c5c62fc77cd",
+  "5d13dd06dbc3d9f4",
+  "a264d05c4a334a63",
+  "572833d258d3dcf8",
+  "3df061cc1417ae08",
+  "9ccfbddfef1d0e55",
+  "d1966bdadacb5ce6",
+  "40b32c12a9167ccc",
+  "62ba89485c73fb3d",
+  "1ce9008f930110cd",
+  "883e662748551ac0",
+  "5bb2c9b1b0e81c75",
+  "9d08c4650c62b170",
+  "a41ecb5e5ab2245a",
+  "a0baccbd07dab093"
+ ],
+ "time_s": {
+  "pre_train": 9.475774765014648,
+  "train_wall": 179.2301930290123,
+  "post_train": 1.4662501811981201,
+  "worker_total": 190.90553998947144,
+  "download": null,
+  "setup": 0.0,
+  "data_prep": 0.0
+ },
+ "cold_cache": false,
+ "capped": null,
+ "meter_error": null,
+ "effective_config": {
+  "args": {
+   "per_device_train_batch_size": 8,
+   "gradient_accumulation_steps": 1,
+   "learning_rate": 0.0002,
+   "lr_scheduler_type": "constant",
+   "warmup_steps": 0.0,
+   "warmup_ratio": "<absent>",
+   "weight_decay": 0.0,
+   "max_grad_norm": 1.0,
+   "optim": "adamw_torch",
+   "seed": 3407,
+   "data_seed": 3407,
+   "bf16": true,
+   "fp16": false,
+   "gradient_checkpointing": true,
+   "gradient_checkpointing_kwargs": {
+    "use_reentrant": false
+   },
+   "num_train_epochs": 1,
+   "max_steps": -1,
+   "max_length": 512,
+   "packing": false,
+   "padding_free": false,
+   "assistant_only_loss": false,
+   "completion_only_loss": null,
+   "use_liger_kernel": false,
+   "torch_compile": false,
+   "group_by_length": "<absent>",
+   "dataloader_num_workers": 0,
+   "per_device_eval_batch_size": 8,
+   "eval_strategy": "no",
+   "save_strategy": "steps",
+   "report_to": []
+  },
+  "model": {
+   "trainer_class": "RewindSFTTrainer",
+   "trainer_mro": [
+    "RewindSFTTrainer",
+    "SFTTrainer",
+    "BaseTrainer",
+    "Trainer",
+    "object"
+   ],
+   "attn_implementation": "sdpa",
+   "model_dtype": "torch.bfloat16",
+   "quantization_config": "BitsAndBytesConfig {\n  \"_load_in_4bit\": true,\n  \"_load_in_8bit\": false,\n  \"bnb_4bit_compute_dtype\": \"bfloat16\",\n  \"bnb_4bit_quant_storage\": \"uint8\",\n  \"bnb_4bit_quant_type\": \"nf4\",\n  \"bnb_4bit_use_double_quant\": true,\n  \"llm_int8_enable_fp32_cpu_offload\": false,\n  \"llm_int8_has_fp16_weight\": false,\n  \"llm_int8_skip_modules\": null,\n  \"llm_int8_threshold\": 6.0,\n  \"load_in_4bit\": true,\n  \"load_in_8bi",
+   "is_gradient_checkpointing": true,
+   "unsloth_imported": false,
+   "trainable_params": 40370176,
+   "total_params_visible": 4393342464,
+   "lora": {
+    "r": 16,
+    "alpha": 32,
+    "dropout": 0.0,
+    "targets": [
+     "down_proj",
+     "gate_proj",
+     "k_proj",
+     "o_proj",
+     "q_proj",
+     "up_proj",
+     "v_proj"
+    ]
+   }
+  }
+ },
+ "requested": {
+  "hyperparameters": {
+   "lora_r": 16,
+   "lora_alpha": 32,
+   "lora_dropout": 0.0,
+   "lora_targets": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj"
+   ],
+   "lr": 0.0002,
+   "lr_scheduler": "constant",
+   "warmup_steps": 0,
+   "weight_decay": 0.0,
+   "max_grad_norm": 1.0,
+   "optimizer": "adamw_torch",
+   "quantization": "nf4 (bitsandbytes, double-quant on, on-the-fly from the bf16 checkpoint)",
+   "max_length": 512,
+   "grad_accum": 1,
+   "gradient_checkpointing": true,
+   "packing": false,
+   "padding_free": false,
+   "assistant_only_loss": false,
+   "precision": "bf16 where the card has it, else fp16"
+  },
+  "launched_utc": "2026-11-08T11:56:47Z",
+  "amendment1_env": {
+   "TCO_GC": null,
+   "TCO_STREAM_RECOMPUTE": null,
+   "TCO_UNSLOTH_EXACT": null,
+   "TCO_ARM": "B",
+   "TCO_PROFILE": null
+  },
+  "tco_run_args": {
+   "cmd": "run",
+   "case": "1",
+   "framework": "soup",
+   "mode": "window",
+   "card": "NVIDIA GeForce RTX 4090",
+   "price_json": null,
+   "usd_per_hour": null,
+   "price_source": null,
+   "price_date": null,
+   "actual_usd_per_hour": null,
+   "repeat": 1,
+   "force": false,
+   "synthetic": false,
+   "cpu": false,
+   "no_quant": false,
+   "model": null,
+   "batch": null,
+   "max_length": null,
+   "setup_s": 0.0,
+   "pretrain_cap_s": 3600.0
+  }
+ },
+ "versions": {
+  "soup-cli": "0.77.2",
+  "transformers": "5.17.0",
+  "trl": "0.29.1",
+  "peft": "0.20.0",
+  "bitsandbytes": "0.50.2",
+  "accelerate": "1.15.0",
+  "datasets": "4.8.5",
+  "torch": "2.11.0+cu128",
+  "xformers": null,
+  "triton": "3.6.0",
+  "torchao": null,
+  "typer": "0.27.3",
+  "click": "8.4.2",
+  "numpy": "2.5.4",
+  "python": "3.12.3"
+ },
+ "version_drift": {},
+ "hardware": {
+  "gpu_name": "NVIDIA GeForce RTX 4090",
+  "gpu_total_mib": 24564.0,
+  "driver": "595.99.02",
+  "pcie_gen": "4",
+  "pcie_width": "16",
+  "power_limit_w": "450.00",
+  "max_sm_clock_mhz": "3105",
+  "nvidia_smi_cuda": "13.2",
+  "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+  "cpu_threads": 24,
+  "ram_gb": 61.9,
+  "memlock_ulimit": 8388608,
+  "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39"
+ },
+ "price": {
+  "usd_per_hour": null,
+  "card": "NVIDIA GeForce RTX 4090",
+  "definition": "none given",
+  "actual_billed_usd_per_hour": null
+ },
+ "caps": {
+  "max_wall_s": 2400,
+  "max_usd": 1.0,
+  "effective_wall_cap_s": 2400.0
+ },
+ "stream": null,
+ "gpu_samples": {
+  "sm_clock_mhz_median": 2700.0,
+  "sm_clock_mhz_min": 210.0,
+  "power_w_max": 451.81,
+  "temp_c_max": 79.0
+ },
+ "host_memory": {
+  "worker_rss_peak_mib": 2926.34765625,
+  "mem_available_min_mib": 54147.8203125,
+  "samples": 38
+ },
+ "data": {
+  "rows": 840,
+  "sha256": "eba8a5bc6074eced5adb255f3f8872d942779978171421e13f9c670494479c8a",
+  "dataset": "HuggingFaceH4/ultrachat_200k",
+  "synthetic": false,
+  "scanned": 1104
+ },
+ "fake": false
+}

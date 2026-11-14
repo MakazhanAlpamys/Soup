@@ -1,7 +1,6 @@
 """soup card prints a typed reference and output path as typed, not as Rich markup."""
 
 import re
-import sys
 
 import pytest
 from rich.console import Console
@@ -10,22 +9,19 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.registry.store import RegistryStore
 from soup_cli.utils.paths import quote_path
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows, and "n:" there is a drive.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, an emoji code, and a tag
 # with control characters, so the strip and the escape are pinned separately.
 _NAMES = [
     "x[red]n.md",
-    pytest.param("n:warning:.md", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.md", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}.md",
 ]
 # A reference is not a file name, so it can also carry a closing tag with nothing to close.
