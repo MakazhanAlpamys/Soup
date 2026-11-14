@@ -351,7 +351,11 @@ def _merge_low_memory(
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.lowmem_merge import (
+            LowMemoryMergeError,
+            hub_download_patterns,
+            merge_low_memory,
+        )
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
@@ -378,11 +382,13 @@ def _merge_low_memory(
             from soup_cli.utils.hubs import snapshot_download
 
             console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
+            allow_patterns, ignore_patterns = hub_download_patterns(trc)
             base_dir = Path(
                 snapshot_download(
                     base,
                     cache_dir=None,
-                    allow_patterns=["*.safetensors", "*.json"],
+                    allow_patterns=allow_patterns,
+                    ignore_patterns=ignore_patterns,
                     revision=revision_kwargs.get("revision"),
                 )
             )

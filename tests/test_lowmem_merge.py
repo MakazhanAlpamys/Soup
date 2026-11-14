@@ -192,6 +192,93 @@ def test_integer_tensors_keep_their_dtype(tmp_path):
         assert torch.equal(merged.get_tensor("extra.positions"), torch.arange(6))
 
 
+def _add_support_files(base: Path) -> None:
+    """Give the tiny base the files a real Hub repository with custom code has."""
+    (base / "modeling_my.py").write_text("class MyModel: ...\n", encoding="utf-8")
+    (base / "tokenizer.model").write_bytes(b"spm")
+    (base / "chat_template.jinja").write_text("{{ messages }}", encoding="utf-8")
+    (base / "vocab.txt").write_text("a\nb\n", encoding="utf-8")
+    first_shard = sorted(base.glob("*.safetensors"))[0]
+    shutil.copyfile(first_shard, base / "consolidated.safetensors")
+
+
+def _fake_hub_download(repo: Path, snapshot: Path):
+    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does."""
+    from fnmatch import fnmatch
+
+    def download(repo_id, **kwargs):
+        allow = kwargs.get("allow_patterns") or ["*"]
+        ignore = kwargs.get("ignore_patterns") or []
+        snapshot.mkdir()
+        for entry in sorted(repo.iterdir()):
+            if not entry.is_file():
+                continue
+            if not any(fnmatch(entry.name, pattern) for pattern in allow):
+                continue
+            if any(fnmatch(entry.name, pattern) for pattern in ignore):
+                continue
+            shutil.copyfile(entry, snapshot / entry.name)
+        return str(snapshot)
+
+    return download
+
+
+def _support_names(output: Path) -> set:
+    return {
+        p.name
+        for p in output.iterdir()
+        if not p.name.endswith(".safetensors") and p.name != "tokenizer.json"
+    }
+
+
+@pytest.mark.parametrize("trust", [True, False])
+def test_download_patterns_cover_every_copied_suffix(trust):
+    """Adding a suffix to _COPIED_SUFFIXES cannot leave the Hub download behind."""
+    from fnmatch import fnmatch
+
+    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_download_patterns
+
+    allow, ignore = hub_download_patterns(trust)
+    for suffix in _COPIED_SUFFIXES:
+        assert any(fnmatch(f"file{suffix}", pattern) for pattern in allow), suffix
+    assert any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
+    assert any(fnmatch("modeling_my.py", pattern) for pattern in allow) is trust
+    assert not any(fnmatch("model.safetensors", pattern) for pattern in ignore)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "consolidated.safetensors",
+        "consolidated-00001-of-00003.safetensors",
+        "consolidated.00.safetensors",
+        "original/consolidated.safetensors",
+        "mistral/consolidated-00002-of-00003.safetensors",
+    ],
+)
+def test_consolidated_copies_are_ignored_at_any_depth(name):
+    """A single top-level pattern is anchored: the shared Hub patterns also cover a
+    nested or sharded consolidated copy, which the Hub download would otherwise fetch."""
+    from fnmatch import fnmatch
+
+    from soup_cli.utils.checkpoint_files import HUB_FALLBACK_IGNORE_PATTERNS
+    from soup_cli.utils.lowmem_merge import hub_download_patterns
+
+    _, ignore = hub_download_patterns(False)
+    assert ignore == list(HUB_FALLBACK_IGNORE_PATTERNS)
+    assert any(fnmatch(name, pattern) for pattern in ignore), name
+    assert not any(fnmatch("model-00001-of-00003.safetensors", pattern) for pattern in ignore)
+    assert not any(fnmatch("original/model.safetensors", pattern) for pattern in ignore)
+
+
+def test_the_trust_rule_is_written_once():
+    """``hub_download_patterns`` and ``_support_files`` take ``.py`` from the same helper."""
+    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, _copied_suffixes
+
+    assert _copied_suffixes(False) == _COPIED_SUFFIXES
+    assert _copied_suffixes(True) == _COPIED_SUFFIXES + (".py",)
+
+
 class _StubTokenizer:
     @staticmethod
     def from_pretrained(*_args, **_kwargs):
@@ -250,6 +337,7 @@ class TestCli:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.utils.lowmem_merge import hub_download_patterns
 
         base, adapter, _ = checkpoints
         monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
@@ -273,10 +361,116 @@ class TestCli:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert fetched["repo_id"] == "org/tiny-llama"
-        assert fetched["allow_patterns"] == ["*.safetensors", "*.json"]
+        allow_patterns, ignore_patterns = hub_download_patterns(False)
+        assert fetched["allow_patterns"] == allow_patterns
+        assert fetched["ignore_patterns"] == ignore_patterns
+        assert "*.safetensors" in allow_patterns and "*.json" in allow_patterns
+        assert "*.py" not in allow_patterns
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    @pytest.mark.parametrize("trust", [True, False], ids=["trusted", "untrusted"])
+    def test_hub_base_gets_the_support_files_a_local_base_gets(
+        self, checkpoints, monkeypatch, trust
+    ):
+        """#2235: the Hub download and the local copy select the same files."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        _add_support_files(base)
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+        )
+        flag = ["--trust-remote-code"] if trust else []
+
+        from_hub = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/tiny-llama",
+             "--output", "from_hub", "--low-memory", *flag],
+        )
+        from_local = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", str(base),
+             "--output", "from_local", "--low-memory", *flag],
+        )
+
+        assert from_hub.exit_code == 0, (from_hub.output, repr(from_hub.exception))
+        assert from_local.exit_code == 0, (from_local.output, repr(from_local.exception))
+        hub_files = _support_names(base.parent / "from_hub")
+        assert hub_files == _support_names(base.parent / "from_local")
+        assert ("modeling_my.py" in hub_files) is trust
+        assert {"tokenizer.model", "chat_template.jinja", "vocab.txt"} <= hub_files
+        assert ("modeling_my.py" in {p.name for p in snapshot.iterdir()}) is trust
+
+    def test_consolidated_weights_are_not_downloaded(self, checkpoints, monkeypatch):
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        _add_support_files(base)
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/tiny-llama",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        downloaded = {p.name for p in snapshot.iterdir()}
+        assert "consolidated.safetensors" not in downloaded
+        assert any(name.endswith(".safetensors") for name in downloaded)
+        expected = _regular_merge(base, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    def test_a_hub_base_with_only_consolidated_weights_says_why(self, checkpoints, monkeypatch):
+        """Nothing is downloaded, and the refusal says the consolidated copy is skipped."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        repo = base.parent / "repo"
+        repo.mkdir()
+        shutil.copyfile(base / "config.json", repo / "config.json")
+        shutil.copyfile(sorted(base.glob("*.safetensors"))[0], repo / "consolidated.safetensors")
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(repo, snapshot)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/consolidated-only",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        output = " ".join(strip_ansi(result.output).split())
+        assert "Low-memory merge not possible" in output
+        assert "no .safetensors weights found" in output
+        assert "consolidated*.safetensors copy is never read" in output
+        assert "not downloaded from the Hub" in output
+        assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
+        assert not (base.parent / "merged_out").exists()
 
     def test_tokenizer_failure_leaves_no_output(self, run, checkpoints, monkeypatch):
         import transformers
