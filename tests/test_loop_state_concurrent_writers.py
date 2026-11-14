@@ -23,6 +23,7 @@ from soup_cli.cli import app
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_state import (
     LoopState,
+    StateMergeError,
     merge_state,
     read_state,
     state_lock,
@@ -382,3 +383,173 @@ class TestEveryWriterTakesTheLock:
         final = real_read(_path(cwd))
         assert final.status == "paused"
         assert final.production_name == f"by-another-writer-{len(injections)}"
+
+
+# ---------------------------------------------------------------------------
+# merge_state never writes a stale copy (python review P4)
+# ---------------------------------------------------------------------------
+
+
+class TestMergeStateNeverWritesAStaleCopy:
+    def _conflict(self, cwd):
+        """The file moved on (a manual promotion to version 5) while the iteration ran; the
+        iteration's own ``latest_version=3`` cannot be applied next to it."""
+        base = _promoted_state()
+        write_state(
+            replace(base, production_name="v5", production_version=5, latest_version=5),
+            _path(cwd),
+        )
+        new = replace(base, latest_version=3, iteration_count=1, last_iteration_id="iter-x")
+        return base, new
+
+    def test_a_change_that_conflicts_does_not_bring_the_stale_copy_back(self, cwd):
+        base, new = self._conflict(cwd)
+
+        merged = merge_state(base, new, _path(cwd))
+
+        on_disk = read_state(_path(cwd))
+        assert on_disk == merged
+        assert (on_disk.production_name, on_disk.production_version) == ("v5", 5)
+        assert on_disk.latest_version == 5
+
+    def test_the_fields_that_do_apply_are_still_written(self, cwd):
+        base, new = self._conflict(cwd)
+
+        merged = merge_state(base, new, _path(cwd))
+
+        assert merged.iteration_count == 1 and merged.last_iteration_id == "iter-x"
+
+    def test_the_field_that_could_not_be_applied_is_named(self, cwd):
+        base, new = self._conflict(cwd)
+        skipped: list = []
+
+        merge_state(base, new, _path(cwd), skipped=skipped)
+
+        assert skipped == ["latest_version"]
+
+    def test_nothing_is_reported_when_every_change_applies(self, cwd):
+        base = _promoted_state()
+        write_state(base, _path(cwd))
+        skipped: list = []
+
+        merge_state(base, replace(base, iteration_count=2), _path(cwd), skipped=skipped)
+
+        assert skipped == []
+
+    def test_a_missing_file_fails_with_a_named_error_and_writes_nothing(self, cwd):
+        base = _promoted_state()
+        assert not Path(_path(cwd)).exists()
+
+        with pytest.raises(StateMergeError, match="loop.yaml.*not written"):
+            merge_state(base, replace(base, iteration_count=1), _path(cwd))
+
+        assert not Path(_path(cwd)).exists()
+
+    def test_an_unreadable_file_fails_with_a_named_error_and_is_left_alone(self, cwd):
+        base = _promoted_state()
+        write_state(base, _path(cwd))
+        Path(_path(cwd)).write_text("{ not json", encoding="utf-8")
+
+        with pytest.raises(StateMergeError, match="not valid JSON"):
+            merge_state(base, replace(base, iteration_count=1), _path(cwd))
+
+        assert Path(_path(cwd)).read_text(encoding="utf-8") == "{ not json"
+        assert not Path(_path(cwd) + ".lock").exists()
+
+
+# ---------------------------------------------------------------------------
+# Taking over a dead holder's lock is atomic (python review P3)
+# ---------------------------------------------------------------------------
+
+
+class TestStaleLockTakeover:
+    DEAD_PID = 424242
+
+    def _stale_lock(self, cwd, monkeypatch) -> Path:
+        write_state(_promoted_state(), _path(cwd))
+        lock = Path(_path(cwd) + ".lock")
+        lock.write_text(json.dumps({"pid": self.DEAD_PID}), encoding="utf-8")
+        monkeypatch.setattr(loop_state, "process_is_alive", lambda pid: pid != self.DEAD_PID)
+        return lock
+
+    def test_two_waiters_that_both_saw_the_dead_holder_never_both_take_the_lock(
+        self, cwd, monkeypatch
+    ):
+        self._stale_lock(cwd, monkeypatch)
+        real_holder = loop_state._lock_holder
+        rendezvous = threading.Barrier(2, timeout=10)
+        seen = threading.local()
+
+        def holder(path):
+            result = real_holder(path)
+            if not getattr(seen, "judged", False):
+                seen.judged = True
+                rendezvous.wait()  # both waiters have judged the lock abandoned by now
+            return result
+
+        monkeypatch.setattr(loop_state, "_lock_holder", holder)
+        real_take_over = loop_state._take_over_stale
+        take_over_calls, calls_guard = [], threading.Lock()
+        first_inside = threading.Event()
+
+        def take_over(lock_path):
+            with calls_guard:
+                order = len(take_over_calls)
+                take_over_calls.append(1)
+            if order == 1:
+                # the slower waiter acts on its OLD judgement: only after the first one has
+                # replaced the dead lock and is inside the critical section
+                first_inside.wait(10)
+            return real_take_over(lock_path)
+
+        monkeypatch.setattr(loop_state, "_take_over_stale", take_over)
+        inside, overlaps, entered = [], [], []
+        second_in = threading.Event()
+
+        def worker():
+            with state_lock(_path(cwd), timeout=10.0):
+                first_inside.set()
+                inside.append(1)
+                entered.append(1)
+                if len(inside) > 1:
+                    overlaps.append(len(inside))
+                    second_in.set()
+                second_in.wait(0.6)  # stay inside while the other waiter would come in
+                inside.pop()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+
+        assert overlaps == []
+        assert len(entered) == 2  # the second waiter did get the lock, after the first left
+
+    def test_a_dead_holders_lock_is_still_taken_over(self, cwd, monkeypatch):
+        lock = self._stale_lock(cwd, monkeypatch)
+
+        with state_lock(_path(cwd), timeout=5.0):
+            assert json.loads(lock.read_text(encoding="utf-8"))["pid"] == os.getpid()
+
+        assert not lock.exists()
+
+    def test_a_takeover_that_finds_the_lock_alive_again_leaves_it(self, cwd, monkeypatch):
+        """The re-check under the takeover guard: the lock was dead when the waiter looked,
+        a live process owns it by the time the waiter holds the guard."""
+        lock = self._stale_lock(cwd, monkeypatch)
+        lock.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+
+        assert loop_state._take_over_stale(str(lock)) is True
+        assert lock.exists()
+
+    def test_a_takeover_does_not_wait_for_another_takeover_in_progress(self, cwd, monkeypatch):
+        lock = self._stale_lock(cwd, monkeypatch)
+        guard_fd = os.open(str(lock) + ".takeover", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            assert loop_state._try_kernel_lock(guard_fd) is True
+
+            assert loop_state._take_over_stale(str(lock)) is False
+            assert lock.exists()  # the loser leaves the lock to the winner
+        finally:
+            os.close(guard_fd)

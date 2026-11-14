@@ -862,6 +862,75 @@ def _lock_holder(lock_path: str) -> "tuple[Optional[int], bool]":
     return None, age >= _UNPARSABLE_LOCK_GRACE_SEC
 
 
+def _try_kernel_lock(fd: int) -> bool:
+    """Take a non-blocking exclusive OS lock on ``fd``; ``False`` if another handle holds it.
+
+    A kernel lock dies with its holder (the process ends, the handle closes), so unlike a lock
+    file it can never be left behind and never needs a staleness judgement.
+    """
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _kernel_unlock(fd: int) -> None:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _take_over_stale(lock_path: str) -> bool:
+    """Remove ``lock_path`` if it is STILL abandoned, one waiter at a time.
+
+    Two waiters can both judge the same dead holder's lock abandoned. If each then unlinked it,
+    the second would delete the first one's NEW lock and both would enter the critical section.
+    The takeover is therefore serialised by a kernel lock on ``<lock>.takeover`` (never removed:
+    deleting a file other processes have open would split the lock in two), and the holder is
+    judged AGAIN once the guard is held: a lock the previous winner has already replaced is alive
+    and is left alone. Returns ``False`` (back off and retry) when another waiter holds the
+    guard, ``True`` once this waiter has done the check (whether or not it removed anything).
+    """
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    try:
+        guard = os.open(lock_path + ".takeover", flags, 0o600)
+    except OSError:
+        return False
+    try:
+        if not _try_kernel_lock(guard):
+            return False
+        try:
+            _, still_abandoned = _lock_holder(lock_path)
+            if still_abandoned:
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+        finally:
+            _kernel_unlock(guard)
+        return True
+    finally:
+        os.close(guard)
+
+
 @contextmanager
 def state_lock(path: Optional[str] = None, *, timeout: float = STATE_LOCK_TIMEOUT_SEC):
     """Hold the exclusive lock on ``loop.yaml`` (``<path>.lock``, created with ``O_EXCL``).
@@ -887,11 +956,7 @@ def state_lock(path: Optional[str] = None, *, timeout: float = STATE_LOCK_TIMEOU
             if isinstance(exc, PermissionError) and os.name != "nt":
                 raise
             holder, abandoned = _lock_holder(lock_path)
-            if abandoned:
-                try:
-                    os.unlink(lock_path)
-                except OSError:
-                    pass
+            if abandoned and _take_over_stale(lock_path):
                 continue
             if time.monotonic() >= deadline:
                 raise TimeoutError(
@@ -931,16 +996,29 @@ def update_state(mutate: Callable[[LoopState], LoopState], path: Optional[str] =
 _UNOWNED_FIELDS = frozenset({"created_at", "updated_at"})
 
 
-def merge_state(base: LoopState, new: LoopState, path: Optional[str] = None) -> LoopState:
+class StateMergeError(ValueError):
+    """``loop.yaml`` cannot be read, so an iteration's changes cannot be merged onto it."""
+
+
+def merge_state(
+    base: LoopState,
+    new: LoopState,
+    path: Optional[str] = None,
+    *,
+    skipped: Optional[list] = None,
+) -> LoopState:
     """Persist what an iteration changed (``base`` -> ``new``) onto the file's CURRENT contents.
 
     An iteration can run for hours; ``soup loop rollback`` / ``pause`` / ``canary`` may change
     ``loop.yaml`` meanwhile, and writing the iteration's copy back would undo them. Under the
     lock this re-reads the file and applies ONLY the fields ``new`` changed relative to ``base``
     (the ones the iteration owns). A field both changed takes the iteration's value, except
-    ``status``: a pause or stop made meanwhile wins over the iteration's copy. If the merged
-    result is not a valid ``LoopState``, or the file is gone or unreadable, ``new`` is written
-    as it is (the behaviour before this function existed).
+    ``status``: a pause or stop made meanwhile wins over the iteration's copy.
+
+    The iteration's copy is NEVER written as it is. If all the changes together do not make a
+    valid ``LoopState`` next to what the file holds now, they are applied one field at a time
+    and the fields that do not fit are left out (their names go into ``skipped``, if given).
+    If the file is gone or unreadable, ``StateMergeError`` is raised and nothing is written.
     """
     target = path if path is not None else default_state_path()
     with state_lock(target):
@@ -952,11 +1030,28 @@ def merge_state(base: LoopState, new: LoopState, path: Optional[str] = None) -> 
         }
         try:
             fresh = read_state(target)
-            if fresh.status != base.status:
-                changes.pop("status", None)
+        except (FileNotFoundError, ValueError) as exc:
+            raise StateMergeError(
+                f"loop.yaml cannot be read ({exc}); the iteration's changes were not written"
+            ) from exc
+        if fresh.status != base.status:
+            changes.pop("status", None)
+        try:
             merged = replace(fresh, **changes)
-        except (FileNotFoundError, ValueError):
-            merged = new
+        except ValueError:
+            merged, pending = fresh, dict(changes)
+            progress = True
+            while pending and progress:  # a field that needs another one applied first retries
+                progress = False
+                for name in list(pending):
+                    try:
+                        merged = replace(merged, **{name: pending[name]})
+                    except ValueError:
+                        continue
+                    del pending[name]
+                    progress = True
+            if skipped is not None:
+                skipped.extend(pending)
         _write_state_unlocked(merged, target)
         return merged
 
