@@ -800,6 +800,37 @@ def _stderr_tail(stderr: object) -> str:
     return " | ".join(lines[-_STDERR_TAIL_LINES:])[-_STDERR_TAIL_CHARS:]
 
 
+#: How much of the end of a child log is read back for a failure note.
+_LOG_TAIL_BYTES = 8192
+
+
+def _run_logged(runner, argv, *, log_path: str, timeout: float):
+    """Run a child with stdout and stderr going to ``log_path``: nothing is held in memory.
+
+    stdin is the null device. A child that runs for hours and prints progress bars or one
+    warning over and over used to fill the daemon memory through ``capture_output``.
+    """
+    import subprocess  # noqa: S404 — argv list mode, no shell
+
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    with open(log_path, "wb") as handle:
+        return runner(  # noqa: S603 — internal argv, no shell
+            argv, stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            timeout=timeout, check=False,
+        )
+
+
+def _log_tail(log_path: str) -> str:
+    """The last lines of a child log (read from the end, capped); empty if unreadable."""
+    try:
+        size = os.path.getsize(log_path)
+        with open(log_path, "rb") as handle:
+            handle.seek(max(0, size - _LOG_TAIL_BYTES))
+            return _stderr_tail(handle.read())
+    except OSError:
+        return ""
+
+
 def _train_failure(note: str, decided: Mapping[str, object]) -> "dict[str, object]":
     """A failed run: ``failed`` (never ``skipped``) and the reason in ``notes``."""
     previous = decided.get("notes")
@@ -899,22 +930,30 @@ def train_dpo_from_pairs(
         import subprocess  # noqa: S404 — argv list mode, no shell
 
         runner = subprocess.run
+    log_path = str(yaml_dir / f"{run_id}.train.log")
     try:
-        result = runner(  # noqa: S603 — internal argv, no shell
-            argv, capture_output=True, timeout=24 * 3600, check=False
-        )
+        result = _run_logged(runner, argv, log_path=log_path, timeout=24 * 3600)
     except Exception as exc:  # noqa: BLE001 — train failure must not crash loop
         _LOG.warning("train subprocess failed: %s", type(exc).__name__)
-        return _train_failure(f"train failed: {type(exc).__name__}", decided)
+        return {
+            **_train_failure(f"train failed: {type(exc).__name__}", decided),
+            "train_log": log_path,
+        }
 
     rc = getattr(result, "returncode", 1)
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
-        tail = _stderr_tail(getattr(result, "stderr", None))
-        return _train_failure(
-            f"train failed (exit code {rc})" + (f": {tail}" if tail else ""), decided
-        )
-    trained = {"run_id": run_id, "skipped": False, "adapter_path": output_dir, **decided}
+        tail = _log_tail(log_path) or _stderr_tail(getattr(result, "stderr", None))
+        return {
+            **_train_failure(
+                f"train failed (exit code {rc})" + (f": {tail}" if tail else ""), decided
+            ),
+            "train_log": log_path,
+        }
+    trained = {
+        "run_id": run_id, "skipped": False, "adapter_path": output_dir,
+        "train_log": log_path, **decided,
+    }
     if plan is not None:
         # What the verdict checks: the corrections this run trained on, and the ones it kept out.
         trained["trained_edits"] = list(plan.trainable)
@@ -1183,21 +1222,24 @@ def verify_with_ship(
         import subprocess  # noqa: S404 — argv list mode, no shell
 
         runner = subprocess.run
+    log_path = os.path.join(_VERDICTS_DIR, f"{run_id}.ship.log")
+    common["verify_log"] = log_path
     try:
-        result = runner(  # noqa: S603 — internal argv, no shell
-            argv, capture_output=True, timeout=_SHIP_TIMEOUT_SEC, check=False
-        )
+        result = _run_logged(runner, argv, log_path=log_path, timeout=_SHIP_TIMEOUT_SEC)
     except Exception as exc:  # noqa: BLE001 — a verdict failure must not crash the loop
         return {**common, **_verdict_skipped(f"soup ship could not run ({_short(exc)})")}
     shipped = _read_ship_output(out_path)
     decision = shipped["decision"] if shipped is not None else None
     if decision is None:
         rc = getattr(result, "returncode", None)
-        stderr = getattr(result, "stderr", b"") or b""
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", "replace")
-        lines = [line.strip() for line in str(stderr).splitlines() if line.strip()]
-        tail = f": {_printable(lines[-1])}" if lines else ""
+        tail = _log_tail(log_path).rsplit(" | ", 1)[-1]
+        if not tail:
+            stderr = getattr(result, "stderr", b"") or b""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", "replace")
+            lines = [line.strip() for line in str(stderr).splitlines() if line.strip()]
+            tail = lines[-1] if lines else ""
+        tail = f": {_printable(tail)}" if tail else ""
         reason = f"soup ship wrote no verdict (exit {rc}){tail}"
         return {**common, **_verdict_skipped(reason)}
     verdict = {**common, "gate_verdict": _SHIP_DECISIONS[decision], "verdict_decision": decision}

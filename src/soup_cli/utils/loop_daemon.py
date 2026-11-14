@@ -72,12 +72,14 @@ from soup_cli.utils.loop_log import (
 from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
+    StateMergeError,
     format_wait_duration,
     merge_state,
     read_state,
     update_state,
     write_state,
 )
+from soup_cli.utils.terminal import for_terminal
 
 _LOG = logging.getLogger(__name__)
 # BucketStats.verdict's default: canary answers needed before a verdict.
@@ -451,6 +453,8 @@ def run_once(
         )[:4096],
         canary_quality=reading.evidence,
         graduated=len(plan.graduated) if trained_run and isinstance(plan, HoldoutPlan) else None,
+        train_log=_log_ref(train_out.get("train_log")),
+        verify_log=_log_ref(gate_out.get("verify_log")),
         **_evidence(gate_out),
     )
     # The lifetime totals count what training used: an iteration that only waited for
@@ -776,6 +780,17 @@ def _canary_decides(gate_out: Mapping[str, object]) -> bool:
     return gate_out.get("gate_verdict") == "MAJOR" and gate_out.get("canary_decides") is True
 
 
+def _log_ref(path: object) -> Optional[str]:
+    """``path`` if it is a plain path string fit for the iteration record, else ``None``."""
+    if (
+        isinstance(path, str)
+        and 0 < len(path) <= 512
+        and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in path)
+    ):
+        return path
+    return None
+
+
 def _evidence(gate_out: Mapping[str, object]) -> "dict[str, object]":
     """The iteration record's fields for the evidence of ``soup ship --gate loop-v2``.
 
@@ -1075,6 +1090,46 @@ def combine_canary_verdicts(error_verdict: str, quality_verdict: str) -> str:
     return "UNKNOWN"
 
 
+class WatchAbortedError(RuntimeError):
+    """The daemon stopped because ``loop.yaml`` could not be read or merged (``str()`` = why).
+
+    ``state`` is the last state the daemon held and ``iterations`` the iterations it ran; the
+    ``soup loop watch`` command prints the reason and exits 1.
+    """
+
+    def __init__(self, reason: str, state: LoopState, iterations: int) -> None:
+        super().__init__(reason)
+        self.state = state
+        self.iterations = iterations
+
+
+def _log_daemon_error(log: Optional[LoopLog], code: str, reason: str) -> None:
+    """One line with the reason to the daemon's log and (if there is one) the progress file."""
+    _LOG.error("watch: %s", reason)
+    if log is not None:
+        try:
+            log.progress(progress_line(
+                None, "daemon", "error", message="loop.yaml could not be used; see the log",
+                error=code,
+            ))
+        except (OSError, ValueError):
+            _LOG.warning("watch: the progress line could not be written", exc_info=True)
+
+
+def _with_note(record: IterationRecord, text: str) -> IterationRecord:
+    prefix = record.notes + " | " if record.notes else ""
+    return replace(record, notes=(prefix + text)[:4096])
+
+
+def _restore_signal_handlers(previous: "dict[int, object]") -> None:
+    """Put back the handlers ``watch`` replaced, so Ctrl+C works again once it returns."""
+    for signum, handler in previous.items():
+        try:
+            signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+        except (ValueError, OSError, TypeError):
+            pass
+
+
 def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     """Run the daemon loop. Returns ``(final_state, iterations_run)``.
 
@@ -1082,6 +1137,11 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     - ``config.max_iterations`` reached (test/finite mode)
     - state file going to ``status="stopped"`` between iterations
     - SIGTERM/SIGINT (installed via ``signal.signal`` when on the main thread)
+
+    Raises ``WatchAbortedError`` (after the final status write) when ``loop.yaml`` is gone or
+    invalid at the top of a cycle, or cannot be merged after an iteration: the reason is
+    logged first. An ``OSError`` (a Windows permission denial, a lock timeout) is transient:
+    it is logged and the daemon goes on to the next cycle.
     """
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
@@ -1090,26 +1150,32 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     def _request_stop(signum, frame):  # pragma: no cover — signal path
         stop.set()
 
+    previous_handlers: "dict[int, object]" = {}
     try:
         if threading.current_thread() is threading.main_thread():
-            signal.signal(signal.SIGTERM, _request_stop)
-            signal.signal(signal.SIGINT, _request_stop)
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                previous_handlers[signum] = signal.signal(signum, _request_stop)
     except (ValueError, AttributeError):
         # Non-main-thread + Windows-Python combos where signal.signal raises.
         pass
 
     iterations = 0
+    aborted: Optional[str] = None
     log = LoopLog(config.iteration_dir) if config.loop_logs else None
     # v0.71.4 #177 — chain Registry entries across iterations so the loop
     # forms a real lineage DAG (parent links to the prior iteration's entry).
     prev_registry_id: Optional[str] = None
-    state = read_state(config.state_path)
-    # Only promote `stopped` → `running` automatically; `paused` must
-    # survive a `soup loop watch` invocation so a SIGTERM + restart
-    # cycle does not silently un-pause the daemon (code-review HIGH #2).
-    if state.status == "stopped":
-        state = state.with_status("running")
-        write_state(state, config.state_path)
+    try:
+        state = read_state(config.state_path)
+        # Only promote `stopped` → `running` automatically; `paused` must
+        # survive a `soup loop watch` invocation so a SIGTERM + restart
+        # cycle does not silently un-pause the daemon (code-review HIGH #2).
+        if state.status == "stopped":
+            state = state.with_status("running")
+            write_state(state, config.state_path)
+    except BaseException:
+        _restore_signal_handlers(previous_handlers)
+        raise
     try:
         while not stop.is_set():
             if config.max_iterations is not None and iterations >= config.max_iterations:
@@ -1121,8 +1187,18 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                     _LOG.warning("on_cycle callback raised", exc_info=True)
             try:
                 state = read_state(config.state_path)
-            except (FileNotFoundError, ValueError):
+            except (FileNotFoundError, ValueError) as exc:
+                aborted = f"loop.yaml cannot be used ({for_terminal(exc)}); the daemon stops"
+                _log_daemon_error(log, "state_unreadable", aborted)
                 break
+            except OSError as exc:  # transient: a permission denial, a locked drive
+                _LOG.warning(
+                    "watch: loop.yaml could not be read this cycle (%s); trying again",
+                    type(exc).__name__,
+                )
+                if stop.wait(min(config.poll_interval_sec, 60.0)):
+                    break
+                continue
             if state.status == "paused":
                 if stop.wait(min(config.poll_interval_sec, 60.0)):
                     break
@@ -1133,7 +1209,24 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
             state, record, decision = run_once(state, config, log=log)
             # The iteration may have run for hours: persist only the fields it changed onto
             # the file as it is NOW, so a rollback / pause / canary made meanwhile survives.
-            state = merge_state(started_from, state, config.state_path)
+            skipped: list = []
+            try:
+                state = merge_state(started_from, state, config.state_path, skipped=skipped)
+            except StateMergeError as exc:
+                aborted = str(exc)
+                _log_daemon_error(log, "state_unreadable", aborted)
+                record = _with_note(record, f"loop.yaml could not be updated: {aborted}")
+            except OSError as exc:  # TimeoutError (locked) too: transient
+                note = f"loop.yaml could not be updated: {for_terminal(exc)}"
+                _LOG.warning("watch: %s", note)
+                record = _with_note(record, note)
+            else:
+                if skipped:
+                    record = _with_note(
+                        record,
+                        "loop.yaml changed during the run; not overwritten: "
+                        + ", ".join(skipped),
+                    )
             # Budget-skipped iterations DO NOT produce a manifest — the
             # cycle didn't actually run, so cluttering .soup-loops/ with
             # "I didn't run" records would surprise operators expecting
@@ -1156,12 +1249,15 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                     except Exception:  # noqa: BLE001 — daemon must not crash
                         _LOG.warning("on_iteration callback raised", exc_info=True)
             iterations += 1
+            if aborted is not None:
+                break
             if iterations and (
                 config.max_iterations is None or iterations < config.max_iterations
             ):
                 if stop.wait(config.poll_interval_sec):
                     break
     finally:
+        _restore_signal_handlers(previous_handlers)
         # Preserve `paused` status across daemon exit — only flip to
         # `stopped` if the daemon naturally exited (max_iterations / state
         # was running). A SIGTERM while paused must not be silently
@@ -1173,8 +1269,10 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                 ),
                 config.state_path,
             )
-        except (FileNotFoundError, ValueError):
-            pass
+        except (OSError, ValueError):  # gone, invalid, or locked: nothing more to record
+            _LOG.warning("watch: the final status could not be written", exc_info=True)
+    if aborted is not None:
+        raise WatchAbortedError(aborted, state, iterations)
     return state, iterations
 
 

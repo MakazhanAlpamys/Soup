@@ -775,17 +775,52 @@ def _check_path(path: str, *, allow_missing: bool) -> str:
     return path
 
 
+#: Windows denies access (instead of waiting) to a file another process has open without
+#: sharing it, e.g. mid-``os.replace``; the denial lasts milliseconds, so it is ridden out.
+_PERMISSION_RETRY = os.name == "nt"
+_PERMISSION_RETRIES = 40
+
+
 def _replace_file(tmp: str, target: str) -> None:
     """``os.replace``, retried briefly on Windows, where a reader that has the target open (a
     ``soup loop status`` at that instant, a virus scanner) makes the replace fail."""
-    for attempt in range(40):
+    for attempt in range(_PERMISSION_RETRIES):
         try:
             os.replace(tmp, target)
             return
         except PermissionError:
-            if os.name != "nt" or attempt == 39:
+            if not _PERMISSION_RETRY or attempt == _PERMISSION_RETRIES - 1:
                 raise
             time.sleep(0.025)
+
+
+def _fsync_directory(directory: str) -> None:
+    """Make a rename in ``directory`` durable (POSIX; Windows cannot open a directory)."""
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _read_bytes(target: str) -> bytes:
+    """The file's bytes; a Windows permission denial (a writer mid-replace) is retried."""
+    for attempt in range(_PERMISSION_RETRIES):
+        try:
+            with open(target, "rb") as fh:
+                return fh.read()
+        except PermissionError:
+            if not _PERMISSION_RETRY or attempt == _PERMISSION_RETRIES - 1:
+                raise
+            time.sleep(0.025)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def write_state(state: LoopState, path: Optional[str] = None) -> str:
@@ -828,7 +863,12 @@ def _write_state_unlocked(state: LoopState, path: Optional[str] = None) -> str:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body)
+            # On disk before the rename: a power loss must not leave the new name over no data
+            # (a zero-length loop.yaml is "not valid JSON" and the loop would not start).
+            fh.flush()
+            os.fsync(fh.fileno())
         _replace_file(tmp, target)
+        _fsync_directory(parent)
     except Exception:
         try:
             os.unlink(tmp)
@@ -940,19 +980,20 @@ def _take_over_stale(lock_path: str) -> bool:
 
 
 @contextmanager
-def state_lock(path: Optional[str] = None, *, timeout: float = STATE_LOCK_TIMEOUT_SEC):
+def state_lock(path: Optional[str] = None, *, timeout: Optional[float] = None):
     """Hold the exclusive lock on ``loop.yaml`` (``<path>.lock``, created with ``O_EXCL``).
 
     Every writer takes it (watch, rollback, pause, resume, canary, init), so two of them never
     interleave their read-modify-write. The lock file holds the owner's pid: one whose process is
     gone (or that nobody can read for ``_UNPARSABLE_LOCK_GRACE_SEC``) is removed and taken over.
-    Raises ``TimeoutError`` naming the lock file after ``timeout`` seconds. Not re-entrant.
+    Raises ``TimeoutError`` naming the lock file after ``timeout`` seconds (default
+    ``STATE_LOCK_TIMEOUT_SEC``). Not re-entrant.
     """
     target = path if path is not None else default_state_path()
     _check_path(target, allow_missing=True)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     lock_path = target + ".lock"
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + (STATE_LOCK_TIMEOUT_SEC if timeout is None else timeout)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     while True:
         try:
@@ -1074,8 +1115,7 @@ def read_state(path: Optional[str] = None) -> LoopState:
         raise ValueError(f"state file unreadable: {type(exc).__name__}") from exc
     if size > _MAX_FILE_BYTES:
         raise ValueError("state file exceeds 1 MiB cap")
-    with open(target, "rb") as fh:
-        raw = fh.read()
+    raw = _read_bytes(target)
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

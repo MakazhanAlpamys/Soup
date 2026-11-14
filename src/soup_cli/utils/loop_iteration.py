@@ -61,6 +61,11 @@ class IterationRecord:
     verdict_held_out: Optional[dict] = None
     verdict_reason: Optional[str] = None
     graduated: Optional[int] = None
+    # Where the train child and the check (``soup ship``) wrote their full output: files next to
+    # the run (``.soup-loops/adapters/<run>.train.log``, ``.soup-loops/verdicts/<run>.ship.log``),
+    # never held in memory. None = the stage did not run a child. Last, so older manifests load.
+    train_log: Optional[str] = None
+    verify_log: Optional[str] = None
 
     def __post_init__(self) -> None:
         _check_id(self.iteration_id)
@@ -206,6 +211,8 @@ def write_iteration(
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, target)
     except Exception:
         try:

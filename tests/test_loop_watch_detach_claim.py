@@ -146,7 +146,9 @@ def test_a_log_that_cannot_be_opened_removes_the_claim(initialised, monkeypatch)
 
     result, popen = _detach()
 
-    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = " ".join(_ANSI.sub("", result.output).split())
+    assert result.exit_code == 2, (out, repr(result.exception))
+    assert "cannot detach: log file must not be a symlink" in out
     assert popen.call_count == 0
     assert not _pid_path(initialised).exists()
 

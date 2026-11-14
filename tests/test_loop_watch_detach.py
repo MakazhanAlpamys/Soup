@@ -280,6 +280,7 @@ def test_a_refused_detach_does_not_create_the_log(initialised, liveness):
     liveness.live.add(OTHER_PID)
     result, _ = _detach()
     assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert f"a loop daemon is already running: pid {OTHER_PID}" in _clean(result.output)
     assert not (initialised / ".soup" / "loop.log").exists()
 
 
@@ -742,6 +743,7 @@ def test_a_refused_detach_does_not_rotate_the_live_daemons_log(initialised, live
     result, popen = _detach()
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert f"a loop daemon is already running: pid {OTHER_PID}" in _clean(result.output)
     popen.assert_not_called()
     assert log.stat().st_size == loop_detach.MAX_LOG_BYTES
     assert not _old_log_path(initialised).exists()

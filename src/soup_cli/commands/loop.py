@@ -40,12 +40,13 @@ from soup_cli.utils.loop_budget import (
     reset_daily_counter_if_new_day,
     reset_monthly_spend_if_new_month,
 )
-from soup_cli.utils.loop_daemon import CANARY_MIN_SAMPLES, WatchConfig, watch
+from soup_cli.utils.loop_daemon import CANARY_MIN_SAMPLES, WatchAbortedError, WatchConfig, watch
 from soup_cli.utils.loop_detach import (
     DETACHED_ENV,
     PidFileHeldError,
     claim_pid_file,
     describe_daemon,
+    detached_popen_kwargs,
     display_path,
     log_file_path,
     open_log,
@@ -102,6 +103,26 @@ def _safe_read() -> LoopState:
         raise typer.Exit(code=2)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]loop state invalid:[/] {for_terminal(str(exc))}")
+        raise typer.Exit(code=2)
+
+
+def _update(mutate) -> LoopState:
+    """``update_state`` for a command: its errors are one red line, never a traceback.
+
+    A file locked for the whole wait (``TimeoutError`` names the lock file) exits 1; a value
+    that makes the state invalid (the ``ValueError`` names the field) exits 2, as the
+    commands' other refusals do.
+    """
+    try:
+        return update_state(mutate)
+    except TimeoutError as exc:
+        console.print(f"[red]cannot update loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as exc:
+        console.print(f"[red]cannot update loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=2)
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]invalid loop setting:[/] {for_terminal(exc)}; loop.yaml unchanged")
         raise typer.Exit(code=2)
 
 
@@ -751,7 +772,7 @@ def pause_cmd() -> None:
     if state.status == "stopped":
         console.print("[yellow]loop is already stopped[/]")
         raise typer.Exit(code=0)
-    update_state(lambda fresh: fresh.with_status("paused"))
+    _update(lambda fresh: fresh.with_status("paused"))
     console.print("[green]loop paused[/]")
 
 
@@ -762,7 +783,7 @@ def resume_cmd() -> None:
     if state.status != "paused":
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
-    update_state(
+    _update(
         lambda fresh: fresh.with_status("running") if fresh.status == "paused" else fresh
     )
     console.print("[green]loop resumed[/]")
@@ -831,7 +852,7 @@ def set_cmd(
                 console.print(f"[red]invalid verify / eval:[/] {for_terminal(exc)}")
                 raise typer.Exit(code=2)
             console.print(f"[yellow]warning:[/] {for_terminal(exc)}")
-    update_state(lambda fresh: replace(fresh, **{key: new_value}))
+    _update(lambda fresh: replace(fresh, **{key: new_value}))
     console.print(f"[green]{key} set:[/] {for_terminal(new_value)}")
 
 
@@ -1012,6 +1033,7 @@ def watch_cmd(
                     stderr=subprocess.STDOUT,
                     close_fds=True,
                     env={**os.environ, DETACHED_ENV: "1"},
+                    **detached_popen_kwargs(),
                 )
             finally:
                 # Popen hands the child its own duplicate; the parent keeps none.
@@ -1068,7 +1090,13 @@ def watch_cmd(
         # Only the --detach child writes to .soup/loop.log; a foreground watch may be
         # writing to a terminal and rotates nothing.
         cfg = replace(cfg, on_cycle=rotate_open_log)
-    final_state, ran = watch(cfg)
+    try:
+        final_state, ran = watch(cfg)
+    except WatchAbortedError as exc:
+        console.print(
+            f"[red]watch stopped after {exc.iterations} iteration(s):[/] {for_terminal(exc)}"
+        )
+        raise typer.Exit(code=1)
     console.print(
         f"[green]watch exited[/] iterations={ran} status={for_terminal(final_state.status)}"
     )
@@ -1132,7 +1160,7 @@ def canary_cmd(
         )
     }
     # Only the canary fields are this command's: what a daemon wrote meanwhile is kept.
-    new_state = update_state(lambda fresh: replace(fresh, **owned))
+    new_state = _update(lambda fresh: replace(fresh, **owned))
     console.print(
         f"[green]canary set:[/] {for_terminal(policy.canary or '')} @ "
         f"{policy.traffic_pct:.1f}% (autoroll={autoroll_on_regress})"
@@ -1163,7 +1191,7 @@ def rollback_cmd() -> None:
         # No version changes; the canary's iteration, if one started it, ends rolled_back.
         log = LoopLog()
         _log_withdrawal(log, state)
-        update_state(
+        _update(
             lambda fresh: replace(
                 fresh,
                 canary_active=None,
@@ -1203,7 +1231,7 @@ def rollback_cmd() -> None:
         message=f"production back to version {changes['production_version']}",
     ))
     cursor_changes = rollback_cursor_changes(state)
-    update_state(
+    _update(
         lambda fresh: replace(
             fresh,
             production_name=target,

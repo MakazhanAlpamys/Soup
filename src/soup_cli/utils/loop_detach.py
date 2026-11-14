@@ -27,6 +27,7 @@ import errno
 import json
 import os
 import stat
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -82,6 +83,24 @@ class DaemonInfo:
     pid: Optional[int] = None
     #: For a stale file, why: names the dead pid, or says the file is not a PID file.
     reason: str = ""
+
+
+def detached_popen_kwargs(os_name: Optional[str] = None) -> dict:
+    """``subprocess.Popen`` arguments that cut the child loose from the parent's terminal.
+
+    POSIX: ``start_new_session=True`` (a new session, so the terminal's SIGHUP and Ctrl+C never
+    reach it). Windows: ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` (no console to close,
+    and Ctrl+C is not delivered to the new group). Either way stdin is the null device.
+    """
+    kwargs: dict = {"stdin": subprocess.DEVNULL}
+    if (os.name if os_name is None else os_name) == "nt":
+        kwargs["creationflags"] = (
+            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        )
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
 
 
 def pid_file_path(state_path: Optional[str] = None) -> str:
