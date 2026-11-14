@@ -28,6 +28,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import __version__
 from soup_cli.utils.diagnose import FailureReport, compose_report
@@ -45,7 +46,7 @@ from soup_cli.utils.diagnose.runner import (
 )
 from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -80,7 +81,7 @@ def _exit_for(report: FailureReport, allow_not_run: bool) -> None:
 
 
 def _render_report(report: FailureReport) -> None:
-    table = Table(title=f"soup diagnose: {for_terminal(report.adapter or report.run_id)}")
+    table = Table(title=Text(f"soup diagnose: {strip_control(report.adapter or report.run_id)}"))
     table.add_column("Mode", style="bold")
     table.add_column("Score", justify="right")
     table.add_column("Verdict")
@@ -94,19 +95,26 @@ def _render_report(report: FailureReport) -> None:
             # A NOT_RUN score is a stored 0.0 placeholder, not a measurement.
             "\u2014" if score.verdict == "NOT_RUN" else f"{score.score:.3f}",
             f"[{_verdict_style(score.verdict)}]{score.verdict}[/]",
-            for_terminal(score.evidence),
+            Text(strip_control(score.evidence)),
         )
     console.print(table)
     console.print(
         Panel.fit(
-            f"[bold {_verdict_style(report.overall)}]{report.overall}[/] — "
-            f"run [bold]{for_terminal(report.run_id)}[/]",
+            Text.assemble(
+                (report.overall, f"bold {_verdict_style(report.overall)}"),
+                " — run ",
+                (strip_control(report.run_id), "bold"),
+            ),
             title="overall",
         )
     )
     skipped = report.extras.get("rows_skipped")
     if skipped:
-        console.print(f"[dim]Rows skipped: {for_terminal(skipped)}[/]")
+        console.print(Text(f"Rows skipped: {strip_control(skipped)}", style="dim"))
+
+
+def _print_error(label: str, message: object) -> None:
+    console.print(Text.assemble((label, "red"), f" {strip_control(message)}"))
 
 
 def _load_evidence(path: str) -> dict:
@@ -210,14 +218,13 @@ def _attach_to_registry(report: FailureReport, registry_id: str, output: str) ->
 
         attach_artifact(registry_id, path=output, kind="diagnose_report")
     except Exception as exc:  # noqa: BLE001
-        console.print(
-            f"[red]Error:[/] could not attach to registry: "
-            f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
-        )
+        _print_error("Error:", f"could not attach to registry: {type(exc).__name__}: {exc}")
         raise typer.Exit(code=1) from exc
     console.print(
-        f"[green]Attached[/] diagnose_report to registry entry "
-        f"[bold]{for_terminal(registry_id)}[/]"
+        Text.assemble(
+            ("Attached", "green"), " diagnose_report to registry entry ",
+            (strip_control(registry_id), "bold"),
+        )
     )
 
 
@@ -234,24 +241,18 @@ def _emit_report(
     if output:
         try:
             write_report(report, output)
-            console.print(f"[green]Wrote[/] {for_terminal(output)}")
+            console.print(Text.assemble(("Wrote", "green"), f" {strip_control(output)}"))
         except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot write --output: "
-                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
-            )
+            _print_error("Error:", f"cannot write --output: {type(exc).__name__}: {exc}")
             raise typer.Exit(code=1) from exc
 
     if badge:
         try:
             svg = render_badge_svg(report)
             _write_badge(badge, svg)
-            console.print(f"[green]Badge written[/] to {for_terminal(badge)}")
+            console.print(Text.assemble(("Badge written", "green"), f" to {strip_control(badge)}"))
         except (OSError, ValueError, TypeError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot write --badge: "
-                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
-            )
+            _print_error("Error:", f"cannot write --badge: {type(exc).__name__}: {exc}")
             raise typer.Exit(code=1) from exc
 
     if attach_to_registry is not None:
@@ -355,9 +356,7 @@ def diagnose(
     try:
         resolved_citation_style = validate_citation_style(citation_style)
     except (TypeError, ValueError) as exc:
-        console.print(
-            f"[red]Invalid --citation-style:[/] {for_terminal(exc)}"
-        )
+        _print_error("Invalid --citation-style:", exc)
         raise typer.Exit(code=2) from exc
 
     # The attach links the --output file, so without one nothing can be
@@ -379,7 +378,7 @@ def diagnose(
             try:
                 tokenizer_arg = _common.resolve_tokenizer(tokenizer)
             except (TypeError, ValueError) as exc:
-                console.print(f"[red]Error:[/] {for_terminal(exc)}")
+                _print_error("Error:", exc)
                 raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
         try:
@@ -396,10 +395,7 @@ def diagnose(
                 shuffle_seed=shuffle_seed,
             )
         except (ValueError, TypeError, OSError, RuntimeError) as exc:
-            console.print(
-                f"[red]Error:[/] live diagnose failed: "
-                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
-            )
+            _print_error("Error:", f"live diagnose failed: {type(exc).__name__}: {exc}")
             raise typer.Exit(code=1) from exc
         _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
         _exit_for(report, allow_not_run)
@@ -411,10 +407,7 @@ def diagnose(
         try:
             payload = _load_evidence(evidence_path)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot read --evidence: "
-                f"{escape(type(exc).__name__)}"
-            )
+            _print_error("Error:", f"cannot read --evidence: {type(exc).__name__}")
             raise typer.Exit(code=1) from exc
         scores = _scores_from_evidence(payload)
         # Sanitise extras — null-byte rejection + 256-char cap on both

@@ -6,14 +6,12 @@ live run from a model reply, a dataset row or a probe's exception text), the
 run id, the adapter name, the ``--output`` / ``--badge`` paths, the registry
 entry id, and the text of the exceptions it reports. Each went through
 ``rich.markup.escape`` alone, which neutralises ``[...]`` tags and leaves ESC,
-DEL and the C1 range U+0080-U+009F in place. Each now goes through
-``soup_cli.utils.terminal.for_terminal``.
+DEL and the C1 range U+0080-U+009F in place. Rich Text preserves their literal
+spelling after terminal controls are stripped.
 
-Every test drives the real ``soup diagnose`` command line, with the module's
-console swapped for ``Console(file=StringIO(), color_system=None)`` so Rich
-emits no styling of its own: any control byte in the capture came from the
-value. Control characters are asserted on the UTF-8 bytes of the capture.
-Non-ASCII characters are built with ``chr()`` so this file stays ASCII.
+Every test drives the real ``soup diagnose`` command line and captures its
+console in a StringIO. The control-byte tests disable Rich styling so any
+control byte in the capture came from the value.
 """
 
 from __future__ import annotations
@@ -121,7 +119,7 @@ def _assert_shown_literally(out: str, *, times: int = 1) -> None:
     assert _flat(out).count(SHOWN) == times, out
 
 
-def _run(monkeypatch, tmp_path, *args, evidence=None, ensure_ascii=True):
+def _run(monkeypatch, tmp_path, *args, evidence=None, ensure_ascii=True, color=False):
     """Invoke ``soup diagnose`` in ``tmp_path``; return (result, console capture)."""
     monkeypatch.chdir(tmp_path)
     argv = ["diagnose", *args]
@@ -132,7 +130,17 @@ def _run(monkeypatch, tmp_path, *args, evidence=None, ensure_ascii=True):
         argv += ["--evidence", "ev.json"]
     buffer = StringIO()
     monkeypatch.setattr(
-        diagnose_mod, "console", Console(file=buffer, color_system=None, width=400)
+        diagnose_mod,
+        "console",
+        Console(
+            file=buffer,
+            width=400,
+            height=100,
+            force_terminal=color,
+            no_color=not color,
+            color_system="standard" if color else None,
+            legacy_windows=False,
+        ),
     )
     result = runner.invoke(app, argv)
     return result, buffer.getvalue()
@@ -410,7 +418,7 @@ def test_rejected_evidence_value_is_quoted_with_repr(monkeypatch, tmp_path, fiel
 
 
 def test_plain_escape_is_left_only_on_text_the_program_wrote():
-    """A mode name is a constant and an exception class name is an identifier."""
+    """The only remaining escape call receives a mode name from the fixed list."""
     tree = ast.parse(Path(diagnose_mod.__file__).read_text(encoding="utf-8"))
     arguments = sorted(
         {
@@ -421,4 +429,120 @@ def test_plain_escape_is_left_only_on_text_the_program_wrote():
             and node.func.id == "escape"
         }
     )
-    assert arguments == ["mode", "type(exc).__name__"], arguments
+    assert arguments == ["mode"], arguments
+
+
+_LITERAL = r"name:warning:[red]\[end"
+_STORED = _LITERAL + "\x9b\u202e"
+
+
+def test_diagnose_displays_report_fields_without_interpreting_them(monkeypatch, tmp_path):
+    result, out = _run(
+        monkeypatch,
+        tmp_path,
+        "run-" + _STORED,
+        "--adapter",
+        "adapter-" + _STORED,
+        evidence={
+            "scores": {"forgetting": {"score": 1.0, "evidence": "evidence-" + _STORED}},
+            "extras": {"rows_skipped": "skipped-" + _STORED},
+        },
+    )
+    _ok(result)
+    for field in ("run", "adapter", "evidence", "skipped"):
+        assert f"{field}-{_LITERAL}" in _flat(out), out
+    assert "\x9b" not in out and "\u202e" not in out
+
+
+@pytest.mark.parametrize("field", ["--output", "--badge", "--attach-to-registry"])
+def test_diagnose_literal_receipts_keep_destination(monkeypatch, tmp_path, field):
+    called = []
+
+    def record(*args, **kwargs):
+        called.append((args, kwargs))
+
+    if field == "--output":
+        monkeypatch.setattr(diagnose_mod, "write_report", record)
+        args = [field, _STORED]
+        label = "Wrote "
+    elif field == "--badge":
+        monkeypatch.setattr(diagnose_mod, "_write_badge", record)
+        args = [field, _STORED]
+        label = "Badge written to "
+    else:
+        monkeypatch.setattr(attach_mod, "attach_artifact", record)
+        args = ["--output", "report.json", field, _STORED]
+        label = "Attached diagnose_report to registry entry "
+    result, out = _run(monkeypatch, tmp_path, "run1", *args, color=True)
+    _ok(result)
+    assert label + _LITERAL in strip_ansi(out)
+    verb = {"--output": "Wrote", "--badge": "Badge written", "--attach-to-registry": "Attached"}
+    assert f"\x1b[32m{verb[field]}\x1b[0m" in out
+    assert "\x9b" not in out and "\u202e" not in out
+    assert len(called) == 1
+    assert _STORED in called[0][0]
+
+
+@pytest.mark.parametrize(
+    "stage", ["evidence", "output", "badge", "attach", "live", "citation", "tokenizer"]
+)
+def test_diagnose_external_errors_keep_literal_text(monkeypatch, tmp_path, stage):
+    from soup_cli.utils.diagnose import _common
+
+    named_error = type("Problem:" + _STORED, (ValueError,), {})
+
+    def fail(*args, **kwargs):
+        raise named_error(_STORED)
+
+    module, attr, args, label, code = {
+        "evidence": (diagnose_mod, "_load_evidence", [], "cannot read --evidence: ", 1),
+        "output": (
+            diagnose_mod,
+            "write_report",
+            ["--output", "r.json"],
+            "cannot write --output: ",
+            1,
+        ),
+        "badge": (diagnose_mod, "_write_badge", ["--badge", "b.svg"], "cannot write --badge: ", 1),
+        "attach": (
+            attach_mod,
+            "attach_artifact",
+            ["--output", "r.json", "--attach-to-registry", "r"],
+            "could not attach to registry: ",
+            1,
+        ),
+        "live": (
+            live_mod,
+            "run_live_diagnose",
+            ["--base-model", "owner/model"],
+            "live diagnose failed: ",
+            1,
+        ),
+        "citation": (citation_mod, "validate_citation_style", [], "Invalid --citation-style: ", 2),
+        "tokenizer": (
+            _common,
+            "resolve_tokenizer",
+            ["--base-model", "owner/model", "--tokenizer", "model"],
+            "Error: ",
+            3,
+        ),
+    }[stage]
+    monkeypatch.setattr(module, attr, fail)
+    result, out = _run(
+        monkeypatch,
+        tmp_path,
+        "run1",
+        *args,
+        evidence={} if stage == "evidence" else None,
+        color=True,
+    )
+    assert result.exit_code == code, (result.output, result.exception)
+    shown = _LITERAL
+    if stage in {"output", "badge", "attach", "live"}:
+        shown = f"Problem:{_LITERAL}: {_LITERAL}"
+    elif stage == "evidence":
+        shown = f"Problem:{_LITERAL}"
+    assert label + shown in strip_ansi(out)
+    error_label = "Invalid --citation-style:" if stage == "citation" else "Error:"
+    assert f"\x1b[31m{error_label}\x1b[0m" in out
+    assert "\x9b" not in out and "\u202e" not in out
