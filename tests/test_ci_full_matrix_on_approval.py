@@ -851,6 +851,62 @@ class TestConcurrency:
         assert joins == (_approval_for(event) == "true")
 
 
+class TestAdapterWorkflow:
+    @pytest.fixture
+    def workflow(self):
+        return yaml.safe_load((ROOT / ".github/workflows/mlx-adapters.yml").read_text())
+
+    def test_dependency_changes_trigger_native_validation(self, workflow):
+        triggers = workflow.get("on", workflow.get(True))
+        assert "pyproject.toml" in triggers["pull_request"]["paths"]
+
+    def test_unrelated_labels_do_not_cancel_running_or_pending_validation(self, workflow):
+        key = workflow["concurrency"]["group"]
+        active = _render(key, _pull_request("synchronize", labels=(LABEL,)))
+        first = _render(key, _pull_request("labeled", label="bug", labels=(LABEL,), run_id="1"))
+        second = _render(key, _pull_request("labeled", label="bug", labels=(LABEL,), run_id="2"))
+        assert len({active, first, second}) == 3
+        assert _render(key, _pull_request("labeled", label=LABEL)) == active
+
+    def test_manual_runs_are_independent_of_pr_and_each_other(self, workflow):
+        key = workflow["concurrency"]["group"]
+        pr = _render(key, _pull_request("synchronize", labels=(LABEL,)))
+        first = _render(key, _on_event("workflow_dispatch", run_id="1"))
+        second = _render(key, _on_event("workflow_dispatch", run_id="2"))
+        assert len({pr, first, second}) == 3
+
+    @pytest.mark.parametrize(
+        ("context", "runs"),
+        [
+            (_pull_request("synchronize", labels=(LABEL,)), True),
+            (_pull_request("labeled", label=LABEL), True),
+            (_pull_request("ready_for_review", labels=(LABEL,)), True),
+            (_pull_request("synchronize"), False),
+            (_pull_request("labeled", label="bug", labels=(LABEL,)), False),
+            (_pull_request("synchronize", labels=(LABEL,), draft=True), False),
+            (_on_event("workflow_dispatch"), True),
+        ],
+    )
+    def test_the_job_starts_only_for_a_labelled_ready_run_or_a_manual_one(
+        self, workflow, context, runs
+    ):
+        condition = str(workflow["jobs"]["native-adapters"]["if"])
+        assert _truthy(_Expression(condition, context).value()) == runs
+
+    def test_the_token_reads_code_and_nothing_else(self, workflow):
+        assert workflow["permissions"] == {"contents": "read"}
+        assert "permissions" not in workflow["jobs"]["native-adapters"]
+        triggers = workflow.get("on", workflow.get(True))
+        assert "pull_request_target" not in triggers
+
+    def test_checkout_does_not_persist_the_token(self, workflow):
+        steps = workflow["jobs"]["native-adapters"]["steps"]
+        checkout = next(
+            step for step in steps if step.get("uses", "").startswith("actions/checkout@")
+        )
+        assert checkout["with"]["persist-credentials"] is False
+
+
 def _posix_bash() -> str | None:
     """A bash that runs a POSIX script; on Windows, Git for Windows' copy.
 
@@ -1145,6 +1201,7 @@ PINNED_ON_PR_AND_PUSH = frozenset(
     {
         ("recipe-validation.yml", "validate-recipes"),
         ("recipe-attach.yml", "verify"),
+        ("mlx-adapters.yml", "native-adapters"),
     }
 )
 
