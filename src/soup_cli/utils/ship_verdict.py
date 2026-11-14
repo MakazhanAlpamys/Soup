@@ -23,8 +23,10 @@ CPU-testable. Model loading + live evaluation live in ``commands/ship.py``.
 Public surface
 --------------
 - Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``AdapterChange``,
-  ``ShipVerdict``.
-- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``TASK_MODES``,
+  ``ShipVerdict``, and the detail of the task leg: ``TaskDetail`` (``TaskRows``,
+  ``Truncation``, ``GenerationFailures``) and ``Judged``.
+- ``LegScore``: a float that also carries the per-row scores and flags it was built from.
+- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``SCHEMA_VERSION``, ``TASK_MODES``,
   ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` / ``DECISION_DONT_SHIP``, the
   ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``,
   ``ADAPTER_CHANGE_WARN_BELOW``.
@@ -39,7 +41,9 @@ Public surface
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -64,12 +68,38 @@ from soup_cli.utils.terminal import strip_control as for_terminal
 # a future optional addition cannot be silently ignored by both public readers.
 # ``provenance`` is intentionally opaque metadata, so its nested keys are not
 # part of the verdict schema.
+#
+# Schema version 2 (soup-cli 0.78) added ``schema_version`` and ``judged`` at the root and
+# ``rows`` / ``truncated`` / ``generation_failures`` in the task; their own keys are the
+# ``rows`` ... ``judged`` sections. ``V2_ONLY_FIELDS`` lists the paths a reader of version 1 does
+# not know: the reader refuses them under version 1.
 EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
-    "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
-    "task": frozenset({"mode", "base", "tuned"}),
+    "root": frozenset({
+        "task", "benchmarks", "noise_floor", "provenance", "numerics", "schema_version", "judged",
+    }),
+    "task": frozenset({"mode", "base", "tuned", "rows", "truncated", "generation_failures"}),
     "benchmark": frozenset({"base", "tuned"}),
     "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
+    "rows": frozenset({"better", "worse", "same", "n"}),
+    "truncated": frozenset({"base", "tuned", "n", "max_new_tokens"}),
+    "generation_failures": frozenset({"base", "tuned", "n"}),
+    "judged": frozenset({"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}),
 })
+
+#: ``--output`` and ``--emit-evidence`` carry ``schema_version``. Absent means 1 (soup-cli 0.77.x).
+#: Version 2 adds ``task_win.rows`` / ``truncated`` / ``generation_failures`` and ``judged``.
+#: A reader of version 1 must treat a file with a ``schema_version`` it does not know as
+#: unreadable (soup-cli 0.77.x does: ``unsupported field(s): 'schema_version'``, exit 3).
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (1, 2)
+
+#: Evidence paths introduced by version 2: (section, key).
+V2_ONLY_FIELDS: Tuple[Tuple[str, str], ...] = (
+    ("root", "judged"),
+    ("task", "rows"),
+    ("task", "truncated"),
+    ("task", "generation_failures"),
+)
 
 # Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
 # a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
@@ -94,6 +124,37 @@ DEFAULT_FORGETTING_THRESHOLD = 0.05
 # near-zero-learning-rate controls up to 6.5e-3 and early checkpoints of real runs
 # from 2.5e-3, so no fraction separates them and the verdict never depends on it.
 ADAPTER_CHANGE_WARN_BELOW = 1e-2
+
+# Task-leg detail: what a SHIP / DON'T SHIP is made of, shown beside the verdict and never part
+# of the decision.
+
+#: Name of the one warning the detail can raise. It is information: the verdict, ``failed_rule``
+#: and the exit code are the same with and without it.
+WARNING_TRUNCATION_GROWTH = "truncation_growth"
+
+#: ``truncation_growth`` fires when the tuned model's cut-off answers exceed the base's by at
+#: least ``max(TRUNCATION_GROWTH_MIN_ROWS, ceil(TRUNCATION_GROWTH_MIN_SHARE * n))`` rows. One or
+#: two rows never fire (greedy decoding on a GPU is not bit-stable, #376); a fall never fires.
+#: A display constant like the changed-fraction bound, NOT calibrated: no table of real runs
+#: exists yet, and it stays a warning until one does. Competitor run 5 -> 14 of 64: threshold 7,
+#: rise 9, fires.
+TRUNCATION_GROWTH_MIN_ROWS = 3
+TRUNCATION_GROWTH_MIN_SHARE = 0.10
+
+#: Two per-row scores closer than this are the same row (float noise is not a change).
+ROW_SCORE_EPS = 1e-9
+
+# Bounds on an evidence-supplied detail block (a task file holds at most 10 000 rows, so a count
+# or an ``n`` above that cannot describe a real run).
+_MAX_EVIDENCE_ROWS = 10_000
+_MAX_EVIDENCE_NEW_TOKENS = 1 << 20
+_MAX_JUDGED_CHARS = 4096  # a path
+_MAX_CHECKPOINT_STEP = 10**15
+
+#: ``checkpoint-<digits>`` exactly: ``\Z`` (``$`` also accepts a trailing newline), ASCII digits
+#: only, and a bounded digit run so ``int()`` never sees an unbounded string.
+_CHECKPOINT_RE = re.compile(r"checkpoint-([0-9]{1,15})\Z")
+_PATH_SEPARATORS = re.compile(r"[\\/]")
 
 # Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
 # format name; full-precision loads use the torch dtype that actually went to
@@ -147,6 +208,128 @@ _MAX_FLOOR_AXIS_CHARS = 256
 # Frozen dataclasses
 # ---------------------------------------------------------------------------
 
+def truncation_growth_threshold(n: int) -> int:
+    """Rows by which the tuned truncation count must exceed the base's to raise the warning.
+
+    ``max(TRUNCATION_GROWTH_MIN_ROWS, ceil(TRUNCATION_GROWTH_MIN_SHARE * n))`` in exact
+    arithmetic (a ``Fraction`` of the constant's decimal text), so no float rounding can move a
+    boundary if the share is ever changed: ``0.07 * 100`` is ``7.000000000000001``, whose float
+    ceiling is 8, not 7.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("n must be a non-negative integer")
+    share = Fraction(str(TRUNCATION_GROWTH_MIN_SHARE))
+    return max(TRUNCATION_GROWTH_MIN_ROWS, math.ceil(share * n))
+
+
+@dataclass(frozen=True)
+class TaskRows:
+    """Per-row comparison of the task leg: how many rows the tuned model got better / worse."""
+
+    better: int
+    worse: int
+    same: int
+
+    @property
+    def n(self) -> int:
+        return self.better + self.worse + self.same
+
+
+@dataclass(frozen=True)
+class Truncation:
+    """Answers that stopped at the new-token cap, for the base and the tuned model.
+
+    A count is ``None`` (never 0) when it was not measured: the generator returned a plain
+    ``str`` for some row, or a row's generation failed. ``max_new_tokens`` is the cap the task
+    leg generated with (``None`` when unknown).
+    """
+
+    base: Optional[int]
+    tuned: Optional[int]
+    n: int
+    max_new_tokens: Optional[int] = None
+
+    @property
+    def warning(self) -> Optional[str]:
+        """``truncation_growth`` when the tuned count exceeds the base's by the threshold.
+
+        Computed, never stored: it needs both counts measured. Information only.
+        """
+        if self.base is None or self.tuned is None:
+            return None
+        if self.tuned - self.base >= truncation_growth_threshold(self.n):
+            return WARNING_TRUNCATION_GROWTH
+        return None
+
+
+@dataclass(frozen=True)
+class GenerationFailures:
+    """Rows whose generation raised and was swallowed (scored as wrong), per side."""
+
+    base: int
+    tuned: int
+    n: int
+
+
+@dataclass(frozen=True)
+class TaskDetail:
+    """What the task leg's number is made of. Every part is ``None`` when it was not measured."""
+
+    rows: Optional[TaskRows] = None
+    truncated: Optional[Truncation] = None
+    generation_failures: Optional[GenerationFailures] = None
+
+    def is_empty(self) -> bool:
+        return (
+            self.rows is None and self.truncated is None and self.generation_failures is None
+        )
+
+
+@dataclass(frozen=True)
+class Judged:
+    """What was judged: the strings of the command line, and the checkpoint step they name."""
+
+    base: str
+    adapter: Optional[str] = None
+    tuned: Optional[str] = None
+    base_adapter: Optional[str] = None
+    checkpoint_step: Optional[int] = None
+
+
+class LegScore(float):
+    """A leg-1 score (a ``float`` in every other respect) that remembers what it came from.
+
+    The scorers hand back a plain-looking float, so every caller (the noise floor, a test that
+    stubs a scorer with a bare float) keeps working; ``build_task_detail`` reads the extra
+    attributes when they are there. ``row_scores`` is one score per task, in task order.
+    ``truncated`` is one flag per generated answer (``True`` / ``False`` / ``None`` for "the
+    generator could not tell", see ``GeneratedText``); a pairwise leg generates for two sides,
+    so ``truncated`` holds side A's flags and ``truncated_other`` side B's. ``failures`` counts
+    the generations that raised and were swallowed.
+    """
+
+    row_scores: Optional[Tuple[float, ...]]
+    truncated: Optional[Tuple[Optional[bool], ...]]
+    truncated_other: Optional[Tuple[Optional[bool], ...]]
+    failures: Optional[int]
+
+    def __new__(
+        cls,
+        value: float,
+        *,
+        row_scores: Optional[Sequence[float]] = None,
+        truncated: Optional[Sequence[Optional[bool]]] = None,
+        truncated_other: Optional[Sequence[Optional[bool]]] = None,
+        failures: Optional[int] = None,
+    ) -> "LegScore":
+        instance = super().__new__(cls, value)
+        instance.row_scores = None if row_scores is None else tuple(row_scores)
+        instance.truncated = None if truncated is None else tuple(truncated)
+        instance.truncated_other = None if truncated_other is None else tuple(truncated_other)
+        instance.failures = failures
+        return instance
+
+
 @dataclass(frozen=True)
 class TaskWin:
     """Leg 1 — did the tuned model beat the base model on the target task?"""
@@ -155,6 +338,10 @@ class TaskWin:
     base: float
     tuned: float
     won: bool  # tuned > base (STRICT)
+    #: What the two numbers are made of (rows better / worse, cut-off answers, failed
+    #: generations). ``None`` when the leg could not say (an evidence file of version 1, an
+    #: adapter that changes nothing). Never part of the decision.
+    detail: Optional[TaskDetail] = None
 
 
 @dataclass(frozen=True)
@@ -262,6 +449,10 @@ class ShipVerdict:
     #: Set only by a live ``--adapter`` run that reached the evaluation (#2762).
     #: Display only: no rule reads it.
     adapter_change: Optional[AdapterChange] = None
+    #: What was judged (the strings of the command line and the checkpoint step they name).
+    #: ``None`` for a verdict that was not produced by a live run and whose evidence did not
+    #: record it (a file of version 1). Never part of the decision.
+    judged: Optional[Judged] = None
 
 
 # ---------------------------------------------------------------------------
@@ -410,27 +601,164 @@ def _floor_of(noise_floor: Optional[NoiseFloor], axis: str) -> float:
     return noise_floor.of(axis)
 
 
+def _score_tuple(values: Sequence[object], name: str) -> Tuple[float, ...]:
+    return tuple(_validate_score(value, f"{name}[{index}]") for index, value in enumerate(values))
+
+
+def _flag_tuple(flags: Sequence[object], name: str) -> Tuple[Optional[bool], ...]:
+    out: List[Optional[bool]] = []
+    for index, flag in enumerate(flags):
+        if flag is not None and not isinstance(flag, bool):
+            raise TypeError(f"{name}[{index}] must be True, False or None")
+        out.append(flag)
+    return tuple(out)
+
+
+def compare_rows(
+    base_scores: Sequence[object], tuned_scores: Sequence[object]
+) -> TaskRows:
+    """How many rows the tuned model got better / worse / the same, from per-row scores.
+
+    A row is better iff ``tuned > base + ROW_SCORE_EPS``, worse iff ``tuned < base -
+    ROW_SCORE_EPS`` and the same otherwise, so ``better + worse + same`` is the row count.
+    """
+    base = _score_tuple(base_scores, "base row score")
+    tuned = _score_tuple(tuned_scores, "tuned row score")
+    if len(base) != len(tuned):
+        raise ValueError("base and tuned need the same number of rows to be compared")
+    better = worse = 0
+    for base_score, tuned_score in zip(base, tuned):
+        if tuned_score > base_score + ROW_SCORE_EPS:
+            better += 1
+        elif tuned_score < base_score - ROW_SCORE_EPS:
+            worse += 1
+    return TaskRows(better=better, worse=worse, same=len(base) - better - worse)
+
+
+def count_truncated(flags: Sequence[Optional[bool]]) -> Optional[int]:
+    """Answers that hit the cap, from one flag per answer; ``None`` when any flag is unknown.
+
+    One unmeasured answer makes the whole count unmeasured: a count that skipped it would read
+    as measured over every row. ``None`` is never read as ``False``.
+    """
+    total = 0
+    for flag in _flag_tuple(flags, "truncated flag"):
+        if flag is None:
+            return None
+        total += flag
+    return total
+
+
+def build_truncation(
+    base_flags: Sequence[Optional[bool]],
+    tuned_flags: Sequence[Optional[bool]],
+    *,
+    max_new_tokens: Optional[int] = None,
+) -> Truncation:
+    """The two truncation counts of a task leg (one flag per answer and side)."""
+    base = _flag_tuple(base_flags, "base truncated flag")
+    tuned = _flag_tuple(tuned_flags, "tuned truncated flag")
+    if len(base) != len(tuned):
+        raise ValueError("base and tuned need the same number of rows to be compared")
+    return Truncation(
+        base=count_truncated(base),
+        tuned=count_truncated(tuned),
+        n=len(base),
+        max_new_tokens=max_new_tokens,
+    )
+
+
+def build_task_detail(
+    base_leg: object, tuned_leg: object, *, max_new_tokens: Optional[int] = None
+) -> Optional[TaskDetail]:
+    """The task leg's detail from the two ``LegScore`` s, or ``None`` when they carry none.
+
+    A plain float on either side (a stubbed scorer) means the leg could not say, and gives
+    ``None``: the verdict is built exactly as without the detail.
+    """
+    if not isinstance(base_leg, LegScore) or not isinstance(tuned_leg, LegScore):
+        return None
+    rows = None
+    if base_leg.row_scores is not None and tuned_leg.row_scores is not None:
+        rows = compare_rows(base_leg.row_scores, tuned_leg.row_scores)
+    truncated = None
+    if base_leg.truncated is not None and tuned_leg.truncated is not None:
+        truncated = build_truncation(
+            base_leg.truncated, tuned_leg.truncated, max_new_tokens=max_new_tokens
+        )
+    failures = None
+    if base_leg.failures is not None and tuned_leg.failures is not None:
+        size = next(
+            (
+                len(seq)
+                for seq in (base_leg.row_scores, base_leg.truncated)
+                if seq is not None
+            ),
+            None,
+        )
+        if size is not None:
+            failures = GenerationFailures(
+                base=base_leg.failures, tuned=tuned_leg.failures, n=size
+            )
+    detail = TaskDetail(rows=rows, truncated=truncated, generation_failures=failures)
+    return None if detail.is_empty() else detail
+
+
+def checkpoint_step_of(adapter: Optional[str]) -> Optional[int]:
+    """N when the LAST path component of ``adapter`` is exactly ``checkpoint-N``, else ``None``.
+
+    Never guessed: ``checkpoint-12-old``, ``ckpt-12``, ``checkpoint-`` and a checkpoint that is
+    not the last component all give ``None``. Both separators count (a Windows path) and a
+    trailing one is ignored.
+    """
+    if not isinstance(adapter, str):
+        return None
+    last = _PATH_SEPARATORS.split(adapter.rstrip("\\/"))[-1]
+    match = _CHECKPOINT_RE.match(last)
+    return int(match.group(1)) if match else None
+
+
+def build_judged(
+    *,
+    base: str,
+    adapter: Optional[str] = None,
+    tuned: Optional[str] = None,
+    base_adapter: Optional[str] = None,
+) -> Judged:
+    """What a live run judged, from the command-line strings exactly as given."""
+    return Judged(
+        base=base,
+        adapter=adapter,
+        tuned=tuned,
+        base_adapter=base_adapter,
+        checkpoint_step=checkpoint_step_of(adapter),
+    )
+
+
 def build_task_win(
     mode: str,
     base: object,
     tuned: object,
     *,
     noise_floor: Optional[NoiseFloor] = None,
+    detail: Optional[TaskDetail] = None,
 ) -> TaskWin:
     """Build a leg-1 ``TaskWin``. ``won`` is the STRICT inequality tuned > base.
 
     With a ``noise_floor``, the margin must also clear what the instrument can
     resolve on ``TASK_AXIS``: a win of 0.004 measured on an instrument with a
     0.020 floor is not a win, it is the instrument. Without one the behaviour
-    is byte-identical to v0.73.1.
+    is byte-identical to v0.73.1. ``detail`` rides along and decides nothing.
     """
     if mode not in TASK_MODES:
         raise ValueError(f"mode must be one of {TASK_MODES}, got {mode!r}")
+    if detail is not None and not isinstance(detail, TaskDetail):
+        raise TypeError("detail must be a TaskDetail instance")
     base_f = _validate_score(base, "task base")
     tuned_f = _validate_score(tuned, "task tuned")
     floor = _floor_of(noise_floor, TASK_AXIS)
     return TaskWin(
-        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor
+        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor, detail=detail
     )
 
 
@@ -540,15 +868,10 @@ def decide_ship(
     # Canonicalise the task win for the SAME reason the deltas are canonicalised
     # above: the panel renders ``verdict.task_win.won``, so a TaskWin built
     # without the floor would print "won" beside a DON'T SHIP decided with it.
+    # ``replace`` and not a rebuilt ``TaskWin``: every field the caller set (the task detail
+    # included) survives; only ``won`` is recomputed.
     canonical_win = (
-        task_win
-        if task_win.won == leg1_pass
-        else TaskWin(
-            mode=task_win.mode,
-            base=task_win.base,
-            tuned=task_win.tuned,
-            won=leg1_pass,
-        )
+        task_win if task_win.won == leg1_pass else replace(task_win, won=leg1_pass)
     )
     any_regressed = any(item.regressed for item in canonical)
 
@@ -655,6 +978,78 @@ def adapter_change_lines(change: AdapterChange) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Task-leg detail lines (shared by the rubric, the panel and a replay of evidence)
+# ---------------------------------------------------------------------------
+
+def _count_text(count: Optional[int]) -> str:
+    return "not measured" if count is None else str(count)
+
+
+def detail_lines(win: TaskWin) -> List[Tuple[str, bool]]:
+    """The task leg's detail as ``(text, is_warning)`` lines; empty when there is none.
+
+    Plain text with integers and constants only (no user string), so a caller escapes it for
+    its own medium. A live run and a replay of its evidence print the same lines.
+    """
+    detail = win.detail
+    if detail is None:
+        return []
+    lines: List[Tuple[str, bool]] = []
+    if detail.rows is not None:
+        rows = detail.rows
+        lines.append((
+            f"Rows (tuned vs base): better {rows.better}, worse {rows.worse}, "
+            f"same {rows.same} of {rows.n}",
+            False,
+        ))
+    if detail.truncated is not None:
+        cut = detail.truncated
+        text = (
+            f"Truncated answers: base {_count_text(cut.base)}, "
+            f"tuned {_count_text(cut.tuned)} of {cut.n}"
+        )
+        if cut.max_new_tokens is not None:
+            text += f" (cap {cut.max_new_tokens} new tokens)"
+        lines.append((text, False))
+        warning = cut.warning
+        if warning is not None and cut.base is not None and cut.tuned is not None:
+            lines.append((
+                f"Warning {warning}: truncated {cut.base} -> {cut.tuned} of {cut.n} "
+                f"(rise {cut.tuned - cut.base}, threshold {truncation_growth_threshold(cut.n)})",
+                True,
+            ))
+    if detail.generation_failures is not None:
+        failed = detail.generation_failures
+        any_failed = failed.base > 0 or failed.tuned > 0
+        text = f"Generation failures: base {failed.base}, tuned {failed.tuned} of {failed.n}"
+        if any_failed:
+            text += " (scored as wrong)"
+        lines.append((text, any_failed))
+    return lines
+
+
+def judged_line(verdict: ShipVerdict) -> Optional[str]:
+    """``Judged: ...`` for the terminal, or ``None`` when the verdict did not record it.
+
+    The strings come from the command line (or an evidence file): control bytes are stripped.
+    """
+    judged = verdict.judged
+    if judged is None:
+        return None
+    parts = [f"base {for_terminal(judged.base)}"]
+    if judged.base_adapter is not None:
+        parts.append(f"base-adapter {for_terminal(judged.base_adapter)}")
+    if judged.adapter is not None:
+        text = f"adapter {for_terminal(judged.adapter)}"
+        if judged.checkpoint_step is not None:
+            text += f" (checkpoint step {judged.checkpoint_step})"
+        parts.append(text)
+    if judged.tuned is not None:
+        parts.append(f"tuned {for_terminal(judged.tuned)}")
+    return "Judged: " + ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Rendering — plain text (for --output / clipboard) and Rich (for the terminal)
 # ---------------------------------------------------------------------------
 
@@ -676,11 +1071,15 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
         parts.append(f"Judge numerics: {verdict.numerics}")
     else:
         parts.append("Judge numerics: unstamped")
+    judged = judged_line(verdict)
+    if judged is not None:
+        parts.append(judged)
     parts.append("")
     parts.append(
         f"Leg 1 task win ({win.mode}): "
         f"{win.base:.4f} -> {win.tuned:.4f}  [{won_str}]"
     )
+    parts.extend(f"  {text}" for text, _warning in detail_lines(win))
     parts.append(
         f"Leg 2 general suite (forgetting_threshold {verdict.forgetting_threshold:.2%}):"
     )
@@ -727,6 +1126,12 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
         f"{escape(verdict.numerics) if verdict.numerics is not None else 'unstamped'}"
         "[/]"
     )
+    for text, is_warning in detail_lines(win):
+        header += f"\n[{'yellow' if is_warning else 'dim'}]{escape(text)}[/]"
+    judged = judged_line(verdict)
+    if judged is not None:
+        # judged_line stripped the control bytes (the strings are user input); escape the markup.
+        header += f"\n[dim]{escape(judged)}[/]"
 
     table = Table(
         title=f"Leg 2 general suite (threshold {verdict.forgetting_threshold:.2%})",
@@ -847,6 +1252,36 @@ def render_ship_pr_markdown(verdict: ShipVerdict) -> str:
 # Serialization (--output)
 # ---------------------------------------------------------------------------
 
+def _rows_dict(rows: TaskRows) -> Dict[str, object]:
+    return {"better": rows.better, "worse": rows.worse, "same": rows.same, "n": rows.n}
+
+
+def _truncated_dict(cut: Truncation, *, with_warning: bool) -> Dict[str, object]:
+    block: Dict[str, object] = {
+        "base": cut.base,
+        "tuned": cut.tuned,
+        "n": cut.n,
+        "max_new_tokens": cut.max_new_tokens,
+    }
+    if with_warning:
+        block["warning"] = cut.warning
+    return block
+
+
+def _failures_dict(failed: GenerationFailures) -> Dict[str, object]:
+    return {"base": failed.base, "tuned": failed.tuned, "n": failed.n}
+
+
+def _judged_dict(judged: Judged) -> Dict[str, object]:
+    return {
+        "base": judged.base,
+        "adapter": judged.adapter,
+        "tuned": judged.tuned,
+        "base_adapter": judged.base_adapter,
+        "checkpoint_step": judged.checkpoint_step,
+    }
+
+
 def verdict_to_evidence(
     verdict: ShipVerdict,
     *,
@@ -873,13 +1308,36 @@ def verdict_to_evidence(
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
     win = verdict.task_win
+    task_block: Dict[str, object] = {"mode": win.mode, "base": win.base, "tuned": win.tuned}
     evidence: Dict[str, object] = {
-        "task": {"mode": win.mode, "base": win.base, "tuned": win.tuned},
+        "task": task_block,
         "benchmarks": {
             item.name: {"base": item.base, "tuned": item.tuned}
             for item in verdict.benchmark_deltas
         },
     }
+    # Schema version 2: the task detail and what was judged. Each block is written only when it
+    # was measured, and the version is stamped only when something version 2 is written, so a
+    # verdict that carries none of it (a replayed version-1 file) is still a version-1 file that
+    # soup-cli 0.77.x can read. The truncation warning is NOT stored: it is computed from the
+    # counts on every read, so a stored warning can never contradict its own counts.
+    detail = win.detail
+    carries_v2 = False
+    if detail is not None:
+        if detail.rows is not None:
+            task_block["rows"] = _rows_dict(detail.rows)
+            carries_v2 = True
+        if detail.truncated is not None:
+            task_block["truncated"] = _truncated_dict(detail.truncated, with_warning=False)
+            carries_v2 = True
+        if detail.generation_failures is not None:
+            task_block["generation_failures"] = _failures_dict(detail.generation_failures)
+            carries_v2 = True
+    if verdict.judged is not None:
+        evidence["judged"] = _judged_dict(verdict.judged)
+        carries_v2 = True
+    if carries_v2:
+        evidence["schema_version"] = SCHEMA_VERSION
     # A verdict decided against a measured floor does NOT replay without it —
     # the offline reader would recompute both legs at the bare threshold and
     # could return the opposite decision. #312's property is that the output is
@@ -961,6 +1419,171 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     )
 
 
+def _evidence_schema_version(payload: Mapping[object, object]) -> int:
+    """The evidence's ``schema_version``: absent is 1 (soup-cli 0.77.x), 1 and 2 are read.
+
+    Anything else, a bool and a float included, is refused with the key named. A reader never
+    guesses what a version it does not know means.
+    """
+    if "schema_version" not in payload:
+        return 1
+    value = payload["schema_version"]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value not in SUPPORTED_SCHEMA_VERSIONS
+    ):
+        shown = (
+            str(value)
+            if isinstance(value, int) and not isinstance(value, bool) and abs(value) < 10**6
+            else type(value).__name__
+        )
+        raise ValueError(f"evidence.schema_version must be 1 or 2, got {shown}")
+    return value
+
+
+def _refuse_v2_fields_under_v1(
+    payload: Mapping[object, object], task: Mapping[object, object]
+) -> None:
+    """Version 1 (or an absent version) does not know the version-2 fields: refuse, naming one."""
+    for section, key in V2_ONLY_FIELDS:
+        block = payload if section == "root" else task
+        if key in block:
+            path = f"evidence.{key}" if section == "root" else f"evidence.{section}.{key}"
+            raise ValueError(
+                f"{path} is a schema_version 2 field, but this evidence is schema_version 1 "
+                "(an absent schema_version means 1); set schema_version to 2 to carry it"
+            )
+
+
+def _evidence_int(
+    value: object, path: str, *, low: int, high: int, nullable: bool = False
+) -> Optional[int]:
+    if value is None and nullable:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{path} must be an integer" + (" or null" if nullable else ""))
+    if not (low <= value <= high):
+        raise ValueError(f"{path} must be in [{low}, {high}]")
+    return value
+
+
+def _evidence_block(block: object, section: str, path: str) -> Mapping[object, object]:
+    """A detail block: an object holding exactly the registered keys (null says not measured)."""
+    if not isinstance(block, Mapping):
+        raise ValueError(f"{path} must be an object")
+    _validate_evidence_fields(block, section, path)
+    missing = sorted(EVIDENCE_SCHEMA_FIELDS[section] - set(block))
+    if missing:
+        raise ValueError(f"{path} needs {', '.join(missing)} (use null for not measured)")
+    return block
+
+
+def _rows_from_evidence(payload: object) -> TaskRows:
+    path = "evidence.task.rows"
+    block = _evidence_block(payload, "rows", path)
+    counts = {
+        key: _evidence_int(block[key], f"{path}.{key}", low=0, high=_MAX_EVIDENCE_ROWS)
+        for key in ("better", "worse", "same")
+    }
+    rows = TaskRows(better=counts["better"], worse=counts["worse"], same=counts["same"])
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    if rows.n != n:
+        raise ValueError(f"{path}: better + worse + same must equal n ({rows.n} != {n})")
+    return rows
+
+
+def _truncation_from_evidence(payload: object) -> Truncation:
+    path = "evidence.task.truncated"
+    block = _evidence_block(payload, "truncated", path)
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    return Truncation(
+        base=_evidence_int(block["base"], f"{path}.base", low=0, high=n, nullable=True),
+        tuned=_evidence_int(block["tuned"], f"{path}.tuned", low=0, high=n, nullable=True),
+        n=n,
+        max_new_tokens=_evidence_int(
+            block["max_new_tokens"], f"{path}.max_new_tokens",
+            low=1, high=_MAX_EVIDENCE_NEW_TOKENS, nullable=True,
+        ),
+    )
+
+
+def _failures_from_evidence(payload: object) -> GenerationFailures:
+    path = "evidence.task.generation_failures"
+    block = _evidence_block(payload, "generation_failures", path)
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    return GenerationFailures(
+        base=_evidence_int(block["base"], f"{path}.base", low=0, high=n),
+        tuned=_evidence_int(block["tuned"], f"{path}.tuned", low=0, high=n),
+        n=n,
+    )
+
+
+def _task_detail_from_evidence(task: Mapping[object, object]) -> Optional[TaskDetail]:
+    """Decode the version-2 detail blocks of ``evidence.task`` (each is optional)."""
+    rows = _rows_from_evidence(task["rows"]) if "rows" in task else None
+    truncated = _truncation_from_evidence(task["truncated"]) if "truncated" in task else None
+    failures = (
+        _failures_from_evidence(task["generation_failures"])
+        if "generation_failures" in task else None
+    )
+    # One task file, one row count: the blocks describe the same rows.
+    sizes = [
+        (name, block.n)
+        for name, block in (
+            ("rows", rows), ("truncated", truncated), ("generation_failures", failures),
+        )
+        if block is not None
+    ]
+    for name, size in sizes[1:]:
+        if size != sizes[0][1]:
+            raise ValueError(
+                f"evidence.task.{name}.n ({size}) differs from "
+                f"evidence.task.{sizes[0][0]}.n ({sizes[0][1]})"
+            )
+    detail = TaskDetail(rows=rows, truncated=truncated, generation_failures=failures)
+    return None if detail.is_empty() else detail
+
+
+def _judged_string(value: object, path: str, *, nullable: bool) -> Optional[str]:
+    if value is None and nullable:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_JUDGED_CHARS
+        or "\x00" in value
+    ):
+        raise ValueError(
+            f"{path} must be a non-empty string of at most {_MAX_JUDGED_CHARS} characters "
+            "without NUL" + (" or null" if nullable else "")
+        )
+    return value
+
+
+def _judged_from_evidence(payload: object) -> Judged:
+    path = "evidence.judged"
+    block = _evidence_block(payload, "judged", path)
+    adapter = _judged_string(block["adapter"], f"{path}.adapter", nullable=True)
+    step = _evidence_int(
+        block["checkpoint_step"], f"{path}.checkpoint_step",
+        low=0, high=_MAX_CHECKPOINT_STEP, nullable=True,
+    )
+    if step != checkpoint_step_of(adapter):
+        # "Never guessed" holds on read too: the step is what the path says, or null.
+        raise ValueError(
+            f"{path}.checkpoint_step must be {checkpoint_step_of(adapter)} for the adapter "
+            "path it names (null when the last path component is not checkpoint-<digits>)"
+        )
+    return Judged(
+        base=_judged_string(block["base"], f"{path}.base", nullable=False),
+        adapter=adapter,
+        tuned=_judged_string(block["tuned"], f"{path}.tuned", nullable=True),
+        base_adapter=_judged_string(block["base_adapter"], f"{path}.base_adapter", nullable=True),
+        checkpoint_step=step,
+    )
+
+
 def verdict_from_evidence(
     payload: Mapping[str, object],
     *,
@@ -975,12 +1598,15 @@ def verdict_from_evidence(
     if not isinstance(payload, Mapping):
         raise TypeError("evidence must be an object")
     _validate_evidence_fields(payload, "root", "evidence")
+    version = _evidence_schema_version(payload)
     threshold = _validate_threshold(forgetting_threshold)
 
     task = payload.get("task")
     if not isinstance(task, Mapping):
         raise ValueError("evidence.task must be an object with 'mode', 'base', 'tuned'")
     _validate_evidence_fields(task, "task", "evidence.task")
+    if version < SCHEMA_VERSION:
+        _refuse_v2_fields_under_v1(payload, task)
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
         supported = ", ".join(SUPPORTED_TASK_MODES)
@@ -994,9 +1620,10 @@ def verdict_from_evidence(
         stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
+    detail = _task_detail_from_evidence(task)
     try:
         task_win = build_task_win(
-            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
+            str(mode), task["base"], task["tuned"], noise_floor=stored_floor, detail=detail
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.task: {exc}") from exc
@@ -1039,6 +1666,8 @@ def verdict_from_evidence(
         stored_numerics = numerics_from_evidence(payload.get("numerics"))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.numerics: {exc}") from exc
+    if "judged" in payload:
+        verdict = replace(verdict, judged=_judged_from_evidence(payload["judged"]))
     if stored_numerics is not None:
         return replace(verdict, numerics=stored_numerics)
     return verdict
@@ -1067,13 +1696,31 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
     win = verdict.task_win
-    return {
+    detail = win.detail
+    data: Dict[str, object] = {
+        # Absent in soup-cli 0.77.x, which reads as version 1. Version 2 adds ``judged`` and
+        # ``task_win.rows`` / ``truncated`` / ``generation_failures`` (each null when not
+        # measured); no key of version 1 is removed or renamed.
+        "schema_version": SCHEMA_VERSION,
         "decision": verdict.decision,
         "task_win": {
             "mode": win.mode,
             "base": win.base,
             "tuned": win.tuned,
             "won": win.won,
+            "rows": (
+                None if detail is None or detail.rows is None else _rows_dict(detail.rows)
+            ),
+            "truncated": (
+                None
+                if detail is None or detail.truncated is None
+                else _truncated_dict(detail.truncated, with_warning=True)
+            ),
+            "generation_failures": (
+                None
+                if detail is None or detail.generation_failures is None
+                else _failures_dict(detail.generation_failures)
+            ),
         },
         "benchmark_deltas": [
             {
@@ -1101,7 +1748,9 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
         ),
         "numerics": verdict.numerics,
         "adapter_change": _adapter_change_dict(verdict.adapter_change),
+        "judged": None if verdict.judged is None else _judged_dict(verdict.judged),
     }
+    return data
 
 
 def _adapter_change_dict(change: Optional[AdapterChange]) -> Optional[Dict[str, object]]:
