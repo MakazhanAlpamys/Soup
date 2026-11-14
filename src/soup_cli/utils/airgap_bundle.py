@@ -115,12 +115,27 @@ class BundleManifest:
     repro_receipt: Optional[dict] = None
 
 
-def _hash_file(path: str) -> tuple[int, str]:
+def _hash_file(path: str, max_bytes: int) -> tuple[int, str]:
+    """Stream ``path`` through SHA-256, refusing before any read if it alone
+    would blow ``max_bytes`` (the remaining bundle-size budget).
+
+    Without this stat-before-read check, a single file bigger than the
+    aggregate cap (e.g. a stray multi-GB checkpoint shard under a dataset
+    dir) was fully read and hashed before the cap was ever consulted at the
+    call site -- a slow hang ending in the exact error a quick stat could
+    have given instantly. Mirrors adapter_sign._hash_file's
+    stat-before-read "hostile device file" defense.
+    """
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):
         raise ValueError(f"{os.path.basename(path)!r}: must not be a symlink")
     if not stat.S_ISREG(st.st_mode):
         raise ValueError(f"{os.path.basename(path)!r}: must be a regular file")
+    if st.st_size > max_bytes:
+        raise ValueError(
+            f"bundle aggregate size would exceed the cap: {os.path.basename(path)!r} is "
+            f"{st.st_size} bytes but only {max_bytes} bytes of the cap remain"
+        )
     digest = hashlib.sha256()
     size = 0
     with open(path, "rb") as fh:
@@ -166,6 +181,9 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     - output / model_dir / dataset_dir outside cwd (containment)
     - aggregate bytes > ``bundle_size_cap_bytes``
     - any symlink encountered (refused at the boundary)
+
+    Raises ``FileNotFoundError`` when ``model_dir`` or any dataset, wheel or kernel
+    directory does not exist or is not a directory.
     """
     if not isinstance(plan, AirgapBundlePlan):
         raise TypeError("plan must be AirgapBundlePlan")
@@ -178,6 +196,26 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
         enforce_under_cwd_and_no_symlink(entry, "wheel_dir")
     for entry in plan.kernel_dirs:
         enforce_under_cwd_and_no_symlink(entry, "kernel_dir")
+
+    if not os.path.exists(plan.model_dir):
+        raise FileNotFoundError(f"model directory not found: {plan.model_dir}")
+    if not os.path.isdir(plan.model_dir):
+        raise FileNotFoundError(f"model path is not a directory: {plan.model_dir}")
+    for entry in plan.dataset_dirs:
+        if not os.path.exists(entry):
+            raise FileNotFoundError(f"dataset directory not found: {entry}")
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"dataset path is not a directory: {entry}")
+    for entry in plan.wheel_dirs:
+        if not os.path.exists(entry):
+            raise FileNotFoundError(f"wheel directory not found: {entry}")
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"wheel path is not a directory: {entry}")
+    for entry in plan.kernel_dirs:
+        if not os.path.exists(entry):
+            raise FileNotFoundError(f"kernel directory not found: {entry}")
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"kernel path is not a directory: {entry}")
 
     members: list[tuple[str, str]] = []
     members.extend(_enumerate_dir(plan.model_dir, label="model"))
@@ -236,7 +274,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
             )
         )
     for full, rel_tar in members:
-        size, digest = _hash_file(full)
+        size, digest = _hash_file(full, plan.bundle_size_cap_bytes - total)
         total += size
         if total > plan.bundle_size_cap_bytes:
             raise ValueError(

@@ -3,11 +3,14 @@
 import sys
 from unittest.mock import patch
 
+import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
-from tests.conftest import strip_ansi
+from tests._windows_filenames import skip_colon_on_windows
+from tests.conftest import make_cli_runner, strip_ansi
 
 runner = CliRunner()
 
@@ -345,12 +348,11 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
         "soup_cli.utils.advanced_precision.is_blackwell_gpu",
         lambda: True,
     )
-    fake_torchao = types.ModuleType("torchao")
-    fake_quantization = types.ModuleType("torchao.quantization")
-    fake_quantization.quantize_ = lambda *args, **kwargs: None
-    fake_torchao.quantization = fake_quantization
-    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
-    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+    # Every module the resolver can reach, so a real torchao cached by an
+    # earlier test cannot answer past the fakes (#2664).
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {}, with_nvfp4=False)
 
     from soup_cli.commands.doctor import _get_precision_capabilities
 
@@ -1158,6 +1160,38 @@ def test_doctor_nonexistent_config_exits_2(tmp_path, monkeypatch):
     assert "All checks passed!" not in out
 
 
+@pytest.mark.parametrize(
+    ("path", "display"),
+    [
+        pytest.param("missing.yaml", "missing.yaml", id="plain"),
+        pytest.param("[red]missing.yaml", "[red]missing.yaml", id="literal-tag"),
+        pytest.param("missing[/red].yaml", "missing[/red].yaml", id="unmatched-closing-tag"),
+        pytest.param(r"missing\[unclosed.yaml", r"missing\[unclosed.yaml", id="literal-backslash"),
+        pytest.param("missing\x9b\u202e.yaml", "missing.yaml", id="controls"),
+        pytest.param(
+            "missing-:smile:.yaml",
+            "missing-:smile:.yaml",
+            marks=skip_colon_on_windows,
+            id="literal-emoji-alias",
+        ),
+    ],
+)
+def test_doctor_missing_config_prints_literal_path(tmp_path, monkeypatch, path, display):
+    _mock_clean_doctor_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(width=160, height=100))
+
+    result = make_cli_runner().invoke(app, ["doctor", "--config", path])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert isinstance(result.exception, SystemExit)
+    # Check raw stdout before removing color escapes.
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert f"Config not found: {display}" in strip_ansi(result.stdout).splitlines()
+    assert "All checks passed!" not in result.stdout
+    assert result.stderr == ""
+
+
 def test_doctor_load_error_exception_exits_2(monkeypatch):
     """An unexpected exception during config load prints error detail and exits 2 (#2100)."""
     _mock_clean_doctor_env(monkeypatch)
@@ -1172,3 +1206,92 @@ def test_doctor_load_error_exception_exits_2(monkeypatch):
     assert "Config could not be loaded: disk read failed" in out
     assert "All checks passed!" not in out
 
+
+# --- NF4 note on Blackwell consumer cards (sm_120), #776 ---
+
+
+def _gpu_panel_text(
+    monkeypatch, capability, arch_list=None, name="NVIDIA GeForce RTX 5070 Laptop GPU"
+):
+    """Render ``_check_gpu`` for a faked single CUDA device and return the plain text.
+
+    The console is a forced terminal on purpose: colour escapes land inside the text on
+    Linux/macOS CI, and the helper must read through them (ANSI-strip + whitespace collapse).
+    """
+    import importlib.machinery
+    import io
+    import types
+
+    from soup_cli.commands import doctor
+
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        get_device_name=lambda idx: name,
+        get_device_properties=lambda idx: types.SimpleNamespace(total_memory=8 * 1024**3),
+        get_device_capability=lambda idx: capability,
+        get_arch_list=lambda: arch_list or ["sm_75", "sm_80", "sm_90", "sm_120"],
+    )
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=fake_cuda,
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        doctor, "_get_precision_capabilities", lambda torch: {"BF16": (True, None)}
+    )
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=120, force_terminal=True, color_system="standard")
+    monkeypatch.setattr(doctor, "console", console)
+    doctor._check_gpu()
+    return _plain(buffer.getvalue())
+
+
+def test_nf4_blackwell_note_is_only_for_sm_120():
+    from soup_cli.commands.doctor import _nf4_blackwell_note
+
+    lines = _nf4_blackwell_note(12, 0)
+    assert lines, "sm_120 must carry the NF4 note"
+    text = " ".join(lines)
+    assert "sm_120" in text
+    assert "issues/776" in text
+    for major, minor in [(8, 0), (8, 6), (8, 9), (9, 0), (10, 0), (12, 1), (7, 5)]:
+        assert _nf4_blackwell_note(major, minor) == [], (major, minor)
+
+
+def test_doctor_gpu_panel_shows_the_nf4_note_on_sm_120(monkeypatch):
+    from soup_cli.commands.doctor import _nf4_blackwell_note
+
+    out = _gpu_panel_text(monkeypatch, (12, 0))
+
+    assert "sm_120 (Blackwell)" in out
+    for line in _nf4_blackwell_note(12, 0):
+        assert line in out, line
+    assert "https://github.com/MakazhanAlpamys/Soup/issues/776" in out
+    assert "Precision features" in out  # the note does not displace the existing block
+
+
+def test_doctor_gpu_panel_has_no_nf4_note_on_other_architectures(monkeypatch):
+    out = _gpu_panel_text(
+        monkeypatch, (8, 9), arch_list=["sm_80", "sm_86", "sm_89"], name="NVIDIA GeForce RTX 4090"
+    )
+
+    assert "sm_89 (Ada)" in out
+    assert "NF4 on sm_120" not in out
+    assert "issues/776" not in out
+
+
+def test_doctor_gpu_panel_survives_a_capability_probe_failure(monkeypatch):
+    """A device whose capability cannot be read gets no note and no crash."""
+    import types
+
+    from soup_cli.commands import doctor
+
+    def broken_capability(idx):
+        raise RuntimeError("no device")
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(get_device_capability=broken_capability)
+    )
+    assert doctor._nf4_note_lines_for_device(fake_torch, 0) == []

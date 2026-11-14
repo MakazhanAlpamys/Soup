@@ -64,10 +64,11 @@ under-predicts; 3 when a row is void; 2 for bad arguments or no CUDA device.
 
 Reading the table
 -----------------
-``pred/real`` below 1.0 is the direction the pre-flight must not err in. The
-chunked rows are the ones nobody has measured: their logits term is the shipped
-14 bytes per element charged on ``min(seq, chunk)`` tokens, plus two
-``[batch, seq, hidden]`` tensors (``estimate_loss_chunk_bytes``).
+``pred/real`` below 1.0 is the direction the pre-flight must not err in. On the
+chunked rows the logits term is the shipped 14 bytes per element charged on
+``min(seq, chunk)`` tokens, plus two ``[batch, seq, hidden]`` tensors
+(``estimate_loss_chunk_bytes``); the pre-flight charges that or the last decoder
+layer's backward (``estimate_recompute_bytes``), whichever is larger.
 """
 
 from __future__ import annotations
@@ -420,8 +421,9 @@ def sweep(base: str, seqs: list[int], chunk: int, quantization: str) -> int:
 # --- --self-test: the same protocol on a tiny local Llama, no peak read ----
 
 #: Small enough to run in seconds, with a vocabulary large enough that the
-#: logits term the option removes dominates the two hidden-sized tensors it adds.
-_TINY = {"vocab": 512, "hidden": 64, "layers": 2}
+#: logits term the option removes dominates the two hidden-sized tensors it adds,
+#: and that the loss, not the last layer's backward, sets both arms' prediction.
+_TINY = {"vocab": 1024, "hidden": 64, "layers": 2}
 _SELF_TEST_SEQ = 64
 
 

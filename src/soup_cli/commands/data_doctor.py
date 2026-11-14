@@ -22,6 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils import data_doctor as engine
@@ -40,7 +41,8 @@ _PREFERENCE_FORMATS = ("dpo", "kto")
 
 
 def _verdict_style(verdict: str) -> str:
-    return {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(verdict, "white")
+    styles = {"OK": "green", "MINOR": "yellow", "MAJOR": "red", "SKIPPED": "yellow"}
+    return styles.get(verdict, "white")
 
 
 _AnyCheck = Union[engine.DoctorCheck, lint_engine.LintCheck]
@@ -75,10 +77,14 @@ def _render_doctor_report(report: engine.DoctorReport) -> None:
 
 def _render_lint_report(report: lint_engine.LintReport) -> None:
     _render_checks_table(f"soup data lint ({escape(report.fmt)})", report.checks)
+    skipped = report.skipped_count
+    skipped_note = (
+        f", [yellow]{skipped} check{'s' if skipped != 1 else ''} skipped[/]" if skipped else ""
+    )
     console.print(
         Panel.fit(
             f"[bold {_verdict_style(report.overall)}]{report.overall}[/] — "
-            f"{report.rows_scanned}/{report.total_rows} rows scanned",
+            f"{report.rows_scanned}/{report.total_rows} rows scanned{skipped_note}",
             title="overall",
         )
     )
@@ -180,6 +186,12 @@ def doctor(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
+    refuse_output_over_input(
+        [("the input", path)],
+        [("--output", output)],
+        exit_code=1,
+        console=console,
+    )
 
     # Mirrors the soup.yaml schema rules (#1251): "data.mask_history
     # requires data.train_on_responses_only: true", and mask_history is
@@ -299,6 +311,12 @@ def lint(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=EXIT_USAGE_ERROR)
+    refuse_output_over_input(
+        [("the input", path)],
+        [("--output", output)],
+        exit_code=EXIT_USAGE_ERROR,
+        console=console,
+    )
 
     data = load_raw_data(file_path)
     if not data:

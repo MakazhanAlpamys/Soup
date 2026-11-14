@@ -17,6 +17,9 @@ from soup_cli.utils.paths import is_under_cwd as _is_under_cwd
 if TYPE_CHECKING:
     from rich.table import Table
 
+    from soup_cli.eval.custom import EvalTask
+    from soup_cli.eval.quant_performance import PerformanceComparison
+
 
 def classify_delta(delta: float, *, minor: float = 0.02, major: float = 0.05) -> str:
     """Return one of OK / MINOR / MAJOR based on absolute drop in score."""
@@ -44,6 +47,7 @@ class QuantCheckRow:
 class QuantCheckResult:
     rows: list[QuantCheckRow]
     stub: bool = False
+    performance: "PerformanceComparison | None" = None
 
     def to_json(self) -> str:
         payload: dict[str, Any] = {
@@ -51,16 +55,15 @@ class QuantCheckResult:
         }
         if self.stub:
             payload["stub"] = True
+        if self.performance is not None:
+            payload["performance"] = asdict(self.performance)
         return json.dumps(payload, indent=2)
 
 
-def _score_tasks(tasks_file: str, generate_fn: Callable[[str], str]) -> float:
-    """Load a JSONL task file and return the average score."""
-    from soup_cli.eval.custom import load_eval_tasks, score_task
+def _score_eval_tasks(tasks: "list[EvalTask]", generate_fn: Callable[[str], str]) -> float:
+    """Average score of an already-loaded task list through ``generate_fn``."""
+    from soup_cli.eval.custom import score_task
 
-    tasks = load_eval_tasks(tasks_file)
-    if not tasks:
-        return 0.0
     total = 0.0
     for task in tasks:
         output = generate_fn(task.prompt)
@@ -72,13 +75,31 @@ def run_quant_check(
     *,
     before_gen: Callable[[str], str],
     after_gen: Callable[[str], str],
-    tasks_file: str,
+    tasks_file: str = "",
     task_name: str = "default",
     stub: bool = False,
+    tasks: Optional["list[EvalTask]"] = None,
 ) -> QuantCheckResult:
-    """Run ``tasks_file`` through both models and return the row."""
-    before = _score_tasks(tasks_file, before_gen)
-    after = _score_tasks(tasks_file, after_gen)
+    """Score the same tasks through both models and return the row.
+
+    ``tasks`` (a list already loaded with :func:`soup_cli.eval.custom.load_eval_tasks`,
+    e.g. pre-parsed by the CLI so a bad file is refused before any model is
+    loaded) takes precedence; when it is ``None`` the file named by
+    ``tasks_file`` is loaded here, as before. Providing neither source, or
+    an empty task list, raises ``ValueError``: a check that scores zero
+    tasks would report before == after == 0.0 and measure nothing.
+    """
+    if tasks is None:
+        if not tasks_file:
+            raise ValueError("run_quant_check needs tasks or tasks_file")
+
+        from soup_cli.eval.custom import load_eval_tasks
+
+        tasks = load_eval_tasks(tasks_file)
+    if not tasks:
+        raise ValueError("No eval tasks to score")
+    before = _score_eval_tasks(tasks, before_gen)
+    after = _score_eval_tasks(tasks, after_gen)
     delta = after - before
     verdict = classify_delta(delta)
     return QuantCheckResult(
@@ -87,6 +108,29 @@ def run_quant_check(
             delta=delta, verdict=verdict,
         )],
         stub=stub,
+    )
+
+
+def run_performance_quant_check(
+    *, before_factory: Callable, after_factory: Callable, tasks: "list[EvalTask]",
+    device: str, warmup: int = 1, repeats: int = 3, task_name: str = "default",
+) -> QuantCheckResult:
+    """Opt-in sequential model lifetimes; quality scoring still uses one answer/task."""
+    from soup_cli.eval.quant_performance import compare_performance, measure_model, validate_budgets
+
+    validate_budgets(warmup, repeats)
+    if not tasks:
+        raise ValueError("No eval tasks to score")
+    before_score, before = measure_model(
+        before_factory, tasks, device=device, warmup=warmup, repeats=repeats,
+    )
+    after_score, after = measure_model(
+        after_factory, tasks, device=device, warmup=warmup, repeats=repeats,
+    )
+    delta = after_score - before_score
+    return QuantCheckResult(
+        rows=[QuantCheckRow(task_name, before_score, after_score, delta, classify_delta(delta))],
+        performance=compare_performance(before, after, warmup=warmup, repeats=repeats),
     )
 
 
@@ -122,6 +166,13 @@ def render_table(result: QuantCheckResult) -> "Table":
             f"{row.delta:+.3f}",
             colored,
         )
+    if result.performance is not None:
+        from soup_cli.eval.quant_performance import performance_note, performance_rows
+
+        table.add_section()
+        for label, before, after, delta in performance_rows(result.performance):
+            table.add_row(label, before, after, delta, "INFO")
+        table.caption = performance_note(result.performance)
     return table
 
 
@@ -140,6 +191,14 @@ def render_markdown(result: QuantCheckResult) -> str:
             f"| {row.task} | {row.before:.3f} | {row.after:.3f} | "
             f"{row.delta:+.3f} | {row.verdict} |"
         )
+    if result.performance is not None:
+        from soup_cli.eval.quant_performance import performance_note, performance_rows
+
+        lines.extend(["", "| Performance | Before | After | Change |",
+                      "|---|---:|---:|---:|"])
+        lines.extend(f"| {label} | {before} | {after} | {delta} |"
+                     for label, before, after, delta in performance_rows(result.performance))
+        lines.extend(["", performance_note(result.performance)])
     return "\n".join(lines)
 
 
@@ -170,6 +229,7 @@ def make_model_generator(
     *,
     max_new_tokens: int = 256,
     temperature: float = 0.0,
+    device: Optional[str] = None,
 ) -> Callable[[str], str]:
     """Return a ``generate_fn(prompt) -> str`` backed by a transformers model.
 
@@ -186,15 +246,24 @@ def make_model_generator(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
+    load_kwargs = {}
+    if device is not None:
+        from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+        device_map, dtype = resolve_inference_device_map_and_dtype(device)
+        load_kwargs = {"device_map": device_map, "dtype": dtype}
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, trust_remote_code=False
+        model_path, trust_remote_code=False, **load_kwargs,
     )
     model.eval()
 
     def _generate(prompt: str) -> str:
         if not prompt:
+            _generate.last_generated_tokens = 0
             return ""
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+        if device is not None:
+            inputs = {key: value.to(device) for key, value in inputs.items()}
         do_sample = temperature > 0.0
         outputs = model.generate(
             **inputs,
@@ -205,8 +274,18 @@ def make_model_generator(
         )
         # Strip the prompt prefix from the decoded text.
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        _generate.last_generated_tokens = len(new_tokens)
         return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
+    def _close() -> None:
+        nonlocal model, tokenizer
+        model = None
+        tokenizer = None
+
+    _generate.close = _close
+    _generate.last_generated_tokens = None
+    _generate.device = device or str(getattr(model, "device", "cpu"))
+    _generate.dtype = str(getattr(model, "dtype", "unknown"))
     return _generate
 
 

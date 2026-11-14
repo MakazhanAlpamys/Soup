@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -91,51 +91,36 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 
 ## 最新动态
 
-**v0.77.0——v0.76 警告过的内容，现在会被拒绝。** 31 个没有任何代码读取的配置字段，以及三个已弃用的
-取值，不再带着警告加载：加载会中止，每个设置一行，指出它的名字并说明该删除什么。在 v0.76 上带警告或静默
-加载的配置，在 v0.77 上可能无法加载：请先运行 `soup doctor --config soup.yaml`。
+**v0.77.2——基于 v0.77.1 之后 `main` 的一次发布：159 个拉取请求，其中 153 个来自维护者之外的 30 位
+贡献者。** 大部分是修复。它也新增了功能，以及两条可能拒绝 v0.77.1 所接受内容的规则，因此在升级服务器或
+`task: sft` 配置之前，请先阅读 [v0.77.2 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)。从 0.76.x 升级时，请先运行
+`soup doctor --config soup.yaml`，并阅读 [v0.77.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)。
 
-- **破坏性变更：暂存（staged）字段和已弃用的取值会被拒绝。** 其中的字段包括 `training.lr_groups`、
-  `early_stop_patience`、`forgetting_eval_steps`、`checkpoint_eval_*`、`quantize_ref_model`、
-  `long_context_grpo`、`vision_grpo`、`data.split_thinking` 和 `data.video_*` 系列键。
-  `training.rl_checkpoint_include_ref_model` 和 `rl_checkpoint_include_rollout_buffer` 是在 v0.76.0
-  之后才被暂存的，因此此前没有任何版本对它们发出过警告。取值包括：`data.remove_unused_columns: true`、
-  在从不量化的任务上设置 `training.quantization: 4bit` / `8bit`（或 `load_in_8bit: true`），以及
-  `soup ab --beta`。
-  v0.76 不声不响地忽略的十五个设置也会被拒绝，例如在没有任何代码应用它们的地方设置的 `use_mod` 或
-  `neftune_alpha`、带 LoRA 秩的 `expand_layers`、Unsloth 上的 `8bit` 或视觉 SFT，以及 MLX 或 Unsloth 上的
-  `lora.rank_pattern`：详见 CHANGELOG 中的升级说明。
-- **破坏性变更：Python 3.11–3.13，不再支持 AWQ 和 GPTQ 导出，`soup serve` 的两个路由需要令牌。** 不再
-  支持 Python 3.10（已于 2026-10-01 结束生命周期）；在 3.10 上，pip 会继续解析到 v0.76.x。
-  `soup export --format awq` / `gptq` 和 `soup quantize --to awq` / `gptq` 已被移除，因为两个上游项目
-  都已归档：请改用 `gguf`、`onnx`、`tensorrt`、`bitnet` 或 `tq1_0`，或继续使用 v0.76.x。除非服务器以
-  `--tool-auth-token`（或 `SOUP_TOOL_AUTH_TOKEN`）启动，否则 `/v1/tools/python` 和 `/v1/tools/bash`
-  在任何绑定地址上都返回 401；在主机不提供操作系统级隔离的环境中，`/v1/tools/python` 与 bash 一样返回
-  501。
-- **DPO、ORPO、SimPO 和 KTO 在 Apple Silicon 上原生运行。** 使用 `backend: mlx` 的 `task: dpo`、
-  `orpo`、`simpo` 和 `kto` 通过 Soup 自己的 MLX 训练循环、按 TRL 的目标函数训练（ORPO 和 SimPO 不需要
-  参考模型）。MLX 文本 SFT 新增原生 DoRA、`training.eval_steps`、`training.seed` 和损失看门狗（loss
-  watchdog）。`lora.use_rslora` 现在会在 MLX 和 Unsloth 上生效，因此那里的 rsLoRA 运行会按它所要求的
-  缩放训练，结果也会随之改变。
-- **Layer streaming 支持 DeepSeek-V3 系列 MoE。** Soup 的 layer streaming（L2L 的一种实现，
-  Pudipeddi et al. 2020）现在可以流式加载 `model_type: deepseek_v3`，常驻与流式在前向和反向上结果一致，
-  并在分片时把 FP8 分块量化的 checkpoint 反量化。Kimi-K2-Base 和 -Instruct 要先通过逐字段检查才会被接受
-  （一个 K2 形状的小 checkpoint 在 CPU 上逐位一致地流式运行；没有在 K2 本身上训练过任何东西）。
-  `training.stream_expert_layout: per_expert` 一次只流式加载一个被路由到的专家：在一台
-  RTX 5070 Laptop 8 GB 上，同一份 Moonlight-16B LoRA 配置的 GPU 显存峰值为 1.0 GB（NF4 专家），而 fused
-  布局为 3.1 GB（bf16 专家），两次运行的缓存层级也不同；每步耗时约为 2.7x（[记录](benchmarks/probe-rtx5070-moonlight-16b.md)）。
-  `training.stream_recompute: off` / `auto` 会保留流式层的激活而不重新计算，梯度逐位一致：在同一张卡的
-  RAM 层级上，Mistral-7B NF4 的一步在 512 个 token 时快 22%，在 2048 时快 8.5%
-  （[记录](benchmarks/gate-stream-recompute.md)）。需显式开启（`stream_layers: true`），BETA。
-- **可核验的来源（provenance）。** `soup registry push --data <file>` 记录训练文件的 SHA-256，
-  `--idempotency-key` 让推送可以安全重试；在 transformers 后端上，常驻、layer streaming 和多 GPU 运行都会
-  记录它们所加载基座模型的 Hub commit；`soup ship --require-provenance` 会把证据与它盖章时记录的
-  adapter、任务和源数据字节、评测套件版本以及判定策略进行比对。
-- **其他新内容。** `soup --version`；用于在 `soup data ingest` 中处理 PDF 和 DOCX 的
-  `pip install "soup-cli[documents]"`；`soup merge --low-memory`；GRPO 可以用 LLM 评审打分
-  （`training.reward_fn: judge_rank`）；[`docs/config-reference.md`](docs/config-reference.md) 和
-  [`docs/cli-reference.md`](docs/cli-reference.md) 由代码生成，任一页面不再如实陈述代码的行为时，测试套件
-  就会失败。
+- **`soup profile --model <id>` 无需 `soup.yaml` 即可回答“放得下吗？”。** 它根据模型的 `config.json`
+  估算该次运行，由 `--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer` 和
+  `--gradient-checkpointing` 决定形状；在 Apple Silicon 上，它与 Metal 的工作集大小比较。
+  `soup plan` 和 `soup apply` 现在接受 `--minillm-on-policy`。
+- **Apple Silicon 上支持更多训练。** 带有 `preference_loss: dpo`、`orpo` 或 `simpo` 的
+  `task: preference` 运行原生 MLX 训练器，MLX GRPO 可在 4 位 `mlx-community` 基座上训练，
+  MLX Adafactor 会遵循配置的学习率和调度。
+- **两个新的 DPO 配方：** `qwen3.5-0.8b-dpo` 和 `qwen3.5-27b-dpo`。
+- **更接近实际的 VRAM 估算。** 优化器步骤被视为独立阶段，PRM 步骤只计一个位置的 logits，
+  分片的 FSDP 或 ZeRO 运行按每张卡估算，`stream_loss_chunk` 步骤计入最后一层的重计算，
+  Unsloth 的 LoRA 目标按其加载器的选择估算。
+- **更少的静默覆盖和空结果。** 更多命令会拒绝指向某个输入的 `--output`（`soup data ingest`、
+  `persona-mix`、`generate` 等）；`soup ship --adapter` 会拒绝不改变任何东西的适配器；
+  `soup distill-prompt`、`soup data evolve`、`gen-magpie` 和 `filter --perplexity` 会报错，
+  而不是写出空文件或未过滤的文件。
+- **偏好与强化学习修复。** `data.max_length` 对 SimPO 和 KTO 重新生效，PPO 在要求时会对策略启用
+  gradient checkpointing（在 4 位和 8 位下也不再崩溃），`soup merge` 会加载适配器训练时所用的基座提交。
+- **文本按输入原样显示。** 数十个命令在显示路径、名称和消息时保留方括号和 `:name:` 文本，
+  并移除终端控制字符。
+
+**需要了解的行为变化。** `soup serve --tool-auth-token` 必须是由 `A-Z`、`a-z`、`0-9`、`_` 和 `-`
+组成的 16 到 128 个字符（否则退出码为 2）。`task: sft` 会在从未应用这些设置的视觉、音频、MLX、
+Unsloth、RAFT 和预分词路径上拒绝 `reasoning_effort`、`train_on_eot`、`use_flash_attn` 和
+`use_liger`。`soup completions` 生成的脚本需要重新生成。`soup data from-traces --signal thumbs_up`、
+MLX Adafactor、`soup merge` 和 VRAM 预检可能给出与 v0.77.1 不同的结果。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 
@@ -333,7 +318,7 @@ Llama 3.x/4、Qwen 2.5/3、Gemma 3、Mistral、Mixtral、DeepSeek R1/V3、Phi-4 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # 或在本地构建
 ```
 

@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,58 +92,40 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.0 — v0.76 が警告していたものは、拒否されるようになりました。** 何からも読み取られない
-31 個の設定フィールドと、非推奨の三つの値は、警告付きで読み込まれることがなくなりました。読み込みは、
-設定ごとに一行で、その設定名と削除すべきものを示して停止します。v0.76 では警告付きで、あるいは黙って読み込めた設定が、
-v0.77 では読み込めなくなることがあります。まず `soup doctor --config soup.yaml` を実行してください。
+**v0.77.2 — v0.77.1 以降の `main` をそのまま切り出したリリース：プルリクエスト 159 件、うち 153 件は
+メンテナー以外の 30 人によるものです。** 大半は修正ですが、新機能と、v0.77.1 が受け入れていたものを
+拒否することがある 2 つの規則も含みます。サーバーや `task: sft` の設定をアップグレードする前に
+[v0.77.2 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: ステージされたフィールドと非推奨の値は拒否されます。** 対象のフィールドには、
-  `training.lr_groups`、`early_stop_patience`、`forgetting_eval_steps`、`checkpoint_eval_*`、
-  `quantize_ref_model`、`long_context_grpo`、`vision_grpo`、`data.split_thinking`、そして
-  `data.video_*` キーが含まれます。`training.rl_checkpoint_include_ref_model` と
-  `rl_checkpoint_include_rollout_buffer` は v0.76.0 より後にステージされたため、事前に警告した
-  リリースはありません。値は、`data.remove_unused_columns: true`、量子化を一切行わないタスクでの
-  `training.quantization: 4bit` / `8bit`（または `load_in_8bit: true`）、そして `soup ab --beta` です。
-  v0.76 が何も言わずに無視していた十五個の設定も拒否されます。たとえば何も適用しない場所での `use_mod` や
-  `neftune_alpha`、LoRA ランク付きの `expand_layers`、Unsloth での `8bit` やビジョン SFT、MLX または
-  Unsloth での `lora.rank_pattern` です。CHANGELOG のアップグレードノートを参照してください。
-- **破壊的変更: Python 3.11–3.13、AWQ と GPTQ のエクスポートは廃止、`soup serve` の二つのルートに
-  トークンが必要に。** Python 3.10 はサポート対象外になりました（2026-10-01 にサポート終了）。3.10 では
-  pip は引き続き v0.76.x を解決します。`soup export --format awq` / `gptq` と
-  `soup quantize --to awq` / `gptq` は削除されました。どちらの上流プロジェクトもアーカイブ済みのためです。
-  `gguf`、`onnx`、`tensorrt`、`bitnet`、`tq1_0` を使うか、v0.76.x にとどまってください。
-  `/v1/tools/python` と `/v1/tools/bash` は、サーバーが `--tool-auth-token`（または
-  `SOUP_TOOL_AUTH_TOKEN`）付きで起動されていなければ、どのバインドでも 401 を返します。また
-  `/v1/tools/python` は、ホストに OS レベルの分離がない環境では、bash と同じく 501 を返します。
-- **DPO、ORPO、SimPO、KTO が Apple Silicon でネイティブに動作します。** `backend: mlx` での
-  `task: dpo`、`orpo`、`simpo`、`kto` は、Soup 独自の MLX ループで TRL の目的関数に従って学習します
-  （ORPO と SimPO は参照モデル不要）。MLX のテキスト SFT は、ネイティブ DoRA、`training.eval_steps`、
-  `training.seed`、損失ウォッチドッグに対応しました。`lora.use_rslora` は MLX と Unsloth で適用される
-  ようになったため、そこでの rsLoRA 実行は要求したスケールで学習し、結果が変わります。
-- **レイヤーストリーミングが DeepSeek-V3 系の MoE に対応しました。** Soup のレイヤーストリーミング
-  （L2L の実装、Pudipeddi et al. 2020）は、`model_type: deepseek_v3` を、常駐とストリーミングで
-  フォワードとバックワードの一致（パリティ）を確認したうえでストリーミングし、FP8 ブロック量子化
-  チェックポイントをシャード時に逆量子化します。Kimi-K2-Base と -Instruct は、フィールドごとの検査を
-  通ったうえで受け入れられます（K2 形状の小さなチェックポイントが CPU 上でビット単位で一致して
-  ストリーミングされます。K2 そのものでは何も学習していません）。
-  `training.stream_expert_layout: per_expert` は、ルーティングされたエキスパートを一つずつストリーミング
-  します。RTX 5070 Laptop 8 GB 一台で、同じ Moonlight-16B の LoRA 設定は、fused の 3.1 GB に対して
-  GPU メモリのピークが 1.0 GB（エキスパートは bf16 に対して NF4、キャッシュ階層も異なる）で、ステップ時間は約 2.7x でした
-  （[記録](benchmarks/probe-rtx5070-moonlight-16b.md)）。`training.stream_recompute: off` / `auto` は、
-  ストリーミングされるレイヤーのアクティベーションを再計算せずに保持し、勾配はビット単位で一致します。
-  同じカードの RAM 階層では、Mistral-7B NF4 のステップが 512 トークンで 22%、2048 で 8.5% 速くなります
-  （[記録](benchmarks/gate-stream-recompute.md)）。オプトイン方式（`stream_layers: true`）で、BETA です。
-- **検証できる来歴（provenance）。** `soup registry push --data <file>` は学習ファイルの SHA-256 を
-  記録し、`--idempotency-key` によりプッシュを安全に再試行できます。transformers バックエンドでは、常駐、
-  レイヤーストリーミング、マルチ GPU の各実行が、読み込んだベースモデルの Hub コミットを記録します。
-  `soup ship --require-provenance` は、エビデンスを、それに刻まれたアダプター・タスク・ソースのバイト列、
-  スイートのバージョン、判定ポリシーと照合します。
-- **その他の新機能。** `soup --version`。`soup data ingest` で PDF と DOCX を扱うための
-  `pip install "soup-cli[documents]"`。`soup merge --low-memory`。GRPO が LLM ジャッジで採点できる
-  ようになりました（`training.reward_fn: judge_rank`）。そして
-  [`docs/config-reference.md`](docs/config-reference.md) と
-  [`docs/cli-reference.md`](docs/cli-reference.md) はコードから生成され、どちらかがコードの動作を正しく
-  述べなくなると、テストスイートが失敗します。
+- **`soup profile --model <id>` は `soup.yaml` なしで「収まるか」に答えます。** モデルの
+  `config.json` から実行の見積もりを出し、`--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer`、
+  `--gradient-checkpointing` で形が決まります。Apple Silicon では Metal のワーキングセットと比較します。
+  `soup plan` と `soup apply` は `--minillm-on-policy` を受け付けます。
+- **Apple Silicon での学習が増えました。** `preference_loss: dpo`、`orpo`、`simpo` を指定した
+  `task: preference` はネイティブ MLX トレーナーで動き、MLX GRPO は 4 ビットの `mlx-community`
+  ベースで学習でき、MLX Adafactor は設定された学習率とスケジュールに従います。
+- **新しい DPO レシピが 2 つ：** `qwen3.5-0.8b-dpo` と `qwen3.5-27b-dpo`。
+- **VRAM の見積もりが実測に近づきました。** optimizer ステップを独立したフェーズとして扱い、
+  PRM ステップには 1 位置分の logits を計上し、分割された FSDP / ZeRO の実行はカードごとに見積もり、
+  `stream_loss_chunk` のステップには最終層の再計算を計上し、Unsloth の LoRA ターゲットはそのローダーが
+  選ぶとおりに扱います。
+- **黙った上書きと空の結果が減りました。** より多くのコマンドが、入力を指す `--output` を拒否します
+  （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
+  拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
+  未フィルターのファイルを書く代わりに失敗します。
+- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、PPO は要求されると方策に
+  gradient checkpointing を適用し（4 ビット・8 ビットでもクラッシュしなくなり）、`soup merge` は
+  アダプターを学習したときのベースのコミットを読み込みます。
+- **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
+  テキストを保ったまま、端末制御文字を取り除いて表示します。
+
+**知っておくべき挙動の変更。** `soup serve --tool-auth-token` は `A-Z`、`a-z`、`0-9`、`_`、`-` からなる
+16〜128 文字でなければなりません（そうでなければ終了コード 2）。`task: sft` は、`reasoning_effort`、
+`train_on_eot`、`use_flash_attn`、`use_liger` を、それらを一度も適用していなかった画像・音声・MLX・
+Unsloth・RAFT・事前トークナイズ済みの経路で拒否します。`soup completions` のスクリプトは再生成が必要です。
+`soup data from-traces --signal thumbs_up`、MLX Adafactor、`soup merge`、VRAM の事前チェックは、
+v0.77.1 と異なる結果になることがあります。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -343,7 +325,7 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 

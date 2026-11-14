@@ -24,6 +24,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -312,7 +313,7 @@ class MoleRoutingTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
             **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
@@ -491,7 +492,8 @@ class MoleRoutingTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
         gate_path = output_dir / "mole_gate.pt"
         # #1266: always fp32, whatever the module holds by now (a DeepSpeed bf16/fp16

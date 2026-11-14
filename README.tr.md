@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -93,60 +93,42 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.77.0 — v0.76'nın uyardığı şeyler artık reddediliyor.** Hiçbir şeyin okumadığı 31 yapılandırma
-alanı ve kullanımdan kaldırılmış üç değer artık bir uyarıyla yüklenmiyor: yükleme, her ayar için o ayarı
-adlandıran ve neyin silineceğini söyleyen bir satırla duruyor. v0.76'da uyarılarla ya da sessizce yüklenen bir
-yapılandırma v0.77'de yüklenmeyebilir: önce `soup doctor --config soup.yaml` komutunu çalıştırın.
+**v0.77.2 — v0.77.1'den sonra `main`'in bir kesiti: 159 pull request, bunların 153'ü bakımcı
+dışındaki 30 kişiden.** Büyük kısmı düzeltme. Ayrıca yeni özellikler ve v0.77.1'in kabul ettiğini
+reddedebilen iki kural getiriyor; bu yüzden bir sunucuyu ya da bir `task: sft` yapılandırmasını
+yükseltmeden önce [v0.77.2 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) okuyun. 0.76.x'ten geliyorsanız önce
+`soup doctor --config soup.yaml` komutunu çalıştırın ve [v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **Geriye dönük uyumsuz değişiklik: bekletilen (staged) alanlar ve kullanımdan kaldırılmış değerler
-  reddediliyor.** Alanlar arasında `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`,
-  `checkpoint_eval_*`, `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking`
-  ve `data.video_*` anahtarları var. `training.rl_checkpoint_include_ref_model` ve
-  `rl_checkpoint_include_rollout_buffer` v0.76.0'dan sonra bekletmeye alındı; bu yüzden hiçbir sürüm
-  önce onlar hakkında uyarmadı. Değerler: `data.remove_unused_columns: true`, hiç niceleme yapmayan bir
-  görevde `training.quantization: 4bit` / `8bit` (veya `load_in_8bit: true`) ve `soup ab --beta`.
-  v0.76'nın hiçbir şey söylemeden yok saydığı on beş ayar da artık reddediliyor; örneğin hiçbir
-  şeyin uygulamadığı yerlerde `use_mod` veya `neftune_alpha`, LoRA rank'ı ile `expand_layers`, Unsloth'ta
-  `8bit` veya görsel SFT ve MLX ya da Unsloth'ta `lora.rank_pattern`: CHANGELOG'daki yükseltme notlarına
-  bakın.
-- **Geriye dönük uyumsuz değişiklik: Python 3.11–3.13, AWQ ve GPTQ dışa aktarımı yok, iki `soup serve`
-  rotası için belirteç.** Python 3.10 artık desteklenmiyor (destek süresi 2026-10-01'de sona erdi);
-  3.10'da pip v0.76.x'i seçmeye devam ediyor. `soup export --format awq` / `gptq` ve
-  `soup quantize --to awq` / `gptq` kaldırıldı, çünkü her iki üst proje de arşivlenmiş durumda: `gguf`,
-  `onnx`, `tensorrt`, `bitnet` veya `tq1_0` kullanın ya da v0.76.x'te kalın. `/v1/tools/python` ve
-  `/v1/tools/bash`, sunucu `--tool-auth-token` (veya `SOUP_TOOL_AUTH_TOKEN`) ile başlatılmadıysa her
-  bağlamada 401 döndürüyor; `/v1/tools/python`, ana makinede işletim sistemi düzeyinde yalıtım yoksa
-  bash'in zaten yaptığı gibi 501 döndürüyor.
-- **DPO, ORPO, SimPO ve KTO, Apple Silicon üzerinde yerel olarak çalışıyor.** `backend: mlx` ile
-  `task: dpo`, `orpo`, `simpo` ve `kto`, Soup'un kendi MLX döngüsüyle TRL'nin hedefleri üzerinden
-  eğitiliyor (ORPO ve SimPO referans model olmadan). MLX metin SFT'si yerel DoRA,
-  `training.eval_steps`, `training.seed` ve kayıp bekçisini (loss watchdog) kazandı.
-  `lora.use_rslora` artık MLX ve Unsloth üzerinde uygulanıyor; bu yüzden oradaki bir rsLoRA
-  çalıştırması istediği ölçekte eğitiliyor ve sonuçları değişiyor.
-- **Katman akışı DeepSeek-V3 ailesinin MoE modellerine ulaştı.** Soup'un katman akışı (L2L'nin bir
-  uygulaması, Pudipeddi et al. 2020) artık `model_type: deepseek_v3` modelini, yerleşik ve akışlı model
-  arasında ileri ve geri geçişte eşlikle (parity) akıtıyor ve FP8 blok nicelemeli checkpoint'leri
-  parçalama (shard) sırasında nicelemeden çözüyor. Kimi-K2-Base ve -Instruct alan alan bir denetimden
-  geçerek kabul ediliyor (K2 biçimindeki küçük bir checkpoint CPU'da bit bit aynı sonuçla akıyor; K2'nin
-  kendisi üzerinde hiçbir şey eğitilmedi). `training.stream_expert_layout: per_expert` her seferinde
-  tek bir yönlendirilmiş uzmanı akıtıyor: tek bir RTX 5070 Laptop 8 GB üzerinde aynı Moonlight-16B
-  LoRA yapılandırması, birleşik (fused) düzendeki 3.1 GB'a karşı 1.0 GB GPU belleğiyle zirve yaptı
-  (bf16 uzmanlara karşı NF4 uzmanlar, farklı önbellek katmanları); adım süresi yaklaşık 2.7x
-  ([kayıt](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` / `auto`,
-  akışlı katmanların aktivasyonlarını yeniden hesaplamak yerine saklıyor ve gradyanlar bit bit aynı
-  kalıyor: aynı kartın RAM katmanında bir Mistral-7B NF4 adımı 512 token'da %22, 2048'de %8.5 daha hızlı
-  ([kayıt](benchmarks/gate-stream-recompute.md)). İsteğe bağlıdır (`stream_layers: true`), BETA.
-- **Doğrulanabilir köken (provenance).** `soup registry push --data <file>` eğitim dosyasının SHA-256
-  özetini kaydediyor ve `--idempotency-key` bir gönderimi yeniden denemeye güvenli hâle getiriyor;
-  transformers arka ucunda yerleşik, katman akışlı ve çoklu GPU çalıştırmaları, yükledikleri temel
-  modelin Hub commit'ini kaydediyor; `soup ship --require-provenance` kanıtı, damgalandığı adaptör,
-  görev ve kaynak baytları, paket (suite) sürümü ve karar politikasıyla karşılaştırıyor.
-- **Ayrıca yeni.** `soup --version`; `soup data ingest` içinde PDF ve DOCX için
-  `pip install "soup-cli[documents]"`; `soup merge --low-memory`; GRPO artık bir LLM hakemiyle
-  değerlendirme yapabiliyor (`training.reward_fn: judge_rank`); ve
-  [`docs/config-reference.md`](docs/config-reference.md) ile
-  [`docs/cli-reference.md`](docs/cli-reference.md) koddan üretiliyor; bu sayfalardan biri kodun
-  yaptığını artık söylemediğinde test paketi başarısız oluyor.
+- **`soup profile --model <id>`, `soup.yaml` olmadan "sığar mı?" sorusunu yanıtlıyor.** Çalıştırmayı
+  modelin `config.json` dosyasından fiyatlıyor; sonucu `--seq`, `--batch`, `--method`, `--lora-r`,
+  `--optimizer` ve `--gradient-checkpointing` belirliyor; Apple Silicon'da Metal'in çalışma kümesiyle
+  karşılaştırıyor. `soup plan` ve `soup apply` artık `--minillm-on-policy` alıyor.
+- **Apple Silicon'da daha fazla eğitim.** `preference_loss: dpo`, `orpo` ya da `simpo` ile
+  `task: preference` yerel MLX eğiticisini çalıştırıyor, MLX GRPO 4-bit `mlx-community` tabanlarında
+  eğitiliyor ve MLX Adafactor yapılandırılmış öğrenme oranını ve çizelgesini izliyor.
+- **İki yeni DPO tarifi:** `qwen3.5-0.8b-dpo` ve `qwen3.5-27b-dpo`.
+- **Daha yakın VRAM tahminleri.** Optimizer adımı kendi başına bir aşama; bir PRM adımına tek konumun
+  logit'leri yazılıyor; parçalanmış bir FSDP ya da ZeRO çalıştırması kart başına fiyatlanıyor;
+  `stream_loss_chunk` adımına son katmanının yeniden hesaplaması yazılıyor; Unsloth'un LoRA hedefleri
+  yükleyicisinin seçtiği gibi hesaplanıyor.
+- **Sessiz üzerine yazmalar ve boş sonuçlar azaldı.** Daha fazla komut, bir girdiyi adlandıran
+  `--output` değerini reddediyor (`soup data ingest`, `persona-mix`, `generate` ve diğerleri);
+  `soup ship --adapter` hiçbir şeyi değiştirmeyen bir adaptörü reddediyor; `soup distill-prompt`,
+  `soup data evolve`, `gen-magpie` ve `filter --perplexity` boş ya da filtrelenmemiş bir dosya yazmak
+  yerine hata veriyor.
+- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, PPO istenince
+  politikasını checkpoint'liyor (4-bit ve 8-bit altında artık çökmüyor) ve `soup merge` adaptörün
+  eğitildiği taban commit'ini yüklüyor.
+- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut yolları, adları ve iletileri köşeli
+  parantezler ve `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
+
+**Bilmeniz gereken davranış değişiklikleri.** `soup serve --tool-auth-token`, `A-Z`, `a-z`, `0-9`,
+`_` ve `-` karakterlerinden oluşan 16 ila 128 karakter olmalı (aksi halde çıkış kodu 2).
+`task: sft`, `reasoning_effort`, `train_on_eot`, `use_flash_attn` ve `use_liger` ayarlarını,
+bunları hiç uygulamayan görü, ses, MLX, Unsloth, RAFT ve önceden belirteçlenmiş yollarda reddediyor.
+`soup completions` betiklerinin yeniden üretilmesi gerekiyor.
+`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` ve VRAM ön kontrolü
+v0.77.1'den farklı bir sonuç verebilir.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -348,7 +330,7 @@ CUDA ya da PyTorch'u yerel olarak kurmadan Soup'u çalıştırın (imaj her sür
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # ya da yerel olarak derleyin
 ```
 

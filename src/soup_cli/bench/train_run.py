@@ -215,6 +215,7 @@ def run_bench_train(
     from soup_cli.bench.train_report import check_trainable, summarize_clock_samples
     from soup_cli.trainer.sft import SFTTrainerWrapper
     from soup_cli.utils.gpu import configure_mps_async_load
+    from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 
     with tempfile.TemporaryDirectory(prefix="soup-bench-") as scratch:
         # Log every step (the grad_norm check reads each one), never save, and
@@ -247,6 +248,17 @@ def run_bench_train(
             return original_step(model, inputs, *args, **kwargs)
 
         trainer.training_step = training_step
+
+        # `soup train` does this in SFTTrainerWrapper.train(), which bench does
+        # not call: on an fp16 card it casts the bf16 adapters TRL leaves on a
+        # 4-bit or 8-bit model back to fp32, or the GradScaler cannot unscale their
+        # gradients (#2215). Done before the first fingerprint, so what is
+        # measured is what `soup train` trains.
+        align_trainable_dtype_for_fp16(
+            trainer.model,
+            fp16=getattr(trainer.args, "fp16", False),
+            bf16=getattr(trainer.args, "bf16", False),
+        )
 
         if before_train is not None:
             before_train(wrapper)

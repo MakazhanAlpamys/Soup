@@ -315,6 +315,18 @@ def load_config(
             raw["training"] = training
         training.update(training_overrides)
 
+    return validate_config_mapping(raw)
+
+
+def validate_config_mapping(raw: dict) -> SoupConfig:
+    """Validate a config mapping already read from a file; the checks and
+    messages of :func:`load_config`, which ends here.
+
+    For a command that reads the file itself (``soup plan`` / ``soup apply``)
+    and must refuse what ``soup train`` refuses, with the same lines: an
+    unknown key, a staged field, a refused value or any other schema error
+    prints ``Config validation error:`` and its lines and exits 1.
+    """
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
@@ -364,7 +376,16 @@ def load_config_from_string(yaml_str: str, *, max_bytes: "int | None" = None) ->
         raise ValueError(
             f"Config must be a YAML mapping, got {type(raw).__name__}"
         )
+    return config_from_mapping(raw)
 
+
+def config_from_mapping(raw: dict) -> SoupConfig:
+    """Validate a config mapping and return the SoupConfig, raising ValueError on errors.
+
+    The checks of :func:`load_config_from_string` without the YAML parse, for a caller
+    that holds the mapping already and wants an exception rather than an exit
+    (``build_plan`` called with a dict alone, #2306).
+    """
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         raise ValueError(unknown_error)

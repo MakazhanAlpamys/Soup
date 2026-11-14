@@ -28,7 +28,9 @@ def explicit_offline_state(monkeypatch):
 
 
 def _run(tracker, *, base=BASE):
-    return tracker.start_run({"base": base, "task": "sft"}, "cpu", "CPU", {})
+    run_id = tracker.start_run({"base": base, "task": "sft"}, "cpu", "CPU", {})
+    tracker.finish_run(run_id, 1.0, 0.5, 1, 1.0, "/tmp/out")
+    return run_id
 
 
 def test_legacy_run_upgrade_is_nullable_and_idempotent(tmp_path):
@@ -256,6 +258,7 @@ def test_registration_keeps_training_digest_after_source_mutation(tmp_path, sour
     tracker = ExperimentTracker(tmp_path / "runs.db")
     try:
         run_id = tracker.start_run(config, "cpu", "CPU", {})
+        tracker.finish_run(run_id, 1.0, 0.5, 1, 1.0, str(tmp_path / "out"))
         tracker._get_conn().execute(
             "UPDATE runs SET training_data_sha256=? WHERE run_id=?", (historical, run_id),
         )

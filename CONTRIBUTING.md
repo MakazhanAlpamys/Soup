@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (171 recipes)
+  recipes/            - Ready-made configs for popular models (179 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -426,7 +426,6 @@ take it back.
 | @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
 | @taljeon | Eval gate | `area:eval` |
 | @akkupratap323 | Ingest and feedback sources | `area:ingest` |
-| @dryn85-max | The MLX backend (maintainer's exception: named ahead of the threshold, held from the first merge) | `area:mlx` |
 
 ## Making Changes
 
@@ -584,7 +583,13 @@ If adding a new training algorithm:
 
 1. Add a `RecipeMeta` entry in `recipes/catalog.py`
 2. Add tests in `tests/test_recipes.py`
-3. Update `README.md` recipes section
+3. Set `EXPECTED_RECIPE_COUNT` in `tests/recipe_count.py` to the new count, then run
+   `python scripts/sync_recipe_count.py` to rewrite every documentation site that
+   states it (`DOC_SITES` in `tests/test_recipe_count_is_synced.py` lists them).
+   `python scripts/sync_recipe_count.py --check` reports what is out of sync and
+   writes nothing. The pin is edited by hand on purpose: deriving it from
+   `len(RECIPES)` would reduce the milestone assertions to `len(RECIPES) ==
+   len(RECIPES)`, which can never fail (#1016)
 4. Regenerate `tests/fixtures/recipe_config_snapshots.json` with
    `python scripts/generate_recipe_snapshot.py` and review the diff — the new
    recipe's resolved config must be in the committed snapshot, or
@@ -694,7 +699,7 @@ full set runs. A push, the nightly run and a release branch are never docs-only.
 
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 45-minute step limit and a 60-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
@@ -769,6 +774,12 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 6. Tag: `git tag v0.X.0 && git push --tags`
 7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
    on the `v*` tag (Trusted Publisher / OIDC)
+
+Docker version tags are published for every release, while `latest` follows the highest
+stable `vX.Y.Z` tag. Before tagging a maintenance-line Docker release, backport
+`.github/workflows/docker.yml` and `scripts/docker_release_tags.py` so it keeps the newer
+line's `latest` image. A manual dispatch uses the workflow at its selected ref;
+updating `main` does not change workflows on existing historical tags.
 
 ## Recognition
 

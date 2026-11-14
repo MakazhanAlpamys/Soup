@@ -1,0 +1,10 @@
+SHIM vram_cap OK cap_bytes=6710886400 device_bytes=47751888896 fraction=0.140537
+SHIM order OK train_sampling_strategy=sequential
+SHIM logging OK step_log=/workspace/b77/runs/main/step_log.jsonl
+SHIM soup_cli 0.77.2 from /workspace/payload/soup/src/soup_cli/__init__.py
+SHIM schedule OK total_steps=300 warmup=10 peak=0.0001 min=1e-05
+SHIM lora_dtype fp32_forced=True before={'torch.bfloat16': 256} cast=256 after={'torch.float32': 256}
+SHIM adamw_state_dtype {'step': 'torch.float32', 'exp_avg': 'torch.float32', 'exp_avg_sq': 'torch.float32'}
+SHIM kept adapter of checkpoint-100 in /workspace/out/artifacts/kept/step100
+SHIM kept adapter of checkpoint-200 in /workspace/out/artifacts/kept/step200
+SHIM kept adapter of checkpoint-300 in /workspace/out/artifacts/kept/step300

@@ -1,0 +1,30 @@
+{
+  "source_commit": "311962ced65176d9adb05a0a6c875b5785c1a2b8",
+  "worker_sha256": "fee82d6c806315468610332dc0febd85098c0bff5901e4d35080c90630edc2ee",
+  "model_snapshot": "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+  "runtime": {
+    "torch": "2.14.1",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "trl": "0.29.1",
+    "triton": "3.8.0",
+    "liger-kernel": "0.8.5",
+    "flash-attn": "2.8.3.post2"
+  },
+  "cuda": "13.0",
+  "python": "3.12",
+  "card": "NVIDIA H200",
+  "gpu_uuid": "<redacted>",
+  "card_total_mib": 143771,
+  "other_process_mib": 49850,
+  "shared_card": true,
+  "driver_version": null,
+  "driver_note": "The archived campaign rows did not capture a driver-version string; no later driver observation is substituted.",
+  "sm_clock_range_mhz": [
+    1875,
+    1980
+  ],
+  "clock_scope": "All raw samples, including initial idle samples; cell-specific ranges are retained in summary.json.",
+  "power_limit": "Not changed by the campaign; the configured wattage was not recorded.",
+  "derivation": "Runtime/model/card from timings/s1024-off-r1-sdpa/result.json; clock extrema from all summary rows; shared-card headroom from the campaign record."
+}

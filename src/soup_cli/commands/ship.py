@@ -50,6 +50,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli import __version__
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
 )
@@ -68,8 +69,10 @@ from soup_cli.utils.ship_progress import group, jsonl_command
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
 from soup_cli.utils.ship_verdict import (
+    DECISION_DONT_SHIP,
     DECISION_SHIP,
     DEFAULT_FORGETTING_THRESHOLD,
+    FAILED_ADAPTER_NOOP,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
     NUMERICS_FAMILY_FULL,
@@ -498,14 +501,14 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
 
 # live_eval only builds a BitsAndBytesConfig for these two (#367); the other
 # quant_menu formats (gptq/awq/hqq/...) need a full TrainingConfig, so those
-# still fall back to bf16 here, same as no --config at all.
+# still fall back to the device's full-precision dtype, as with no --config.
 _LIVE_EVAL_QUANTIZATION_FORMATS = frozenset({"4bit", "8bit"})
 
 
 def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> Optional[str]:
     """Reuse the training run's own quantization for the live eval load.
 
-    Returns ``None`` (unchanged bf16 default) when no ``--config`` was given,
+    Returns ``None`` (device-selected full precision) when no ``--config`` was given,
     or the run used a format live_eval cannot build directly.
     """
     if soup_config is None:
@@ -527,9 +530,13 @@ def _live_eval_numerics(
     if quantization == "4bit" or quantization == "8bit":
         return quantization
     from soup_cli.utils import live_eval
+    from soup_cli.utils.gpu import bf16_fp16_flags
 
     resolved = live_eval.resolve_device(device)
-    return "bfloat16" if resolved.startswith("cuda") else "float32"
+    bf16, fp16 = bf16_fp16_flags(resolved)
+    if bf16:
+        return "bfloat16"
+    return "float16" if fp16 else "float32"
 
 
 def _expected_numerics_family(soup_config: "SoupConfig") -> str:
@@ -598,7 +605,7 @@ def _resolve_generators(
         )
         dtype = None
     else:
-        # dtype is the stamp: bf16 on CUDA (including cuda:0), fp32 elsewhere.
+        # Both loaders receive the same device-selected dtype as the stamp.
         dtype = numerics
         console.print(
             f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
@@ -1052,6 +1059,36 @@ def _parse_suite(general_suite: Optional[str]) -> List[str]:
     return [name for name in names if name]
 
 
+def _adapter_is_noop(adapter: str) -> bool:
+    """True when every ``lora_B`` in a local adapter is zero, so tuned == base.
+
+    Reuses ``soup adapters check``'s reader but not its verdict, which refuses
+    more than this (partly-zero layers, orphans, ...). An adapter with no LoRA
+    pairs (VeRA etc.) or a non-zero standalone tensor (saved head, bias) can
+    still change the model and is left to the live eval. Hub ids are skipped.
+    """
+    if not os.path.isdir(adapter):
+        return False
+    from soup_cli.utils.adapter_check import check_adapter
+
+    try:
+        report = check_adapter(adapter)
+    except (ValueError, TypeError, OSError, RuntimeError, ImportError) as exc:
+        console.print(
+            "[yellow]Warning:[/] could not read the adapter weights to check for an "
+            f"all-zero lora_B: {escape(for_terminal(str(exc)))}"
+        )
+        return False
+    return (
+        report.total_layers > 0
+        and len(report.all_zero_lora_b_layers) == report.total_layers
+        and all(
+            item.frobenius == 0.0 and not item.has_non_finite
+            for item in report.standalone_tensors
+        )
+    )
+
+
 def _verdict_live(
     *,
     base: Optional[str],
@@ -1131,6 +1168,18 @@ def _verdict_live(
         if not judge_model:
             _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
         _validate_judge_model_url(judge_model)
+
+    # Read the adapter before either model loads: an all-zero lora_B adds
+    # nothing, and the live eval would only reach "task did not improve" (#2410).
+    if adapter and _adapter_is_noop(adapter):
+        return ShipVerdict(
+            decision=DECISION_DONT_SHIP,
+            task_win=TaskWin(mode=task_mode, base=0.0, tuned=0.0, won=False),
+            benchmark_deltas=(),
+            failed_rule=FAILED_ADAPTER_NOOP,
+            forgetting_threshold=forgetting_threshold,
+            soup_version=__version__,
+        )
 
     tuned_id = tuned if tuned else base
     try:
@@ -1241,7 +1290,10 @@ def _emit_and_exit(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
-    if emit_evidence:
+    if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
+        # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
+        console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
+    elif emit_evidence:
         try:
             payload = verdict_to_evidence(verdict, provenance=provenance)
             atomic_write_text(

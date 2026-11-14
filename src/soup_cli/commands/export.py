@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
 from soup_cli.utils.terminal import for_terminal, strip_control
@@ -79,6 +80,23 @@ def export(
         "text-generation",
         "--onnx-task",
         help="ONNX export task: text-generation (causal LM) or feature-extraction (embedding)",
+    ),
+    validate_onnx: bool = typer.Option(
+        False, "--validate-onnx",
+        help=(
+            "ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, "
+            "3=unusable validation. Other export option conflicts also use 2; "
+            "inspect the diagnostic."
+        ),
+    ),
+    prompts: Optional[str] = typer.Option(
+        None, "--prompts", help="Explicit text/JSONL prompts for --validate-onnx (at most 32).",
+    ),
+    atol: Optional[float] = typer.Option(
+        None, "--atol", help=(
+            "Absolute logits tolerance for --validate-onnx. Default 1e-4 "
+            "(FP32 smoke check, not a quality threshold)."
+        ),
     ),
     deploy: Optional[str] = typer.Option(
         None,
@@ -166,13 +184,16 @@ def export(
                 f"\n[yellow]--format {fmt} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
             )
         console.print(
-            f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
-            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+            Text.assemble(
+                (f"Unsupported format: {strip_control(fmt)}", "red"),
+                Text.from_markup(removed_notice),
+                f"\nSupported: {', '.join(SUPPORTED_FORMATS)}",
+            )
         )
         raise typer.Exit(1)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(Text(f"Model path not found: {strip_control(model_path)}", style="red"))
         raise typer.Exit(1)
 
     if (verbose or no_install_deps) and fmt != "gguf":
@@ -181,6 +202,31 @@ def export(
         ) if enabled]
         console.print(f"[red]{' and '.join(flags)} require --format gguf.[/]")
         raise typer.Exit(2)
+
+    validation_prompts = None
+    validation_atol = None
+    if validate_onnx or prompts is not None or atol is not None:
+        from soup_cli.eval.onnx_check import (
+            DEFAULT_ATOL,
+            OnnxValidationError,
+            load_validation_prompts,
+            validate_atol,
+        )
+
+        try:
+            if not validate_onnx or fmt != "onnx" or onnx_task != "text-generation":
+                raise OnnxValidationError(
+                    "--validate-onnx, --prompts and --atol require --format onnx "
+                    "--onnx-task text-generation and --validate-onnx."
+                )
+            if prompts is None:
+                raise OnnxValidationError("--validate-onnx requires an explicit --prompts file.")
+            validation_atol = DEFAULT_ATOL if atol is None else atol
+            validate_atol(validation_atol)
+            validation_prompts = load_validation_prompts(Path(prompts))
+        except OnnxValidationError as exc:
+            console.print(Text(f"ONNX validation input error: {strip_control(exc)}", style="red"))
+            raise typer.Exit(3) from exc
 
     model_name = Path(model).name
 
@@ -194,14 +240,22 @@ def export(
             raise typer.Exit(1)
         if deploy != "ollama":
             console.print(
-                f"[red]Unsupported deploy target: {deploy}[/]\n"
-                "Supported: ollama"
+                Text.assemble(
+                    (f"Unsupported deploy target: {strip_control(deploy)}", "red"),
+                    "\nSupported: ollama",
+                )
             )
             raise typer.Exit(1)
 
     # --- ONNX export path ---
     if fmt == "onnx":
-        output_path = _export_onnx(model_path, output, base, onnx_task, trust_remote_code)
+        validation_kwargs = {}
+        if validation_prompts is not None:
+            validation_kwargs = {"validation_prompts": validation_prompts,
+                                 "validation_atol": validation_atol}
+        output_path = _export_onnx(
+            model_path, output, base, onnx_task, trust_remote_code, **validation_kwargs,
+        )
         if output_path is not None:
             _maybe_attach_export(
                 artifact_path=str(output_path), kind="onnx",
@@ -306,6 +360,7 @@ def export(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
 
     if is_adapter:
         console.print("[dim]GGUF: merge adapter...[/]")
@@ -318,7 +373,7 @@ def export(
             )
             raise typer.Exit(1)
 
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
@@ -404,9 +459,7 @@ def export(
 
     finally:
         # Clean up temporary merge directory
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     if not output_path.exists():
         console.print("[red]Export failed - output file not created.[/]")
@@ -452,6 +505,29 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
         return None
 
 
+def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
+    """The scratch directory next to an adapter, and whether this export will create it.
+
+    A directory (or link) already there is not this export's: the cleanup leaves it alone.
+    """
+    path = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+    return path, not (path.exists() or path.is_symlink())
+
+
+def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
+    """Remove the scratch merge directory if this export created it; never one that was there."""
+    if merge_dir is None or not merge_dir.exists():
+        return
+    if not created:
+        console.print(
+            f"[dim]Leaving {for_terminal(str(merge_dir))}: it existed before this export.[/]"
+        )
+        return
+    if announce:
+        console.print("[dim]Cleaning up temporary merge files...[/]")
+    shutil.rmtree(merge_dir, ignore_errors=True)
+
+
 def _merge_adapter(
     adapter_path: str,
     base_model: str,
@@ -486,7 +562,7 @@ def _merge_adapter(
         console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
         **revision_kwargs,
@@ -591,7 +667,7 @@ def _existing_llama_cpp(user_path: Optional[str] = None) -> Optional[Path]:
         path = Path(user_path)
         if path.exists():
             return path
-        console.print(f"[red]llama.cpp not found at: {path}[/]")
+        console.print(Text(f"llama.cpp not found at: {strip_control(path)}", style="red"))
         raise typer.Exit(1)
 
     # 2. LLAMA_CPP_PATH env var
@@ -816,6 +892,7 @@ def _export_onnx(
     model_path: Path, output: Optional[str], base: Optional[str],
     task: str = "text-generation",
     trust_remote_code: bool = False,
+    *, validation_prompts: Optional[list[str]] = None, validation_atol: float = 1e-4,
 ) -> Optional[Path]:
     """Export model to ONNX format via optimum."""
     try:
@@ -832,6 +909,7 @@ def _export_onnx(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -843,7 +921,7 @@ def _export_onnx(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
 
@@ -876,10 +954,35 @@ def _export_onnx(
         except Exception as exc:
             console.print(f"[red]ONNX export failed:[/] {exc}")
             raise typer.Exit(1)
+
+        if validation_prompts is not None:
+            from soup_cli.eval.onnx_check import validate_onnx_export
+
+            try:
+                result = validate_onnx_export(
+                    source_path, output_path, validation_prompts,
+                    atol=validation_atol, trust_remote_code=trust_remote_code,
+                )
+            except Exception as exc:
+                console.print(Text(
+                    f"ONNX validation could not run: {strip_control(exc)}\n"
+                    'Check the graph, inputs and dependencies: pip install "soup-cli[onnx]".',
+                    style="red",
+                ))
+                raise typer.Exit(3) from exc
+            status = "PASS" if result.passed else "FAIL"
+            console.print(Panel(
+                f"{status}\nMax absolute error: {result.max_abs_error:.6g}\n"
+                f"Mean absolute error: {result.mean_abs_error:.6g}\n"
+                f"Absolute tolerance: {result.atol:.6g}\n"
+                f"Checked: {result.prompts} prompts, {result.elements} logits elements\n"
+                "CPU float32; explicit prompts only; no cached generation or quality claim.",
+                title="ONNX Logits Validation",
+            ))
+            if not result.passed:
+                raise typer.Exit(2)
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -936,6 +1039,7 @@ def _export_tensorrt(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -947,7 +1051,7 @@ def _export_tensorrt(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
 
@@ -1025,9 +1129,7 @@ def _export_tensorrt(
             raise typer.Exit(1)
 
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -1116,16 +1218,28 @@ def _maybe_attach_export(
 
     Resolution order:
       1. ``--registry-id`` (explicit override)
-      2. Auto-match by source model output dir
-    Silent no-op if no match is found and no explicit id was given. Failures
-    are surfaced as warnings, never as a hard CLI exit (the export itself
-    succeeded).
+      2. Auto-match: the newest entry whose tracked run wrote ``source_model``
+         (see ``lookup_entry_by_output_dir``)
+    Silent no-op if no match is found and no explicit id was given. Failures,
+    including a registry or tracker database that cannot be read during the
+    auto-match, are surfaced as warnings, never as a hard CLI exit (the export
+    itself succeeded).
     """
+    import sqlite3
+
     from soup_cli.registry.attach import attach_artifact, lookup_entry_by_output_dir
 
     entry_id = explicit_id
     if entry_id is None:
-        entry_id = lookup_entry_by_output_dir(source_model)
+        try:
+            entry_id = lookup_entry_by_output_dir(source_model)
+        except (sqlite3.Error, OSError) as exc:
+            console.print(
+                "[yellow]Could not look up a registry entry for this export:[/] "
+                f"{for_terminal(exc)}. Pass --registry-id to attach it.",
+                emoji=False,
+            )
+            return
     if entry_id is None:
         return
 
@@ -1284,13 +1398,14 @@ def _export_bitnet_gguf(
 
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
             console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
@@ -1322,8 +1437,7 @@ def _export_bitnet_gguf(
             console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
             raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
@@ -1393,6 +1507,7 @@ def _export_gguf_advanced(
     # Pre-merge LoRA adapter if needed
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
@@ -1401,7 +1516,7 @@ def _export_gguf_advanced(
                 "[red]Cannot detect base model. Pass --base.[/]"
             )
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
@@ -1435,8 +1550,7 @@ def _export_gguf_advanced(
             console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
             raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"

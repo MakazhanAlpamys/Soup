@@ -27,7 +27,7 @@ def why(
     Heuristic — looks at the SQLite-stored metric series and config and
     surfaces common pathologies (NaN loss, plateaus, divergence, bad LR).
     """
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.why import diagnose
 
     tracker = ExperimentTracker()
@@ -40,7 +40,7 @@ def why(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {escape(run_id)}")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
 
     metrics = tracker.get_metrics(target["run_id"])
@@ -54,11 +54,15 @@ def why(
 
     findings = diagnose(metrics, config)
 
+    total_steps = target.get("total_steps")
+    initial_loss = target.get("initial_loss")
+    final_loss = target.get("final_loss")
     header = (
         f"Run: [bold]{escape(target['run_id'])}[/]\n"
         f"Status: {target.get('status') or '-'} | "
-        f"Steps: {target.get('total_steps') or '-'} | "
-        f"Loss: {target.get('initial_loss') or '-'} → {target.get('final_loss') or '-'}"
+        f"Steps: {total_steps if total_steps is not None else '-'} | "
+        f"Loss: {initial_loss if initial_loss is not None else '-'} → "
+        f"{final_loss if final_loss is not None else '-'}"
     )
     console.print(Panel(header, title="soup why"))
 

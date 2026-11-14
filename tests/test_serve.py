@@ -127,7 +127,7 @@ class TestCreateApp:
         from soup_cli.commands.serve import _create_app
 
         with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-            mock_gen.return_value = ("Hello there!", 10, 5)
+            mock_gen.return_value = ("Hello there!", 10, 5, "stop")
 
             app = _create_app(
                 model_obj=MagicMock(),
@@ -165,7 +165,7 @@ class TestCreateApp:
         from soup_cli.commands.serve import _create_app
 
         with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-            mock_gen.return_value = ("Hello world", 10, 5)
+            mock_gen.return_value = ("Hello world", 10, 5, "stop")
 
             app = _create_app(
                 model_obj=MagicMock(),
@@ -199,7 +199,7 @@ class TestStreamResponse:
         from soup_cli.commands.serve import _stream_response
 
         with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-            mock_gen.return_value = ("Hello world", 5, 2)
+            mock_gen.return_value = ("Hello world", 5, 2, "stop")
 
             chunks = list(_stream_response(
                 model=MagicMock(),

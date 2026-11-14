@@ -33,6 +33,8 @@
 
 v0.57 shipped `adapters diff / merge / blame / branch`. v0.67 finishes the lifecycle: evolutionary merge driven by your eval, GitHub-shaped PRs for adapter review, a shared `soup.lock` for team reproducibility, and binary-search bisect over training history.
 
+`adapters merge` and `adapters arithmetic` refuse an `--output` that names one of their input adapters (including `./A`, an absolute path, a case alias on Windows or a hard link) and exit before touching it; write to a new directory instead.
+
 ```bash
 # 1. Evolutionary merge: search the simplex of merge weights via CMA-ES.
 #    v0.71.4 makes this a LIVE loop — each candidate is merged, scored against
@@ -85,10 +87,15 @@ soup adapters bisect \
   ckpt-step-100 ckpt-step-200 ckpt-step-400 ckpt-step-800 \
   --eval-command "soup eval custom --model {ckpt} --tasks eval.jsonl" \
   -o bisect.json
-# Exits 3 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
+# Exits 2 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
 ```
 
-CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters. The program, the first word of the command after `{ckpt}` is filled in, runs from the absolute `PATH` directory it is found in (empty and relative entries and the current directory are not searched) unless it is given with its path. A fixed program that is not on `PATH` is refused with exit 2 before the first probe; one that the checkpoint id names counts as a failed probe.
+CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect splits its command template with native platform quoting before replacing
+`{ckpt}` inside each argument, and runs an argv list without a shell. A fixed program is
+checked before the first probe, including a program given with its path; bare names use
+only absolute `PATH` directories. An unstartable program exits 2 without a verdict or
+output file, including one named by the checkpoint. An actual nonzero exit or a timeout
+still counts as a failed probe.
 
 VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) supports live multi-tenant serving,
 and `task='moe_lora_routing'` trains the live sparse per-token MoLE gating kernel.
@@ -118,7 +125,8 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# the latest thumbs-up and thumbs-down answer per prompt. Matching answer
+# texts yield no pair, even when older distinct answers exist. The database must
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db

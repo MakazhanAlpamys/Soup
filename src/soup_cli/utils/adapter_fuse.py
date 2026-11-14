@@ -89,7 +89,7 @@ def merge_adapter_to_dense(
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     base = AutoModelForCausalLM.from_pretrained(
-        base_model, trust_remote_code=trc, torch_dtype="auto"
+        base_model, trust_remote_code=trc, dtype="auto"
     )
     merged = PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()
 

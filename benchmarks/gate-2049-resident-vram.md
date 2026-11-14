@@ -24,8 +24,8 @@ TinyLlama-1.1B-Chat-v1.0 `fe8a4ea1`, Qwen2.5-1.5B-Instruct `989aa798`,
 Qwen2.5-3B-Instruct `aa8e7253`. Vocabularies from 32,000 to 151,936.
 
 The raw results are in
-[`evidence/vram-2049-resident.json`](evidence/vram-2049-resident.json): the 39 result lines
-of the two-step runs in the order printed, every field as the harness printed it, with one
+[`evidence/vram-2049-resident.json`](evidence/vram-2049-resident.json): the 42 result lines
+of the two-step runs in the order printed (rows 40 to 42 were added for #2277), every field as the harness printed it, with one
 change. The harness names each model by its local snapshot directory (`row.base` and
 `model.base`); the file names it by its Hugging Face id (`model`) and full commit
 (`revision`) instead, so `row` is renamed `run` and `model` is renamed `config`. No
@@ -87,6 +87,9 @@ every term except `overhead` (the CUDA context and allocator slack, which
 | 37 | Llama-3.2-1B-Instruct | 8-bit | r8 auto | 512 x 1 | off | adamw_torch | 2.027 | 4.383 | 4.362 | 0.995 |
 | 38 | SmolLM2-135M-Instruct | bf16 | full FT | 1024 x 1 | off | adamw_torch | 0.538 | 3.482 | 3.443 | 0.989 |
 | 39 | SmolLM2-135M-Instruct | bf16 | full FT | 2048 x 1 | on | adamw_torch | 0.538 | 3.085 | 3.477 | 1.127 |
+| 40 | SmolLM2-135M-Instruct | bf16 | full FT | 64 x 1 | off | adamw_torch | 0.538 | 2.756 | 2.690 | 0.976 |
+| 41 | SmolLM2-135M-Instruct | bf16 | full FT | 128 x 1 | off | adamw_torch | 0.538 | 2.757 | 2.690 | 0.976 |
+| 42 | SmolLM2-135M-Instruct | bf16 | full FT | 256 x 1 | off | adamw_torch | 0.538 | 2.754 | 2.690 | 0.977 |
 
 Seven rows (20, 21, 25, 26, 33, 34 and 35) allocated more than the 5.37 GB the card had
 free. Under WSL2 the driver falls back to shared system memory instead of raising, so
@@ -98,7 +101,7 @@ run out of memory.
 | bf16 LoRA | 20 | 0.994 to 1.064 | 0.98 to 1.10 |
 | 4-bit | 11 | 0.915 to 1.086 | 0.91 to 1.10 |
 | 8-bit | 3 | 0.969 to 1.164 | 0.95 to 1.20 |
-| full fine-tuning | 5 | 0.970 to 1.127 | 0.96 to 1.15 |
+| full fine-tuning | 8 | 0.970 to 1.127 | 0.96 to 1.15 |
 
 `tests/test_vram_estimate_calibration.py` holds every row to the allowed band for its
 kind of run, and checks that with the logits term removed every row with a vocabulary
@@ -108,7 +111,8 @@ checkpoint boundary, the adapters' saved inputs, the fp32 output head under 4-bi
 8-bit, or the extra inputs a trained base keeps; halving the per-hidden,
 per-intermediate or adapted-input activation coefficients, the 4-bit and 8-bit extras,
 the 4-bit, 8-bit, fp32 and full fine-tuning weight figures, the gradient bytes or the
-AdamW state. Terms too small on these rows to move a peak by a band's width are not
+AdamW state; or dropping the optimizer step's scratch (rows 40 to 42 fall to 0.810,
+0.839 and 0.899). Terms too small on these rows to move a peak by a band's width are not
 pinned by the table: the fp32 adapters at r=8, the 4-bit dequantization copy, and the
 checkpoint boundary at half its size.
 
@@ -138,7 +142,26 @@ checkpoint boundary at half its size.
 5. **The worst row is 4-bit Qwen2.5-3B with checkpointing at 512 tokens, 0.915.** The
    same model at 1024 tokens is 0.963, so the shortfall does not grow with the tokens;
    it is left as measured rather than fitted away.
-6. **The gate records named in #2049 do not calibrate the resident total.**
+6. **On a short full fine-tune the optimizer step sets the peak, not the pass (#2277).**
+   Rows 40 to 42 peak at 2.754 to 2.757 GB whatever the length, about 20.5 bytes a
+   parameter: the fp32 weights, their gradients and AdamW's two moments (16 bytes),
+   plus one fp32 copy of `exp_avg_sq` that the foreach `_foreach_sqrt` allocates during
+   `optimizer.step()`, after the activations are freed. The estimate takes the larger of
+   the two phases, with 4 bytes a parameter of step scratch for `adamw_torch` only; the
+   `optimizer_step` term is how far the step exceeds the pass. From 512 tokens the pass
+   is the larger: rows 5 and 38, measured again for #2277, gave the same peaks to the
+   byte. `adamw_torch_fused` at 64 x 1 peaked at 2.326 GB against an estimate of 2.233
+   (no step scratch), 0.95997, just under its band. The harness's result line:
+
+   ```json
+   {"row": {"base": "/home/abdulwaarith/.cache/huggingface/hub/models--HuggingFaceTB--SmolLM2-135M-Instruct/snapshots/12fd25f77366fa6b3b4b768ec3050bf629380bac", "quantization": "none", "lora_r": 0, "target_modules": "auto", "seq": 64, "batch": 1, "gradient_checkpointing": false, "optimizer": "adamw_torch_fused"}, "stack": {"torch": "2.14.0", "transformers": "5.17.0", "trl": "0.29.1", "peft": "0.20.0", "bitsandbytes": "0.50.2", "accelerate": "1.15.0", "cuda": "13.0", "device": "NVIDIA GeForce RTX 3060 Laptop GPU"}, "model": {"base": "/home/abdulwaarith/.cache/huggingface/hub/models--HuggingFaceTB--SmolLM2-135M-Instruct/snapshots/12fd25f77366fa6b3b4b768ec3050bf629380bac", "model_type": "llama", "hidden_size": 576, "intermediate_size": 1536, "num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3, "vocab_size": 49152, "tie_word_embeddings": true, "torch_dtype": "bfloat16", "params": 134515008}, "free_before": 5366611968, "total": 6441926656, "realised": 64, "realised_batch": 1, "steps": 2, "before_step_allocated": 538078208, "loss": 0.5997804999351501, "peak_allocated": 2326005248, "peak_reserved": 2418016256, "oom": false, "void": false}
+   ```
+
+   It is not in the file, and the fused step stays at no scratch: its peak is the pass
+   plus about 93 MB nothing prices, the same order as the residual the `adamw_torch`
+   rows carry above 20 bytes a parameter, and a fused figure fitted on one row would be
+   the fixed constant this estimate does not take (decided on #2338).
+7. **The gate records named in #2049 do not calibrate the resident total.**
    `gate-v0.73.1-measured-vram-fit.md` and `gate-395-second-stack-vram.md` are streamed
    runs (`stream_buffers: 2`), which the resident pre-flight skips.
 
@@ -151,7 +174,7 @@ checkpoint boundary at half its size.
 - **Seven dense decoders of 135M to 3B parameters,** at up to 4,096 tokens and batch 4,
   on one card and one stack. No model of 7B or more, and no mixture-of-experts model,
   which the estimate sizes as dense.
-- **The coefficients are fitted on these same 39 rows,** so the bands above show how
+- **The coefficients are fitted on rows 1 to 39,** so the bands above show how
   well they fit them, not the error on a run they were not fitted to.
 
 ## Reproduce

@@ -13,8 +13,8 @@ Three decisions shape it:
   frozen copy. A warm start (``--resume``) computes them before the
   checkpoint's weights are loaded, so the reference stays the base model.
 - **Tokenization mirrors TRL 0.29's DPO trainer** (text rows get EOS appended,
-  conversational rows go through the chat template, the prompt is capped at
-  ``max_length // 2`` and completions at what remains), so a ``soup.yaml``
+  conversational rows go through the chat template; only an overflowing pair
+  has its prompt capped at ``max_length // 2`` and completions at what remains), so a ``soup.yaml``
   trains on the same tokens on either backend. Where TRL only *warns* that a
   template is not prefix-stable and then slices at the wrong offset, this
   refuses: a wrong slice supervises the wrong tokens.
@@ -119,6 +119,8 @@ def build_preference_example(
     constant loss, zero gradient), and a template that is not prefix-stable for
     the row raises :class:`PrefixUnstableError` where TRL warns and slices
     anyway. Per-row ``tools`` / ``chat_template_kwargs`` are not applied.
+    Soup preserves the whole prompt when both complete inputs fit ``max_length``;
+    otherwise it applies the prompt cap, then clips each answer to its room.
     """
     row = _normalise_row(row)
     prompt, chosen, rejected = row["prompt"], row["chosen"], row["rejected"]
@@ -157,7 +159,10 @@ def build_preference_example(
             "chat template is not prefix-stable for this row"
         )
 
-    prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
+    # Match the transformers path: the prompt cap is a recovery budget for an
+    # overflowing pair, not a limit on a prompt whose two model inputs fit.
+    if len(prompt_ids) + max(len(full_chosen) - n, len(full_rejected) - n) > max_length:
+        prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
     room = max(0, max_length - len(prompt_ids))
     return PreferenceExample(
         prompt_ids=prompt_ids,
@@ -580,6 +585,47 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             "dpo_loss_type": "sigmoid",
             "reference": "precomputed from the base model",
         }
+
+    def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
+        """Warm start only from an adapter of this objective and base.
+
+        The checkpoint's directory must hold the ``adapter_config.json`` the
+        run writes (it is written before the first step, so step checkpoints of
+        a run that stopped early have it too). An adapter of another task
+        (another preference objective, or SFT), a different base model, or no
+        metadata at all is refused before any tensor loads; the tensor names
+        and shapes are then checked by MLX SFT's loader. For DPO and KTO the
+        reference was already computed from the base model, before this runs.
+        ORPO, SimPO and KTO reuse it through ``objective`` and their metadata's
+        ``task``.
+        """
+        import json
+        from pathlib import Path
+
+        name = self.objective
+        task = self._objective_metadata()["task"]
+        meta_path = Path(checkpoint_path).resolve().parent / "adapter_config.json"
+        if not meta_path.is_file():
+            raise ValueError(
+                f"MLX {name}: no adapter_config.json beside {checkpoint_path}; cannot "
+                f"confirm it is a task={task!r} adapter of this base model"
+            )
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"MLX {name}: unreadable {meta_path}: {exc}") from exc
+        if meta.get("task") != task:
+            raise ValueError(
+                f"MLX {name}: {checkpoint_path} was trained with task="
+                f"{meta.get('task')!r}, not {task!r}; start a fresh run or resume "
+                "with the matching task"
+            )
+        if str(meta.get("model")) != str(self.config.base):
+            raise ValueError(
+                f"MLX {name}: {checkpoint_path} belongs to base {meta.get('model')!r}, "
+                f"not {self.config.base!r}"
+            )
+        super()._load_checkpoint_weights(checkpoint_path)
 
     # -- loop -------------------------------------------------------------
 

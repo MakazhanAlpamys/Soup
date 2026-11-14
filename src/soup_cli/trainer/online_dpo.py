@@ -43,6 +43,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.online_dpo_ranking import (
     judge_label,
@@ -406,7 +407,7 @@ class OnlineDPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -460,6 +461,18 @@ class OnlineDPOTrainerWrapper:
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(self.model, cfg.base)
+
+        # #2365: trl switches checkpointing off and on around each generation, and
+        # each enable adds an input-grad hook that is never removed. Keep only the
+        # latest. TRL applies the LoRA config later and keeps this model as the base.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            from soup_cli.utils.gradient_ckpt import keep_one_input_grad_hook
+
+            keep_one_input_grad_hook(self.model)
 
     @staticmethod
     def _judge_kwargs(evaluator, has_judges: bool) -> dict:
@@ -552,7 +565,8 @@ class OnlineDPOTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         # #1225: a run in which the judge ranked nothing trained nothing; it
         # raises here instead of saving an adapter as if it had succeeded.

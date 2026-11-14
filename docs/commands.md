@@ -24,7 +24,8 @@ soup train --config soup.yaml --gpus auto|N      Launch on local GPUs through Ac
 soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.0.0.10 --master-port 29500  Multi-node launch; run on each node with its own rank
 soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
-soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
+soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch (a repository it creates is private)
+soup train --config soup.yaml --push-as user/repo --push-public  Create that repository public (an existing one keeps its visibility)
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda|runpod --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
@@ -52,7 +53,7 @@ soup export --model ./output --format gguf --no-install-deps  Never invoke pip; 
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
-soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
+soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat [--hardware slug]  Create HF Space
 soup deploy autopilot --target mac-m3|rtx-4090-24gb|...  Pick PEFT+quant+spec-decoding for a hardware target
 soup deploy autopilot --list                  List all 10 deploy profiles
 soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
@@ -69,6 +70,7 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
+soup eval retention --model <m> --label v3 [--adapter <dir>] [--add-task NAME=PATH ...] [--record] [--threshold 0.05] [--ledger retention.json] [--output r.json] [--config soup.yaml] [--chat-template-kwargs JSON] [--require-history]  Accumulated forgetting across a series of versions: every control task vs its best-ever score (exit 0=no regression / 2=regression / 3=usage / 1=runtime)
 soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
 soup eval discover <data>                       Discover a held-out canary set
 soup eval lock <design>                         Freeze a design as a checksummed suite
@@ -162,9 +164,12 @@ soup data educational --input rows.jsonl -o scored.jsonl  Score educational valu
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
-soup profile --config soup.yaml --json       Machine-readable output
+soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics on stderr
+soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
+soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
@@ -184,8 +189,9 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 171 ready-made recipes
+soup recipes list                             List all 179 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
 soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
@@ -231,7 +237,7 @@ soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-m
 soup ship ... --chat-template-kwargs '{"enable_thinking":false}'  Pass template variables equally to base/tuned live generation; JSON object, live-only (#1758)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
 soup push --model ./out --repo you/m --card <registry-id>  Upload that registry-driven card as the README (HF only) (v0.71.35)
-soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
+soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35; --python range is 3.11 to 3.13); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens
@@ -268,6 +274,7 @@ soup bench infer <model> --cuda-graphs         Bench with experimental CUDA grap
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --model ./output --reasoning-parser deepseek-r1   Strip <think> blocks from responses (v0.53.9)
+soup docs search <query> [-k N] [-f json]  Offline BM25 search over the guides; -f json prints the hits as a JSON array
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
                                               --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
@@ -311,15 +318,15 @@ soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
-soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale)
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule; decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale) (v0.63.0)
 soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
 soup tunability --list                                   List built-in candidate-base catalogue
 soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
-soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
-soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
+soup plan --config soup.yaml [--minillm-on-policy]               Pre-flight summary + write soup.tfstate
+soup apply --config soup.yaml [--dry-run] [--minillm-on-policy]  Record reviewed plan; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
@@ -347,7 +354,7 @@ soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-
 soup lock show [PATH]                        Print tracked lock file
 soup lock check [PATH] --base-sha <h> --dataset-sha <h> --env-hash <h> --base-model <m>  Refuse with exit 2 on drift, 3 on usage/missing lock
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
-soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left
+soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left; when no trace row has a prompt it exits 3 before any provider call and leaves an existing output untouched, and the done panel counts rows skipped for want of a prompt
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--task-lm <m>] [--reflection-lm <m>] [--engine <name>] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
 soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign] [--plan-only]  PEFT LoRA <-> mlx-lm adapter conversion — live (v0.71.21; *-to-apple upstream-gated exit 3)
 soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)

@@ -4,17 +4,18 @@ import itertools
 import math
 import random
 from pathlib import Path
-from typing import Optional
+from typing import Optional, get_args
 
 import typer
 import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.config.loader import load_config
 from soup_cli.utils.sweep_config import load_sweep_yaml
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -111,7 +112,7 @@ def sweep(
     """Run hyperparameter sweep: grid or random search over training parameters."""
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if param and sweep_config:
@@ -140,7 +141,10 @@ def sweep(
         raise typer.Exit(1)
 
     if strategy not in ("grid", "random"):
-        console.print(f"[red]Invalid strategy: {strategy}. Must be grid or random.[/]")
+        console.print(
+            f"[red]Invalid strategy: {for_terminal(strategy)}. Must be grid or random.[/]",
+            emoji=False,
+        )
         raise typer.Exit(1)
 
     if not sweep_params:
@@ -180,15 +184,18 @@ def sweep(
                     _set_nested_param(arm, key, val)
                 _reject_staged_sweep_params(arm)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1) from exc
 
     console.print(
         Panel(
-            f"Config:   [bold]{config_path}[/]\n"
-            f"Strategy: [bold]{strategy}[/]\n"
-            f"Params:   [bold]{', '.join(sweep_params.keys())}[/]\n"
-            f"Runs:     [bold]{len(combinations)}[/]",
+            Text.from_markup(
+                f"Config:   [bold]{for_terminal(config_path)}[/]\n"
+                f"Strategy: [bold]{strategy}[/]\n"
+                f"Params:   [bold]{for_terminal(', '.join(sweep_params.keys()))}[/]\n"
+                f"Runs:     [bold]{len(combinations)}[/]",
+                emoji=False,
+            ),
             title="Sweep Plan",
         )
     )
@@ -197,10 +204,10 @@ def sweep(
     param_table = Table(title="Parameter Grid")
     param_table.add_column("Run", style="bold")
     for key in sweep_params:
-        param_table.add_column(key)
+        param_table.add_column(Text(strip_control(key)))
 
     for idx, combo in enumerate(combinations):
-        row_values = [str(combo[key]) for key in sweep_params]
+        row_values = [Text(strip_control(combo[key])) for key in sweep_params]
         param_table.add_row(f"#{idx + 1}", *row_values)
 
     console.print(param_table)
@@ -220,10 +227,13 @@ def sweep(
 
     for idx, combo in enumerate(combinations):
         run_name = f"{name or 'sweep'}_{idx + 1}"
-        console.print(f"\n[bold]--- Run {idx + 1}/{len(combinations)}: {run_name} ---[/]")
+        console.print(
+            f"\n[bold]--- Run {idx + 1}/{len(combinations)}: {for_terminal(run_name)} ---[/]",
+            emoji=False,
+        )
 
         for key, val in combo.items():
-            console.print(f"  {key} = {val}")
+            console.print(f"  {for_terminal(key)} = {for_terminal(val)}", emoji=False)
 
         try:
             result = _run_single(base_cfg, combo, run_name, config_path)
@@ -259,7 +269,9 @@ def sweep(
             # straight into the markup string, Rich reads `[mlx]` as a style tag
             # and drops it, so the hint that tells the user what to install is
             # the part that disappears. `for_terminal` escapes it.
-            console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
+            console.print(
+                f"[red]Run {for_terminal(run_name)} failed:[/] {for_terminal(exc)}", emoji=False
+            )
             results.append({
                 "name": run_name,
                 "params": combo,
@@ -313,7 +325,10 @@ def _parse_sweep_params(params: list[str]) -> dict[str, list]:
     result = {}
     for param_str in params:
         if "=" not in param_str:
-            console.print(f"[yellow]Skipping invalid param: {param_str} (missing '=')[/]")
+            console.print(
+                f"[yellow]Skipping invalid param: {for_terminal(param_str)} (missing '=')[/]",
+                emoji=False,
+            )
             continue
 
         key, values_str = param_str.split("=", 1)
@@ -323,6 +338,9 @@ def _parse_sweep_params(params: list[str]) -> dict[str, list]:
         for val in values_str.split(","):
             val = val.strip()
             values.append(_parse_value(val))
+
+        if None in values and _refuses_null(_PARAM_SHORTCUTS.get(key, key)):
+            values = ["none" if value is None else value for value in values]
 
         if values:
             result[key] = values
@@ -350,6 +368,39 @@ def _parse_value(val: str):
         pass
     # String
     return val
+
+
+def _refuses_null(full_key: str) -> bool:
+    """Whether the config field at ``full_key`` refuses null.
+
+    :func:`_parse_value` reads ``none`` as null, which an optional field takes
+    (``neftune_alpha=none`` leaves NEFTune off). ``training.quantization`` refuses
+    null: there ``none`` is one of its values, the one ``soup.yaml`` and
+    ``--sweep-config`` pass. A key that names no field is left to the unknown-key
+    check.
+    """
+    from pydantic import BaseModel, TypeAdapter, ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    model, field = SoupConfig, None
+    for part in full_key.split("."):
+        field = model.model_fields.get(part) if model is not None else None
+        if field is None:
+            return False
+        model = next(
+            (
+                kind
+                for kind in (field.annotation, *get_args(field.annotation))
+                if isinstance(kind, type) and issubclass(kind, BaseModel)
+            ),
+            None,
+        )
+    try:
+        TypeAdapter(field.annotation).validate_python(None)
+    except ValidationError:
+        return True
+    return False
 
 
 def _generate_combinations(
@@ -396,59 +447,60 @@ def _generate_combinations(
     return combos
 
 
+#: ``--param`` short names and the config path each one sets.
+_PARAM_SHORTCUTS = {
+    "lr": "training.lr",
+    "epochs": "training.epochs",
+    "batch_size": "training.batch_size",
+    "lora_r": "training.lora.r",
+    "lora_alpha": "training.lora.alpha",
+    "lora_dropout": "training.lora.dropout",
+    "quantization": "training.quantization",
+    "warmup_ratio": "training.warmup_ratio",
+    "weight_decay": "training.weight_decay",
+    "gradient_accumulation_steps": "training.gradient_accumulation_steps",
+    "max_grad_norm": "training.max_grad_norm",
+    "optimizer": "training.optimizer",
+    "scheduler": "training.scheduler",
+    "val_split": "data.val_split",
+    "max_length": "data.max_length",
+    "dpo_beta": "training.dpo_beta",
+    "kto_beta": "training.kto_beta",
+    "grpo_beta": "training.grpo_beta",
+    "num_generations": "training.num_generations",
+    "reward_fn": "training.reward_fn",
+    "ppo_epochs": "training.ppo_epochs",
+    "ppo_clip_ratio": "training.ppo_clip_ratio",
+    "ppo_kl_penalty": "training.ppo_kl_penalty",
+    "reward_model": "training.reward_model",
+    "orpo_beta": "training.orpo_beta",
+    "simpo_gamma": "training.simpo_gamma",
+    "cpo_alpha": "training.cpo_alpha",
+    "ipo_tau": "training.ipo_tau",
+    "bco_beta": "training.bco_beta",
+    "loraplus_lr_ratio": "training.loraplus_lr_ratio",
+    "use_dora": "training.lora.use_dora",
+    "use_galore": "training.use_galore",
+    "galore_rank": "training.galore_rank",
+    "moe_lora": "training.moe_lora",
+    "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
+    "embedding_loss": "training.embedding_loss",
+    "embedding_margin": "training.embedding_margin",
+    "embedding_pooling": "training.embedding_pooling",
+    "embedding_temperature": "training.embedding_temperature",
+    "neftune_alpha": "training.neftune_alpha",
+    "use_rslora": "training.lora.use_rslora",
+    "backend": "backend",
+}
+
+
 def _set_nested_param(config_dict: dict, key: str, value) -> dict:
     """Set a nested parameter in a config dict using dot notation.
 
     Supports keys like: lr, lora.r, training.epochs, etc.
     Maps common short names to their full paths.
     """
-    # Short name mappings
-    shortcuts = {
-        "lr": "training.lr",
-        "epochs": "training.epochs",
-        "batch_size": "training.batch_size",
-        "lora_r": "training.lora.r",
-        "lora_alpha": "training.lora.alpha",
-        "lora_dropout": "training.lora.dropout",
-        "quantization": "training.quantization",
-        "warmup_ratio": "training.warmup_ratio",
-        "weight_decay": "training.weight_decay",
-        "gradient_accumulation_steps": "training.gradient_accumulation_steps",
-        "max_grad_norm": "training.max_grad_norm",
-        "optimizer": "training.optimizer",
-        "scheduler": "training.scheduler",
-        "val_split": "data.val_split",
-        "max_length": "data.max_length",
-        "dpo_beta": "training.dpo_beta",
-        "kto_beta": "training.kto_beta",
-        "grpo_beta": "training.grpo_beta",
-        "num_generations": "training.num_generations",
-        "reward_fn": "training.reward_fn",
-        "ppo_epochs": "training.ppo_epochs",
-        "ppo_clip_ratio": "training.ppo_clip_ratio",
-        "ppo_kl_penalty": "training.ppo_kl_penalty",
-        "reward_model": "training.reward_model",
-        "orpo_beta": "training.orpo_beta",
-        "simpo_gamma": "training.simpo_gamma",
-        "cpo_alpha": "training.cpo_alpha",
-        "ipo_tau": "training.ipo_tau",
-        "bco_beta": "training.bco_beta",
-        "loraplus_lr_ratio": "training.loraplus_lr_ratio",
-        "use_dora": "training.lora.use_dora",
-        "use_galore": "training.use_galore",
-        "galore_rank": "training.galore_rank",
-        "moe_lora": "training.moe_lora",
-        "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
-        "embedding_loss": "training.embedding_loss",
-        "embedding_margin": "training.embedding_margin",
-        "embedding_pooling": "training.embedding_pooling",
-        "embedding_temperature": "training.embedding_temperature",
-        "neftune_alpha": "training.neftune_alpha",
-        "use_rslora": "training.lora.use_rslora",
-        "backend": "backend",
-    }
-
-    full_key = shortcuts.get(key, key)
+    full_key = _PARAM_SHORTCUTS.get(key, key)
     parts = full_key.split(".")
 
     obj = config_dict
@@ -533,7 +585,18 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
+    from soup_cli.utils.gpu import (
+        apply_quantization_guard,
+        configure_mps_async_load,
+        detect_device,
+        get_gpu_info,
+    )
+    from soup_cli.utils.launcher import is_in_distributed
+    from soup_cli.utils.run_provenance import (
+        BaseRevision,
+        base_revision_scope,
+        write_run_provenance,
+    )
 
     cfg = SoupConfig(**config_dict)
 
@@ -541,6 +604,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     device, device_name = detect_device()
     configure_mps_async_load(device)
     gpu_info = get_gpu_info()
+
+    # The same quantization guard `soup train` applies (#423): bitsandbytes cannot run on a
+    # CPU, so an arm that asked for 4bit/8bit there trains with none and says so. Per arm,
+    # not per sweep -- `quantization` can itself be swept, so only some arms downgrade, and
+    # each arm's output then says what that arm ran. Before `start_run`, which stores `cfg`.
+    apply_quantization_guard(cfg, device, console)
 
     # Load data -- the same split `soup train` would use (#1223).
     val_notice = validation_notice(cfg)
@@ -571,12 +640,33 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         # be a second, shorter chain that never grew past v0.40.0, so ten task
         # values and every `backend: mlx` config were trained as plain SFT here
         # while the tracker recorded the configured task.
-        trainer_wrapper = build_trainer(cfg, device=device)
-        trainer_wrapper.setup(dataset)
-
+        base_identity = BaseRevision(
+            cfg.base,
+            binding_supported=(
+                cfg.backend == "transformers" and cfg.training.hub == "hf"
+                and not is_in_distributed()
+            ),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, device=device)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
         # Train
         display = TrainingDisplay(cfg, device_name=device_name)
-        result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        with base_revision_scope(base_identity):
+            result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        write_run_provenance(result["output_dir"], base_identity.metadata(run_id))
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
         tracker.finish_run(
             run_id=run_id,
             initial_loss=result["initial_loss"],
@@ -599,7 +689,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     table = Table(title="Sweep Results")
     table.add_column("Run", style="bold")
     for key in sweep_params:
-        table.add_column(key)
+        table.add_column(Text(strip_control(key)))
     table.add_column("Final Loss", justify="right", style="green")
     table.add_column("Duration", justify="right")
     table.add_column("Status")
@@ -611,7 +701,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
         diverged = res["status"] == "completed" and _is_diverged_loss(res.get("final_loss"))
         display_status = "diverged" if diverged else res["status"]
         status_style = "green" if display_status == "completed" else "red"
-        param_vals = [str(res["params"].get(k, "")) for k in sweep_params]
+        param_vals = [Text(strip_control(res["params"].get(k, ""))) for k in sweep_params]
         finite_loss = _finite_loss(res.get("final_loss"))
         if diverged:
             loss_str = str(res["final_loss"])
@@ -625,7 +715,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
             else ""
         )
         table.add_row(
-            res["name"],
+            Text(strip_control(res["name"])),
             *param_vals,
             f"{loss_str}{best_marker}",
             res.get("duration", "-"),
@@ -643,10 +733,11 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     if completed:
         best = completed[0]
         console.print(
-            f"\n[bold green]Best run:[/] {best['name']} "
-            f"(loss: {best['final_loss']:.4f})"
+            f"\n[bold green]Best run:[/] {for_terminal(best['name'])} "
+            f"(loss: {best['final_loss']:.4f})",
+            emoji=False,
         )
         for key, val in best["params"].items():
-            console.print(f"  {key} = {val}")
+            console.print(f"  {for_terminal(key)} = {for_terminal(val)}", emoji=False)
         if best.get("run_id"):
             console.print(f"\n[dim]View details: soup runs show {best['run_id']}[/]")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
@@ -13,8 +14,13 @@ if TYPE_CHECKING:
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
+
+_SPACE_HARDWARE_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -38,9 +44,9 @@ model = AutoModelForCausalLM.from_pretrained(MODEL_ID, device_map="auto")
 def respond(message, history):
     messages = []
     for user, assistant in history:
-        messages.append({{"role": "user", "content": user}})
-        messages.append({{"role": "assistant", "content": assistant}})
-    messages.append({{"role": "user", "content": message}})
+        messages.append({"role": "user", "content": user})
+        messages.append({"role": "assistant", "content": assistant})
+    messages.append({"role": "user", "content": message})
     prompt = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True,
     )
@@ -69,7 +75,7 @@ _GRADIO_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: gradio
 sdk_version: 4.0.0
 app_file: app.py
@@ -111,12 +117,12 @@ for msg in st.session_state["messages"]:
 
 prompt = st.chat_input("Ask me anything")
 if prompt:
-    st.session_state["messages"].append({{"role": "user", "content": prompt}})
+    st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
         messages = [
-            {{"role": m["role"], "content": m["content"]}}
+            {"role": m["role"], "content": m["content"]}
             for m in st.session_state["messages"]
         ]
         chat_prompt = tokenizer.apply_chat_template(
@@ -132,7 +138,7 @@ if prompt:
         )
         st.markdown(reply)
         st.session_state["messages"].append(
-            {{"role": "assistant", "content": reply}}
+            {"role": "assistant", "content": reply}
         )
 '''
 
@@ -146,7 +152,7 @@ _STREAMLIT_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: streamlit
 sdk_version: 1.30.0
 app_file: app.py
@@ -175,7 +181,9 @@ HF_SPACE_TEMPLATES = {
 }
 
 
-def render_space_template(template: str, model_repo: str) -> dict[str, str]:
+def render_space_template(
+    template: str, model_repo: str, *, zero_gpu: bool = False,
+) -> dict[str, str]:
     """Render the Space template files with ``model_repo`` substituted.
 
     Raises ``ValueError`` when the template is unknown or the model repo id
@@ -191,9 +199,18 @@ def render_space_template(template: str, model_repo: str) -> dict[str, str]:
             f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
         )
     spec = HF_SPACE_TEMPLATES[template]
+    app_source = spec["app.py"]
+    requirements = spec["requirements.txt"]
+    if zero_gpu:
+        if template != "gradio-chat":
+            raise ValueError("ZeroGPU hardware is supported only with the gradio-chat template")
+        app_source = app_source.replace(
+            "import gradio as gr\n", "import spaces\nimport gradio as gr\n", 1,
+        ).replace("\ndef respond(", "\n@spaces.GPU\ndef respond(", 1)
+        requirements += "spaces\n"
     return {
-        "app.py": spec["app.py"].replace("{MODEL_REPO}", model_repo),
-        "requirements.txt": spec["requirements.txt"],
+        "app.py": app_source.replace("{MODEL_REPO}", model_repo),
+        "requirements.txt": requirements,
         "README.md": spec["README.md"].replace("{MODEL_REPO}", model_repo),
     }
 
@@ -278,7 +295,9 @@ def ollama(
         table.add_column("Name", style="bold cyan")
         table.add_column("Size", style="green")
         for entry in models:
-            table.add_row(entry["name"], entry["size"])
+            # Text, not str: a cell string is parsed as markup, and these names are
+            # whatever `ollama list` printed.
+            table.add_row(Text(strip_control(entry["name"])), Text(strip_control(entry["size"])))
         console.print(table)
         raise typer.Exit(0)
 
@@ -301,9 +320,9 @@ def ollama(
 
         success, message = remove_model(remove)
         if success:
-            console.print(f"[green]{message}[/]")
+            console.print(f"[green]{for_terminal(message)}[/]", emoji=False)
         else:
-            console.print(f"[red]{message}[/]")
+            console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
             raise typer.Exit(1)
         raise typer.Exit(0)
 
@@ -328,7 +347,7 @@ def ollama(
     gguf_path = Path(model)
     valid_path, path_err = validate_gguf_path(gguf_path)
     if not valid_path:
-        console.print(f"[red]{path_err}[/]")
+        console.print(f"[red]{for_terminal(path_err)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Check Ollama is installed
@@ -351,8 +370,9 @@ def ollama(
         resolved_template = template
     else:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -361,7 +381,9 @@ def ollama(
     if parameter:
         for param_str in parameter:
             if "=" not in param_str:
-                console.print(f"[red]Invalid parameter format: {param_str}[/]")
+                console.print(
+                    f"[red]Invalid parameter format: {for_terminal(param_str)}[/]", emoji=False
+                )
                 console.print("[dim]Expected format: key=value (e.g. temperature=0.7)[/]")
                 raise typer.Exit(1)
             key, value = param_str.split("=", 1)
@@ -370,11 +392,14 @@ def ollama(
     # Show deploy plan
     console.print(
         Panel(
-            f"Model:    [bold]{name}[/]\n"
-            f"GGUF:     [bold]{gguf_path}[/]\n"
-            f"Template: [bold]{resolved_template}[/]"
-            + (f"\nSystem:   [bold]{system}[/]" if system else "")
-            + (f"\nParams:   [bold]{params}[/]" if params else ""),
+            Text.from_markup(
+                f"Model:    [bold]{name}[/]\n"
+                f"GGUF:     [bold]{for_terminal(gguf_path)}[/]\n"
+                f"Template: [bold]{resolved_template}[/]"
+                + (f"\nSystem:   [bold]{for_terminal(system)}[/]" if system else "")
+                + (f"\nParams:   [bold]{for_terminal(params)}[/]" if params else ""),
+                emoji=False,
+            ),
             title="Deploy to Ollama",
         )
     )
@@ -383,14 +408,15 @@ def ollama(
     if not yes:
         console.print(
             "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-            f"named '{name}'."
+            f"named '{name}'.",
+            emoji=False,
         )
         confirm = typer.confirm("Proceed?")
         if not confirm:
             raise typer.Exit(0)
 
     # Generate Modelfile
-    console.print(f"[green]\u2713[/] Ollama v{version} detected")
+    console.print(f"[green]\u2713[/] Ollama v{for_terminal(version)} detected", emoji=False)
     try:
         modelfile = create_modelfile(
             gguf_path=gguf_path,
@@ -399,7 +425,7 @@ def ollama(
             parameters=params,
         )
     except ValueError as exc:
-        console.print(f"[red]Invalid parameter:[/] {exc}")
+        console.print(f"[red]Invalid parameter:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1)
     console.print("[green]\u2713[/] Modelfile generated")
 
@@ -407,13 +433,15 @@ def ollama(
     console.print("[dim]Creating model in Ollama...[/]")
     success, message = deploy_to_ollama(name, modelfile)
     if not success:
-        console.print(f"[red]Deploy failed:[/] {message}")
+        console.print(f"[red]Deploy failed:[/] {for_terminal(message)}", emoji=False)
         raise typer.Exit(1)
 
-    console.print(f"[green]\u2713[/] Model created: [bold]{name}[/]")
+    console.print(
+        f"[green]\u2713[/] Model created: [bold]{name}[/]", emoji=False
+    )
     console.print(
         Panel(
-            f"Run: [bold]ollama run {name}[/]",
+            Text.from_markup(f"Run: [bold]ollama run {name}[/]", emoji=False),
             title="[bold green]Deploy Complete![/]",
         )
     )
@@ -448,6 +476,11 @@ def hf_space(
             "Use {MODEL_REPO} placeholder for substitution."
         ),
     ),
+    hardware: Optional[str] = typer.Option(
+        None,
+        "--hardware",
+        help="Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g)",
+    ),
     private: bool = typer.Option(
         False, "--private", help="Create the Space as private",
     ),
@@ -460,6 +493,8 @@ def hf_space(
     Uploads an app.py, requirements.txt, and README.md rendered from the
     chosen template. Supports gradio-chat and streamlit-chat.
     """
+    from rich.markup import escape
+
     from soup_cli.utils.hf import (
         get_hf_api,
         resolve_endpoint,
@@ -472,12 +507,32 @@ def hf_space(
     try:
         validate_repo_id(space)
     except ValueError as exc:
-        console.print(f"[red]Invalid --space repo id:[/] {exc}")
+        # The message quotes the id with repr(), which already shows control
+        # characters as escapes, so only the tags and ":name:" codes are left.
+        console.print(f"[red]Invalid --space repo id:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     if template_dir is None and template not in HF_SPACE_TEMPLATES:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}",
+            emoji=False,
+        )
+        raise typer.Exit(1)
+    if hardware is not None and (
+        len(hardware) > 32 or _SPACE_HARDWARE_SLUG.fullmatch(hardware) is None
+    ):
+        console.print(
+            "[red]Invalid --hardware:[/] expected a lowercase hardware slug "
+            "of at most 32 letters, digits, and single hyphens.",
+            emoji=False,
+        )
+        raise typer.Exit(1)
+    zero_gpu = hardware is not None and hardware.startswith("zero-")
+    if zero_gpu and template_dir is None and template == "streamlit-chat":
+        console.print(
+            "[red]ZeroGPU does not support the built-in streamlit-chat template; "
+            "use --template gradio-chat.[/]",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -509,22 +564,28 @@ def hf_space(
             # always created the Space with space_sdk="gradio").
             sdk = detect_space_sdk(files.get("requirements.txt"))
         else:
-            files = render_space_template(template, model_repo=model)
+            files = render_space_template(template, model_repo=model, zero_gpu=zero_gpu)
             sdk = HF_SPACE_TEMPLATES[template]["sdk"]
     except ValueError as exc:
-        console.print(f"[red]Template render failed:[/] {exc}")
+        # Quoted with repr() or fixed text, like the --space id above.
+        console.print(f"[red]Template render failed:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     except FileNotFoundError as exc:
-        console.print(f"[red]Template directory error:[/] {exc}")
+        console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     template_label = template_dir if template_dir is not None else template
+    # The space and the model passed validate_repo_id; the template directory is
+    # typed text.
     console.print(
         Panel(
-            f"Space:    [bold]{space}[/]\n"
-            f"Model:    [bold]{model}[/]\n"
-            f"Template: [bold]{template_label}[/]\n"
-            f"Private:  [bold]{private}[/]",
+            Text.from_markup(
+                f"Space:    [bold]{space}[/]\n"
+                f"Model:    [bold]{model}[/]\n"
+                f"Template: [bold]{for_terminal(template_label)}[/]\n"
+                f"Private:  [bold]{private}[/]",
+                emoji=False,
+            ),
             title="Deploy HuggingFace Space",
         )
     )
@@ -536,26 +597,34 @@ def hf_space(
     # --- Create repo + upload ---
     try:
         api = get_hf_api(token=token, endpoint=endpoint)
+        from huggingface_hub import CommitOperationAdd
     except ImportError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1) from exc
 
     try:
-        api.create_repo(
-            repo_id=space, repo_type="space",
-            space_sdk=sdk,
-            private=private, exist_ok=True,
+        operations = [
+            CommitOperationAdd(path_in_repo=name, path_or_fileobj=content.encode("utf-8"))
+            for name, content in files.items()
+        ]
+        create_repo_kwargs = {
+            "repo_id": space,
+            "repo_type": "space",
+            "space_sdk": sdk,
+            "private": private,
+            "exist_ok": True,
+        }
+        if hardware is not None:
+            create_repo_kwargs["space_hardware"] = hardware
+        api.create_repo(**create_repo_kwargs)
+        api.create_commit(
+            repo_id=space,
+            repo_type="space",
+            operations=operations,
+            commit_message="Soup CLI: deploy Space files",
         )
-        for in_repo_name, content in files.items():
-            api.upload_file(
-                path_or_fileobj=content.encode("utf-8"),
-                path_in_repo=in_repo_name,
-                repo_id=space,
-                repo_type="space",
-                commit_message=f"Soup CLI: add {in_repo_name}",
-            )
     except Exception as exc:
-        console.print(f"[red]Space deploy failed:[/] {exc}")
+        console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(

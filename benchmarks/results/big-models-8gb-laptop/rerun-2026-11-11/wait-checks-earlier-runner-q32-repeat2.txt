@@ -1,0 +1,26 @@
+# Scrubbed copy of the operator's wait log (times UTC). Removed: the list of programs using the GPU.
+# 'python of other jobs' counts python processes that belong to other GPU jobs.
+earlier-runner Qwen3-32B repeat 2 wait start UTC 15:04:36 (budget 10 min)
+UTC 15:04:41 | AC=True | GPU used=0 MiB | free RAM=9,7 GB | python of this work=0 | python of other jobs=0
+UTC 15:05:16 | AC=True | GPU used=0 MiB | free RAM=9,9 GB | python of this work=0 | python of other jobs=0
+final precheck: PRECHECK: NOT OK
+UTC 15:05:55 | AC=True | GPU used=0 MiB | free RAM=9,4 GB | python of this work=0 | python of other jobs=0
+UTC 15:06:30 | AC=True | GPU used=0 MiB | free RAM=9,3 GB | python of this work=0 | python of other jobs=0
+final precheck: PRECHECK: NOT OK
+UTC 15:07:09 | AC=True | GPU used=0 MiB | free RAM=9,2 GB | python of this work=0 | python of other jobs=1
+UTC 15:07:44 | AC=True | GPU used=0 MiB | free RAM=9,1 GB | python of this work=0 | python of other jobs=0
+UTC 15:08:19 | AC=True | GPU used=0 MiB | free RAM=8,6 GB | python of this work=1 | python of other jobs=1
+UTC 15:08:54 | AC=True | GPU used=0 MiB | free RAM=8,5 GB | python of this work=1 | python of other jobs=2
+UTC 15:09:27 | AC=True | GPU used=6606 MiB | free RAM=6,8 GB | python of this work=0
+UTC 15:09:59 | AC=True | GPU used=7110 MiB | free RAM=6,8 GB | python of this work=0
+UTC 15:10:31 | AC=True | GPU used=7110 MiB | free RAM=6,5 GB | python of this work=0
+UTC 15:11:03 | AC=True | GPU used=7148 MiB | free RAM=6,6 GB | python of this work=0
+UTC 15:11:35 | AC=True | GPU used=7148 MiB | free RAM=6,3 GB | python of this work=0
+UTC 15:12:07 | AC=True | GPU used=7148 MiB | free RAM=6,1 GB | python of this work=0
+UTC 15:12:38 | AC=True | GPU used=7148 MiB | free RAM=6,0 GB | python of this work=0
+UTC 15:13:10 | AC=True | GPU used=7148 MiB | free RAM=5,9 GB | python of this work=0
+UTC 15:13:42 | AC=True | GPU used=7148 MiB | free RAM=6,2 GB | python of this work=0
+UTC 15:14:14 | AC=True | GPU used=7148 MiB | free RAM=6,4 GB | python of this work=0
+UTC 15:14:46 | AC=True | GPU used=7148 MiB | free RAM=6,4 GB | python of this work=0
+UTC 15:15:18 | AC=True | GPU used=7148 MiB | free RAM=6,5 GB | python of this work=0
+GAVE UP UTC 15:15:48: conditions never held for 2 consecutive checks

@@ -20,6 +20,7 @@ from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
     bench,
+    cache,
     can,
     card,
     chat,
@@ -120,6 +121,7 @@ app.add_typer(
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
 )
 app.command()(migrate.migrate)
+app.command(name="prune-layer-cache")(cache.prune_layer_cache)
 app.add_typer(
     adapters.app, name="adapters",
     help="Adapter management: list, info, compare LoRA adapters.",
@@ -349,15 +351,16 @@ from soup_cli.commands import active_sample as _active_sample_cmd  # noqa: E402
 
 data.app.command(name="active-sample")(_active_sample_cmd.active_sample)
 
-# v0.63.0 Part D — mSPRT A/B harness.
+# v0.63.0 Part D — Bayes-factor A/B harness.
 from soup_cli.commands import ab as _ab_cmd  # noqa: E402
 
 app.command(
     name="ab",
     help=(
-        "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
-        "reports whether the treatment is better or worse, valid under re-running after "
-        "every new row (v0.63.0)."
+        "Two-sided sequential A/B harness on latency / judge_score / retry_rate "
+        "(Bayes factor with a confidence-sequence accept rule): reports whether "
+        "the treatment is better or worse, valid under re-running after every "
+        "new row (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 
@@ -585,6 +588,15 @@ app.add_typer(
         "Synthesize a deterministic reward verifier from reference outputs, with "
         "a calibration report that refuses degenerate verifiers (v0.71.40)."
     ),
+)
+
+# Documentation search & offline reference guides.
+from soup_cli.commands import docs as _docs_cmd  # noqa: E402
+
+app.add_typer(
+    _docs_cmd.app,
+    name="docs",
+    help="Documentation search & offline reference guides.",
 )
 
 

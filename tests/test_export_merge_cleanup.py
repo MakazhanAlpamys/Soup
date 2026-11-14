@@ -677,3 +677,112 @@ def test_control_tensorrt_build_failure_cleans_up(tmp_path, monkeypatch):
         sys.executable, "/fake/trtllm-build",
     ]
     assert _leftovers(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# The export removes only the merge directory it created
+# ---------------------------------------------------------------------------
+
+_FORMATS = [
+    ("gguf", ["--quant", "q4_0"]),
+    ("bitnet", []),
+    ("gguf-ud", ["--gguf-flavour", "Q4_0_4_4"]),
+    ("onnx", []),
+    ("tensorrt", []),
+]
+
+
+def _preexisting_merge_dir(tmp_path: Path) -> tuple[Path, Path]:
+    existing = tmp_path / ".soup_merge_tmp_adapter"
+    existing.mkdir()
+    marker = existing / "keep-me.txt"
+    marker.write_text("not created by this export", encoding="utf-8")
+    return existing, marker
+
+
+def _stub_optional_modules(monkeypatch) -> None:
+    for name in (
+        "optimum", "optimum.exporters", "optimum.exporters.onnx", "tensorrt_llm",
+        "tensorrt_llm.commands", "tensorrt_llm.commands.convert_checkpoint",
+    ):
+        monkeypatch.setitem(sys.modules, name, mock.MagicMock())
+
+
+@pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
+def test_a_merge_that_fails_early_leaves_a_directory_it_did_not_create(
+    tmp_path, monkeypatch, fmt, extra_args
+):
+    adapter = _adapter_dir(tmp_path)
+    existing, marker = _preexisting_merge_dir(tmp_path)
+    _stub_optional_modules(monkeypatch)
+
+    def failing_merge(adapter_path, base_model, output_dir, trust_remote_code=False):
+        raise RuntimeError("merge failed before writing")
+
+    monkeypatch.setattr(export_mod, "_merge_adapter", failing_merge)
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "merge failed before writing" in str(result.exception)
+    assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert existing.is_dir()
+
+
+@pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
+def test_a_later_failure_also_leaves_a_directory_it_did_not_create(
+    tmp_path, monkeypatch, fmt, extra_args
+):
+    adapter = _adapter_dir(tmp_path)
+    existing, marker = _preexisting_merge_dir(tmp_path)
+    _stub_optional_modules(monkeypatch)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_partial_merge(merges))
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
+    )
+
+    assert merges == [str(existing)]
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert existing.is_dir()
+
+
+def test_the_run_says_it_left_the_directory(tmp_path, monkeypatch):
+    adapter = _adapter_dir(tmp_path)
+    existing, _ = _preexisting_merge_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "export", "--model", str(adapter), "--format", "gguf", "--quant", "q4_0",
+            "--llama-cpp", str(tmp_path / "missing"),
+        ],
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    text = _plain(result.output)
+    assert "existed before this export" in text
+    assert "Cleaning up temporary merge files" not in text
+    assert existing.is_dir()
+
+
+@pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
+def test_a_directory_the_export_created_is_still_removed(tmp_path, monkeypatch, fmt, extra_args):
+    adapter = _adapter_dir(tmp_path)
+    _stub_optional_modules(monkeypatch)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_partial_merge(merges))
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
+    )
+
+    assert merges != []
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _leftovers(tmp_path) == []

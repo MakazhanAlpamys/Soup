@@ -7,16 +7,23 @@ import math
 import os
 import re
 import sys
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     import torch
+    from rich.console import Console
+
+    from soup_cli.config.schema import SoupConfig
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
 # KB — the weights themselves are never touched.
 _ST_HEADER_LEN_BYTES = 8
 _MAX_ST_HEADER_BYTES = 100 * 1024 * 1024  # sanity bound on a crafted file
+# More elements than any model has, in one tensor or in all of them: not a real header.
+_MAX_TENSOR_ELEMENTS = 2**40
+_MAX_TOTAL_PARAMS = 2**50
 
 
 def _params_from_local_safetensors(path: str) -> float | None:
@@ -75,10 +82,14 @@ def param_count_from_local_safetensors(path: str) -> int | None:
                     if not isinstance(dim, int) or dim < 0:
                         return None
                     numel *= dim
+                    if numel > _MAX_TENSOR_ELEMENTS:
+                        return None
                 total += numel
+                if total > _MAX_TOTAL_PARAMS:
+                    return None
         return total or None
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None  # unreadable/crafted -> fall back to the name guess
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
+        return None  # unreadable or malformed -> fall back to the name guess
 
 
 def resolve_device_map(device: str):
@@ -149,7 +160,7 @@ def resolve_inference_device_map_and_dtype(
             ignored.
 
     Returns:
-        A ``(device_map, torch_dtype)`` pair to splat into
+        A ``(device_map, dtype)`` pair to splat into
         ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
         CPU/MLX, ``{"": device}`` (lower-cased) and ``float16`` for
         MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and ``float16``
@@ -300,6 +311,23 @@ def resolve_quantization(
         return "none", msg
 
     return quantization, None
+
+
+def apply_quantization_guard(cfg: SoupConfig, device: str, console: Console) -> None:
+    """Resolve ``cfg.training.quantization`` for ``device`` and print the warning, if any.
+
+    The one place ``soup train`` and every ``soup sweep`` arm decide this, so a CPU run
+    prints the same text and trains with the same value whichever command started it.
+    Call it before anything records ``cfg`` (the tracker stores what actually trained).
+    """
+    resolved, warning = resolve_quantization(
+        device=device,
+        backend=cfg.backend,
+        quantization=cfg.training.quantization,
+    )
+    if warning:
+        console.print(f"[yellow]{warning}[/]")
+    cfg.training.quantization = resolved
 
 
 def get_gpu_info(backend: Optional[str] = None) -> dict:
@@ -533,8 +561,13 @@ def model_size_from_name(model_name: str) -> float:
     return 7.0  # default guess
 
 
-def cuda_supports_bf16() -> bool:
-    """Does the current CUDA device support bf16? Ampere (sm_80) and later.
+def cuda_supports_bf16(device: str | None = None) -> bool:
+    """Does the requested CUDA device support native bf16?
+
+    With no argument, probe the current device as before. An explicit device
+    is made current only for the probe, restoring the caller's device even
+    when the probe fails. This matters on machines mixing pre-Ampere and newer
+    cards: PyTorch's ``is_bf16_supported`` has no device argument.
 
     A T4 (sm_75, Colab's free tier), a P100 (Kaggle), a V100, a GTX 16xx or an
     RTX 20xx does not. Every trainer wrapper used to spell this as
@@ -560,20 +593,15 @@ def cuda_supports_bf16() -> bool:
 
         if not torch.cuda.is_available():
             return False
-        try:
-            # NOT the bare call. ``is_bf16_supported()`` defaults to
-            # ``including_emulation=True``, and its fast path (CUDA >= 11 AND
-            # compute capability >= 8) is only the FIRST branch: when that
-            # fails it falls through to merely constructing a bf16 tensor,
-            # which succeeds on a T4 through software emulation. So the default
-            # answers "can this device hold a bf16 value", while every caller
-            # here is asking "does this device have bf16 hardware".
-            return bool(torch.cuda.is_bf16_supported(including_emulation=False))
-        except TypeError:
-            # torch too old for the keyword, and its bare answer is the
-            # permissive one we are trying to avoid — ask the capability.
-            major, _ = torch.cuda.get_device_capability()
-            return major >= 8
+        with torch.cuda.device(device) if device is not None else nullcontext():
+            try:
+                # The bare call includes emulation and can return True on a T4.
+                return bool(torch.cuda.is_bf16_supported(including_emulation=False))
+            except TypeError:
+                # Older torch lacks the native-only keyword. Query the same
+                # selected device, rather than trusting its permissive probe.
+                major, _ = torch.cuda.get_device_capability()
+                return major >= 8
     except (ImportError, RuntimeError, AssertionError, OSError):
         # The same narrow set ``sft._resolve_mixed_precision`` already catches —
         # broad ``except Exception`` here would swallow a real CUDA error and
@@ -634,12 +662,14 @@ def bf16_fp16_flags(
             return (False, False)
     except (ImportError, RuntimeError, AssertionError, OSError):
         return (False, False)
-    supported = cuda_supports_bf16()
+    supported = (
+        cuda_supports_bf16() if device_name == "cuda" else cuda_supports_bf16(device_name)
+    )
     return (supported, not supported)
 
 
 def resolve_frozen_base_load_dtype(device: str):
-    """``torch_dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
+    """``dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
 
     A frozen base never receives an optimizer step, so there is no reason to
     upcast it to the HF default of float32 on load: keep the checkpoint's own

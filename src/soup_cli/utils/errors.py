@@ -5,8 +5,9 @@ import traceback
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console(stderr=True)
 
@@ -377,13 +378,13 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
 
     if matched is not None:
         error_msg, fix = matched
-        console.print(f"\n[bold red]Error:[/] {for_terminal(error_msg)}")
+        console.print(Text.assemble("\n", ("Error:", "bold red"), f" {strip_control(error_msg)}"))
         console.print(f"[green]Fix:[/] {fix}")
         if verbose:
             console.print()
             console.print(
                 Panel(
-                    for_terminal(traceback.format_exc()),
+                    Text(strip_control(traceback.format_exc())),
                     title="[dim]Full Traceback[/]",
                     border_style="dim",
                 )
@@ -391,13 +392,19 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
         return
 
     # Unknown error — show type + message
-    console.print(f"\n[bold red]Error:[/] {for_terminal(exc_type)}: {for_terminal(exc_str)}")
+    console.print(
+        Text.assemble(
+            "\n",
+            ("Error:", "bold red"),
+            f" {strip_control(exc_type)}: {strip_control(exc_str)}",
+        )
+    )
     console.print("[dim]Run with --verbose for the full traceback.[/]")
     if verbose:
         console.print()
         console.print(
             Panel(
-                for_terminal(traceback.format_exc()),
+                Text(strip_control(traceback.format_exc())),
                 title="[dim]Full Traceback[/]",
                 border_style="dim",
             )

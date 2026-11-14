@@ -44,6 +44,13 @@ soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
 soup merge --adapter ./output --output ./merged --low-memory
 ```
 
+Both merge paths reuse the base commit recorded in the adapter's `soup_run.json`
+when its base ID matches and its revision source is `hub_commit`, and print
+`Base revision: <commit> (recorded run)`. A different `--base` override, a local
+base, a non-Hugging-Face source or a legacy adapter keeps its existing loading
+behavior and prints the revision as unknown; Soup does not query today's Hub
+head to fill missing training history.
+
 `--low-memory` reads the base `.safetensors` files and writes the merged files
 one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
 file; a single-file model is memory-mapped as a whole, so it saves little). The
@@ -67,6 +74,43 @@ ReLoRA training outputs are already standalone dense models: Soup merges the
 final active adapter into the accumulated in-memory base before writing the
 training output. Load or export that directory directly; `soup merge` is only
 for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
+
+
+### Native MLX adapter fusion
+
+On Apple Silicon, merge an ordinary native text LoRA into a standalone dense checkpoint:
+
+```bash
+soup merge --backend mlx --adapter ./mlx-adapter --output ./fused --dtype float32
+# Explicit opt-in for a genuinely 4-bit source; output remains dense:
+soup merge --backend mlx --adapter ./mlx-4bit-adapter --output ./fused --dequantize
+soup infer --backend mlx --model ./fused --input prompts.jsonl --output results.jsonl
+```
+
+The shared native loader resolves the saved base identity and validates all adapter
+keys/shapes before applying tensors. `--base`, if supplied, must match that identity.
+Fusion uses MLX-LM's linear LoRA fusion and dequantizes the whole model, including
+untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
+`--save-format fp16` names the standard dense format, independently of this dtype.
+`--dequantize` is a no-op for an already dense base. There is no automatic
+requantization. The saved weights, model configuration and
+tokenizer reload without the original base/adapter directories; quantization metadata
+and live adapter tensors are removed, while tied-weight configuration is preserved.
+Saving uses the local base snapshot already loaded, including for a Hub identifier,
+with the same file filters as the model loader; uncached README or repository
+metadata files are not required, including with MLX-LM 0.31.3. It does not fetch a
+Hub README. MLX-LM copies the base's top-level `*.py` files and
+`generation_config.json` when present and generates a local README. An `auto_map`
+entry still requires explicit `--trust-remote-code` when loading the result.
+
+Output must be new, contained under the current directory and disjoint from both
+inputs, including through symlinks. Writes are staged in its parent; failed or
+interrupted saves do not publish an incomplete checkpoint. Inputs remain unchanged.
+DoRA and other unqualified adapter variants, BNB save formats and explicit
+`--double-quant` controls, `--low-memory`, and non-HF hubs are refused on the native path.
+Native fusion loads the full model; it does not implement tensor-streaming merge.
+`--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
+tiny dense/affine 4-bit text fixtures, not general model quality or GGUF conversion.
 
 
 ## Export to GGUF
@@ -189,13 +233,119 @@ Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are unteste
 
 ### ONNX Export
 
-Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
+Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/).
+The supported path uses **two environments**: keep training and adapter merging
+in the training environment, and install only `soup-cli[onnx]` in a separate
+export environment. Installing `[train]` and `[onnx]` together is unsupported.
+
+For an adapter-only output, merge it in the existing training environment first;
+a standalone dense checkpoint can be exported directly. For compatible model
+configurations and tokenizers, the POSIX workflow is:
 
 ```bash
-pip install "soup-cli[onnx]"
-soup export --model ./output --format onnx
-soup export --model ./output --format onnx --output ./model_onnx
+# In the existing training environment, for an adapter-only output:
+soup merge --adapter ./output --output ./merged
+
+# Switch to a fresh export-only environment:
+python3 -m venv .venv-onnx
+source .venv-onnx/bin/activate
 ```
+
+Install the [qualified export-only pins below](#qualified-export-only-setup),
+including CPU PyTorch and the compatible Optimum/Transformers versions, in this
+environment before exporting:
+
+```bash
+soup export --model ./merged --format onnx --output ./model_onnx
+```
+
+On Windows, activate the export environment with
+`.venv-onnx\Scripts\Activate.ps1` in PowerShell instead of `source`.
+
+To check a causal-LM export numerically on your own inputs, add `--validate-onnx`:
+
+```bash
+soup export --model ./merged --format onnx --validate-onnx \
+  --prompts ./prompts.txt --atol 0.0001 --output ./model_onnx
+```
+
+The prompt file is UTF-8, one text per line, or `.jsonl` with one
+`{"prompt": "..."}` object per line. The check uses the same token IDs for the source
+model and ONNX Runtime, compares **all logits**, and prints maximum absolute error,
+element-weighted mean absolute error, the tolerance and PASS/FAIL. It runs both models
+on CPU in float32, one prompt at a time, without a chat template, padding or truncation.
+The default absolute tolerance, `0.0001`, is a configurable starting point for an FP32
+smoke check; it is not a model-independent quality threshold. There is no additional
+relative tolerance. Non-finite logits never pass.
+
+Allow RAM for both the source model and ONNX Runtime: the source's float32 weights
+alone need roughly four bytes per parameter, plus logits and runtime buffers.
+A large merged checkpoint can therefore need substantially more RAM than its file size.
+
+The first version supports `--onnx-task text-generation` with exactly one ONNX graph,
+standard integer token inputs and a float32 `logits` output. Cached decoding, split
+graphs, other tasks and unknown inputs are refused. Inputs are limited to 1 MiB,
+32 non-empty prompts and 512 tokens per prompt; exceeding a limit refuses the check
+rather than silently checking a subset. A check on these inputs says nothing about
+held-out accuracy or generation with a KV cache.
+
+After the requested validation runs, exit **0** means PASS and **2** means a numerical
+FAIL: logits exceeded the tolerance or were non-finite. Exit **3** means invalid
+validation input, missing validation dependencies or an unsupported/failed comparison.
+Exporter failures retain their existing exit code **1**.
+
+Exit **2** is also an existing export usage code: for example, `--verbose` or
+`--no-install-deps` with ONNX is refused before export because those options require
+GGUF. A script must not classify exit 2 alone as numerical drift. The numerical case
+prints the `ONNX Logits Validation` report with `FAIL` and error figures; option
+conflicts print their option-specific diagnostic and no validation report. Invalid
+validation arguments print `ONNX validation input error` and exit 3; an unusable
+comparison prints `ONNX validation could not run` and exits 3. These existing export
+option-conflict codes are unchanged with or without the validation flag.
+
+A failed check leaves the exported files for inspection,
+does not print the completion panel and does not register the export. For an adapter,
+the reference is its freshly merged model, checked before the temporary merge is removed.
+Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
+the flag.
+
+**Supported exporter/dependency policy.** ONNX export and the opt-in validation
+check use the separate export-only environment described above. The `[onnx]`
+extra remains `optimum[onnxruntime]>=1.16.0`; this feature does not change any
+dependency bounds or select a different export backend. The policy is confirmed
+in [the exporter support decision](https://github.com/MakazhanAlpamys/Soup/issues/2676#issuecomment-6816046820).
+
+#### Qualified export-only setup
+
+**Why the environments are separate.** The tested
+`optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires
+Transformers 5.16.1 or newer. These requirements do not fit in one environment. For a
+merged checkpoint whose model configuration and tokenizer are supported by Transformers 4.57.6,
+the following separate, export-only environment was checked on Linux / Python 3.12:
+
+```bash
+python3 -m venv .venv-onnx
+.venv-onnx/bin/python -m pip install "torch==2.6.0" \
+  --index-url https://download.pytorch.org/whl/cpu
+.venv-onnx/bin/python -m pip install -e ".[onnx]" \
+  "optimum==2.1.0" "optimum-onnx==0.1.0" "transformers==4.57.6"
+.venv-onnx/bin/python -m pip check
+.venv-onnx/bin/python -m soup_cli.cli export --model ./merged --format onnx \
+  --validate-onnx --prompts ./prompts.txt --output ./model_onnx
+```
+
+Install only the ONNX extra there; keep training and merging in their training environment.
+**Known tokenizer limit:** a checkpoint saved by Transformers 5 may have a tokenizer
+that the export environment's 4.x loader cannot read. For example, a tokenizer saved
+as `TokenizersBackend` cannot be loaded by the tested 4.x loader. Such a checkpoint
+is outside this export path's compatibility scope; do not rename its tokenizer
+class to bypass the error. Transformers-5-only architectures are likewise not
+qualified by these checks.
+
+The compatibility report and a separate native-PyTorch lab prototype are in
+[the ONNX qualification record](../benchmarks/onnx-export-compatibility-2026-11-11.md).
+That prototype remains a lab harness. A native exporter for Transformers 5 would
+require a separate issue and optional-dependency decision; it is outside this feature.
 
 ### TensorRT-LLM Export
 
@@ -271,7 +421,7 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
 - **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). Without the flag, `soup export` looks for the entry registered from the run that wrote `--model`: it compares each entry's run `output_dir` in the experiment tracker with `--model` (resolved paths, the newest 1000 entries). Entries without a run id never match, and when several match (one run registered twice, or several runs trained into the same directory) the most recently registered entry wins; the attach line names the entry it chose, and nothing is attached when no entry matches. A run whose output directory was recorded as a relative path (as the tracker stored the default `./output` until #2725) is resolved against the current directory, so it matches when you export from the directory it trained in. If the registry or the experiment tracker database cannot be read, the export still succeeds and prints a warning instead of attaching; pass `--registry-id` to attach explicitly. When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -303,6 +453,18 @@ soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output re
 soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
 ```
 
+Interactive chat uses the same component and artifact contract:
+
+```bash
+soup chat --backend mlx --model ./mlx-adapter --temperature 0
+soup chat --backend mlx --model ./mlx-base
+```
+
+Chat preserves conversation history, `/quit`, `/clear` and `/system`.
+Ctrl-C or end-of-input during native generation ends the session with `Goodbye!`;
+its in-memory conversation history is discarded.
+Native adapters passed to the default chat backend are refused with a backend hint.
+
 Inference uses a shared MLX loader and generation implementation. Native Soup
 adapters carry `model`, `num_layers` and resolved `lora_parameters` in
 `adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
@@ -315,8 +477,10 @@ to the default Transformers backend is refused with a backend hint.
 
 The initial native consumer supports ordinary linear text LoRA (including the saved
 rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
-DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
-adapter targets are refused. This does not add MLX serving or adapter fusion.
+Adapters trained with native linear RoPE scaling record `rope_scaling` in `adapter_config.json`,
+which is re-applied during generation and fusion for unquantized base models (quantized bases
+with RoPE scaling are refused). DoRA, full-finetune adapters, embedding/switch-layer targets
+and other quantized adapter targets are refused. This does not add MLX serving or adapter fusion.
 Use the base tokenizer's chat template; rendered special tokens are encoded once.
 Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
 with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
@@ -438,6 +602,16 @@ Endpoints:
 - `GET /v1/models` — list available models
 - `GET /health` — health check
 
+On the Transformers backend, `"stream": true` on `/v1/chat/completions` sends the reply
+as the model generates it (word by word), so the first chunk arrives before generation
+ends. The chunk fields, final chunk, `[DONE]` and `finish_reason` are the same as for a
+reply generated in full. A request served with `--reasoning-parser`, a draft model
+(`--speculative-decoding`), n-gram lookup or MoLE routing is generated in full first and
+sent afterwards, and so is a request to a model whose generation config sets beam search
+(`num_beams` above 1) or several return sequences. A `/v1/messages` request with
+`"stream": true` follows the same rules (see [Anthropic Messages Endpoint](#anthropic-messages-endpoint)).
+Use `--backend vllm` for token streaming with speculative decoding.
+
 Compatible with OpenAI SDK:
 ```python
 from openai import OpenAI
@@ -447,6 +621,17 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
+
+On the default Transformers backend, including a MoLE runtime, `finish_reason` is `"length"` when generation used the whole `max_tokens` budget without an end token and `"stop"` otherwise, even when the end token is the last one the budget allows. `/v1/messages` reports the same as `stop_reason` `max_tokens` / `end_turn`, or `stop_sequence` when a stop string ended the reply (and then `stop_sequence` carries the matched string, `null` otherwise), in the reply and in the final `message_delta` event.
+
+**Stop strings.** `/v1/chat/completions` takes the OpenAI `stop` field and `/v1/messages` the Anthropic `stop_sequences` field:
+
+- `stop` is a string, a list of at most 4 non-empty strings, or `null`. `stop_sequences` is a list only (a bare string is refused). Each string is at most 256 characters; an empty list means no stop string.
+- A value outside that is answered with a 400 whose message names the field (`stop` or `stop_sequences`) and the rule it broke; it never repeats the value.
+- The reply is cut before the first stop string to complete, and the stop string and everything after it are never returned, in a streamed reply as well. Whitespace left before the cut is dropped.
+- A match gives `finish_reason` `"stop"` (`stop_reason` `"stop_sequence"` on `/v1/messages`), even when the reply also used its whole `max_tokens` budget.
+- On the plain Transformers path generation ends at the match. With `--reasoning-parser`, a draft model, n-gram lookup, MoLE routing, or a model that sets beam search or several return sequences, the reply is generated in full and cut afterwards (with `--reasoning-parser`, after the reasoning block is removed).
+- Only the Transformers backend honours the field: the vLLM, SGLang and MII backends do not forward it, so their replies are not cut.
 
 ### KV Cache Quantization (`soup serve --kv-cache-type`)
 
@@ -824,7 +1009,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 171 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 179 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -833,7 +1018,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (171 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (179 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -990,7 +1175,7 @@ anthropic_payload = to_anthropic({
 })
 ```
 
-Multiple `system` messages join with `\n\n`. `tool` role with structured (list) content is concatenated into a single `tool_result` text block, never silently dropped. `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. `soup serve` exposes this converter as a live `POST /v1/messages` endpoint on both the transformers and vLLM backends; with `"stream": true` it answers in the Anthropic event shape.
+Multiple `system` messages join with `\n\n`. `tool` role with structured (list) content is concatenated into a single `tool_result` text block, never silently dropped. `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`, `top_p` bounded `[0.0, 1.0]`. `soup serve` exposes this converter as a live `POST /v1/messages` endpoint on both the transformers and vLLM backends; with `"stream": true` it answers in the Anthropic event shape.
 
 
 ## Server-Side Tools
@@ -1029,10 +1214,21 @@ curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
 ```
 
 Non-streaming requests return Anthropic-shaped envelopes. Streaming (`stream: true`)
-returns Anthropic event-shape SSE with `message_start` → `content_block_delta` →
-`message_delta` + `message_stop` events. Validation errors return a generic
+returns Anthropic event-shape SSE. On the Transformers backend the events follow the
+Anthropic SDK order and the text is sent as the model generates it: `message_start`,
+`content_block_start`, one `content_block_delta` per piece of text, `content_block_stop`,
+`message_delta` (carrying `stop_reason`, `stop_sequence` and the `output_tokens` count) and
+`message_stop`. A failure after the stream has started ends it with an `error` event. The
+requests that are generated in full first are the ones listed under
+[Inference Server](#inference-server). The vLLM backend generates in full and sends
+`message_start`, a `content_block_delta` per word, `message_delta` and `message_stop`.
+`stop_sequences` is read on the Transformers backend only (see Stop strings under
+[Inference Server](#inference-server)); a bad `stop_sequences` is a 400 that names the
+field. Other validation errors return a generic
 `"Invalid request"` 400 body with details logged server-side at DEBUG. CORS restricted
-to loopback-only (`localhost` / `127.0.0.1`) on both backends.
+to loopback-only (`localhost` / `127.0.0.1`) on both backends, and on both a request whose
+`Origin` names another site is refused with 403 (see
+[Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 
 ## N-gram Speculative Decoding
@@ -1066,9 +1262,9 @@ Three POST routes are now available on `soup serve`:
   `timed_out: true` and `exit_code: 124`; an output overflow returns
   `timed_out: false` and `exit_code: 1`. Other process failures retain their exit
   code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB.
-  Python line numbers include the six-line network-guard prefix: the caller's
-  first line is reported as line 7. Tool authentication failures return HTTP 401
-  with `WWW-Authenticate: Bearer`.
+  The code is compiled under the file name `<code>`, so a traceback gives the caller's
+  own line numbers (`File "<code>", line 2` for an error on the second line). Tool
+  authentication failures return HTTP 401 with `WWW-Authenticate: Bearer`.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
@@ -1085,6 +1281,11 @@ Three POST routes are now available on `soup serve`:
   The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
+
+When the sandbox cannot start, `/v1/tools/python` answers 501 with
+`python sandbox requires OS-level isolation` and `/v1/tools/bash` with
+`bash sandbox requires OS-level isolation`, whatever the cause; the cause is logged on the
+server at DEBUG level.
 
 **`/v1/tools/python` and `/v1/tools/bash` need `--tool-auth-token` on every bind.** A
 server started without it answers both routes with 401 on loopback too, as it already did
@@ -1110,6 +1311,12 @@ a long random one, such as the one generated above
 loopback or behind a proxy that terminates TLS: the Bearer header is sent in clear text
 over plain HTTP.
 
+The token must be 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`, the rule
+`soup ui` and `soup mcp serve` apply to theirs. `soup serve` checks the value from the
+option or from `SOUP_TOOL_AUTH_TOKEN` first, on every bind, and exits with status 2 before
+loading the model when it does not match; the message names the rule, never the value. An
+empty value counts as no token.
+
 `/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
 bind they take a token only when the server has one.
 
@@ -1126,7 +1333,9 @@ another site is refused with 403, so a page the operator merely visits cannot dr
 generation on their server or enumerate the loaded adapters — CORS alone would only stop
 that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
 all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
-checked on these routes, so a proxy can still front them under its own hostname.
+checked on these routes, so a proxy can still front them under its own hostname. The
+`--backend vllm`, `sglang` and `mii` servers apply the same `Origin` check to their
+generation routes (`/v1/chat/completions`, and `/v1/messages` on vLLM).
 
 **What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
 without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
@@ -1136,5 +1345,6 @@ put a proxy that authenticates in front of the server if that is not intended. W
 `--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks
 the token. On a wildcard bind (`0.0.0.0`, `::`) there is no single name to compare `Host`
 against, so the routes that otherwise compare it check only that an `Origin` header, when
-sent, names the same host as `Host`. `soup serve` prints these points at startup whenever
-it binds beyond loopback.
+sent, names the same host as `Host`. Every route speaks plain HTTP: `soup serve` has no
+TLS, so terminate TLS in a proxy in front of a server other machines reach. `soup serve`
+prints these notes at startup whenever it binds beyond loopback.

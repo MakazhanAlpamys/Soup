@@ -12,13 +12,34 @@ from rich.console import Console
 from rich.markup import escape as markup_escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
+from soup_cli.utils.code_revision import CodeRevision
 from soup_cli.utils.run_cost import format_cost_usd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
+
+
+def _recorded_code_revision(run: dict) -> CodeRevision:
+    """Validate stored provenance too: a local database can be edited."""
+    dirty = run.get("code_dirty")
+    if type(dirty) is int and dirty in (0, 1):
+        dirty = bool(dirty)
+    try:
+        return CodeRevision(commit=run.get("code_commit"), dirty=dirty)
+    except ValueError:
+        return CodeRevision()
+
+
+def _code_state(run: dict) -> str:
+    """Do not mistake an older or malformed observation for a clean tree."""
+    dirty = _recorded_code_revision(run).dirty
+    if dirty is None:
+        return "unknown"
+    return "dirty" if dirty else "clean"
 
 
 def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
@@ -123,14 +144,13 @@ def list_runs(
         # Shorten run_id for display
         short_id = run["run_id"]
 
-        # experiment_name / base_model / task are config-derived — escape so a
-        # crafted value can't inject Rich markup (registry.py escapes the same
-        # fields).
+        # experiment_name / base_model / task are config-derived: Text, not str, so a
+        # crafted value is neither parsed as markup nor turned into an emoji.
         table.add_row(
-            markup_escape(str(short_id)),
-            markup_escape(str(run.get("experiment_name") or "")),
-            markup_escape(str(run.get("base_model") or "")),
-            markup_escape(str(run.get("task") or "")),
+            Text(strip_control(str(short_id))),
+            Text(strip_control(str(run.get("experiment_name") or ""))),
+            Text(strip_control(str(run.get("base_model") or ""))),
+            Text(strip_control(str(run.get("task") or ""))),
             status_str,
             loss_str,
             str(run.get("total_steps") or ""),
@@ -147,13 +167,13 @@ def show(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
 ):
     """Show detailed info about a specific run, including loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
@@ -181,11 +201,12 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-    # Build info panel — config-derived fields escaped (mirrors registry.py).
-    _esc = markup_escape
+    # Build info panel — config-derived fields go through for_terminal and the
+    # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
+    # codes and control characters in the text.
     info_lines = [
-        f"Run ID:     [bold]{_esc(str(run['run_id']))}[/]",
-        f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Name:       {for_terminal(run.get('experiment_name') or '-')}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
     ]
@@ -199,21 +220,25 @@ def show(
         info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
     info_lines.extend([
         "",
-        f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+        f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
-        f"Task:       {_esc(str(run.get('task') or '-'))}",
-        f"Device:     {_esc(str(run.get('device_name') or '-'))} "
-        f"({_esc(str(run.get('device') or '-'))})",
-        f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
+        f"Commit:     {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
+        f"State:      {_code_state(run)}",
+        f"Task:       {for_terminal(run.get('task') or '-')}",
+        f"Device:     {for_terminal(run.get('device_name') or '-')} "
+        f"({for_terminal(run.get('device') or '-')})",
+        f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
-        f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
+        f"Output:     {for_terminal(run.get('output_dir') or '-')}",
     ])
-    console.print(Panel("\n".join(info_lines), title="Run Details"))
+    console.print(
+        Panel(Text.from_markup("\n".join(info_lines), emoji=False), title="Run Details")
+    )
 
     # Config section
     if run.get("config_json"):
@@ -223,7 +248,9 @@ def show(
             # Truncate long configs
             if len(config_str) > 1500:
                 config_str = config_str[:1500] + "\n..."
-            console.print(Panel(config_str, title="Config"))
+            # json.dumps already escapes control characters, so Text only has to
+            # stop Rich from reading the JSON as markup or emoji codes.
+            console.print(Panel(Text(config_str), title="Config"))
         except json.JSONDecodeError:
             pass
 
@@ -234,7 +261,9 @@ def show(
         eval_table.add_column("Benchmark", style="bold")
         eval_table.add_column("Score", justify="right")
         for result in eval_results:
-            eval_table.add_row(result["benchmark"], f"{result['score']:.4f}")
+            eval_table.add_row(
+                Text(strip_control(str(result["benchmark"]))), f"{result['score']:.4f}"
+            )
         console.print(eval_table)
 
     # Loss curve
@@ -244,29 +273,39 @@ def show(
             _plot_loss_curve(metrics)
 
 
-@app.command()
+@app.command(short_help="Compare two local training runs side by side.")
 def compare(
     run_1: str = typer.Argument(..., help="First run ID (or prefix)"),
     run_2: str = typer.Argument(..., help="Second run ID (or prefix)"),
 ):
-    """Compare two training runs side by side."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    """Compare two local training runs side by side. The summary includes stored dataset
+    SHA-256 hashes and the Code commit and Code state startup observations. The
+    config table shows differing paths and labels fields absent
+    from one run as not stored. If either full config is unavailable, the command
+    identifies that run and skips the config table. The evaluation table uses the
+    latest stored score for each benchmark and shows the right-minus-left delta
+    when both runs have a score.
+    """
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+    from soup_cli.registry.diff import config_diff, eval_delta
 
     tracker = ExperimentTracker()
     r1 = tracker.get_run(run_1)
     r2 = tracker.get_run(run_2)
 
     if not r1:
-        console.print(f"[red]Run not found: {run_1}[/]")
+        console.print(f"[red]{run_lookup_failure(tracker, run_1)}[/]", emoji=False)
         raise typer.Exit(1)
     if not r2:
-        console.print(f"[red]Run not found: {run_2}[/]")
+        console.print(f"[red]{run_lookup_failure(tracker, run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
+    # Run ids, names, models and config values are stored text: every cell is a
+    # Text, so none is parsed as markup or turned into an emoji.
     table = Table(title="Run Comparison")
     table.add_column("Metric", style="bold")
-    table.add_column(r1["run_id"][:20], justify="right")
-    table.add_column(r2["run_id"][:20], justify="right")
+    table.add_column(Text(strip_control(r1["run_id"][:20])), justify="right")
+    table.add_column(Text(strip_control(r2["run_id"][:20])), justify="right")
 
     rows = [
         ("Name", r1.get("experiment_name") or "-", r2.get("experiment_name") or "-"),
@@ -274,6 +313,11 @@ def compare(
         ("Task", r1.get("task") or "-", r2.get("task") or "-"),
         ("Device", r1.get("device_name") or "-", r2.get("device_name") or "-"),
         ("Status", r1.get("status") or "-", r2.get("status") or "-"),
+        ("Code commit", _recorded_code_revision(r1).commit or "unknown",
+         _recorded_code_revision(r2).commit or "unknown"),
+        ("Code state", _code_state(r1), _code_state(r2)),
+        ("Dataset SHA-256", r1.get("training_data_sha256") or "unknown",
+         r2.get("training_data_sha256") or "unknown"),
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
         ("Final Loss", _fmt_float(r1.get("final_loss")), _fmt_float(r2.get("final_loss"))),
         ("Steps", str(r1.get("total_steps") or "-"), str(r2.get("total_steps") or "-")),
@@ -281,19 +325,12 @@ def compare(
          _fmt_duration(r2.get("duration_secs"))),
     ]
 
-    # Add config comparison for key fields
-    for run_data in [r1, r2]:
-        if run_data.get("config_json"):
-            try:
-                run_data["_config"] = json.loads(run_data["config_json"])
-            except json.JSONDecodeError:
-                run_data["_config"] = {}
-
-    c1 = r1.get("_config", {})
-    c2 = r2.get("_config", {})
-
-    training1 = c1.get("training", {})
-    training2 = c2.get("training", {})
+    # Keep the familiar summary, then compare the complete stored config below.
+    c1, c2 = _stored_run_config(r1), _stored_run_config(r2)
+    training1 = (c1 or {}).get("training", {})
+    training2 = (c2 or {}).get("training", {})
+    training1 = training1 if isinstance(training1, dict) else {}
+    training2 = training2 if isinstance(training2, dict) else {}
     rows.extend([
         ("Epochs", str(training1.get("epochs", "-")), str(training2.get("epochs", "-"))),
         ("Learning Rate", str(training1.get("lr", "-")), str(training2.get("lr", "-"))),
@@ -305,6 +342,8 @@ def compare(
 
     lora1 = training1.get("lora", {})
     lora2 = training2.get("lora", {})
+    lora1 = lora1 if isinstance(lora1, dict) else {}
+    lora2 = lora2 if isinstance(lora2, dict) else {}
     rows.extend([
         ("LoRA r", str(lora1.get("r", "-")), str(lora2.get("r", "-"))),
         ("LoRA alpha", str(lora1.get("alpha", "-")), str(lora2.get("alpha", "-"))),
@@ -312,12 +351,72 @@ def compare(
 
     for label, val1, val2 in rows:
         # Highlight differences
-        if val1 != val2:
-            table.add_row(label, f"[yellow]{val1}[/]", f"[yellow]{val2}[/]")
-        else:
-            table.add_row(label, val1, val2)
+        style = "yellow" if val1 != val2 else ""
+        table.add_row(
+            label,
+            Text(strip_control(val1), style=style),
+            Text(strip_control(val2), style=style),
+        )
 
     console.print(table)
+
+    if c1 is None or c2 is None:
+        for run, config in ((r1, c1), (r2, c2)):
+            if config is None:
+                run_id = strip_control(run["run_id"])
+                console.print(
+                    Text(f"Config comparison unavailable: config for {run_id} not stored.")
+                )
+    else:
+        changes = config_diff(c1, c2)
+        if not changes:
+            console.print("No config differences.")
+        else:
+            config_table = Table(title="Config Differences")
+            for heading in ("Path", "Kind", "Left", "Right"):
+                config_table.add_column(heading)
+            for change in changes:
+                config_table.add_row(
+                    Text(strip_control(change.path)),
+                    "changed" if change.kind == "changed" else "not stored",
+                    _config_cell(change.left, missing=change.kind == "added"),
+                    _config_cell(change.right, missing=change.kind == "removed"),
+                )
+            console.print(config_table)
+
+    deltas = eval_delta(
+        tracker.get_eval_results(run_id=r1["run_id"]),
+        tracker.get_eval_results(run_id=r2["run_id"]),
+    )
+    if not deltas:
+        console.print("No stored evaluation scores.")
+    else:
+        eval_table = Table(title="Evaluation Comparison")
+        eval_table.add_column("Benchmark")
+        for heading in ("Left", "Right", "Delta (right - left)"):
+            eval_table.add_column(heading, justify="right")
+        for row in deltas:
+            eval_table.add_row(
+                Text(strip_control(str(row["benchmark"]))),
+                f"{row['left']:.4f}" if row["left"] is not None else "-",
+                f"{row['right']:.4f}" if row["right"] is not None else "-",
+                f"{row['delta']:+.4f}" if row["delta"] is not None else "-",
+            )
+        console.print(eval_table)
+
+
+def _stored_run_config(run: dict) -> Optional[dict]:
+    """Read recorded JSON, without inventing defaults for historical runs."""
+    try:
+        config = json.loads(run.get("config_json"))
+    except (TypeError, ValueError):
+        return None
+    return config if isinstance(config, dict) else None
+
+
+def _config_cell(value: object, *, missing: bool) -> Text:
+    """Keep missing distinct from JSON null, and stored text literal."""
+    return Text("<not stored>" if missing else strip_control(json.dumps(value, ensure_ascii=False)))
 
 
 @app.command()
@@ -326,21 +425,22 @@ def delete(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a training run and its metrics."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found: {run_id}[/]")
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if not force:
-        if not typer.confirm(f"Delete run {run['run_id']}?"):
+        # typer.confirm prints through click, not Rich: only the strip applies.
+        if not typer.confirm(f"Delete run {strip_control(run['run_id'])}?"):
             raise typer.Exit()
 
     tracker.delete_run(run["run_id"])
-    console.print(f"[green]Deleted run: {run['run_id']}[/]")
+    console.print(f"[green]Deleted run: {for_terminal(run['run_id'])}[/]", emoji=False)
 
 
 def _checkpoint_step(checkpoint: Path) -> Optional[int]:
@@ -379,6 +479,17 @@ def _checkpoint_to_keep(
     return None, False
 
 
+def _resolved_output_dir(run: dict) -> Optional[Path]:
+    """A run's recorded output directory as ``runs clean`` compares it, or None."""
+    out_dir_str = run.get("output_dir")
+    if not out_dir_str:
+        return None
+    try:
+        return Path(os.path.realpath(out_dir_str))
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -404,7 +515,7 @@ def clean(
     """
     import shutil
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
@@ -416,7 +527,7 @@ def clean(
     elif run_id:
         run = tracker.get_run(run_id)
         if not run:
-            console.print(f"[red]Run not found: {run_id}[/]")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
         runs_to_clean = [run]
     else:
@@ -428,40 +539,52 @@ def clean(
         console.print("[yellow]No runs to clean.[/]")
         raise typer.Exit()
 
+    # Cross-platform containment: project convention requires
+    # os.path.realpath + commonpath because Path.resolve() + relative_to()
+    # silently mismatches on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
     total_bytes_to_reclaim = 0
     files_to_delete = []
     dirs_to_delete = []
 
+    # Several runs can share one output directory (#2724). Each directory is
+    # pruned once, so no path is listed, counted or deleted twice.
+    runs_by_dir: dict[Path, list[dict]] = {}
     for run in runs_to_clean:
-        out_dir_str = run.get("output_dir")
-        if not out_dir_str:
+        output_dir = _resolved_output_dir(run)
+        if output_dir is None or not is_under_cwd(output_dir) or not output_dir.exists():
             continue
-        # Cross-platform containment: project convention requires
-        # os.path.realpath + commonpath because Path.resolve() + relative_to()
-        # silently mismatches on Windows 8.3 short names.
-        from soup_cli.utils.paths import is_under_cwd
+        runs_by_dir.setdefault(output_dir, []).append(run)
 
-        try:
-            output_dir = Path(os.path.realpath(out_dir_str))
-        except (OSError, ValueError):
-            continue
-        if not is_under_cwd(output_dir):
-            continue
-        if not output_dir.exists():
-            continue
+    # Every run recorded at a directory keeps its best checkpoint, including
+    # runs that are not being cleaned: `runs clean B` must not prune A's best.
+    # Each directory's list starts from the runs being cleaned, so they are
+    # protected even when `list_runs` does not return them.
+    cleaned_ids = {run["run_id"] for runs in runs_by_dir.values() for run in runs}
+    runs_at_dir = {output_dir: list(runs) for output_dir, runs in runs_by_dir.items()}
+    recorded_runs = runs_to_clean if all_runs else tracker.list_runs(limit=100000)
+    for run in recorded_runs:
+        output_dir = _resolved_output_dir(run)
+        if output_dir in runs_at_dir and run["run_id"] not in cleaned_ids:
+            runs_at_dir[output_dir].append(run)
 
-        metrics = tracker.get_metrics(run["run_id"])
-
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
-        if fallback:
-            console.print(
-                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]"
-            )
+        keep_steps = set()
+        for run in runs_here:
+            keep_step, fallback = _checkpoint_to_keep(tracker.get_metrics(run["run_id"]), steps)
+            if keep_step is not None:
+                keep_steps.add(keep_step)
+            if fallback and run["run_id"] in cleaned_ids:
+                console.print(
+                    f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                    f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                    emoji=False,
+                )
         for ckpt in checkpoints:
-            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
+            if _checkpoint_step(ckpt) in keep_steps:
                 continue
 
             if keep_weights:
@@ -493,9 +616,9 @@ def clean(
                       f"from {len(files_to_delete)} files "
                       f"and {len(dirs_to_delete)} directories.")
         for d in dirs_to_delete:
-            console.print(f"  [red]Delete dir:[/]\t{d}")
+            console.print(f"  [red]Delete dir:[/]\t{for_terminal(d)}", emoji=False)
         for f in files_to_delete:
-            console.print(f"  [red]Delete file:[/]\t{f}")
+            console.print(f"  [red]Delete file:[/]\t{for_terminal(f)}", emoji=False)
         raise typer.Exit()
 
     if not force:
@@ -507,12 +630,19 @@ def clean(
         try:
             f.unlink()
         except OSError as e:
-            console.print(f"[yellow]Warning:[/] Failed to delete file {f}: {e}")
+            console.print(
+                f"[yellow]Warning:[/] Failed to delete file {for_terminal(f)}: {for_terminal(e)}",
+                emoji=False,
+            )
     for d in dirs_to_delete:
         try:
             shutil.rmtree(d)
         except OSError as e:
-            console.print(f"[yellow]Warning:[/] Failed to delete directory {d}: {e}")
+            console.print(
+                f"[yellow]Warning:[/] Failed to delete directory {for_terminal(d)}: "
+                f"{for_terminal(e)}",
+                emoji=False,
+            )
 
     console.print(f"[green]Successfully reclaimed {gb_to_reclaim:.2f} GB.[/]")
 
@@ -539,21 +669,21 @@ def replay(
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Render loss curve"),
 ):
     """Replay a completed run's metrics — re-renders summary + loss curve."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.replay import downsample, summarise
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     metrics = tracker.get_metrics(run["run_id"])
     summary = summarise(metrics)
 
     rendered = [
-        f"Run ID:     [bold]{run['run_id']}[/]",
-        f"Status:     {run.get('status') or '-'}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Status:     {for_terminal(run.get('status') or '-')}",
         f"Steps:      {summary.first_step or '-'} → {summary.last_step or '-'}"
         f" ({summary.total_rows} rows)",
     ]
@@ -564,7 +694,9 @@ def replay(
             f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}"
         )
     rendered.append(f"Cost:       {_fmt_cost(run)}")
-    console.print(Panel("\n".join(rendered), title="Replay"))
+    console.print(
+        Panel(Text.from_markup("\n".join(rendered), emoji=False), title="Replay")
+    )
 
     if plot and metrics:
         sampled = downsample(metrics)
@@ -639,14 +771,14 @@ def curriculum_curve(
     import os
     import stat as _stat
 
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.curriculum_dynamic import parse_history_jsonl, render_curve
     from soup_cli.utils.paths import is_under_cwd
 
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if history_path is None:
@@ -666,13 +798,15 @@ def curriculum_curve(
     except OSError as exc:
         console.print(
             f"[red]history path is not stat-able:[/] "
-            f"{markup_escape(os.path.basename(candidate))}"
+            f"{for_terminal(os.path.basename(candidate))}",
+            emoji=False,
         )
         raise typer.Exit(2) from exc
     if _st is not None and _stat.S_ISLNK(_st.st_mode):
         console.print(
             f"[red]history path is a symlink (rejected for safety):[/] "
-            f"{markup_escape(os.path.basename(candidate))}"
+            f"{for_terminal(os.path.basename(candidate))}",
+            emoji=False,
         )
         raise typer.Exit(2)
     real = os.path.realpath(candidate)
@@ -682,7 +816,8 @@ def curriculum_curve(
     if not os.path.isfile(real):
         console.print(
             f"[yellow]curriculum_history.jsonl not found:[/] "
-            f"{markup_escape(os.path.basename(real))}"
+            f"{for_terminal(os.path.basename(real))}",
+            emoji=False,
         )
         raise typer.Exit(1)
     max_history_bytes = 50 * 1024 * 1024  # 50 MB
@@ -693,21 +828,28 @@ def curriculum_curve(
     rows = []
     max_lines = 100_000
     with open(real, "r", encoding="utf-8") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]history malformed: line {lineno} is not valid JSON[/]"
+                )
+                raise typer.Exit(2) from exc
             if len(rows) > max_lines:
                 console.print("[red]history exceeds 100k-row cap[/]")
                 raise typer.Exit(2)
     if not rows:
         console.print("[yellow](no curriculum history rows)[/]")
         return
-    nb = len(rows[0].get("weights", []))
     try:
         normalised = parse_history_jsonl(rows)
+        nb = len(normalised[0]["weights"])
+        curve = render_curve(normalised, num_buckets=nb, width=width)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]history malformed: {markup_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    console.print(render_curve(normalised, num_buckets=nb, width=width))
+    console.print(curve)

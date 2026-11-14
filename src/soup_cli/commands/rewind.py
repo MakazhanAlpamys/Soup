@@ -40,6 +40,28 @@ def _fmt_ratio(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _json_record(record: dict) -> dict:
+    """One payload record with every non-finite float replaced by ``null``.
+
+    ``json.dumps`` writes NaN and Infinity as bare tokens that strict parsers
+    reject, and a run whose loss went non-finite is exactly the run ``soup
+    rewind`` exists for. The record keeps the information that the value was
+    non-finite with ``non_finite: true``, so a ``null`` here is not confused
+    with a field that was never measured (#1818).
+    """
+    out: dict = {}
+    non_finite = False
+    for key, value in record.items():
+        if isinstance(value, float) and not math.isfinite(value):
+            out[key] = None
+            non_finite = True
+        else:
+            out[key] = value
+    if non_finite:
+        out["non_finite"] = True
+    return out
+
+
 def rewind(
     run_id: Optional[str] = typer.Argument(
         None,
@@ -75,7 +97,7 @@ def rewind(
     ranks the rows in the worst one by how much of that step's loss they
     carried.
     """
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.monitoring.rewind_log import RewindLog, RewindLogError, read_rewind_log
     from soup_cli.utils import rewind as rewind_utils
     from soup_cli.utils.paths import check_report_output_path
@@ -99,7 +121,7 @@ def rewind(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {for_terminal(run_id)}")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             raise typer.Exit(1)
 
     candidates = _log_candidates(target, RewindLog.FILENAME)
@@ -234,14 +256,14 @@ def rewind(
         payload = {
             "run_id": target["run_id"],
             "step": detail_step,
-            "spikes": [asdict(s) for s in spikes],
-            "rows": [asdict(r) for r in rows],
+            "spikes": [_json_record(asdict(s)) for s in spikes],
+            "rows": [_json_record(asdict(r)) for r in rows],
         }
         from soup_cli.utils.paths import atomic_write_text
 
         try:
             atomic_write_text(
-                json.dumps(payload, indent=2),
+                json.dumps(payload, indent=2, allow_nan=False),
                 json_path,
                 prefix=".rewind.",
                 suffix=".json.tmp",
@@ -260,7 +282,9 @@ def _log_candidates(target: dict, filename: str) -> list[Path]:
     is exactly the one ``soup rewind`` exists for. So the recorded directory comes
     first, then the run's own config: ``output/experiment_name`` (the transformers
     layout) and ``output`` (MLX). A relative ``output`` resolves against the current
-    directory, as it did for ``soup train``.
+    directory, as it did for ``soup train``. The recorded directory is absolute for a
+    run finished since #2725; an older row may hold it relative, and it resolves
+    against the current directory the same way.
     """
     dirs: list[Path] = []
     if target.get("output_dir"):

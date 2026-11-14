@@ -890,7 +890,7 @@ _GOLDEN_OUTPUT = (
     '{"trace_id": "t2", "prompt": "Привет", "output": "Здравствуйте", "source": "langfuse", '
     '"signal": "thumbs_down", "metadata": {}}\n'
     '{"trace_id": "t4", "prompt": "list shape", "output": "ok", "source": "langfuse", '
-    '"signal": "none", "metadata": {}}\n'
+    '"signal": "thumbs_down", "metadata": {}}\n'
 ).encode("utf-8")
 
 

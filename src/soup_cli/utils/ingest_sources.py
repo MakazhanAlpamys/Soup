@@ -209,7 +209,10 @@ def parse_langfuse(events: Iterable[Any]) -> Iterator[TraceRecord]:
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"langfuse-{idx}")
-        signal = _signal_from_thumbs(event.get("score") or event.get("rating"))
+        score = event.get("score")
+        if score is None:
+            score = event.get("rating")
+        signal = _signal_from_thumbs(score)
         metadata: Dict[str, Any] = {}
         model = event.get("model")
         if isinstance(model, str):

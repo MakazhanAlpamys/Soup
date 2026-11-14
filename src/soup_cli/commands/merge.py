@@ -14,11 +14,18 @@ console = Console()
 
 
 def merge(
+    ctx: typer.Context = None,
     adapter: str = typer.Option(
         ...,
         "--adapter",
         "-a",
         help="Path to the LoRA adapter directory",
+    ),
+    backend: str = typer.Option(
+        "transformers", "--backend", help="Merge backend: transformers or mlx",
+    ),
+    dequantize: bool = typer.Option(
+        False, "--dequantize", help="Explicitly dequantize an MLX base for dense fused output",
     ),
     base: Optional[str] = typer.Option(
         None,
@@ -83,6 +90,51 @@ def merge(
     ),
 ):
     """Merge a LoRA adapter with its base model into a full model."""
+    from soup_cli.utils.mlx_generation import reject_native_adapter
+
+    if backend not in ("transformers", "mlx"):
+        raise typer.BadParameter("--backend must be transformers or mlx")
+    if backend == "mlx":
+        from soup_cli.utils.mlx_merge import merge_native_adapter
+        from soup_cli.utils.typer_compat import ParameterSource
+
+        try:
+            from soup_cli.utils.save_formats import validate_merge_save_format
+
+            if validate_merge_save_format(save_format) != "fp16":
+                raise ValueError("MLX merge supports dense --save-format fp16 only")
+            if hub != "hf":
+                raise ValueError("MLX merge supports --hub hf only")
+            if low_memory:
+                raise ValueError("MLX merge does not support --low-memory; it loads the full model")
+            if ctx is not None and ctx.get_parameter_source("double_quant") not in (
+                None, ParameterSource.DEFAULT,
+            ):
+                raise ValueError("MLX merge does not accept BNB --double-quant controls")
+            output_path = merge_native_adapter(
+                adapter, output, base=base, dtype=dtype, dequantize=dequantize,
+                trust_remote_code=trust_remote_code,
+            )
+        except KeyboardInterrupt as exc:
+            console.print("[red]MLX merge interrupted; no incomplete checkpoint published[/]")
+            raise typer.Exit(130) from exc
+        except Exception as exc:
+            console.print(f"[red]MLX merge failed: {for_terminal(exc)}[/]")
+            raise typer.Exit(1) from exc
+        console.print(Panel(
+            f"Output: [bold]{for_terminal(output_path)}[/]\n"
+            f"Dtype: [bold]{dtype}[/]\n"
+            "Standalone dense MLX checkpoint; use soup infer --backend mlx.",
+            title="[bold green]Merge Complete![/]",
+        ))
+        return
+    try:
+        if dequantize:
+            raise ValueError("--dequantize requires --backend mlx")
+        reject_native_adapter(adapter)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
     # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. The local
     # adapter dir is left untouched; only the base repo id is rewritten.
     if hub and hub != "hf":
@@ -132,6 +184,21 @@ def merge(
             "Expected adapter_config.json in the directory."
         )
         raise typer.Exit(1)
+
+    if (adapter_path / "added_tokens.safetensors").exists():
+        console.print(
+            "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+        )
+        raise typer.Exit(1)
+    try:
+        cfg_data = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+        if isinstance(cfg_data, dict) and cfg_data.get("vocab_expansion"):
+            console.print(
+                "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+            )
+            raise typer.Exit(1)
+    except (OSError, ValueError):
+        pass
 
     # --- Resolve base model ---
     if not base:
@@ -192,12 +259,29 @@ def merge(
             requires_remote_code=requires,
         )
 
+        # The merged checkpoint takes its tokenizer from the adapter directory.
+        # Load it before the base model and before anything is written, so an
+        # adapter directory without usable tokenizer files fails here instead of
+        # leaving merged weights with no tokenizer in --output.
+        console.print("[dim]Loading tokenizer from the adapter...[/]")
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(adapter_path), trust_remote_code=trc
+        )
+
         console.print(f"[dim]Loading base model: {for_terminal(base)}...[/]")
+        from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+        revision_kwargs = recorded_base_kwargs(adapter_path, base)
+        if revision_kwargs:
+            console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+        else:
+            console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
         model = AutoModelForCausalLM.from_pretrained(
             base,
-            torch_dtype=model_dtype,
+            dtype=model_dtype,
             trust_remote_code=trc,
             device_map="cpu",
+            **revision_kwargs,
         )
 
         console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
@@ -212,9 +296,6 @@ def merge(
             model.save_pretrained(str(output_path))
 
             console.print("[dim]Saving tokenizer...[/]")
-            tokenizer = AutoTokenizer.from_pretrained(
-                str(adapter_path), trust_remote_code=trc
-            )
             tokenizer.save_pretrained(str(output_path))
         else:
             # v0.53.1 #142 — 4bit / 4bit_forced merged checkpoint.
@@ -232,9 +313,6 @@ def merge(
                     f"[dim]Staging fp16 merge in {staged_path.name}...[/]"
                 )
                 model.save_pretrained(str(staged_path))
-                tokenizer = AutoTokenizer.from_pretrained(
-                    str(adapter_path), trust_remote_code=trc
-                )
                 tokenizer.save_pretrained(str(staged_path))
 
                 # Free the in-memory fp16 model before reloading 4bit
@@ -285,6 +363,14 @@ def _merge_low_memory(
             requires_remote_code=model_requires_trust_remote_code(str(adapter_path)) or False,
         )
 
+        from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+        revision_kwargs = recorded_base_kwargs(adapter_path, base)
+        if revision_kwargs:
+            console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+        else:
+            console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
+
         if Path(base).is_dir():
             base_dir = Path(base)
         else:
@@ -296,6 +382,7 @@ def _merge_low_memory(
                     base,
                     cache_dir=None,
                     allow_patterns=["*.safetensors", "*.json"],
+                    revision=revision_kwargs.get("revision"),
                 )
             )
 
