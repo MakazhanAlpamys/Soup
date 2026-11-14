@@ -1,0 +1,169 @@
+{
+  "complete_accounting": true,
+  "rows": [
+    {
+      "sequence": 4096,
+      "checkpoint": "off",
+      "arm": "sdpa",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    },
+    {
+      "sequence": 4096,
+      "checkpoint": "off",
+      "arm": "fa2",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    },
+    {
+      "sequence": 4096,
+      "checkpoint": "off",
+      "arm": "liger",
+      "probe_status": "ok",
+      "completed_repetitions": 5,
+      "failures": [],
+      "median_tokens_per_second": 12799.62575181813,
+      "min_tokens_per_second": 12743.578881095817,
+      "max_tokens_per_second": 12854.835026970106,
+      "median_seconds_per_step": 1.280037425912451,
+      "max_peak_allocated_bytes": 109046583808,
+      "max_peak_reserved_bytes": 112405250048
+    },
+    {
+      "sequence": 4096,
+      "checkpoint": "off",
+      "arm": "fa2_liger",
+      "probe_status": "ok",
+      "completed_repetitions": 5,
+      "failures": [],
+      "median_tokens_per_second": 12078.419752446167,
+      "min_tokens_per_second": 12032.456400786426,
+      "max_tokens_per_second": 12103.735053031156,
+      "median_seconds_per_step": 1.3564688374637626,
+      "max_peak_allocated_bytes": 109046567424,
+      "max_peak_reserved_bytes": 112403152896
+    },
+    {
+      "sequence": 8192,
+      "checkpoint": "off",
+      "arm": "sdpa",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    },
+    {
+      "sequence": 8192,
+      "checkpoint": "off",
+      "arm": "fa2",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    },
+    {
+      "sequence": 8192,
+      "checkpoint": "off",
+      "arm": "liger",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    },
+    {
+      "sequence": 8192,
+      "checkpoint": "off",
+      "arm": "fa2_liger",
+      "probe_status": "oom",
+      "completed_repetitions": 0,
+      "failures": [
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom",
+        "not_run_probe_oom"
+      ]
+    }
+  ],
+  "elapsed_seconds": 1623.953467081301,
+  "final_gpu_state": {
+    "driver_version": "580.82.07",
+    "uuid": "<redacted>",
+    "name": "NVIDIA H200",
+    "memory.total": "143771",
+    "memory.used": "32313",
+    "memory.free": "110844",
+    "utilization.gpu": "100",
+    "power.limit": "700.00",
+    "clocks.sm": "1980"
+  },
+  "protocol": {
+    "source_commit": "2acba19bc31e0b65c67ff6def5f1d9eaa60b9870",
+    "worker_sha256": "fee82d6c806315468610332dc0febd85098c0bff5901e4d35080c90630edc2ee",
+    "controller_sha256": "24d8b11a544519ac37858f173fc4ace150e3d716bb0a1bdab50beff01a2eb603",
+    "model": "<hf-cache>/models--meta-llama--Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+    "sequences": [
+      4096,
+      8192
+    ],
+    "checkpoints": [
+      "off"
+    ],
+    "arms": [
+      "sdpa",
+      "fa2",
+      "liger",
+      "fa2_liger"
+    ],
+    "warmup": 5,
+    "steps": 80,
+    "repeats": 5,
+    "probe_steps": 8,
+    "gpu_selection": "<redacted>",
+    "gpu_index": 1,
+    "initial_gpu_state": {
+      "driver_version": "580.82.07",
+      "uuid": "<redacted>",
+      "name": "NVIDIA H200",
+      "memory.total": "143771",
+      "memory.used": "32313",
+      "memory.free": "110844",
+      "utilization.gpu": "0",
+      "power.limit": "700.00",
+      "clocks.sm": "1980"
+    },
+    "interleaving": "all probes, then cyclic four-arm rotation by repetition; explicit skipped slots for probe OOM",
+    "scope": "New shared-GPU follow-up. No exclusive-card or held-out-quality claim; old record is unchanged.",
+    "frozen_at_utc": "2026-11-14T16:32:43.172050+00:00"
+  },
+  "no_sdpa_ratio_without_successful_same_shape_sdpa": true
+}

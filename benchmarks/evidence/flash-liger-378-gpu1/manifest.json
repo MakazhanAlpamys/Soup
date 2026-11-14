@@ -1,0 +1,37 @@
+{
+  "scope": "Separate shared-H200 GPU1 follow-up, 2026-11-14; original #2691 record unchanged.",
+  "issue": "https://github.com/MakazhanAlpamys/Soup/issues/378",
+  "invitation": "https://github.com/MakazhanAlpamys/Soup/issues/378#issuecomment-6881502534",
+  "source_commit": "2acba19bc31e0b65c67ff6def5f1d9eaa60b9870",
+  "retained_files": {
+    "summary.json": {
+      "sha256": "66344ae5b9c58678e809d4ccf5e317273051efb37781b6f454c424f41d8de364",
+      "bytes": 4579
+    },
+    "protocol.json": {
+      "sha256": "2341fb7f59c739f6cf1e92fbff90707b3dfc4c73143bb5ca8cf1e5b0c6ed2ebb",
+      "bytes": 1180
+    }
+  },
+  "archive": {
+    "url": "https://github.com/AubakirovArman/Soup/releases/download/benchmark-flash-liger-gpu1-2026-11-14-b1316656/flash-liger-378-gpu1-2026-11-14.tar.gz",
+    "release_url": "https://github.com/AubakirovArman/Soup/releases/tag/benchmark-flash-liger-gpu1-2026-11-14-b1316656",
+    "sha256": "b13166562907e6275487e484bf36e0ddb507a657dfee0757e14fcc4e9a0fbfd1",
+    "bytes": 83699,
+    "total_files": 94,
+    "internal_manifest_entries": 93
+  },
+  "validation": {
+    "level": "full raw arithmetic and manifest verification after archive round-trip",
+    "successful_timings": 10,
+    "probe_ooms": 6,
+    "planned_timing_slots": 40,
+    "not_run_probe_oom_slots": 30,
+    "command": "python validate.py .",
+    "working_directory": "extracted flash-liger-378-gpu1 directory",
+    "requires": [
+      "rich"
+    ]
+  },
+  "provenance_note": "Retained files match the public redacted archive. Preflight provenance hashes identify original pre-redaction records; the archive internal manifest hashes identify public redacted files."
+}

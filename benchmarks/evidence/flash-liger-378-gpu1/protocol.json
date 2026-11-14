@@ -1,0 +1,39 @@
+{
+  "source_commit": "2acba19bc31e0b65c67ff6def5f1d9eaa60b9870",
+  "worker_sha256": "fee82d6c806315468610332dc0febd85098c0bff5901e4d35080c90630edc2ee",
+  "controller_sha256": "24d8b11a544519ac37858f173fc4ace150e3d716bb0a1bdab50beff01a2eb603",
+  "model": "<hf-cache>/models--meta-llama--Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+  "sequences": [
+    4096,
+    8192
+  ],
+  "checkpoints": [
+    "off"
+  ],
+  "arms": [
+    "sdpa",
+    "fa2",
+    "liger",
+    "fa2_liger"
+  ],
+  "warmup": 5,
+  "steps": 80,
+  "repeats": 5,
+  "probe_steps": 8,
+  "gpu_selection": "<redacted>",
+  "gpu_index": 1,
+  "initial_gpu_state": {
+    "driver_version": "580.82.07",
+    "uuid": "<redacted>",
+    "name": "NVIDIA H200",
+    "memory.total": "143771",
+    "memory.used": "32313",
+    "memory.free": "110844",
+    "utilization.gpu": "0",
+    "power.limit": "700.00",
+    "clocks.sm": "1980"
+  },
+  "interleaving": "all probes, then cyclic four-arm rotation by repetition; explicit skipped slots for probe OOM",
+  "scope": "New shared-GPU follow-up. No exclusive-card or held-out-quality claim; old record is unchanged.",
+  "frozen_at_utc": "2026-11-14T16:32:43.172050+00:00"
+}
