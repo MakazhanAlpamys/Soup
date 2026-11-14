@@ -16,6 +16,7 @@ import pytest
 from rich.console import Console
 
 from soup_cli.commands import attest as attest_cmd
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -31,10 +32,7 @@ FILE_VALUES = [
         "x\\[n",
         marks=pytest.mark.skipif(sys.platform == "win32", reason="backslash in filename"),
     ),
-    pytest.param(
-        "n:rocket:",
-        marks=pytest.mark.skipif(sys.platform == "win32", reason="colon in filename"),
-    ),
+    pytest.param("n:rocket:", marks=skip_colon_on_windows),
 ]
 SHA = "a" * 64
 SIGSTORE_FLAGS = ("--cert-identity", "me@example.com", "--cert-oidc-issuer", "https://issuer")
