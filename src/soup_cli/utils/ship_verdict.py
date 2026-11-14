@@ -159,6 +159,10 @@ class BenchmarkDelta:
     delta: float  # tuned - base (signed; negative = drop)
     regressed: bool  # drop exceeds the forgetting threshold
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.delta):
+            raise ValueError(f"benchmark delta for {self.name!r} must be finite")
+
 
 @dataclass(frozen=True)
 class NoiseFloor:
@@ -417,13 +421,16 @@ def compute_benchmark_deltas(
     for name in common:
         base_f = _validate_score(base_scores[name], f"base[{name!r}]")
         tuned_f = _validate_score(tuned_scores[name], f"tuned[{name!r}]")
+        raw_delta = tuned_f - base_f
+        if not math.isfinite(raw_delta):
+            raise ValueError(f"benchmark delta for {name!r} must be finite")
         effective = max(threshold, _floor_of(noise_floor, str(name)))
         deltas.append(
             BenchmarkDelta(
                 name=str(name),
                 base=base_f,
                 tuned=tuned_f,
-                delta=round(tuned_f - base_f, _DELTA_ROUND),
+                delta=round(raw_delta, _DELTA_ROUND),
                 regressed=_is_regressed(base_f, tuned_f, effective),
             )
         )
@@ -475,20 +482,25 @@ def decide_ship(
 
     # Canonical deltas: recompute at THIS threshold so the verdict is internally
     # consistent regardless of how the inputs were built.
-    canonical: Tuple[BenchmarkDelta, ...] = tuple(
-        BenchmarkDelta(
-            name=item.name,
-            base=item.base,
-            tuned=item.tuned,
-            delta=round(item.tuned - item.base, _DELTA_ROUND),
-            regressed=_is_regressed(
-                item.base,
-                item.tuned,
-                max(threshold, _floor_of(noise_floor, item.name)),
-            ),
+    canonical_list: List[BenchmarkDelta] = []
+    for item in deltas_in:
+        raw_delta = item.tuned - item.base
+        if not math.isfinite(raw_delta):
+            raise ValueError(f"benchmark delta for {item.name!r} must be finite")
+        canonical_list.append(
+            BenchmarkDelta(
+                name=item.name,
+                base=item.base,
+                tuned=item.tuned,
+                delta=round(raw_delta, _DELTA_ROUND),
+                regressed=_is_regressed(
+                    item.base,
+                    item.tuned,
+                    max(threshold, _floor_of(noise_floor, item.name)),
+                ),
+            )
         )
-        for item in deltas_in
-    )
+    canonical: Tuple[BenchmarkDelta, ...] = tuple(canonical_list)
 
     leg1_pass = task_win.tuned > task_win.base + _floor_of(noise_floor, TASK_AXIS)
     # Canonicalise the task win for the SAME reason the deltas are canonicalised
