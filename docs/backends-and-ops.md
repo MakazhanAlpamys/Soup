@@ -960,6 +960,10 @@ covered by offline tests.
 
 ## Chat with your model
 
+Chat displays model paths, loader diagnostics, system-prompt receipts and assistant
+replies literally, with terminal controls and bidi marks removed from the display.
+The model's input history and the values passed to its loaders retain their original text.
+
 ```bash
 # Chat with a LoRA adapter (auto-detects base model)
 soup chat --model ./output
