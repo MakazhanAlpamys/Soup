@@ -372,7 +372,7 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # (never truncated). The log is rotated at 10 MB, and one old file is kept as
 # .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
 # daemon itself at each watch cycle, without stopping. A foreground watch rotates
-# nothing. While the PID file names a live process a second --detach is
+# nothing. The PID file is created exclusively before the daemon is spawned, so two --detach started at once cannot both win. While the PID file names a live process a second --detach is
 # refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
@@ -484,7 +484,7 @@ quality verdict is `MAJOR` when the canary's negative share exceeds stable's by 
 five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
 false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
 `OK` at the minimum means no significant regression was found, not that the canary is
-proven equal, and a gap of five points on a few dozen ratings is often chance. With fewer
+proven equal, and a gap of five points on a few dozen ratings is often chance. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
 ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
 canary against). The two verdicts
 combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is

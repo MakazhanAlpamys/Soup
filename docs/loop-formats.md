@@ -47,7 +47,10 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
   (see [conversation](#conversation)); a reader that meets a higher version it does not
   know skips the line.
 - **Time** is ISO 8601 in UTC with the suffix `Z` or `+00:00`, for example
-  `2026-11-05T11:00:00+00:00`.
+  `2026-11-05T11:00:00+00:00`. A reader skips (and counts, with a warning) a line whose time
+  is more than 24 hours ahead of now: one such line would be the newest time and the
+  loop's data cursor would never move past it. A line up to a day ahead (a client clock
+  that runs fast) is read.
 - **Ids** (`id`, `response_id`) are UUIDs in canonical lowercase form. Two exceptions:
   `conversation_id` is whatever key the client chose (up to 512 characters), and
   `iteration_id` is any string that is safe as a directory name (letters, digits, `.`,

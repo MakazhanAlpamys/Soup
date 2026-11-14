@@ -456,7 +456,7 @@ skipped without a message. Weights the reader refuses (`adapter_model.bin`, a sy
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).
 
-`--base-adapter <path>` swaps the *before* side from the bare base to `base + that LoRA adapter`,
+`--base-adapter <path>` (and `--adapter`) must not hold pickle weights (`adapter_model.bin`, `.pt`): `soup ship` refuses them before PEFT reads the directory, as `soup serve` does, so use safetensors. It swaps the *before* side from the bare base to `base + that LoRA adapter`,
 so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
 already in production (`base + --base-adapter`), both trained from the same base. It is a live
 run with `--adapter` only. `soup ship` refuses it, with exit code 3 and a message naming both
