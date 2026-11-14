@@ -29,17 +29,30 @@ pytest.importorskip("safetensors")
 
 from safetensors.torch import save_file  # noqa: E402
 
-from soup_cli.utils.adapter_change import measure_adapter_change  # noqa: E402
+from soup_cli.utils.adapter_change import (  # noqa: E402
+    measure_adapter_change,
+    value_changes,
+)
 
 runner = CliRunner()
 
 KEY = "model.layers.0.self_attn.q_proj"
 OUT, IN = 10, 100  # 1,000 elements, so k changed elements is a fraction of k / 1000
-WARNING = "fewer than 1% of the elements"
+WARNING = (
+    "Warning: the adapter changes fewer than 1% of the elements of its target modules "
+    "(9.000e-03 < 1e-02). Adapters trained with a near-zero learning rate sit in this "
+    "range, and so can an early checkpoint of a real run. This line does not change the "
+    "verdict."
+)
 
 
 def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
+
+
+def _panelless(text: str) -> str:
+    """The panel body without its left/right border, so a wrapped sentence reads whole."""
+    return " ".join(_plain(text).replace("│", " ").split())
 
 
 def _write_base(path: Path, dtype) -> None:
@@ -48,6 +61,22 @@ def _write_base(path: Path, dtype) -> None:
     weight = torch.ones((OUT, IN), dtype=dtype)
     weight[1, 0] = -0.0
     save_file({f"{KEY}.weight": weight}, str(path / "model.safetensors"))
+
+
+def _write_sharded_base(path: Path, dtype) -> None:
+    """The same weight in a two-shard checkpoint with an index (the sharded path)."""
+    path.mkdir()
+    weight = torch.ones((OUT, IN), dtype=dtype)
+    weight[1, 0] = -0.0
+    target = "model-00001-of-00002.safetensors"
+    other = "model-00002-of-00002.safetensors"
+    save_file({f"{KEY}.weight": weight}, str(path / target))
+    save_file({"unrelated.weight": torch.zeros((2, 2), dtype=dtype)}, str(path / other))
+    index = {
+        "metadata": {},
+        "weight_map": {f"{KEY}.weight": target, "unrelated.weight": other},
+    }
+    (path / "model.safetensors.index.json").write_text(json.dumps(index), encoding="utf-8")
 
 
 def _write_adapter(path: Path, changed: int, *, config: dict | None = None) -> None:
@@ -115,6 +144,26 @@ def test_all_zero_update_changes_nothing_even_with_negative_zero(tmp_path):
     change = measure_adapter_change(tmp_path / "lora", tmp_path / "base")
 
     assert change.measured and change.changed == 0 and change.fraction == 0.0
+
+
+def test_a_nan_that_stays_nan_is_not_a_change():
+    """The NaN clause: NaN vs NaN is the same value, so it must not be counted."""
+    nan = float("nan")
+    merged = torch.tensor([nan, 1.0, 2.0])
+    weight = torch.tensor([nan, 1.0, -2.0])
+
+    assert value_changes(merged, weight) == 1
+
+
+def test_sharded_base_uses_the_index(tmp_path):
+    """The sharded path reads the shard the index names; the count matches the single file."""
+    _write_sharded_base(tmp_path / "base", torch.bfloat16)
+    _write_adapter(tmp_path / "lora", 9)
+
+    change = measure_adapter_change(tmp_path / "lora", tmp_path / "base")
+
+    assert change.measured, change.reason
+    assert (change.changed, change.elements, change.modules) == (9, OUT * IN, 1)
 
 
 @pytest.mark.parametrize(
@@ -219,7 +268,7 @@ def test_ship_prints_the_fraction_and_keeps_the_verdict(monkeypatch, changed, wa
     assert out["adapter_change"]["warning"] is warned
     plain = _plain(res.output)
     assert f"changes {changed} of 1,000 elements" in plain
-    assert (WARNING in plain) is warned
+    assert (WARNING in _panelless(res.output)) is warned
     if warned:
         assert "does not change the verdict" in plain
 
@@ -232,7 +281,7 @@ def test_ship_says_not_measured_for_a_dora_adapter(monkeypatch):
     assert out["adapter_change"]["measured"] is False
     assert "use_dora" in out["adapter_change"]["reason"]
     plain = _plain(res.output)
-    assert "Adapter update: not measured" in plain and WARNING not in plain
+    assert "Adapter update: not measured" in plain and WARNING not in _panelless(res.output)
 
 
 def test_hub_base_not_in_cache_is_not_measured_and_not_downloaded(monkeypatch, tmp_path):
@@ -245,6 +294,46 @@ def test_hub_base_not_in_cache_is_not_measured_and_not_downloaded(monkeypatch, t
     assert out["adapter_change"]["measured"] is False
     assert "local Hugging Face cache" in out["adapter_change"]["reason"]
     assert not (tmp_path / "empty-cache").exists()
+
+
+def test_hub_base_in_the_local_cache_is_measured(monkeypatch, tmp_path):
+    """The cache-hit branch: a Hub base already on disk is measured, not skipped."""
+    _write_base(tmp_path / "base", torch.bfloat16)
+    _write_adapter(tmp_path / "lora", 9)
+
+    import huggingface_hub
+
+    import soup_cli.utils.run_provenance as provenance
+
+    monkeypatch.setattr(
+        huggingface_hub, "snapshot_download", lambda *a, **k: str(tmp_path / "base")
+    )
+    monkeypatch.setattr(provenance, "base_revision_kwargs", lambda *a, **k: {})
+    monkeypatch.setattr(provenance, "recorded_base_kwargs", lambda *a, **k: {})
+
+    change = ship_cmd._measure_adapter_change(str(tmp_path / "lora"), "org/cached-model")
+
+    assert change.measured, change.reason
+    assert (change.changed, change.elements) == (9, OUT * IN)
+
+
+def test_a_raising_measurement_keeps_the_verdict_and_exit_code(monkeypatch):
+    """Display only: any failure of the measurement leaves the verdict and exit code."""
+    import soup_cli.utils.adapter_change as adapter_change
+
+    def _raise(*_args, **_kwargs):
+        raise MemoryError("out of memory")
+
+    monkeypatch.setattr(adapter_change, "measure_adapter_change", _raise)
+
+    res, loads, out = _run(monkeypatch, 9)
+
+    assert loads == ["lora"], (res.output, repr(res.exception))
+    assert res.exit_code == 2, (res.output, repr(res.exception))
+    assert out["failed_rule"] == FAILED_TASK_WIN
+    assert out["adapter_change"]["measured"] is False
+    assert "MemoryError" in out["adapter_change"]["reason"]
+    assert "Adapter update: not measured" in _plain(res.output)
 
 
 def test_update_below_resolution_is_measured_as_zero_but_not_refused(monkeypatch):

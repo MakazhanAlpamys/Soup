@@ -1115,15 +1115,15 @@ def _measure_adapter_change(adapter: str, base: str) -> AdapterChange:
         return AdapterChange.not_measured("the adapter is not a local directory")
     try:
         base_dir = _local_base_dir(base, adapter)
-    except (OSError, ValueError, TypeError, ImportError):
+    except Exception:  # display only: no failure here may end the run (#2762)
         return AdapterChange.not_measured(
             "the base weights are not in a local directory or the local Hugging Face cache"
         )
-    from soup_cli.utils.adapter_change import measure_adapter_change
-
     try:
+        from soup_cli.utils.adapter_change import measure_adapter_change
+
         return measure_adapter_change(adapter, base_dir)
-    except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError) as exc:
+    except Exception as exc:  # display only: no failure here may end the run (#2762)
         return AdapterChange.not_measured(f"{type(exc).__name__}: {exc}")
 
 

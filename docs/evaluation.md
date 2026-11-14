@@ -856,6 +856,10 @@ that stays `NaN` is not one either. Only the base tensors the adapter targets ar
 one at a time (memory-mapped); the model itself is not loaded, so the count adds roughly
 the time it takes to read those tensors and nothing else — **about 14 s** for the
 Qwen2.5-1.5B / 196-module case above, 0.1–17 s across the table below by module count.
+A 7B-class base and the peak memory are **not measured**: the count streams the base, reading
+one target tensor at a time and forming each update in float32 (the arithmetic
+`lowmem_merge.merged_tensor` uses), so the peak is one tensor's float32 copy on top of that
+tensor, not the model.
 
 The line is **display only**. It never changes the verdict, `failed_rule` or the exit
 code, and it is not part of the `--evidence` schema, so a verdict still replays as input
@@ -866,7 +870,7 @@ shown as "0 %". The warning line is added only when the fraction is **below `1e-
 
 **Why a warning and not a rule.** The instrument was calibrated by training seven runs
 with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
-checkpoints (42 adapters), plus nine public adapters on six bases. Sorted by changed
+checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
 fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
 interleave:
 
@@ -878,7 +882,7 @@ interleave:
 | lowlr r16 lr 2e-5, step 5 … 190 | real, lr/10 | 2.46e-02 … 2.81e-01 | 1.85e-01 … 8.01e-01 |
 | real r16 lr 2e-4, step 2 … 190 | real | 2.66e-02 … 7.25e-01 | 1.99e-01 … 9.61e-01 |
 | low-rank r1 q / r2 v, lr 2e-4 | real, low rank | 8.45e-02 … 7.79e-01 | 4.84e-01 … 9.67e-01 |
-| 9 public LoRA adapters, 6 bases | public | 5.07e-01 … 9.88e-01 | 9.12e-01 … 9.85e-01 |
+| 9 public LoRA adapters, 7 bases | public | 5.07e-01 … 9.88e-01 | 9.12e-01 … 9.85e-01 |
 
 The highest control (**6.51e-03**, lr 1e-7 at step 190) sits *above* the lowest real
 adapter (**2.47e-03**, lr 2e-6 at step 5) by less than a factor of three, and the real
@@ -900,9 +904,22 @@ modules — worth a second look before shipping. The existing `adapter_noop` rul
 DON'T SHIP; this line only ever *adds* information beside whatever verdict those rules
 produced.
 
-The calibration rows, scripts and per-adapter JSON are kept alongside the take-home
-calibration under `soup_calib/`; the machine-readable table is
-`soup_calib/results/v2/calibration.md`.
+**In the verdict JSON.** A live `--adapter` run adds one field to the `--output` object:
+
+```json
+"adapter_change": {
+  "measured": true, "fraction": 9e-3, "changed": 9, "elements": 1000, "modules": 1,
+  "base_dtypes": ["bfloat16"], "warn_below": 0.01, "warning": true, "reason": null
+}
+```
+
+`fraction` is `null` when the count cannot be made (`measured` is `false` and `reason`
+says why), and `warning` is `fraction < warn_below`. A live run **without** `--adapter`,
+and an offline `--evidence` run, emit `adapter_change: null`. The field is not read back by
+`verdict_to_evidence`, so a verdict still replays as input exactly as before.
+
+The table above is the calibration record; the raw per-adapter JSON is not shipped in this
+repository.
 
 
 ## Retention across versions: `soup eval retention`
