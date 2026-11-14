@@ -19,12 +19,16 @@ import os
 import re
 import stat
 import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
+from dataclasses import fields as dataclass_fields
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Mapping, Optional, Tuple
+from typing import Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.process_liveness import process_is_alive
 
 # Status values are deliberately closed — every state machine transition
 # below must remain auditable.
@@ -252,6 +256,15 @@ class LoopState:
     # The plan-time wait of the latest cycle that waited ("Waiting: 4/5 trainable corrections
     # ..."), for ``soup loop status``; None once the loop trains or has nothing to wait for.
     waiting_note: Optional[str] = None
+    # A candidate that trained and passed the check but whose deploy was refused (serve
+    # restarting, 401, 409 ...): the next cycles retry ONLY the deploy, up to
+    # ``DEPLOY_RETRY_LIMIT`` times in all. A dict with "train" and "gate" (the stage outputs
+    # the deploy needs), "attempts", "cursor_ts" and "iteration_id"; None = nothing pending.
+    # Last, so adding it shifted no existing positional field; loads as None from before.
+    pending_deploy: Optional[dict] = None
+    # Why the latest cycle's training or deploy failed (exit code and stderr tail, or the
+    # deploy's refusal), for ``soup loop status``; None once a cycle went through.
+    last_failure: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -433,6 +446,10 @@ class LoopState:
             raise ValueError("version_log_started must be bool")
         if self.canary_iteration is not None:
             _check_canary_iteration(self.canary_iteration)
+        if self.pending_deploy is not None:
+            _check_pending_deploy(self.pending_deploy)
+        if self.last_failure is not None:
+            _require_str("last_failure", self.last_failure, allow_empty=False)
 
     def stable_name(self) -> str:
         """The canary router's stable side: the promoted adapter, else the served model."""
@@ -520,6 +537,30 @@ def _check_canary_iteration(snapshot: object) -> None:
     _require_iteration_id("canary_iteration iteration_id", snapshot["iteration_id"])
     if snapshot.get("outcome") != "canary":
         raise ValueError("canary_iteration must be an iteration whose outcome is canary")
+
+
+_MAX_PENDING_DEPLOY_CHARS = 32 * 1024
+
+
+def _check_pending_deploy(pending: object) -> None:
+    """``pending_deploy`` is plain, small JSON: the stage outputs a retried deploy needs."""
+    if not isinstance(pending, dict):
+        raise ValueError("pending_deploy must be a dict or None")
+    try:
+        body = json.dumps(pending, allow_nan=False)
+        plain = json.loads(body) == pending
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pending_deploy must hold plain finite JSON values") from exc
+    if not plain:
+        raise ValueError("pending_deploy must hold plain finite JSON values with string keys")
+    if len(body) > _MAX_PENDING_DEPLOY_CHARS:
+        raise ValueError(f"pending_deploy exceeds {_MAX_PENDING_DEPLOY_CHARS} characters")
+    for key in ("train", "gate"):
+        if not isinstance(pending.get(key), dict):
+            raise ValueError(f"pending_deploy must hold a {key} dict")
+    attempts = pending.get("attempts")
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
+        raise ValueError("pending_deploy attempts must be an int from 1 to 100")
 
 
 def _brief(value: object) -> str:
@@ -726,8 +767,37 @@ def _check_path(path: str, *, allow_missing: bool) -> str:
     return path
 
 
+def _replace_file(tmp: str, target: str) -> None:
+    """``os.replace``, retried briefly on Windows, where a reader that has the target open (a
+    ``soup loop status`` at that instant, a virus scanner) makes the replace fail."""
+    for attempt in range(40):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 39:
+                raise
+            time.sleep(0.025)
+
+
 def write_state(state: LoopState, path: Optional[str] = None) -> str:
-    """Atomically persist ``state`` to ``path`` (default: ``./.soup/loop.yaml``).
+    """Persist ``state`` to ``path`` (default: ``./.soup/loop.yaml``) under the state lock.
+
+    The write is atomic (below) and serialised with every other writer through
+    :func:`state_lock`. It writes ``state`` AS IT IS: a caller that read the file earlier
+    and may be stale uses :func:`update_state` (read-modify-write) or :func:`merge_state`.
+    The target is validated before the lock is taken, so a bad path never leaves a lock file.
+    """
+    if not isinstance(state, LoopState):
+        raise TypeError(f"state must be LoopState, got {type(state).__name__}")
+    target = path if path is not None else default_state_path()
+    _check_path(target, allow_missing=True)
+    with state_lock(target):
+        return _write_state_unlocked(state, target)
+
+
+def _write_state_unlocked(state: LoopState, path: Optional[str] = None) -> str:
+    """Atomically persist ``state`` to ``path``; the caller holds :func:`state_lock`.
 
     Uses ``tempfile.mkstemp`` + ``os.replace`` so a SIGKILL mid-write
     cannot leave a torn file at the target — matches v0.43.0 Part D
@@ -750,7 +820,7 @@ def write_state(state: LoopState, path: Optional[str] = None) -> str:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body)
-        os.replace(tmp, target)
+        _replace_file(tmp, target)
     except Exception:
         try:
             os.unlink(tmp)
@@ -763,6 +833,132 @@ def write_state(state: LoopState, path: Optional[str] = None) -> str:
     except OSError:
         pass
     return target
+
+
+#: How long a writer waits for the state lock before it gives up (seconds). The lock is held
+#: for one read and one small write, so a wait this long means a stuck holder.
+STATE_LOCK_TIMEOUT_SEC = 30.0
+#: A lock file nobody can read a pid from is taken for abandoned once it is this old (seconds).
+_UNPARSABLE_LOCK_GRACE_SEC = 5.0
+_LOCK_POLL_SEC = 0.02
+
+
+def _lock_holder(lock_path: str) -> "tuple[Optional[int], bool]":
+    """``(pid, abandoned)`` of a lock file: abandoned = dead pid, or none readable for long."""
+    try:
+        with open(lock_path, "rb") as handle:
+            raw = handle.read(512)
+        pid = json.loads(raw.decode("utf-8")).get("pid")
+    except FileNotFoundError:
+        return None, False
+    except (OSError, ValueError, AttributeError):
+        pid = None
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        return pid, not process_is_alive(pid)
+    try:
+        age = time.time() - os.stat(lock_path).st_mtime
+    except OSError:
+        return None, False
+    return None, age >= _UNPARSABLE_LOCK_GRACE_SEC
+
+
+@contextmanager
+def state_lock(path: Optional[str] = None, *, timeout: float = STATE_LOCK_TIMEOUT_SEC):
+    """Hold the exclusive lock on ``loop.yaml`` (``<path>.lock``, created with ``O_EXCL``).
+
+    Every writer takes it (watch, rollback, pause, resume, canary, init), so two of them never
+    interleave their read-modify-write. The lock file holds the owner's pid: one whose process is
+    gone (or that nobody can read for ``_UNPARSABLE_LOCK_GRACE_SEC``) is removed and taken over.
+    Raises ``TimeoutError`` naming the lock file after ``timeout`` seconds. Not re-entrant.
+    """
+    target = path if path is not None else default_state_path()
+    _check_path(target, allow_missing=True)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    lock_path = target + ".lock"
+    deadline = time.monotonic() + timeout
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    while True:
+        try:
+            fd = os.open(lock_path, flags, 0o600)
+            break
+        except (FileExistsError, PermissionError) as exc:
+            # Windows answers "access denied" (not "exists") for a lock file whose deletion is
+            # still pending because a waiter has it open; that is a lock in use too.
+            if isinstance(exc, PermissionError) and os.name != "nt":
+                raise
+            holder, abandoned = _lock_holder(lock_path)
+            if abandoned:
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"loop.yaml is locked by another process (pid {holder}); lock file "
+                    f"{os.path.basename(lock_path)} - remove it if that process is gone"
+                ) from None
+            time.sleep(_LOCK_POLL_SEC)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(json.dumps({"pid": os.getpid()}).encode("utf-8"))
+        yield
+    finally:
+        for _attempt in range(100):
+            try:
+                os.unlink(lock_path)
+                break
+            except PermissionError:
+                time.sleep(0.01)  # Windows: a waiter is reading the lock file this instant
+            except OSError:
+                break
+
+
+def update_state(mutate: Callable[[LoopState], LoopState], path: Optional[str] = None) -> LoopState:
+    """Read ``loop.yaml`` fresh under the lock, apply ``mutate`` to it, write it, return it.
+
+    The read-modify-write of a command: what another writer changed since the command began is
+    kept, and ``mutate`` sets only the fields the command owns (``replace(fresh, ...)``).
+    """
+    target = path if path is not None else default_state_path()
+    with state_lock(target):
+        updated = mutate(read_state(target))
+        _write_state_unlocked(updated, target)
+        return updated
+
+
+#: Fields no iteration owns: ``write_state`` refreshes them on every persist.
+_UNOWNED_FIELDS = frozenset({"created_at", "updated_at"})
+
+
+def merge_state(base: LoopState, new: LoopState, path: Optional[str] = None) -> LoopState:
+    """Persist what an iteration changed (``base`` -> ``new``) onto the file's CURRENT contents.
+
+    An iteration can run for hours; ``soup loop rollback`` / ``pause`` / ``canary`` may change
+    ``loop.yaml`` meanwhile, and writing the iteration's copy back would undo them. Under the
+    lock this re-reads the file and applies ONLY the fields ``new`` changed relative to ``base``
+    (the ones the iteration owns). A field both changed takes the iteration's value, except
+    ``status``: a pause or stop made meanwhile wins over the iteration's copy. If the merged
+    result is not a valid ``LoopState``, or the file is gone or unreadable, ``new`` is written
+    as it is (the behaviour before this function existed).
+    """
+    target = path if path is not None else default_state_path()
+    with state_lock(target):
+        changes = {
+            item.name: getattr(new, item.name)
+            for item in dataclass_fields(LoopState)
+            if item.name not in _UNOWNED_FIELDS
+            and getattr(new, item.name) != getattr(base, item.name)
+        }
+        try:
+            fresh = read_state(target)
+            if fresh.status != base.status:
+                changes.pop("status", None)
+            merged = replace(fresh, **changes)
+        except (FileNotFoundError, ValueError):
+            merged = new
+        _write_state_unlocked(merged, target)
+        return merged
 
 
 def read_state(path: Optional[str] = None) -> LoopState:

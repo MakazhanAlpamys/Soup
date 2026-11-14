@@ -142,10 +142,24 @@ class LoopLog:
         return os.path.join(self._dir, LOG_FILES[kind])
 
     def iteration(self, line: Mapping[str, Any]) -> bool:
-        return self._append("iteration", line)
+        """Append an iteration line unless that iteration (or canary) already has this outcome.
+
+        A crash between the log append and ``loop.yaml`` makes the restart do the same step
+        again; the second line would be a duplicate, so it is not written (it counts as
+        written: the file already says it).
+        """
+        # A canary's closing line (promoted, withdrawn ...) belongs to the iteration that started
+        # it (parent_iteration_id) and is written by a LATER cycle with an id of its own, so a
+        # restarted cycle is recognised by the parent; any other line by its own id.
+        if line.get("parent_iteration_id") is not None:
+            keys = ("parent_iteration_id", "outcome")
+        else:
+            keys = ("iteration_id", "outcome")
+        return self._append_once("iteration", line, keys)
 
     def version(self, line: Mapping[str, Any]) -> bool:
-        return self._append("version", line)
+        """Append a version line unless the same change (version, cause, iteration) is there."""
+        return self._append_once("version", line, ("to_version", "cause", "iteration_id"))
 
     def progress(self, line: Mapping[str, Any]) -> bool:
         return self._append("progress", line)
@@ -154,6 +168,27 @@ class LoopLog:
         """The notes of the writes that failed since the last call (each once)."""
         taken, self._failures = self._failures, []
         return taken
+
+    def _append_once(self, kind: str, line: Mapping[str, Any], keys: "tuple[str, ...]") -> bool:
+        """``_append``, skipped when a line with the same ``keys`` values is already in the file."""
+        wanted = tuple(line.get(name) for name in keys)
+        if self._enabled and None not in wanted and self._has_line(kind, keys, wanted):
+            return True
+        return self._append(kind, line)
+
+    def _has_line(self, kind: str, keys: "tuple[str, ...]", wanted: tuple) -> bool:
+        try:
+            with open(self.path(kind), "rb") as handle:
+                for raw in handle:
+                    try:
+                        record = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(record, dict) and tuple(record.get(k) for k in keys) == wanted:
+                        return True
+        except OSError:
+            return False
+        return False
 
     def _append(self, kind: str, line: Mapping[str, Any]) -> bool:
         if not self._enabled:

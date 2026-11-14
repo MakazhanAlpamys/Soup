@@ -1579,13 +1579,13 @@ class TestLogFailures:
         write_state(state)
         seen = {}
 
-        real_write_state = daemon.write_state
+        real_merge_state = daemon.merge_state
 
-        def checking(new_state, path=None):
+        def checking(base, new_state, path=None):
             seen.setdefault("lines", len(_read(cwd, "iteration")))  # at the first save
-            return real_write_state(new_state, path)
+            return real_merge_state(base, new_state, path)
 
-        monkeypatch.setattr(daemon, "write_state", checking)
+        monkeypatch.setattr(daemon, "merge_state", checking)
 
         watch(pipeline.config())
 
@@ -1659,7 +1659,9 @@ class TestStageFailureFlags:
 
         out = self._train(cwd, monkeypatch, lambda argv, **kw: Died())
 
-        assert out["failed"] is True and out["skipped"] is True and out["run_id"] is None
+        assert out["failed"] is True and out["run_id"] is None
+        assert not out.get("skipped"), "a failure is not a skip"
+        assert "exit code 1" in out["notes"]
 
     def test_a_training_run_that_could_not_start_failed(self, cwd, monkeypatch):
         def broken(argv, **kwargs):

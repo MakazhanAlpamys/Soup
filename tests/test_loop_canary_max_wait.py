@@ -614,8 +614,13 @@ class TestErrorsOnly:
         assert new_state.production_name == CANARY
         assert "quality unverified: 0/30 canary, 0/30 stable rated in 24h" in record.notes
 
-    def test_a_canary_the_requests_do_not_vouch_for_is_not_promoted(self, cwd):
-        """Only 10 canary answers: the error verdict is itself UNKNOWN, so it keeps waiting."""
+    def test_a_canary_with_few_answers_is_decided_on_its_request_errors_after_the_wait(self, cwd):
+        """Only 10 canary answers, all fine: the wait is over, so the request errors decide.
+
+        The error verdict is UNKNOWN below 30 answers; the maximum wait used to leave such a
+        canary waiting for ever (a small share of keyed traffic may never get to 30). Now
+        ``--canary-on-timeout errors-only`` decides with however many answers there are.
+        """
         state = _canary_state()
         _record(state, ok=10)
         told = []
@@ -624,13 +629,11 @@ class TestErrorsOnly:
             promote_fn=lambda s: told.append(1) or {"promoted": True},
         )
 
-        new_state, record, decision = run_once(state, config, now=at(MAX_WAIT * 5))
+        new_state, record, _decision = run_once(state, config, now=at(MAX_WAIT * 5))
 
-        assert told == [] and decision.proceed is False
-        assert new_state.canary_active == CANARY
-        assert record.canary_verdict == "UNKNOWN"
-        assert "canary errors: UNKNOWN" in record.notes
-        assert "unverified" not in record.notes
+        assert told == [1]
+        assert new_state.canary_active is None and new_state.production_name == CANARY
+        assert "promoted on timeout: 10 canary answers" in record.notes
         assert record.canary_quality["verdict"] == "INSUFFICIENT"
 
     def test_failed_requests_still_withdraw_it(self, cwd):

@@ -77,6 +77,7 @@ from soup_cli.utils.loop_state import (
     init_state,
     parse_wait_duration,
     read_state,
+    update_state,
     validate_sft_recipe_value,
     write_state,
 )
@@ -702,6 +703,14 @@ def status_cmd() -> None:
     if state.waiting_note:
         # The last cycle that waited for corrections said this (not a live count).
         table.add_row("waiting", for_terminal(state.waiting_note))
+    if state.last_failure:
+        # The exit code and stderr tail of a failed training run, or why a deploy was refused.
+        table.add_row("last_failure", for_terminal(state.last_failure))
+    if state.pending_deploy:
+        table.add_row(
+            "pending_deploy",
+            f"attempt {state.pending_deploy.get('attempts', 0)} refused; retried next cycle",
+        )
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("min_new_edits", str(state.min_new_edits))
     table.add_row("min_new_rated", str(state.min_new_rated))
@@ -737,8 +746,7 @@ def pause_cmd() -> None:
     if state.status == "stopped":
         console.print("[yellow]loop is already stopped[/]")
         raise typer.Exit(code=0)
-    state = state.with_status("paused")
-    write_state(state)
+    update_state(lambda fresh: fresh.with_status("paused"))
     console.print("[green]loop paused[/]")
 
 
@@ -749,9 +757,77 @@ def resume_cmd() -> None:
     if state.status != "paused":
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
-    state = state.with_status("running")
-    write_state(state)
+    update_state(
+        lambda fresh: fresh.with_status("running") if fresh.status == "paused" else fresh
+    )
     console.print("[green]loop resumed[/]")
+
+
+#: The settings ``soup loop set`` changes (what ``soup loop init`` needed ``--force`` for).
+SETTABLE_KEYS = ("base_model", "trace_dir", "verify")
+
+
+@app.command("set")
+def set_cmd(
+    key: str = typer.Argument(..., help="base_model, trace_dir or verify."),
+    value: str = typer.Argument(..., help="The new value."),
+) -> None:
+    """Change ONE setting of an existing loop: base_model, trace_dir or verify.
+
+    ``soup loop init`` on an existing loop needs ``--force`` and starts the state over
+    (production, canary, cursors, counters, versions). This changes only the one key, under the
+    state lock, and leaves everything else and the version log as they are.
+    """
+    if key not in SETTABLE_KEYS:
+        console.print(
+            f"[red]cannot set {for_terminal(repr(key))}:[/] soup loop set changes "
+            f"{', '.join(SETTABLE_KEYS)}"
+        )
+        raise typer.Exit(code=2)
+    state = _safe_read()
+    if key == "base_model":
+        if not value.strip():
+            console.print("[red]base_model must not be empty[/]")
+            raise typer.Exit(code=2)
+        from soup_cli.utils.loop_stages import resolve_base_model_source
+
+        try:
+            new_value, _source = resolve_base_model_source(state.served_model, value)
+        except ValueError as exc:
+            console.print(f"[red]invalid base_model:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+    elif key == "trace_dir":
+        if not value.strip():
+            console.print("[red]trace_dir must not be empty[/]")
+            raise typer.Exit(code=2)
+        if os.path.exists(value) and not os.path.isdir(value):
+            console.print(f"[red]trace_dir:[/] {for_terminal(value)} is not a directory")
+            raise typer.Exit(code=2)
+        if not os.path.isdir(value):
+            console.print(
+                f"[yellow]warning:[/] no conversation logs at {for_terminal(value)} yet; "
+                "soup serve --trace-log <dir>/<file>.jsonl writes them"
+            )
+        new_value = value
+    else:
+        from soup_cli.utils.loop_stages import check_verify_eval
+
+        new_value = value.strip().lower().replace("-", "_")
+        if new_value not in VERIFY_METHODS:
+            console.print(
+                f"[red]invalid verify {for_terminal(repr(value))}:[/] one of "
+                f"{', '.join(VERIFY_METHODS)}"
+            )
+            raise typer.Exit(code=2)
+        try:
+            check_verify_eval(new_value, state.eval_suite)
+        except ValueError as exc:
+            if state.pre_wired:
+                console.print(f"[red]invalid verify / eval:[/] {for_terminal(exc)}")
+                raise typer.Exit(code=2)
+            console.print(f"[yellow]warning:[/] {for_terminal(exc)}")
+    update_state(lambda fresh: replace(fresh, **{key: new_value}))
+    console.print(f"[green]{key} set:[/] {for_terminal(new_value)}")
 
 
 @app.command("watch")
@@ -1042,9 +1118,16 @@ def canary_cmd(
         message=f"{policy.traffic_pct:g}% of keyed traffic; verdict after "
         f"{CANARY_MIN_SAMPLES} canary answers",
     ))
-    write_state(new_state)
-    # Reload so the in-memory value reflects the persisted updated_at.
-    new_state = read_state()
+    owned = {
+        name: getattr(new_state, name)
+        for name in (
+            "canary_active", "canary_traffic_pct", "canary_autoroll_on_regress",
+            "canary_rollout_id", "canary_started_ts", "canary_cursor_ts",
+            "canary_iteration",
+        )
+    }
+    # Only the canary fields are this command's: what a daemon wrote meanwhile is kept.
+    new_state = update_state(lambda fresh: replace(fresh, **owned))
     console.print(
         f"[green]canary set:[/] {for_terminal(policy.canary or '')} @ "
         f"{policy.traffic_pct:.1f}% (autoroll={autoroll_on_regress})"
@@ -1075,9 +1158,9 @@ def rollback_cmd() -> None:
         # No version changes; the canary's iteration, if one started it, ends rolled_back.
         log = LoopLog()
         _log_withdrawal(log, state)
-        write_state(
-            replace(
-                state,
+        update_state(
+            lambda fresh: replace(
+                fresh,
                 canary_active=None,
                 canary_traffic_pct=None,
                 canary_rollout_id=None,
@@ -1114,9 +1197,10 @@ def rollback_cmd() -> None:
         state.production_iteration_id, "rollback", "end",
         message=f"production back to version {changes['production_version']}",
     ))
-    write_state(
-        replace(
-            state,
+    cursor_changes = rollback_cursor_changes(state)
+    update_state(
+        lambda fresh: replace(
+            fresh,
             production_name=target,
             production_adapter=state.previous_production_adapter,
             previous_production_name=None,
@@ -1128,7 +1212,7 @@ def rollback_cmd() -> None:
             canary_started_ts=None,
             **changes,
             # the data cursor goes back with production (a running canary's own is withdrawn)
-            **rollback_cursor_changes(state),
+            **cursor_changes,
         )
     )
     label = target or "the served model"

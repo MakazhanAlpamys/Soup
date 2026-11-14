@@ -19,6 +19,7 @@ id back instead of relying on shell job control.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import signal
@@ -72,7 +73,9 @@ from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
     format_wait_duration,
+    merge_state,
     read_state,
+    update_state,
     write_state,
 )
 
@@ -344,35 +347,43 @@ def run_once(
         return state, _noted(record, log), decision
     # Stage events: held back until the iteration has work to show (see StageEvents).
     events = StageEvents(log, iteration_id)
-    events.emit("harvest", "start")
-    harvest_out = dict(config.harvest_fn(state))
-    events.emit("harvest", "end", message=_harvest_message(harvest_out))
-    waiting_note = _log_wait(log, iteration_id, state, harvest_out)
-    if harvest_out.get("pairs_path"):
-        events.go_live()  # a dataset was handed to training
-    events.emit("train", "start")
-    train_out = dict(config.train_fn(state, harvest_out))
-    trained_run = _training_ran(train_out)
-    if trained_run:
-        events.go_live()  # (a custom stage can train without a dataset path)
-    _emit_train_end(events, train_out, trained_run)
-    # What this iteration read up to: the iteration that trained sets the attempt cursor, and the
-    # data cursor when its canary is promoted. The corrected answers it kept aside and the ones
-    # that graduated are now seen, for good: a run that trained nothing, or failed, used none up.
-    read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
-    plan = harvest_out.get("holdout")
-    ledger_notes = (
-        record_plan(plan, iteration_id=iteration_id, until=read_up_to)
-        if trained_run and isinstance(plan, HoldoutPlan)
-        else []
-    )
-    if trained_run:
-        events.emit("verdict", "start")
-    gate_out = dict(config.gate_fn(state, train_out))
-    if trained_run:
-        _emit_verdict_end(events, gate_out)
+    pending = state.pending_deploy
+    if pending is None:
+        events.emit("harvest", "start")
+        harvest_out = dict(config.harvest_fn(state))
+        events.emit("harvest", "end", message=_harvest_message(harvest_out))
+        waiting_note = _log_wait(log, iteration_id, state, harvest_out)
+        if harvest_out.get("pairs_path"):
+            events.go_live()  # a dataset was handed to training
+        events.emit("train", "start")
+        train_out = dict(config.train_fn(state, harvest_out))
+        trained_run = _training_ran(train_out)
+        if trained_run:
+            events.go_live()  # (a custom stage can train without a dataset path)
+        _emit_train_end(events, train_out, trained_run)
+        read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
+        plan = harvest_out.get("holdout")
+        if trained_run:
+            events.emit("verdict", "start")
+        gate_out = dict(config.gate_fn(state, train_out))
+        if trained_run:
+            _emit_verdict_end(events, gate_out)
+        resumed_attempts = 0
+    else:
+        # A candidate trained earlier whose deploy was refused: only the deploy runs again.
+        events.go_live()
+        harvest_out = {"pairs_harvested": 0, "traces_collected": 0}
+        waiting_note = None
+        train_out = dict(pending["train"])
+        gate_out = dict(pending["gate"])
+        trained_run = True
+        read_up_to = valid_cursor(pending.get("cursor_ts"))
+        plan = None
+        resumed_attempts = int(pending["attempts"])
+        iteration_id = str(pending.get("iteration_id") or iteration_id)
+        events.emit("deploy", "start")
     deploying = trained_run and (gate_out.get("gate_verdict") == "OK" or _canary_decides(gate_out))
-    if deploying:
+    if deploying and pending is None:
         events.emit("deploy", "start")
     deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
     if deploying:
@@ -383,6 +394,32 @@ def run_once(
         canary_verdict = str(deploy_verdict)
     shipped = bool(deploy_out.get("deployed", False))
     rolled_back = rolled_back or bool(deploy_out.get("rolled_back", False))
+    # The batch is consumed only by a DECIDED verdict: SHIP deployed, DON'T SHIP, or a deploy
+    # that failed for good (retries used up). A skipped verdict (soup ship crashed) keeps it;
+    # a refused deploy keeps the trained candidate and retries just the deploy next cycle.
+    verdict_decided = str(gate_out.get("gate_verdict", "SKIPPED")) in ("OK", "MAJOR")
+    deploy_refused = deploying and not shipped and bool(deploy_out.get("failed"))
+    attempts_used = resumed_attempts + 1 if deploy_refused else 0
+    retry_deploy = deploy_refused and attempts_used < DEPLOY_RETRY_LIMIT
+    consumed = trained_run and verdict_decided and not retry_deploy
+    failure_note = None
+    if deploy_refused:
+        reason = str(deploy_out.get("notes") or "deploy failed")
+        if retry_deploy:
+            failure_note = (
+                f"deploy failed (attempt {attempts_used} of {DEPLOY_RETRY_LIMIT}): {reason}; "
+                "the trained candidate is kept and the deploy will be retried next cycle"
+            )
+        else:
+            failure_note = f"deploy failed after {attempts_used} attempts: {reason}"
+    elif train_out.get("failed") and train_out.get("notes"):
+        failure_note = str(train_out["notes"])
+    deploy_out = {**deploy_out, **({"notes": failure_note} if deploy_refused else {})}
+    ledger_notes = (
+        record_plan(plan, iteration_id=iteration_id, until=read_up_to)
+        if consumed and isinstance(plan, HoldoutPlan)
+        else []
+    )
     pairs = int(harvest_out.get("pairs_harvested", 0) or 0)
     if pairs < 0:
         pairs = 0
@@ -434,7 +471,20 @@ def run_once(
         last_run_date=today,
     )
     new_state = _state_with(
-        _note_attempt(new_state, read_up_to), waiting_note=_safe_wait(waiting_note)
+        _note_attempt(new_state, read_up_to if consumed else None),
+        waiting_note=_safe_wait(waiting_note),
+        pending_deploy=(
+            {
+                "train": _plain_json(train_out),
+                "gate": _plain_json(gate_out),
+                "attempts": attempts_used,
+                "cursor_ts": read_up_to,
+                "iteration_id": iteration_id,
+            }
+            if retry_deploy
+            else None
+        ),
+        last_failure=(failure_note or "")[:500] or None,
     )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
@@ -653,9 +703,26 @@ def _rollout_start(deploy_out: Mapping[str, object]) -> float:
     return float(started)
 
 
+#: A trained candidate whose deploy is refused is deployed again on the next cycles, this many
+#: attempts in all (the first one included); then the iteration is recorded as failed.
+DEPLOY_RETRY_LIMIT = 3
+
+
 def _training_ran(train_out: Mapping[str, object]) -> bool:
     """True when the train stage produced a run (not skipped, not failed)."""
     return bool(train_out.get("run_id")) and not train_out.get("skipped")
+
+
+def _plain_json(stage_out: Mapping[str, object]) -> "dict[str, object]":
+    """The JSON-plain part of a stage's output (what ``loop.yaml`` can keep for a retry)."""
+    kept: "dict[str, object]" = {}
+    for key, value in stage_out.items():
+        try:
+            if isinstance(key, str) and json.loads(json.dumps(value, allow_nan=False)) == value:
+                kept[key] = value
+        except (TypeError, ValueError):
+            continue
+    return kept
 
 
 def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:
@@ -825,6 +892,22 @@ def _evaluate_active_canary(
         _LOG.warning("canary stats read failed", exc_info=True)
         return _CanaryReading()
     quality = _read_quality(state, config)
+    # The maximum wait ended a canary only once it had its 30 answers; a small share of keyed
+    # traffic may never get there. Once the wait is over --canary-on-timeout decides, whatever
+    # the count (see _decide_on_timeout).
+    wait_over = state.canary_on_timeout != "wait" and _wait_is_over(state, now)
+    counts_text = f"{samples} canary answers, {stable_samples} stable answers"
+    if wait_over and verdict == "UNKNOWN":
+        timed = _decide_on_timeout(state, policy, stats, counts_text, samples, stable_samples)
+        if timed is not None and quality is None:
+            return timed
+        if timed is not None:
+            verdict = timed.verdict or verdict
+            timeout_reading = timed
+        else:
+            timeout_reading = None
+    else:
+        timeout_reading = None
     if quality is None:
         regressed = verdict == "MAJOR" and state.canary_autoroll_on_regress
         return _CanaryReading(
@@ -870,6 +953,15 @@ def _evaluate_active_canary(
             decided_on = "errors_only"
             # Added to the notes only if the canary then is promoted (run_once: verdict OK).
             promote_note = f"promoted on errors only - quality unverified: {missing}"
+    if timeout_reading is not None:
+        # The error verdict was UNKNOWN for want of answers: the timeout decided it above.
+        if timeout_reading.rollback is not None:
+            withdraw = timeout_reading.rollback
+            rollback_note = timeout_reading.rollback_note
+            if verdict != "MAJOR":
+                verdict = "UNKNOWN"
+        else:
+            promote_note = timeout_reading.promote_note
     if withdraw is None and verdict == "MAJOR" and state.canary_autoroll_on_regress:
         withdraw = maybe_rollback(policy, verdict)
     return _CanaryReading(
@@ -886,6 +978,51 @@ def _evaluate_active_canary(
         ),
         rollback_note=rollback_note,
         promote_note=promote_note,
+    )
+
+
+def _decide_on_timeout(
+    state: LoopState,
+    policy: CanaryPolicy,
+    stats: BucketStats,
+    counts_text: str,
+    samples: int,
+    stable_samples: Optional[int],
+) -> Optional[_CanaryReading]:
+    """The canary's request-error verdict once the maximum wait is over, whatever the count.
+
+    ``--canary-on-timeout rollback`` withdraws it; ``errors-only`` lets the request errors
+    alone decide with however many answers there are (a canary that failed more than stable is
+    withdrawn when autoroll is on, any other is promoted). The reason says "timeout" and the
+    counts. ``None`` leaves the verdict as it was (``wait``).
+    """
+    waited = format_wait_duration(state.canary_max_wait_sec)
+    name = state.canary_active
+    if state.canary_on_timeout == "rollback":
+        return _CanaryReading(
+            verdict="UNKNOWN",
+            rollback=rollback(policy, reason="canary undecided after the maximum wait"),
+            samples=samples,
+            stable_samples=stable_samples,
+            rollback_note=(
+                f"canary {name} rolled back on timeout: {counts_text} in {waited}, not enough "
+                "to decide (--canary-on-timeout rollback)"
+            ),
+        )
+    if state.canary_on_timeout != "errors-only":
+        return None
+    error_verdict = stats.verdict(min_samples=1)
+    if error_verdict == "UNKNOWN":
+        error_verdict = "OK"  # no canary answer failed: nothing against it
+    regressed = error_verdict == "MAJOR" and state.canary_autoroll_on_regress
+    return _CanaryReading(
+        verdict=error_verdict,
+        rollback=maybe_rollback(policy, error_verdict) if regressed else None,
+        samples=samples,
+        stable_samples=stable_samples,
+        promote_note=(
+            f"promoted on timeout: {counts_text} in {waited}, decided on request errors alone"
+        ),
     )
 
 
@@ -976,8 +1113,11 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                 continue
             if state.status == "stopped":
                 break
+            started_from = state
             state, record, decision = run_once(state, config, log=log)
-            write_state(state, config.state_path)
+            # The iteration may have run for hours: persist only the fields it changed onto
+            # the file as it is NOW, so a rollback / pause / canary made meanwhile survives.
+            state = merge_state(started_from, state, config.state_path)
             # Budget-skipped iterations DO NOT produce a manifest — the
             # cycle didn't actually run, so cluttering .soup-loops/ with
             # "I didn't run" records would surprise operators expecting
@@ -1011,12 +1151,12 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         # was running). A SIGTERM while paused must not be silently
         # promoted to stopped (code-review HIGH #2 fix).
         try:
-            current = read_state(config.state_path)
-            if current.status == "running":
-                write_state(current.with_status("stopped"), config.state_path)
-                state = current.with_status("stopped")
-            else:
-                state = current
+            state = update_state(
+                lambda current: (
+                    current.with_status("stopped") if current.status == "running" else current
+                ),
+                config.state_path,
+            )
         except (FileNotFoundError, ValueError):
             pass
     return state, iterations

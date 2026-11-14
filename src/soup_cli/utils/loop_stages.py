@@ -779,6 +779,34 @@ def _paraphrase_step(state: LoopState, ctx: Mapping[str, object]) -> list:
         return [f"paraphrases: not written ({type(exc).__name__})"]
 
 
+_STDERR_TAIL_LINES = 6
+_STDERR_TAIL_CHARS = 600
+
+
+def _stderr_tail(stderr: object) -> str:
+    """The last lines of a subprocess's stderr, control characters stripped, capped.
+
+    ``stderr`` is bytes, text or None (a runner that did not capture it). Never raises.
+    """
+    from soup_cli.utils.terminal import strip_control
+
+    if isinstance(stderr, (bytes, bytearray)):
+        text = bytes(stderr).decode("utf-8", errors="replace")
+    elif isinstance(stderr, str):
+        text = stderr
+    else:
+        return ""
+    lines = [line.strip() for line in strip_control(text).splitlines() if line.strip()]
+    return " | ".join(lines[-_STDERR_TAIL_LINES:])[-_STDERR_TAIL_CHARS:]
+
+
+def _train_failure(note: str, decided: Mapping[str, object]) -> "dict[str, object]":
+    """A failed run: ``failed`` (never ``skipped``) and the reason in ``notes``."""
+    previous = decided.get("notes")
+    notes = f"{previous}; {note}" if previous else note
+    return {**decided, "run_id": None, "adapter_path": None, "failed": True, "notes": notes}
+
+
 def train_dpo_from_pairs(
     state: LoopState, ctx: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -877,12 +905,15 @@ def train_dpo_from_pairs(
         )
     except Exception as exc:  # noqa: BLE001 — train failure must not crash loop
         _LOG.warning("train subprocess failed: %s", type(exc).__name__)
-        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True, **decided}
+        return _train_failure(f"train failed: {type(exc).__name__}", decided)
 
     rc = getattr(result, "returncode", 1)
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
-        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True, **decided}
+        tail = _stderr_tail(getattr(result, "stderr", None))
+        return _train_failure(
+            f"train failed (exit code {rc})" + (f": {tail}" if tail else ""), decided
+        )
     trained = {"run_id": run_id, "skipped": False, "adapter_path": output_dir, **decided}
     if plan is not None:
         # What the verdict checks: the corrections this run trained on, and the ones it kept out.
