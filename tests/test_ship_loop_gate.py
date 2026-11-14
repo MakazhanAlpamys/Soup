@@ -831,228 +831,36 @@ def test_a_very_deeply_nested_row_is_a_bad_row_not_a_crash():
 # The verdict JSON validates against the loop formats' iteration schema
 # ---------------------------------------------------------------------------
 
-# Copied from src/soup_cli/schemas/loop/iteration.schema.json on PR #2505's branch
-# (MakazhanAlpamys/Soup @ feat/loop-contracts, commit 637ce6cf, blob 8d557117): the four shared
-# $defs and the inline schemas of verdict.corrections and verdict.held_out. Not on this branch:
-# when #2505 merges, the schema file is the authority and this copy should be read from it.
-ITERATION_FRAGMENT = json.loads(r'''
-{
-  "$defs": {
-    "count": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "fraction_or_null": {
-      "oneOf": [
-        {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "template_ref": {
-      "description": "An instruction template: a stable id and the version of its text.",
-      "type": "object",
-      "required": [
-        "id",
-        "version"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
-    "scoring": {
-      "description": "How an answer was scored against a corrected text.",
-      "type": "object",
-      "required": [
-        "method",
-        "threshold",
-        "template"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "method": {
-          "enum": [
-            "added_recall",
-            "reference_judge"
-          ],
-          "description": "added_recall scores what the correction ADDED: the added words are the edit's content words that the original answer lacked, and an answer is a hit when at least threshold of them are present (when an edit adds fewer than 2 content words, all its content words are used instead). reference_judge asks a judge model to compare the answer with the corrected text."
-        },
-        "threshold": {
-          "description": "added_recall: the share of the added words an answer must contain to be a hit (0.5). null when the method has no threshold.",
-          "$ref": "#/$defs/fraction_or_null"
-        },
-        "template": {
-          "description": "reference_judge: the judge's instruction template. null when the method uses none.",
-          "oneOf": [
-            {
-              "$ref": "#/$defs/template_ref"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    }
-  },
-  "corrections": {
-    "description": "Optional. Check 1, corrections learned: did the new version learn the answers a person corrected? Absent = not measured. When present, all fields are present.",
-    "type": "object",
-    "required": [
-      "fixed",
-      "broken",
-      "ties",
-      "n_edits",
-      "n_paraphrases",
-      "p_value",
-      "scoring",
-      "outcome"
-    ],
-    "additionalProperties": false,
-    "properties": {
-      "fixed": {
-        "description": "Edits whose paraphrases the new version hit more often than the old version did.",
-        "$ref": "#/$defs/count"
-      },
-      "broken": {
-        "description": "Edits whose paraphrases the new version hit less often than the old version did.",
-        "$ref": "#/$defs/count"
-      },
-      "ties": {
-        "description": "Edits where both versions had the same number of hits.",
-        "$ref": "#/$defs/count"
-      },
-      "n_edits": {
-        "description": "The edits checked: fixed + broken + ties.",
-        "$ref": "#/$defs/count"
-      },
-      "n_paraphrases": {
-        "description": "The paraphrases (paraphrase records, latest per answer) the edits were checked with, summed over the edits.",
-        "$ref": "#/$defs/count"
-      },
-      "p_value": {
-        "description": "One-sided sign test over fixed vs broken: the chance of at least this many fixed if fixing and breaking were equally likely. null when fixed + broken is 0.",
-        "$ref": "#/$defs/fraction_or_null"
-      },
-      "scoring": {
-        "$ref": "#/$defs/scoring"
-      },
-      "outcome": {
-        "enum": [
-          "pass",
-          "fail",
-          "insufficient",
-          "not_applicable"
-        ],
-        "description": "insufficient: the iteration had edits but fewer than 5 discordant ones (fixed + broken). not_applicable: the training set held no edits, so there were no corrections to check."
-      }
-    }
-  },
-  "held_out": {
-    "description": "Optional. Check 2, non-inferiority on held-out edits: edits kept out of training, scored with the same metric against their corrected text and paired by prompt. The new version must not be significantly below the old one. Absent = not measured. When present, all required fields are present.",
-    "type": "object",
-    "required": [
-      "better",
-      "worse",
-      "ties",
-      "n",
-      "p_value",
-      "scoring",
-      "outcome"
-    ],
-    "additionalProperties": false,
-    "properties": {
-      "better": {
-        "description": "Held-out edits the new version scored higher on than the old one.",
-        "$ref": "#/$defs/count"
-      },
-      "worse": {
-        "description": "Held-out edits the new version scored lower on than the old one.",
-        "$ref": "#/$defs/count"
-      },
-      "ties": {
-        "description": "Held-out edits both versions scored the same on.",
-        "$ref": "#/$defs/count"
-      },
-      "n": {
-        "description": "The held-out edits scored: better + worse + ties.",
-        "$ref": "#/$defs/count"
-      },
-      "p_value": {
-        "description": "One-sided sign test over worse vs better: the chance of at least this many worse if the two versions were equally good. null when better + worse is 0.",
-        "$ref": "#/$defs/fraction_or_null"
-      },
-      "scoring": {
-        "$ref": "#/$defs/scoring"
-      },
-      "outcome": {
-        "enum": [
-          "pass",
-          "fail",
-          "weak",
-          "not_measured"
-        ],
-        "description": "pass: the new version is not significantly below the old one. fail: it is. weak: fewer than 10 held-out edits, too few to trust a pass. not_measured: fewer than 5 held-out edits."
-      },
-      "style": {
-        "description": "Optional. How a pairwise judge preferred the new version's held-out answers to the old version's. Information only: it is recorded but never decides the outcome.",
-        "type": "object",
-        "required": [
-          "preferred_new",
-          "preferred_old",
-          "n",
-          "p_value"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "preferred_new": {
-            "$ref": "#/$defs/count"
-          },
-          "preferred_old": {
-            "$ref": "#/$defs/count"
-          },
-          "n": {
-            "description": "The answer pairs compared.",
-            "$ref": "#/$defs/count"
-          },
-          "p_value": {
-            "description": "p-value of the split between preferred_new and preferred_old; null when there is nothing to test.",
-            "$ref": "#/$defs/fraction_or_null"
-          }
-        }
-      }
-    }
-  }
-}
-''')  # noqa: E501 -- the copied descriptions are long single-line strings
+def _shipped_iteration_schema() -> dict:
+    """The iteration schema the package ships (``soup_cli/schemas/loop``): the authority, read
+    from the installed package, never a copy."""
+    from importlib import resources
+
+    text = (
+        resources.files("soup_cli.schemas.loop")
+        .joinpath("iteration.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    return json.loads(text)
+
+
 
 
 def _validator(name: str):
     jsonschema = pytest.importorskip("jsonschema")
+    shipped = _shipped_iteration_schema()
+    verdict = shipped["properties"]["verdict"]["oneOf"][0]["properties"]
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$defs": ITERATION_FRAGMENT["$defs"],
-        **ITERATION_FRAGMENT[name],
+        "$defs": shipped["$defs"],
+        **verdict[name],
     }
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
 
 
-def test_the_copied_schema_rejects_what_it_should():
-    """The fixture itself must be strict, or the tests below prove nothing."""
+def test_the_shipped_schema_rejects_what_it_should():
+    """The shipped schema itself must be strict, or the tests below prove nothing."""
     corrections = _validator("corrections")
     good = corrections_check(5, 0, 0, 10, rows=5).to_dict()
     assert list(corrections.iter_errors(good)) == []

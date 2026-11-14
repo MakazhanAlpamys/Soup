@@ -1486,29 +1486,22 @@ class TestStatus:
 
 
 def ship_parse(text: str, keys: tuple) -> list:
-    """The rules ``soup ship`` applies to a --corrections / --held-out file (ship_loop_gate.py)."""
-    rows, seen = [], set()
-    for number, line in enumerate(text.replace("\r\n", "\n").split("\n"), 1):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        assert isinstance(row, dict), number
-        assert set(row) == set(keys), (number, sorted(row))
-        edit_id = row["edit_id"]
-        assert isinstance(edit_id, str) and edit_id.strip() and len(edit_id) <= 256
-        assert edit_id not in seen, f"duplicate edit_id {edit_id}"
-        seen.add(edit_id)
-        for key in keys[1:]:
-            if key == "paraphrases":
-                assert isinstance(row[key], list) and 1 <= len(row[key]) <= 20
-                assert all(isinstance(p, str) and p.strip() and len(p) <= 20000 for p in row[key])
-            elif key == "original":
-                assert isinstance(row[key], str) and len(row[key]) <= 20000
-            else:
-                assert isinstance(row[key], str) and row[key].strip() and len(row[key]) <= 20000
-        rows.append(row)
-    assert len(rows) <= 10_000
-    return rows
+    """What ``soup ship`` makes of a --corrections / --held-out file the loop wrote: the REAL
+    ``ship_loop_gate.parse_corrections`` / ``parse_held_out`` (a bad row raises ``GateInputError``
+    naming the line), as dicts of the fields in ``keys``."""
+    from soup_cli.utils import ship_loop_gate
+
+    if "paraphrases" in keys:
+        edits = ship_loop_gate.parse_corrections(text, "--corrections 'file'")
+    else:
+        edits = ship_loop_gate.parse_held_out(text, "--held-out 'file'")
+    return [
+        {
+            key: list(getattr(edit, key)) if key == "paraphrases" else getattr(edit, key)
+            for key in keys
+        }
+        for edit in edits
+    ]
 
 
 class TestGateFiles:

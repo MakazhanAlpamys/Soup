@@ -82,6 +82,7 @@ def loop(tmp_path, monkeypatch):
     for name in ("_DEPLOY_POSTER", "_LOAD_POSTER", "_TRACE_DIR_RESOLVER"):
         monkeypatch.setattr(ls, name, None)
 
+    from soup_cli.monitoring.feedback_log import FeedbackLogWriter
     from soup_cli.monitoring.trace_logger import TraceLogWriter
     from soup_cli.utils import local_rl
 
@@ -115,6 +116,7 @@ def loop(tmp_path, monkeypatch):
         adapter_map={},
         peft_adapter_names=set(),
         trace_log_writer=TraceLogWriter(os.path.join(".soup-loops", "traces", "serve.jsonl")),
+        feedback_log_writer=FeedbackLogWriter(os.path.join(".soup-loops", "feedback.jsonl")),
         record_thumbs_db="thumbs.db",
         auth_token=TOKEN,
         adapter_dir=os.path.realpath(os.path.join(".soup-loops", "adapters")),
@@ -206,6 +208,15 @@ def loop(tmp_path, monkeypatch):
             )
             assert response.status_code == 200, response.text
 
+    def feedback(response_id, kind, **fields):
+        """What an application (a playground) posts to ``soup serve --feedback-log``."""
+        reply = client.post(
+            "/v1/feedback", headers=headers,
+            json={"response_id": response_id, "kind": kind, **fields},
+        )
+        assert reply.status_code in (200, 201, 202, 204), (reply.status_code, reply.text)
+        return reply
+
     def keyed_traffic(count=300):
         for index in range(count):
             chat("hello", conversation_id=f"user-{index}")
@@ -215,6 +226,7 @@ def loop(tmp_path, monkeypatch):
         "client": client, "model": model, "failing": failing, "served_by": served_by,
         "cycle": cycle, "created": created, "cli": cli, "headers": headers, "chat": chat,
         "users_give_feedback": users_give_feedback, "keyed_traffic": keyed_traffic,
+        "feedback": feedback,
         "verdicts": verdicts, "trained_on": trained_on, "trained_with": trained_with,
     }
 
@@ -985,3 +997,54 @@ def test_a_held_out_edit_is_kept_aside_for_one_iteration_then_graduates(loop, mo
         line for line in progress if (line["stage"], line["event"]) == ("harvest", "progress")
     ]
     assert (waiting["done"], waiting["total"]) == (1, 5)
+
+
+def test_the_iteration_line_hashes_the_dataset_file_the_stage_wrote(loop):
+    import hashlib
+
+    _start_canary(loop)
+    lines = [
+        json.loads(raw)
+        for raw in open(os.path.join(".soup-loops", "iterations.jsonl"), encoding="utf-8")
+        if raw.strip()
+    ]
+    trained = [line for line in lines if (line.get("dataset") or {}).get("path")]
+    assert trained, lines
+    for line in trained:
+        path = line["dataset"]["path"]
+        with open(path, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        assert line["dataset"]["sha256"] == digest
+        assert line["dataset"]["sha256"] != hashlib.sha256(path.encode("utf-8")).hexdigest()
+
+
+def test_a_kto_loop_learns_from_corrections_posted_to_the_feedback_route(loop):
+    """The same flow as the kto case above, but the log is written by ``POST /v1/feedback``
+    (the route an application calls), not by hand."""
+    result, _ = loop["cli"](
+        "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
+        "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
+        "--force", "--train-method", "kto",
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    prompts = _split_prompts(False, 5)
+    answers = {}
+    for number, prompt in enumerate(prompts):
+        reply = loop["chat"](prompt)
+        assert reply.status_code == 200, reply.text
+        answers[prompt] = (
+            reply.headers["X-Response-Id"], reply.json()["choices"][0]["message"]["content"]
+        )
+        loop["feedback"](answers[prompt][0], "edit", edited_text=f"Fixed {number}")
+
+    _, iterations = loop["cycle"]()
+
+    assert iterations == 1
+    (rows,) = loop["trained_on"]
+    for number, prompt in enumerate(prompts):
+        messages = [{"role": "user", "content": prompt}]
+        assert {"prompt": messages, "completion": f"Fixed {number}", "label": True,
+                "source": "feedback"} in rows
+        assert {"prompt": messages, "completion": answers[prompt][1], "label": False,
+                "source": "feedback"} in rows
+    assert read_state().canary_active

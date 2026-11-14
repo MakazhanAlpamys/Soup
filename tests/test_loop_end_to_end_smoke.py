@@ -6,7 +6,8 @@ a real model served by the soup serve app, real thumbs, the real ``soup train``
 (DPO) and ``soup ship`` subprocesses, a real PEFT load through
 ``POST /v1/adapters/load``, real canary generations, promotion and rollback.
 
-Run with: ``pytest -m smoke tests/test_loop_end_to_end_smoke.py``. It downloads
+Run with: ``pytest -m smoke tests/test_loop_end_to_end_smoke.py`` (it is also a ``gpu`` test:
+skipped without a CUDA device, selected by ``pytest -m gpu``). It downloads
 the model on first use and takes minutes. ``soup ship`` decides on its own; a
 one-pair DPO run is not expected to win, so the test checks that a real verdict
 was reached (never SKIPPED) and then canaries the trained adapter directly to
@@ -22,25 +23,16 @@ from urllib.parse import urlparse
 
 import pytest
 
-pytestmark = pytest.mark.smoke
+# ``gpu``: the repo's one CUDA convention (tests/conftest.py skips every ``gpu`` test without a
+# device, ``pytest -m gpu`` selects them: #833); no private probe here.
+pytestmark = [pytest.mark.smoke, pytest.mark.gpu]
 
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
 TOKEN = "smoke-" + "s" * 26
 ENDPOINT = "http://127.0.0.1:8000"
 
 
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:
-        return False
-    return torch.cuda.device_count() > 0
-
-
 def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
-    # Checked here, not in a skipif: collecting this file must not import torch.
-    if not _cuda():
-        pytest.skip("the loop trains in 4-bit, which needs a CUDA GPU")
     import httpx
     import torch
     from fastapi.testclient import TestClient

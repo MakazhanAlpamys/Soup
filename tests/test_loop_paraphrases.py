@@ -1939,3 +1939,36 @@ class TestLoopStateFields:
 
         with pytest.raises(ValueError, match="invalid contents"):
             read_state()
+
+
+class TestMessagesRouteDoesNotHonourTheInternalHeader:
+    """``X-Soup-Internal: loop-check`` is a ``/v1/chat/completions`` feature (the loop asks the
+    model through that route). ``/v1/messages`` does not read it, so an Anthropic-shaped request
+    that carries it is an ordinary one: recorded, canary-routed, counted, and the response does
+    not echo the header. Pinned so that a change to either behaviour is a decision, not drift."""
+
+    BODY = {"model": "base", "max_tokens": 8, "messages": [
+        {"role": "user", "content": "hello"},
+    ]}
+
+    def test_it_is_recorded_canaried_and_counted_like_any_request(self, served):
+        resp = served.client.post(
+            "/v1/messages", json=self.BODY,
+            headers={**INTERNAL, "X-Conversation-Id": "user-1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert "X-Soup-Internal" not in resp.headers
+        (line,) = served.trace_lines()
+        assert line["canary_bucket"] == "canary" and line["adapter"] == "candidate"
+        assert served.stats().canary_ok == 1
+        assert served.observed == ["candidate"]
+
+    def test_the_same_header_on_the_chat_route_is_kept_out_of_all_three(self, served):
+        # The contrast that gives the test above its meaning.
+        resp = chat(served.client, headers={**INTERNAL, "X-Conversation-Id": "user-1"})
+
+        assert resp.headers["X-Soup-Internal"] == "loop-check"
+        assert served.trace_lines() == []
+        assert served.stats().canary_ok == 0
+        assert served.observed == [None]
