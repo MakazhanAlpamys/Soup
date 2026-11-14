@@ -32,7 +32,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
 )
 from soup_cli.utils.paths import atomic_write_text
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
 
 console = Console()
@@ -58,8 +58,8 @@ def _render_checks_table(title: str, checks: Sequence[_AnyCheck]) -> None:
         table.add_row(
             escape(check.name),
             f"[{_verdict_style(check.verdict)}]{check.verdict}[/]",
-            for_terminal(check.message),
-            for_terminal(check.evidence),
+            Text(strip_control(check.message)),
+            Text(strip_control(check.evidence)),
         )
     console.print(table)
 
@@ -106,13 +106,17 @@ def _write_report_json(payload: dict, output: str) -> None:
     atomic_write_text(json.dumps(payload, indent=2), output, field="output")
 
 
+def _print_error(exc: Exception, *, prefix: str = "") -> None:
+    console.print(Text.assemble(("Error:", "red"), f" {prefix}{strip_control(exc)}"))
+
+
 def _resolve_format(data: list, fmt: str) -> str:
     if fmt != "auto":
         return fmt
     try:
         return detect_format(data)
     except ValueError as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        _print_error(exc)
         raise typer.Exit(code=1) from exc
 
 
@@ -127,7 +131,7 @@ def _load_tokenizer(model: str, trust_remote_code: bool):
         resolved_trust = resolve_trust_remote_code(model, trust_remote_code, console, requires)
         return engine.resolve_tokenizer(model, trust_remote_code=resolved_trust)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        _print_error(exc)
         raise typer.Exit(code=1) from exc
 
 
@@ -184,7 +188,7 @@ def doctor(
     """
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(Text(f"File not found: {strip_control(file_path)}", style="red"))
         raise typer.Exit(code=1)
     refuse_output_over_input(
         [("the input", path)],
@@ -251,15 +255,15 @@ def doctor(
                 mask_history=mask_history,
             )
         except ValueError as exc:
-            console.print(f"[red]Error:[/] {escape(str(exc))}")
+            _print_error(exc)
             raise typer.Exit(code=1) from exc
         _render_doctor_report(report)
         if output:
             try:
                 _write_report_json(report.to_dict(), output)
-                console.print(f"[green]Wrote[/] {escape(output)}")
+                console.print(Text.assemble(("Wrote", "green"), f" {strip_control(output)}"))
             except (OSError, ValueError) as exc:
-                console.print(f"[red]Error:[/] cannot write --output: {escape(str(exc))}")
+                _print_error(exc, prefix="cannot write --output: ")
                 raise typer.Exit(code=1) from exc
         if report.overall == "MAJOR":
             exit_code = 2
@@ -274,7 +278,7 @@ def doctor(
                 mask_history=mask_history,
             )
         except ValueError as exc:
-            console.print(f"[red]Error:[/] {escape(str(exc))}")
+            _print_error(exc)
             raise typer.Exit(code=1) from exc
         if previews:
             _render_mask_previews(previews)
@@ -309,7 +313,7 @@ def lint(
     """
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(Text(f"File not found: {strip_control(file_path)}", style="red"))
         raise typer.Exit(code=EXIT_USAGE_ERROR)
     refuse_output_over_input(
         [("the input", path)],
@@ -327,9 +331,14 @@ def lint(
 
     if resolved_fmt not in _PREFERENCE_FORMATS:
         console.print(
-            f"[red]Error:[/] format={escape(repr(resolved_fmt))} is not preference data — "
-            "soup data lint only supports dpo/orpo/simpo/ipo/bco (chosen/rejected) and kto. "
-            "Use [bold]soup data doctor[/] instead for chat/SFT data."
+            Text.assemble(
+                ("Error:", "red"),
+                f" format={strip_control(repr(resolved_fmt))} is not preference data — "
+                "soup data lint only supports dpo/orpo/simpo/ipo/bco (chosen/rejected) and kto. "
+                "Use ",
+                ("soup data doctor", "bold"),
+                " instead for chat/SFT data.",
+            )
         )
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
@@ -355,7 +364,7 @@ def lint(
     try:
         report = lint_engine.run_lint(data, resolved_fmt, sample_size=sample, length_fn=length_fn)
     except ValueError as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        _print_error(exc)
         raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     _render_lint_report(report)
@@ -363,9 +372,9 @@ def lint(
     if output:
         try:
             _write_report_json(report.to_dict(), output)
-            console.print(f"[green]Wrote[/] {escape(output)}")
+            console.print(Text.assemble(("Wrote", "green"), f" {strip_control(output)}"))
         except (OSError, ValueError) as exc:
-            console.print(f"[red]Error:[/] cannot write --output: {escape(str(exc))}")
+            _print_error(exc, prefix="cannot write --output: ")
             raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     if report.overall == "MAJOR":
