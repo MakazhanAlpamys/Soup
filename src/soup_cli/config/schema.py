@@ -9429,8 +9429,16 @@ class SoupConfig(BaseModel):
         """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
         SoupTrainerCallback. MLX text SFT implements its own watchdog (#1989),
         but other native tasks do not; MLX has no checkpoint-recovery path or
-        VRAM budget for grad_accum_auto_tune.
+        VRAM budget for grad_accum_auto_tune. Enabled eval gates require the
+        shared callback too (#1811).
         """
+        gate = self.training.eval_gate
+        if gate is not None and gate.enabled:
+            from soup_cli.config.eval_gate_support import eval_gate_refusal
+
+            refusal = eval_gate_refusal(task=self.task, backend=self.backend)
+            if refusal is not None:
+                raise ValueError(refusal)
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
             tcfg = self.training
