@@ -2043,6 +2043,10 @@ Malformed YAML reports the config path and line/column; invalid UTF-8 reports th
 byte offset; an OS read error names its cause. These refusals exit 2. A missing config
 keeps exit 1, and schema validation keeps its existing validation messages and exit code.
 
+Plan and apply display model names, paths and diagnostics literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; config values, hashes and state-file contents keep their original values.
+
 ```bash
 # Render a pre-flight summary + write soup.tfstate
 soup plan --config soup.yaml
