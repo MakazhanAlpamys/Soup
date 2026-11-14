@@ -296,7 +296,7 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
                                    for key, value in sums.items()}})
             if tracker is not None and run_id:
                 tracker.log_metrics(run_id=run_id, step=update, loss=None,
-                                    val_loss=evaluations[-1]["loss"])
+                                    val_loss=evaluations[-1]["loss"], kind="eval")
             self.model.train()
 
         try:
@@ -355,7 +355,7 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
                         )
                         if tracker is not None and run_id:
                             tracker.log_metrics(run_id=run_id, step=update, epoch=epoch + 1,
-                                                loss=entry["loss"], lr=lr)
+                                                loss=entry["loss"], lr=lr, kind="train")
                     if self._val_rows and (update == total_updates or (
                         tcfg.eval_steps is not None and update % tcfg.eval_steps == 0
                     )):
