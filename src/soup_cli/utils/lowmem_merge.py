@@ -155,14 +155,22 @@ def _flag(config: Dict[str, Any], field: str) -> bool:
     return value
 
 
+def _is_finite(value: Any) -> bool:
+    """``math.isfinite``, but False for an integer too large to convert to a float."""
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def lora_scaling(config: Dict[str, Any]) -> float:
     rank = config.get("r")
-    if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
+    if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0 or not _is_finite(rank):
         raise LowMemoryMergeError(
             f"adapter_config.json field 'r' must be a positive integer, got {rank!r}"
         )
     alpha = config.get("lora_alpha")
-    if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or not math.isfinite(alpha):
+    if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or not _is_finite(alpha):
         raise LowMemoryMergeError(
             f"adapter_config.json field 'lora_alpha' must be a finite number, got {alpha!r}"
         )

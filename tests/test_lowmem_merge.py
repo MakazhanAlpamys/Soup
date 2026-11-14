@@ -1031,11 +1031,14 @@ class TestHostileAdapterValues:
             ("r", 4.0),
             ("r", True),
             ("r", None),
+            pytest.param("r", 10**400, id="r-beyond-float"),
             ("lora_alpha", float("nan")),
             ("lora_alpha", float("inf")),
             ("lora_alpha", "8"),
             ("lora_alpha", True),
             ("lora_alpha", None),
+            pytest.param("lora_alpha", 10**400, id="lora_alpha-beyond-float"),
+            pytest.param("lora_alpha", -(10**400), id="lora_alpha-beyond-negative-float"),
             ("use_rslora", "false"),
             ("use_rslora", 1),
             ("fan_in_fan_out", "false"),
@@ -1056,6 +1059,24 @@ class TestHostileAdapterValues:
         with pytest.raises(LowMemoryMergeError, match=field):
             merge_low_memory(base, adapter, output, "float16")
         assert not output.exists()
+
+    @pytest.mark.parametrize("rslora", [False, True])
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            pytest.param("r", 10**400, id="r-beyond-float"),
+            pytest.param("lora_alpha", 10**400, id="lora_alpha-beyond-float"),
+            pytest.param("lora_alpha", -(10**400), id="lora_alpha-beyond-negative-float"),
+        ],
+    )
+    def test_integers_beyond_float_range_name_their_field(self, field, value, rslora):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, lora_scaling
+
+        config = {"r": 4, "lora_alpha": 32, "use_rslora": rslora}
+        assert lora_scaling(config) == (16.0 if rslora else 8.0)
+        config[field] = value
+        with pytest.raises(LowMemoryMergeError, match=f"field '{field}'"):
+            lora_scaling(config)
 
 
 def _set_weight_map_name(base: Path, name: str) -> None:
