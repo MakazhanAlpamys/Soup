@@ -1045,6 +1045,8 @@ repository; a repository it finds missing is created by the same rule when train
 
 **Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
 
+Hugging Face no longer creates new Spaces with the Streamlit SDK. Soup keeps `streamlit-chat` available for existing deployments and prints a deprecation warning for it and for custom template directories detected as Streamlit in v0.78.0. Use `--template gradio-chat` (or a custom Gradio template) for new Spaces. If the Hub response names the `sdk` field and an SDK value, Soup identifies the Streamlit refusal, suggests `gradio-chat`, and includes the Hub response; unrelated Hub errors keep their usual message.
+
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
 repo and downloads it back to `output_dir`, then resumes — no manual copy /
