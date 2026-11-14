@@ -1,5 +1,6 @@
 """Plan/apply display external text literally without changing persisted inputs."""
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -148,6 +149,10 @@ def test_plan_table_is_literal_and_persists_the_original_values(
         pytest.param("plain", "plain", id="plain-control"),
         pytest.param("[bold]name\u202e[end]", "[bold]name[end]", id="markup-and-bidi"),
         pytest.param(":rocket:", ":rocket:", id="emoji-alias", marks=skip_colon_on_windows),
+        pytest.param(
+            r"name\[unfinished", r"name\[unfinished", id="backslash",
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="POSIX backslash filename"),
+        ),
     ],
 )
 def test_real_plan_apply_round_trip_keeps_paths_hashes_and_state(workdir, suffix, shown):
@@ -191,6 +196,21 @@ def test_real_plan_apply_round_trip_keeps_paths_hashes_and_state(workdir, suffix
     assert Path(config).read_bytes() == original_config
     assert Path("train.jsonl").read_bytes() == original_data
     assert {path.name for path in workdir.iterdir()} == {base, config, state_file, "train.jsonl"}
+
+    # A real config change refuses with exit 3 and keeps the applied state intact.
+    before = Path(state_file).read_bytes()
+    changed = {**document, "training": {**document["training"], "lr": 2e-5}}
+    Path(config).write_text(yaml.safe_dump(changed), encoding="utf-8")
+    changed_config = Path(config).read_bytes()
+    refused = runner.invoke(app, ["apply", *args])
+    assert (
+        "Drift detected. Plan no longer matches state: config_sha"
+    ) in _plain(refused, 3)
+    assert "Run `soup plan` again to refresh, then re-apply." in _plain(refused, 3)
+    assert "\x1b[31mDrift detected." in refused.output
+    assert Path(state_file).read_bytes() == before
+    assert Path(config).read_bytes() == changed_config
+    assert Path("train.jsonl").read_bytes() == original_data
 
 
 def test_known_peak_keeps_the_offload_advisory_dim(workdir, monkeypatch):
