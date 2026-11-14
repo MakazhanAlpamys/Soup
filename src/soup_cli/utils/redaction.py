@@ -11,9 +11,10 @@ Used by the crash bundle (``utils/crash.py``) and by ``.can`` packing
 * ``KEY=value`` / ``key: value`` / ``"key": "value"`` pairs whose KEY NAME says the value
   is a credential, in text and in structured configs (nested dicts and lists).
 
-Every pattern is linear: no nested quantifiers, every repeat is bounded or runs over a
-character class that cannot also match the next token, and a pattern is skipped when the
-literal it needs is absent from the text. Stdlib only, so importing this stays cheap.
+Every pattern is linear: no nested quantifiers over overlapping classes, every repeat is
+bounded, possessive, or runs over a character class that cannot also match the next token,
+and a pattern is skipped when the literal it needs is absent from the text. Stdlib only,
+so importing this stays cheap.
 """
 
 from __future__ import annotations
@@ -36,9 +37,12 @@ class RedactionReport:
 
     count: int = 0
     paths: list[str] = field(default_factory=list)
+    # membership test for ``add_path``: a scan of ``paths`` per call would be quadratic
+    _seen: set[str] = field(default_factory=set, repr=False, compare=False)
 
     def add_path(self, path: str) -> None:
-        if path and path not in self.paths:
+        if path and path not in self._seen:
+            self._seen.add(path)
             self.paths.append(path)
 
 
@@ -102,10 +106,23 @@ def redact_url(url: str, *, keep_query: bool = False) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
-# A URL inside free text: stops at whitespace, quotes, backticks and backslashes.
-_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{1,15}://[^\s\"'`\\]+")
+# A URL inside free text: stops at whitespace, quotes, backticks and backslashes. The scheme
+# may be long (``postgresql+psycopg2``); the look-behind keeps a match from starting inside
+# a run of scheme characters, so a long run is scanned once.
+_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{1,40}://[^\s\"'`\\]+")
 _URL_TRAILING = ".,;:)]}"
 _USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s]*@")
+
+# Userinfo with no scheme in front. ``//user:secret@host/x`` (scheme-relative) is matched on
+# the ``//``; ``user:secret@host/x`` and ``user:secret@host:5432`` only when a path or a port
+# follows the host, so an e-mail address or ``git@github.com:org/repo`` is never touched.
+_REL_USERINFO_RE = re.compile(
+    r"(?<![A-Za-z0-9+.\-])(?P<lead>//)[^/@\s\"'`\\<>]{1,512}@(?=[A-Za-z0-9\[])"
+)
+_BARE_USERINFO_RE = re.compile(
+    r"(?<![A-Za-z0-9_.\-+/@%])[A-Za-z0-9_.\-]{1,64}:[^\s@/:<>\"'`\\]{1,512}"
+    r"@(?=[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(?:/|:[0-9]{1,5}(?![A-Za-z0-9])))"
+)
 
 
 def _mask_url_text(raw: str) -> str:
@@ -116,9 +133,6 @@ def _mask_url_text(raw: str) -> str:
 
 
 def _redact_urls(text: str, report: RedactionReport) -> str:
-    if "://" not in text:
-        return text
-
     def _sub(match: re.Match[str]) -> str:
         raw = match.group(0)
         core = raw.rstrip(_URL_TRAILING)
@@ -131,7 +145,15 @@ def _redact_urls(text: str, report: RedactionReport) -> str:
             report.count += max(1, new.count(REDACTED) - core.count(REDACTED))
         return new + tail
 
-    return _URL_RE.sub(_sub, text)
+    def _sub_userinfo(match: re.Match[str]) -> str:
+        report.count += 1
+        return f"{match.groupdict().get('lead') or ''}{REDACTED}@"
+
+    if "://" in text:
+        text = _URL_RE.sub(_sub, text)
+    if "@" in text:
+        text = _BARE_USERINFO_RE.sub(_sub_userinfo, _REL_USERINFO_RE.sub(_sub_userinfo, text))
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +301,15 @@ def _redact_pem(text: str, report: RedactionReport) -> str:
 # Key names that say "this value is a credential"
 # ---------------------------------------------------------------------------
 
-_SECRET_NAME_RE = re.compile(
-    r"token|secret|passw|pass_?phrase|api_?key|access_?key|private_?key|credential"
+# ``{s}`` is the separator allowed inside a two-word name: ``_`` in a normalised name
+# (``is_secret_key`` turns ``-``, ``.`` and camelCase into ``_`` first), any one non-
+# alphanumeric character in raw text (``x-api-key``, ``client.api.key``). The text pre-filter
+# below is built from the same words, so it can never skip a text the name test would flag.
+_SECRET_WORDS = (
+    r"token|secret|passw|pass{s}phrase|api{s}key|access{s}key|private{s}key|credential"
     r"|auth|bearer|cookie|session"
 )
+_SECRET_NAME_RE = re.compile(_SECRET_WORDS.replace("{s}", "_?"))
 # Harmless names that contain one of the words above. Stripped before the test, so
 # ``max_new_tokens``, ``tokenizer`` and ``auth_required`` stay readable while
 # ``hf_token``, ``use_auth_token`` and ``admin_tokens`` do not.
@@ -295,6 +322,8 @@ _BENIGN_NAME_RE = re.compile(
     r"|reasoning|judge|ignore|suppress)(?:_[a-z0-9]+){0,3}_tokens"
     r"|(?<![a-z0-9])(?:eos|bos|pad|unk|sep|cls|mask|special|stop|think)_token"
     r"|author(?!iz)"
+    r"|authentic[a-z0-9]*"
+    r"|^tokens$"
     r"|auth_(?:required|enabled|disabled|mode|type|method|scheme)"
     r"|(?:require|requires|use|enable|disable)_auth(?!_?token)"
 )
@@ -340,20 +369,21 @@ def mask_secret_value(value: str) -> str:
 
 # ``name`` + separator only: a name that is NOT a credential consumes just itself, so an
 # assignment nested in its value is still seen. The value is read (``_VALUE_RE``) only
-# for a credential-looking name, which keeps the work per match constant.
+# for a credential-looking name, and a value that is read is consumed whole, so the work
+# done for it is paid once. A name is at most 80 characters.
 _ASSIGN_RE = re.compile(
     r"(?<![A-Za-z0-9_.\-])(?P<name>[A-Za-z0-9_.\-]{1,80})"
     r"\\?[\"']?[ \t]{0,16}[:=][ \t]{0,16}(?=\S)"
 )
+# A value has no length cap (a cap would leave the tail of a long token in the text). Every
+# repeat is possessive over characters that cannot also start the closing delimiter, so a
+# value is read once and never backtracked into.
 _VALUE_RE = re.compile(
-    r"\"[^\"\\\n]{1,512}\"|'[^'\\\n]{1,512}'|\\\"[^\"\\\n]{1,512}\\\""
-    r"|[^\s\"',;&}\])\\]{1,512}"
+    r"\"(?:[^\"\\\n]|\\.)*+\"|'(?:[^'\\\n]|\\.)*+'"
+    r"|\\\"(?:[^\"\\\n]|\\(?!\"))*+\\\""
+    r"|(?:[^\s\"',;&}\])\\]|\\(?![\"']))++"
 )
-_ASSIGN_HINT_RE = re.compile(
-    r"token|secret|passw|pass_?phrase|api_?key|access_?key|private_?key|credential"
-    r"|auth|bearer|cookie|session",
-    re.IGNORECASE,
-)
+_ASSIGN_HINT_RE = re.compile(_SECRET_WORDS.replace("{s}", "[^a-z0-9]?"), re.IGNORECASE)
 
 
 def _mask_assigned_value(value: str) -> str:

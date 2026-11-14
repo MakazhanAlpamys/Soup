@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import base64
 import copy
+import faulthandler
 import json
+import sys
 import time
 from dataclasses import dataclass
 
@@ -83,8 +85,17 @@ GH_NEGATIVE = "ghp_short ghx_" + _alnum(36) + " ghost_" + _alnum(36)
 SLACK_NEGATIVE = "xoxz-" + SLACK_TAIL + " xox-" + SLACK_TAIL + " xoxb-short"
 NOT_KEYS = (
     "max_new_tokens=512 tokenizer=Qwen/Qwen2.5-0.5B auth_mode=none author: alice "
-    "token_count=12 learning_rate: 2e-5 num_tokens: 7"
+    "token_count=12 learning_rate: 2e-5 num_tokens: 7 tokens: 4096 authentication: required "
+    "authenticated: yes"
 )
+URL_NEGATIVE = (
+    "mail me@example.com or git@github.com:org/repo.git; note:me@example.com, key:v@x.org. "
+    "see https://huggingface.co/api/models?revision=main and ssh://example.org/a/b"
+)
+# A secret longer than any fixed cap on the length of a value: only the tail is checked, so
+# a pass that replaces just the first part of the value cannot hide behind the whole string.
+LONG_HEAD = _alnum(700, seed="LmNoPqRsTuVwXyZaBcDeFgHiJkMn")
+LONG_TAIL = "TailPart" + _alnum(300, seed="zYxWvUtSrQpOnMlKjIhGfEdCbA9876543")
 
 
 def _github_rows() -> list[Row]:
@@ -166,8 +177,41 @@ ROWS: list[Row] = [
         "plainsecretvalue", NOT_KEYS, keeps='{\\"api_key\\": \\"'),
     Row("assignment", "camelCase key", 'accessToken = "plainsecretvalue"', "plainsecretvalue",
         NOT_KEYS, keeps="accessToken = "),
-    Row("assignment", "header key", "X-Api-Key: plainsecretvalue", "plainsecretvalue",
+    # The values below hold none of the words a key name is searched for (token, secret,
+    # key, auth, ...): only the KEY NAME can make the pass look at them.
+    Row("assignment", "header key", "X-Api-Key: plainvalue-77", "plainvalue-77",
         NOT_KEYS, keeps="X-Api-Key: "),
+    Row("assignment", "lower-case header key", "x-api-key: plainvalue-77", "plainvalue-77",
+        NOT_KEYS, keeps="x-api-key: "),
+    Row("assignment", "hyphenated dict repr", "{'x-api-key': 'plainvalue-77', 'n': 3}",
+        "plainvalue-77", NOT_KEYS, keeps="{'x-api-key': '"),
+    Row("assignment", "hyphenated cli flag", "run --api-key=plainvalue-77 --x", "plainvalue-77",
+        NOT_KEYS, keeps="--api-key="),
+    Row("assignment", "dotted key", "client.api.key=plainvalue-77", "plainvalue-77",
+        NOT_KEYS, keeps="client.api.key="),
+    Row("assignment", "long unquoted value", f"access_token={LONG_HEAD}{LONG_TAIL} next",
+        LONG_TAIL[:40], NOT_KEYS, keeps="access_token="),
+    Row("assignment", "long double-quoted value",
+        '{"refresh_token": "' + LONG_HEAD + LONG_TAIL + '", "n": 1}',
+        LONG_TAIL[:40], NOT_KEYS, keeps='"n": 1}'),
+    Row("assignment", "long single-quoted value",
+        "{'refresh_token': '" + LONG_HEAD + LONG_TAIL + "'}",
+        LONG_TAIL[:40], NOT_KEYS, keeps="{'refresh_token': '"),
+    Row("assignment", "quoted value with an escaped quote",
+        '{"password": "plain\\"tail-77x", "n": 1}', "tail-77x", NOT_KEYS, keeps='"n": 1}'),
+    Row("assignment", "quoted value with a backslash", "password='ab\\\\cd-77plain' ok",
+        "cd-77plain", NOT_KEYS, keeps="password='"),
+    Row("assignment", "unquoted value with a backslash", "password=ab\\cd-77plain next",
+        "cd-77plain", NOT_KEYS, keeps="password="),
+    Row("url", "long scheme (SQLAlchemy driver)",
+        "engine postgresql+psycopg2://admin:plainvalue-77@db.internal:5432/soup failed",
+        "plainvalue-77", URL_NEGATIVE, keeps="@db.internal:5432/soup failed"),
+    Row("url", "scheme-relative userinfo", "proxy //admin:plainvalue-77@proxy.example/x now",
+        "plainvalue-77", URL_NEGATIVE, keeps="@proxy.example/x now"),
+    Row("url", "userinfo without a scheme (path)", "mirror admin:plainvalue-77@mirror.example/x",
+        "plainvalue-77", URL_NEGATIVE, keeps="@mirror.example/x"),
+    Row("url", "userinfo without a scheme (port)", "db admin:plainvalue-77@10.0.0.5:5432 down",
+        "plainvalue-77", URL_NEGATIVE, keeps="@10.0.0.5:5432 down"),
 ]
 
 SHAPE_GROUPS = {shape.name for shape in redaction._SHAPES}
@@ -296,12 +340,61 @@ def test_harmless_query_parameter_is_kept(name):
     (f"git+https://someuser:{URL_SECRET}@github.com/org/repo.git@v1",
      "@github.com/org/repo.git@v1"),
     (f"s3://AKIDEXAMPLE:{URL_SECRET}@bucket/key", "@bucket/key"),
+    (f"postgresql+psycopg2://admin:{URL_SECRET}@db.internal/soup", "@db.internal/soup"),
+    (f"mysql+pymysql://admin:{URL_SECRET}@db.internal/soup", "@db.internal/soup"),
+    (f"HTTPS://Admin:{URL_SECRET}@Host.Example/Path", "@Host.Example/Path"),
+    (f"https://:{URL_SECRET}@host.example/path", "@host.example/path"),
+    (f"redis://:{URL_SECRET}@cache.internal:6379/0", "@cache.internal:6379/0"),
+    (f"{'x' * 30}://u:{URL_SECRET}@host.example/p", "@host.example/p"),
 ])
 def test_url_userinfo_is_replaced_and_the_host_is_kept(url, host_part):
     out = redact_text(f"fetching {url} failed")
     assert URL_SECRET not in out
     assert f"://{REDACTED}{host_part}" in out
     assert out.startswith("fetching ") and out.endswith(" failed")
+
+
+@pytest.mark.parametrize("text, expected", [
+    (f"//u:{URL_SECRET}@h.example/x", f"//{REDACTED}@h.example/x"),
+    (f"proxy=//{URL_SECRET}@h.example/x", f"proxy=//{REDACTED}@h.example/x"),
+    (f"u:{URL_SECRET}@h.example/x", f"{REDACTED}@h.example/x"),
+    (f"u:{URL_SECRET}@h.example:8080", f"{REDACTED}@h.example:8080"),
+    (f"u:{URL_SECRET}@localhost:5432/soup", f"{REDACTED}@localhost:5432/soup"),
+    (f"(u:{URL_SECRET}@10.0.0.5:5432)", f"({REDACTED}@10.0.0.5:5432)"),
+    (f"a.b-c_d:{URL_SECRET}@h.example/x?y=1", f"{REDACTED}@h.example/x?y=1"),
+    (f"<u:{URL_SECRET}@h.example/x>", f"<{REDACTED}@h.example/x>"),
+    (f"socks5h:u:{URL_SECRET}@h.example/x", f"socks5h:{REDACTED}@h.example/x"),
+    (f"{'x' * 50}://u:{URL_SECRET}@h.example/x", f"{'x' * 50}://{REDACTED}@h.example/x"),
+])
+def test_userinfo_without_a_scheme_is_replaced(text, expected):
+    report = RedactionReport()
+    out = redact_text(text, report)
+    assert out == expected, out
+    assert report.count == 1
+    assert redact_text(out) == out
+
+
+@pytest.mark.parametrize("text", [
+    "me@example.com",
+    "mail me@example.com or you@example.org.",
+    "git@github.com:org/repo.git",
+    "ssh git@github.com:22/org/repo.git",
+    "note:me@example.com, then retry",
+    "key:v@x.org.",
+    "12:30@noon.example",
+    "see /srv/a:b@host.example/x for details",
+    "https://host.example/a:b@c.example/d",
+    "user: me@example.com/path",
+    "x//me@example.com",
+    "https://host.example/path//a@b.example",
+    "file:///home/me@laptop/x",
+    "a:b@c",
+    "name:" + "x" * 600 + "@host.example/p",
+])
+def test_text_that_only_resembles_userinfo_is_untouched(text):
+    report = RedactionReport()
+    assert redact_text(text, report) == text
+    assert report.count == 0
 
 
 def test_fragment_parameters_are_masked():
@@ -387,14 +480,57 @@ HARMLESS_KEYS = [
     "eos_token", "pad_token", "bos_token", "unk_token", "special_tokens", "new_special_tokens",
     "add_new_tokens", "online_dpo_max_new_tokens", "grpo_judge_max_tokens", "maxNewTokens",
     "numTokens", "tokens_per_second", "pad_token_id", "author", "authors", "auth_required",
+    "tokens", "authentication", "authenticated", "authenticator", "authority",
     "auth_enabled", "auth_mode", "require_auth", "learning_rate", "output_dir", "base",
     "max_seq_length", "keyboard", "monkey", "compass", "pass_rate",
 ]
 
 
+KEY_SPELLINGS = [
+    "api_key", "api-key", "API-KEY", "Api-Key", "apiKey", "ApiKey", "apikey", "x-api-key",
+    "X-Api-Key", "client.api.key", "hf_token", "hf-token", "hf.token", "HF-TOKEN",
+    "access-token", "accessToken", "x-auth-token", "set-cookie", "private-key", "PASSWORD",
+    "db-passwd", "client-secret",
+]
+# (template, the text kept in front of the value): separator, quoting and spacing variants
+KEY_FORMS = [
+    ("{k}={v}", "{k}="),
+    ("{k} = {v}", "{k} = "),
+    ("{k}: {v}", "{k}: "),
+    ("{k}:{v}", "{k}:"),
+    ("{k}:   {v}", "{k}:   "),
+    ('{k}="{v}"', '{k}="'),
+    ("{k}='{v}'", "{k}='"),
+    ('"{k}": "{v}"', '"{k}": "'),
+    ("{{'{k}': '{v}'}}", "{{'{k}': '"),
+    ('{{\\"{k}\\": \\"{v}\\"}}', '{{\\"{k}\\": \\"'),
+    ("export {k}={v}", "export {k}="),
+    ("  {k}: {v}  ", "  {k}: "),
+]
+PLAIN_VALUE = "plainvalue-77"
+
+
+@pytest.mark.parametrize("key", KEY_SPELLINGS)
+@pytest.mark.parametrize("form, keeps", KEY_FORMS)
+def test_every_spelling_of_a_credential_key_is_redacted(key, form, keeps):
+    text = form.format(k=key, v=PLAIN_VALUE)
+    report = RedactionReport()
+    out = redact_text(text, report)
+    assert PLAIN_VALUE not in out, out
+    assert keeps.format(k=key) in out, out
+    assert report.count == 1
+    assert redact_text(out) == out
+
+
 @pytest.mark.parametrize("name", SECRET_KEYS)
 def test_secret_key_names_are_recognised(name):
     assert is_secret_key(name), name
+
+
+@pytest.mark.parametrize("name", SECRET_KEYS)
+def test_a_secret_key_name_is_enough_for_the_text_pass(name):
+    # the cheap pre-filter in front of the assignment pass must never skip a flagged name
+    assert PLAIN_VALUE not in redact_text(f"{name}={PLAIN_VALUE}"), name
 
 
 @pytest.mark.parametrize("name", HARMLESS_KEYS)
@@ -452,6 +588,20 @@ def test_nested_config_is_redacted_by_key_name_and_by_text():
         "env.WANDB_API_KEY",
     ]
     assert not any("plainvalue" in path or URL_SECRET in path for path in report.paths)
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_many_redacted_values_in_one_config_are_recorded_in_linear_time():
+    count = 40_000
+    config = {"credentials": [f"value-{index}" for index in range(count)] + ["value-0"]}
+    start = time.perf_counter()
+    redacted, report = redact_config(config)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 5, elapsed  # a list scan per path is quadratic: minutes at this size
+    assert report.count == count + 1
+    assert len(report.paths) == count + 1
+    assert report.paths[0] == "credentials[0]" and report.paths[-1] == f"credentials[{count}]"
+    assert not _leaked(json.dumps(redacted), "value-0", f"value-{count - 1}")
 
 
 def test_non_string_values_are_never_touched():
@@ -661,6 +811,20 @@ def test_every_spelling_is_gone_from_all_three_inputs(row):
 LADDER = (4 << 10, 16 << 10, 64 << 10, 256 << 10)
 LADDER_STEP_LIMIT = 10  # 4x more text: linear is about 4x the time, quadratic about 16x
 LADDER_NOISE_FLOOR = 0.02  # seconds; timings below this are noise
+STEP_FLOOR = 0.25  # seconds a step may always take, whatever its size
+CASE_DEADLINE = 90  # seconds: past this the whole run is aborted with a traceback
+
+
+@pytest.fixture
+def perf_watchdog():
+    """A performance case that hangs ends the run with a traceback instead of waiting.
+
+    A regex that went exponential would sit inside ``redact_text`` where no assertion can
+    see it; ``faulthandler`` aborts the process from a timer thread, so the case fails fast.
+    """
+    faulthandler.dump_traceback_later(CASE_DEADLINE, exit=True, file=sys.__stderr__)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 def _time_bound(size: int) -> float:
@@ -686,6 +850,8 @@ def _assert_scales_linearly(make_text, label: str) -> str:
         start = time.perf_counter()
         redact_text(text)
         timings.append(time.perf_counter() - start)
+        # every step has its own bound: a case never climbs the whole ladder to fail
+        assert timings[-1] < max(_time_bound(size), STEP_FLOOR), (label, size, timings[-1])
         if len(timings) > 1:
             limit = LADDER_STEP_LIMIT * max(timings[-2], LADDER_NOISE_FLOOR)
             assert timings[-1] <= limit, (label, size, [round(t, 4) for t in timings])
@@ -702,12 +868,14 @@ def _frame_text(size: int) -> str:
     return frame * (size // len(frame) + 1)
 
 
+@pytest.mark.usefixtures("perf_watchdog")
 def test_the_helpers_that_keep_a_failing_perf_test_cheap_work():
     assert _leaked("a b c", "b", "x") == ["b"]
     assert len(_repeat("ab")(11)) >= 11
     assert _assert_scales_linearly(_repeat("hf_"), "hf prefixes").startswith("hf_")
 
 
+@pytest.mark.usefixtures("perf_watchdog")
 def test_one_mib_traceback_with_a_url_and_a_token_in_a_repr_is_fast():
     _assert_scales_linearly(_frame_text, "traceback frames")
     text = _frame_text(1 << 20)
@@ -721,6 +889,7 @@ def test_one_mib_traceback_with_a_url_and_a_token_in_a_repr_is_fast():
     assert report.count >= 4 * (len(text) // len(_frame_text(1)))
 
 
+@pytest.mark.usefixtures("perf_watchdog")
 def test_a_one_mib_error_message_goes_through_the_bundle_in_time():
     message = ("step failed " + HF + " ") * (1 << 20 >> 6)
     start = time.perf_counter()
@@ -762,9 +931,24 @@ ADVERSARIAL = {
     "distinct key names": lambda size: " ".join(
         f"k{index}_token=v" for index in range(size // 12 + 1)
     ),
+    "unclosed double quote values": _repeat('token="'),
+    "unclosed single quote values": _repeat("token='"),
+    "one unclosed quoted value": lambda size: 'token="' + "a b " * (size // 4),
+    "one huge unquoted value": lambda size: "token=" + "a" * size,
+    "hyphenated key names": _repeat("x-api-key: "),
+    "colon userinfo": _repeat("a:b"),
+    "colon then at": _repeat("a:b@"),
+    "colon userinfo hosts": _repeat("a:b@c.d/"),
+    "userinfo long host": lambda size: "a:b@" + "c." * (size // 2),
+    "userinfo long password": lambda size: "a:" + "b" * size,
+    "relative userinfo": _repeat("//a@"),
+    "relative userinfo no at": lambda size: "//" + "a" * size,
+    "long scheme runs": lambda size: "a+" * (size // 2) + "://",
+    "long scheme then userinfo": _repeat("postgresql+psycopg2://u:p@"),
 }
 
 
+@pytest.mark.usefixtures("perf_watchdog")
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL))
 def test_adversarial_input_is_handled_in_linear_time(name):
     text = _assert_scales_linearly(ADVERSARIAL[name], name)

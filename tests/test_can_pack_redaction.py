@@ -183,6 +183,25 @@ def test_markup_in_a_key_path_is_printed_literally(workdir):
     assert "plainvalue-9" not in buffer.getvalue()
 
 
+def test_a_control_character_in_a_key_path_never_reaches_the_terminal(workdir):
+    config = {**BASE, "api_key]0;titlex": "plainvalue-9"}
+    console, buffer = _console()
+    pack_entry(entry_id=_push(config), out_path=str(workdir / "r.can"), console=console)
+    shown = buffer.getvalue()
+    assert "" not in shown and "" not in shown
+    assert "plainvalue-9" not in shown
+    assert "keys changed: api_key" in " ".join(shown.split())
+
+
+def test_a_key_that_is_itself_a_credential_is_not_printed(workdir):
+    config = {**BASE, "mirrors": {HF: f"https://u:{URL_SECRET}@h.example/x"}}
+    console, buffer = _console()
+    pack_entry(entry_id=_push(config), out_path=str(workdir / "r.can"), console=console)
+    shown = " ".join(buffer.getvalue().split())
+    assert HF not in shown and URL_SECRET not in shown
+    assert f"keys changed: mirrors.{REDACTED}" in shown
+
+
 def test_pack_cli_lists_the_keys_that_were_changed(workdir):
     from soup_cli.cli import app
 
@@ -194,9 +213,31 @@ def test_pack_cli_lists_the_keys_that_were_changed(workdir):
     assert "plainvalue-cli" not in _archive_text(workdir / "r.can")
 
 
+def test_pack_cli_prints_nothing_extra_when_there_is_nothing_to_redact(workdir):
+    from soup_cli.cli import app
+
+    result = CliRunner().invoke(app, ["can", "pack", "--entry-id", _push(BASE), "--out", "r.can"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Redacted" not in strip_ansi(result.output)
+
+
 # ---------------------------------------------------------------------------
 # fork_can
 # ---------------------------------------------------------------------------
+
+
+def test_fork_cli_lists_the_keys_that_were_changed(workdir):
+    from soup_cli.cli import app
+
+    _write_can(workdir / "old.can", BASE)
+    result = CliRunner().invoke(app, [
+        "can", "fork", "old.can", "--out", "f.can", "--modify", "training.hf_token=plainvalue-cli",
+    ])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    shown = " ".join(strip_ansi(result.output).split())
+    assert "Redacted 1 credential value(s) before packing, keys changed: training.hf_token" in shown
+    assert "plainvalue-cli" not in shown
+    assert "plainvalue-cli" not in _archive_text(workdir / "f.can")
 
 
 def test_fork_redacts_a_credential_set_by_a_modification(workdir):
