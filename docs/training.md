@@ -1614,6 +1614,16 @@ training:
   quantization: 4bit
 ```
 
+On the Transformers backend the live panel shows **Zero-spread groups**, TRL's
+measured `frac_reward_zero_std` (the fraction of generation groups with identical
+rewards). A real zero displays as 0%; the row is hidden until a valid measurement
+exists. Logs without this metric keep the last reading; an invalid fraction hides
+the row until the next valid measurement and breaks the warning streak. More than
+50% over five distinct logged optimizer steps emits one warning per run. This is
+a diagnostic heuristic, not a quality threshold: it neither stops training nor
+changes rewards or gradients. Evaluation/summary logs do not count as new
+measurements. MLX's existing logging is unchanged.
+
 ```bash
 # Create a reasoning config
 soup init --template reasoning
