@@ -355,7 +355,7 @@ That shows the objective moving, not alignment quality.
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
-#### SimNPO unlearning on MLX
+#### Unlearn on MLX
 
 `task: unlearn` with `unlearn_method: simnpo` and `backend: mlx` runs the MLX DPO
 loop with no reference model and the objective the transformers backend runs
@@ -366,11 +366,12 @@ number of them scored:
 `loss = (2/beta) * mean(softplus(beta * (s/n - gamma))) + unlearn_alpha * retain CE`
 
 - **Scope:** SimNPO only, on a Llama-architecture text base (`model_type:
-  llama`), with standard LoRA and `quantization: none`. `unlearn_method: npo` and
-  `rmu` are refused at load, naming the method, and so are `training.lora.r: 0`,
-  non-text `modality`, DoRA, LoRA+ and `training.eval_steps`. A base of another
+  llama`), with standard LoRA and `quantization: none`. A base of another
   architecture is refused after it loads, before training. Use `backend:
-  transformers` for any of these.
+  transformers` for it.
+- **Refused at load:** `unlearn_method: npo` and `rmu`, naming the method,
+  `training.lora.r: 0`, non-text `modality`, DoRA, LoRA+ and
+  `training.eval_steps`. Use `backend: transformers` for any of these.
 - **Beta is 0.1 and gamma 0**, the values the transformers path uses; neither is
   a setting. `unlearn_alpha` weights the retain term, 1 when omitted; `0` keeps
   the forget term alone. The retain CE is a token mean over the retain rows'

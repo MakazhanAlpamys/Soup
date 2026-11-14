@@ -14,6 +14,13 @@ DOCS = Path(__file__).parents[1] / "docs"
 NON_SFT_MLX_TASKS = MLX_TASKS - {"sft"}
 
 
+def _task_fields(task: str) -> tuple[dict, dict]:
+    """The data and training keys a task needs before its MLX refusals are reached."""
+    if task == "unlearn":
+        return {"forget_set": "forget.jsonl"}, {"unlearn_method": "simnpo"}
+    return {}, {}
+
+
 def _mlx_section(markdown: str, task: str) -> str:
     headings = list(re.finditer(r"^#### (.+?) on MLX\s*$", markdown, re.MULTILINE))
     for index, heading in enumerate(headings):
@@ -25,6 +32,7 @@ def _mlx_section(markdown: str, task: str) -> str:
 
 @pytest.mark.parametrize("task", sorted(NON_SFT_MLX_TASKS))
 def test_mlx_eval_steps_is_refused_for_each_non_sft_task(task: str) -> None:
+    data, training = _task_fields(task)
     with pytest.raises(
         ValidationError,
         match=r"training\.eval_steps is not (?:supported|applied)",
@@ -33,8 +41,8 @@ def test_mlx_eval_steps_is_refused_for_each_non_sft_task(task: str) -> None:
             base="test/model",
             task=task,
             backend="mlx",
-            data={"train": "train.jsonl", "format": "chatml"},
-            training={"eval_steps": 1},
+            data={"train": "train.jsonl", "format": "chatml", **data},
+            training={"eval_steps": 1, **training},
         )
 
 
@@ -59,23 +67,26 @@ def test_mlx_eval_steps_docs_cover_supported_tasks() -> None:
     )
     assert preference_passage is not None, "Missing MLX eval_steps preference-task passage"
     documented_preferences = set(re.findall(r"`([a-z_]+)`", preference_passage.group(1)))
-    # GRPO also refuses eval_steps but is documented in its own section below; SFT honors it.
-    expected_preferences = MLX_TASKS - {"sft", "grpo"}
+    # GRPO also refuses eval_steps but is documented in its own section below, and unlearn
+    # in the refused-at-load passage, on every backend; SFT honors it.
+    expected_preferences = MLX_TASKS - {"sft", "grpo", "unlearn"}
     assert documented_preferences == expected_preferences
     grpo_section = _mlx_section(backends, "grpo")
     assert re.search(r"MLX GRPO refuses\s+`training\.eval_steps`", grpo_section)
-    assert documented_preferences | {"grpo"} == MLX_TASKS - {"sft"}
+    assert re.search(r"Refused at config load\.\*\*.*?on `task: unlearn`", training, re.DOTALL)
+    assert documented_preferences | {"grpo", "unlearn"} == MLX_TASKS - {"sft"}
 
 
 @pytest.mark.parametrize("task", sorted(NON_SFT_MLX_TASKS))
 def test_mlx_dora_is_refused_for_each_non_sft_task(task: str) -> None:
+    data, training = _task_fields(task)
     with pytest.raises(ValidationError, match="MLX DoRA requires task='sft'"):
         SoupConfig(
             base="test/model",
             task=task,
             backend="mlx",
-            data={"train": "train.jsonl", "format": "chatml"},
-            training={"quantization": "none", "lora": {"use_dora": True}},
+            data={"train": "train.jsonl", "format": "chatml", **data},
+            training={"quantization": "none", "lora": {"use_dora": True}, **training},
         )
 
 
@@ -95,6 +106,8 @@ def test_mlx_dora_refusal_is_listed_in_each_non_sft_task_section() -> None:
 def test_mlx_extra_lists_the_tasks_from_config() -> None:
     models = (DOCS / "models.md").read_text(encoding="utf-8")
     row = next(line for line in models.splitlines() if line.startswith("| `mlx` |"))
-    documented = set(re.findall(r"\bSFT\b|\bDPO\b|\bORPO\b|\bSimPO\b|\bKTO\b|\bGRPO\b", row))
+    documented = set(
+        re.findall(r"\bSFT\b|\bDPO\b|\bORPO\b|\bSimPO\b|\bKTO\b|\bGRPO\b|\bunlearn\b", row)
+    )
     assert {task.lower() for task in documented} == MLX_TASKS
     assert "`[train]` is not required" in row

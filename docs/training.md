@@ -684,8 +684,8 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 On `backend: mlx`, `unlearn_method: simnpo` runs natively on Apple Silicon, on a
 Llama-architecture base with standard LoRA and `quantization: none`; NPO and RMU
-stay on `backend: transformers`. See [SimNPO unlearning on
-MLX](backends-and-ops.md#simnpo-unlearning-on-mlx).
+stay on `backend: transformers`. See [Unlearn on
+MLX](backends-and-ops.md#unlearn-on-mlx).
 
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
 `max_grad_norm`, `batch_size`, `gradient_accumulation_steps` and
