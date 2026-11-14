@@ -168,6 +168,14 @@ def test_a_refusal_keeps_its_red_label_and_dim_options(coloured):
     assert "\x1b[31mUnknown GPU:\x1b[0m nope\n\x1b[2mValid options: " in result.output
 
 
+@pytest.mark.parametrize("flag", ["--method", "--optimizer", "--gradient-checkpointing"])
+def test_a_flag_refusal_keeps_its_red_label_and_dim_options(coloured, flag):
+    result = _profile("--model", "tiny", flag, "nope")
+
+    assert result.exit_code == 1
+    assert f"\x1b[31mUnknown {flag}:\x1b[0m nope\n\x1b[2mValid options: " in result.output
+
+
 def test_a_missing_config_keeps_its_red_label(coloured):
     result = _profile("--config", "missing.yaml")
 
