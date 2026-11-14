@@ -774,8 +774,11 @@ def test_the_written_file_carries_no_credential(tmp_path, monkeypatch):
 
 def test_a_truncated_bundle_still_says_how_much_was_redacted(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config = {"blob": "x" * 1_200_000, "hf_token": "plainvalue-c1"}
-    bundle = build_crash_bundle(error=RuntimeError("x"), config=config)
+    bundle = build_crash_bundle(error=RuntimeError("x"), config={"hf_token": "plainvalue-c1"})
+    # the oversize blob is added after the redaction pass: this test is about what the
+    # truncated file keeps, and a megabyte of text must not run through a pattern a
+    # regression could have made slow
+    bundle["config"]["blob"] = "x" * 1_200_000
     text = write_crash_bundle(bundle).read_text(encoding="utf-8")
     data = json.loads(text)
     assert data["_truncated"] is True
