@@ -28,6 +28,7 @@ import json
 import os
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import BinaryIO, Optional
@@ -63,6 +64,8 @@ _MAX_PID_FILE_BYTES = 4096
 #: Windows ``OpenProcess`` takes a DWORD and ``ctypes`` wraps a larger value silently
 #: (2**32 + 1 would ask about pid 1), so a pid beyond 31 bits is not a pid.
 _MAX_PID = 2**31 - 1
+#: How long a claimant waits for an unparsable PID file to turn into a valid one (seconds).
+_CLAIM_WRITE_GRACE_SEC = 0.05
 
 #: States of :class:`DaemonInfo` (``_VALID`` is internal: a file that holds a valid pid).
 ABSENT = "absent"
@@ -375,6 +378,86 @@ def rotate_open_log(
         except OSError:
             pass
     return moved
+
+
+class PidFileHeldError(Exception):
+    """A live process already holds the PID file: ``pid`` (None when it cannot be read yet)."""
+
+    def __init__(self, pid: Optional[int], path: str) -> None:
+        super().__init__(f"{_PID_FIELD} {path} is held by pid {pid}")
+        self.pid = pid
+        self.path = path
+
+
+def _pid_record(pid: int) -> bytes:
+    record = {
+        "pid": pid,
+        "started_at": _utc_now_iso(),
+        "log": display_path(log_file_path()),
+    }
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _remove_stale(path: str, seen: DaemonInfo) -> None:
+    """Unlink the PID file ``seen`` described, unless it has changed since (never raises)."""
+    try:
+        state, pid = _load(path)
+        if state == ABSENT:
+            return
+        if state == _VALID and (pid != seen.pid or process_is_alive(pid)):
+            return  # another claimant replaced it, or its pid is alive after all
+        os.unlink(path)
+    except (OSError, ValueError):
+        return
+
+
+def claim_pid_file(path: Optional[str] = None) -> Optional[DaemonInfo]:
+    """Claim the PID file for this process, atomically, before a daemon is spawned.
+
+    The file is created with ``O_CREAT | O_EXCL`` and holds THIS process's pid, so a second
+    ``--detach`` running at the same moment finds a live holder and is refused instead of
+    also seeing "no file" and spawning a second daemon. The caller replaces the pid with the
+    child's through :func:`write_pid_file` once it has spawned, or removes the claim
+    (:func:`remove_pid_file_if_own`) when the spawn fails.
+
+    A file that already exists is inspected: a live pid raises :class:`PidFileHeldError`; a
+    stale one (dead pid, or unparsable after a short wait for a writer still in the middle of
+    its claim) is removed and the claim retried. Returns the stale file's description when one
+    was replaced, else ``None``. Raises ``ValueError`` for a path that must be refused
+    (outside the working directory, a symlink, a reparse point, not a regular file).
+    """
+    target = pid_file_path() if path is None else path
+    replaced: Optional[DaemonInfo] = None
+    for _attempt in range(4):
+        try:
+            fd = open_no_follow(
+                target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, check_parent=True
+            )
+        except FileExistsError:
+            info = inspect_pid_file(target)
+            if info.state == STALE and info.pid is None:
+                # The file may be a claim whose writer has not written its pid yet.
+                time.sleep(_CLAIM_WRITE_GRACE_SEC)
+                info = inspect_pid_file(target)
+            if info.state == RUNNING:
+                raise PidFileHeldError(info.pid, target) from None
+            if info.state == STALE:
+                replaced = info
+                _remove_stale(target, info)
+            continue  # stale one removed, or the file vanished: claim again
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError(f"{_PID_FIELD} must not be a symlink (TOCTOU defence)") from exc
+            if os.path.lexists(target):
+                # A directory (Windows answers "access denied" rather than "exists") or
+                # another file that cannot be opened: name the refusal.
+                _load(target)
+                raise ValueError(f"{_PID_FIELD} cannot be opened: {type(exc).__name__}") from exc
+            raise
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(_pid_record(os.getpid()))
+        return replaced
+    raise ValueError(f"{_PID_FIELD} is being claimed by another process; try again")
 
 
 def write_pid_file(pid: int, path: Optional[str] = None) -> str:

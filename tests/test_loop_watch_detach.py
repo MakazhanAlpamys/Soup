@@ -197,7 +197,8 @@ def test_the_log_is_opened_for_append_and_never_truncated(initialised, monkeypat
     real = loop_detach.open_no_follow
 
     def spy(path, flags, *args, **kwargs):
-        if flags & (os.O_WRONLY | os.O_RDWR):
+        # (the PID file claim is opened exclusively before the log: not the log)
+        if flags & (os.O_WRONLY | os.O_RDWR) and not flags & os.O_EXCL:
             flags_seen.append(flags)
         return real(path, flags, *args, **kwargs)
 

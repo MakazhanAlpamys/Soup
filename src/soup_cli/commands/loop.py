@@ -31,7 +31,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -44,11 +43,10 @@ from soup_cli.utils.loop_budget import (
 from soup_cli.utils.loop_daemon import CANARY_MIN_SAMPLES, WatchConfig, watch
 from soup_cli.utils.loop_detach import (
     DETACHED_ENV,
-    RUNNING,
-    STALE,
+    PidFileHeldError,
+    claim_pid_file,
     describe_daemon,
     display_path,
-    inspect_pid_file,
     log_file_path,
     open_log,
     pid_file_path,
@@ -98,11 +96,11 @@ def _safe_read() -> LoopState:
     except FileNotFoundError as exc:
         console.print(
             f"[red]No loop state found.[/] Run [bold]soup loop init[/] first."
-            f"\n  detail: {escape(str(exc))}"
+            f"\n  detail: {for_terminal(str(exc))}"
         )
         raise typer.Exit(code=2)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
+        console.print(f"[red]loop state invalid:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
 
 
@@ -151,7 +149,7 @@ def _paraphraser_line(state: LoopState) -> str:
     """The init panel line for a configured paraphraser (empty without), newline-ended."""
     if not state.paraphraser_endpoint:
         return ""
-    return f"paraphraser:  [bold]{escape(_paraphraser_label(state))}[/]\n"
+    return f"paraphraser:  [bold]{for_terminal(_paraphraser_label(state))}[/]\n"
 
 
 def _paraphraser_from_flags(
@@ -206,7 +204,7 @@ def _train_method_note(state: LoopState) -> str:
         own = tuple(key for key in SFT_RECIPE_KEYS if key in state.sft_recipe)
         note += (
             "sft recipe from loop.yaml: "
-            f"{escape(_sft_recipe_pairs(state.effective_sft_recipe(), own))}\n"
+            f"{for_terminal(_sft_recipe_pairs(state.effective_sft_recipe(), own))}\n"
         )
     return note
 
@@ -477,7 +475,7 @@ def init_cmd(
         try:
             budget_usd = parse_budget_string(monthly_budget)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]invalid --monthly-budget:[/] {escape(str(exc))}")
+            console.print(f"[red]invalid --monthly-budget:[/] {for_terminal(str(exc))}")
             raise typer.Exit(code=2)
     if max_runs_per_day is not None and (
         isinstance(max_runs_per_day, bool) or max_runs_per_day < 1
@@ -623,7 +621,7 @@ def init_cmd(
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]init failed:[/] {escape(str(exc))}")
+        console.print(f"[red]init failed:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
     if pre_wired:
         # The first version of the loop's version log (docs/loop-formats.md). A loop that is
@@ -635,20 +633,20 @@ def init_cmd(
         _warn_log(log, hint="; soup loop watch tries again")
     console.print(
         Panel.fit(
-            f"loop state created at [bold]{escape(os.path.relpath(path))}[/]\n"
-            f"served_model: [bold]{escape(state.served_model)}[/]\n"
-            f"eval_suite:   [bold]{escape(state.eval_suite)}[/]"
-            f" (verify: {escape(state.verify or 'eval_gate')})\n"
-            f"baseline:     [bold]{escape(state.baseline)}[/]\n"
-            f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
-            f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
-            f"train_method: [bold]{escape(state.train_method)}[/]\n"
+            f"loop state created at [bold]{for_terminal(os.path.relpath(path))}[/]\n"
+            f"served_model: [bold]{for_terminal(state.served_model)}[/]\n"
+            f"eval_suite:   [bold]{for_terminal(state.eval_suite)}[/]"
+            f" (verify: {for_terminal(state.verify or 'eval_gate')})\n"
+            f"baseline:     [bold]{for_terminal(state.baseline)}[/]\n"
+            f"trace_dir:    [bold]{for_terminal(_trace_dir_label(state))}[/]\n"
+            f"feedback_log: [bold]{for_terminal(_feedback_log_label(state))}[/]\n"
+            f"train_method: [bold]{for_terminal(state.train_method)}[/]\n"
             f"{_train_method_note(state)}"
             f"{_paraphraser_line(state)}"
             f"canary_max_wait: [bold]{format_wait_duration(state.canary_max_wait_sec)}[/]\n"
-            f"canary_on_timeout: [bold]{escape(state.canary_on_timeout)}[/]\n"
-            f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
-            + (f" (from {escape(base_source)})" if base_source else ""),
+            f"canary_on_timeout: [bold]{for_terminal(state.canary_on_timeout)}[/]\n"
+            f"base_model:   [bold]{for_terminal(state.base_model or 'unknown')}[/]"
+            + (f" (from {for_terminal(base_source)})" if base_source else ""),
             title="soup loop init",
         )
     )
@@ -670,36 +668,36 @@ def status_cmd() -> None:
             state.runs_today, state.last_run_date, now=now
         )
     except ValueError as exc:
-        console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
+        console.print(f"[red]loop state invalid:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
     table = Table(title="soup loop status", show_header=False)
     table.add_column("field", style="bold")
     table.add_column("value")
-    table.add_row("status", f"[bold]{escape(state.status)}[/]")
+    table.add_row("status", f"[bold]{for_terminal(state.status)}[/]")
     # The PID file is read, never written or removed; a stale one is only reported.
-    table.add_row("daemon", escape(describe_daemon()))
-    table.add_row("served_model", escape(state.served_model))
-    table.add_row("eval_suite", escape(state.eval_suite))
-    table.add_row("baseline", escape(state.baseline))
-    table.add_row("base_model", escape(state.base_model or "unknown"))
-    table.add_row("trace_dir", escape(_trace_dir_label(state)))
-    table.add_row("feedback_log", escape(_feedback_log_label(state)))
-    table.add_row("train_method", escape(state.train_method))
+    table.add_row("daemon", for_terminal(describe_daemon()))
+    table.add_row("served_model", for_terminal(state.served_model))
+    table.add_row("eval_suite", for_terminal(state.eval_suite))
+    table.add_row("baseline", for_terminal(state.baseline))
+    table.add_row("base_model", for_terminal(state.base_model or "unknown"))
+    table.add_row("trace_dir", for_terminal(_trace_dir_label(state)))
+    table.add_row("feedback_log", for_terminal(_feedback_log_label(state)))
+    table.add_row("train_method", for_terminal(state.train_method))
     if state.train_method == "sft":
-        table.add_row("sft_recipe", escape(_sft_recipe_label(state)))
+        table.add_row("sft_recipe", for_terminal(_sft_recipe_label(state)))
     if state.paraphraser_endpoint:
-        table.add_row("paraphraser", escape(_paraphraser_label(state)))
-    table.add_row("verify", escape(state.verify or "eval_gate"))
+        table.add_row("paraphraser", for_terminal(_paraphraser_label(state)))
+    table.add_row("verify", for_terminal(state.verify or "eval_gate"))
     table.add_row(
         "production",
-        escape(
+        for_terminal(
             f"{state.production_name or 'served model'} "
             f"({state.production_adapter or 'no adapter'})"
         ),
     )
     table.add_row("canary_traffic", f"{state.deploy_traffic_pct:g}% per new canary")
     table.add_row("canary_max_wait", format_wait_duration(state.canary_max_wait_sec))
-    table.add_row("canary_on_timeout", escape(state.canary_on_timeout))
+    table.add_row("canary_on_timeout", for_terminal(state.canary_on_timeout))
     table.add_row("new_data_since", _cursor_label(state))
     if state.waiting_note:
         # The last cycle that waited for corrections said this (not a live count).
@@ -716,7 +714,7 @@ def status_cmd() -> None:
     if state.canary_active:
         table.add_row(
             "canary",
-            f"{escape(state.canary_active)} @ "
+            f"{for_terminal(state.canary_active)} @ "
             f"{state.canary_traffic_pct or 0:.1f}%",
         )
     if state.monthly_budget_usd is not None:
@@ -872,7 +870,7 @@ def watch_cmd(
         try:
             WatchConfig(poll_interval_sec=poll_interval, max_iterations=max_iterations)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
+            console.print(f"[red]invalid watch config:[/] {for_terminal(str(exc))}")
             raise typer.Exit(code=2)
         argv = [
             sys.executable,
@@ -890,51 +888,57 @@ def watch_cmd(
             argv.append("--pre-wired")
         if pack_cans:
             argv.append("--pack-cans")
-        # One daemon per loop.yaml: a PID file that names a live process refuses the
-        # spawn; a stale one (dead pid, unparsable) is replaced after the spawn.
+        # One daemon per loop.yaml. The PID file is CLAIMED (created exclusively, holding this
+        # process's pid) before anything is spawned: two parallel --detach cannot both see
+        # "no daemon". A live holder refuses the spawn; a stale file is replaced.
         pid_path = pid_file_path()
         try:
-            daemon = inspect_pid_file(pid_path)
-        except ValueError as exc:
-            console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
-            raise typer.Exit(code=2)
-        if daemon.state == RUNNING:
+            replaced = claim_pid_file(pid_path)
+        except PidFileHeldError as exc:
             console.print(
-                f"[red]a loop daemon is already running:[/] pid {daemon.pid}, "
+                f"[red]a loop daemon is already running:[/] pid {exc.pid}, "
                 f"PID file {for_terminal(display_path(pid_path))} "
                 "(delete the file if that pid is not a loop daemon)"
             )
             raise typer.Exit(code=2)
-        if daemon.state == STALE:
+        except ValueError as exc:
+            console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        if replaced is not None:
             console.print(
                 f"[yellow]notice:[/] replacing stale PID file "
-                f"{for_terminal(display_path(pid_path))} ({for_terminal(daemon.reason)})"
+                f"{for_terminal(display_path(pid_path))} ({for_terminal(replaced.reason)})"
             )
         log_path = log_file_path()
         try:
-            # A log that reached the limit moves to loop.log.1 first, so the child starts
-            # on a fresh one; the running child rotates it from then on (rotate_open_log).
-            if rotate_log_if_needed(log_path):
-                console.print(
-                    f"[yellow]notice:[/] log rotated: {for_terminal(display_path(log_path))} "
-                    f"reached its size limit, moved to "
-                    f"{for_terminal(display_path(rotated_log_path(log_path)))}"
+            try:
+                # A log that reached the limit moves to loop.log.1 first, so the child starts
+                # on a fresh one; the running child rotates it from then on (rotate_open_log).
+                if rotate_log_if_needed(log_path):
+                    console.print(
+                        f"[yellow]notice:[/] log rotated: "
+                        f"{for_terminal(display_path(log_path))} reached its size limit, "
+                        f"moved to {for_terminal(display_path(rotated_log_path(log_path)))}"
+                    )
+                log_handle = open_log(log_path)
+            except (ValueError, OSError) as exc:
+                console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
+                raise typer.Exit(code=2)
+            try:
+                proc = subprocess.Popen(  # noqa: S603 — argv is internal, no shell
+                    argv,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    env={**os.environ, DETACHED_ENV: "1"},
                 )
-            log_handle = open_log(log_path)
-        except (ValueError, OSError) as exc:
-            console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
-            raise typer.Exit(code=2)
-        try:
-            proc = subprocess.Popen(  # noqa: S603 — argv is internal, no shell
-                argv,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                env={**os.environ, DETACHED_ENV: "1"},
-            )
-        finally:
-            # Popen hands the child its own duplicate; the parent keeps none.
-            log_handle.close()
+            finally:
+                # Popen hands the child its own duplicate; the parent keeps none.
+                log_handle.close()
+        except BaseException:
+            # Nothing was spawned: give the claim back (only if it still holds our pid).
+            remove_pid_file_if_own(os.getpid(), pid_path)
+            raise
         try:
             write_pid_file(proc.pid, pid_path)
         except (ValueError, OSError) as exc:
@@ -977,7 +981,7 @@ def watch_cmd(
                 base_model=base_model,
             )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
+        console.print(f"[red]invalid watch config:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
     if detached_child:
         # Only the --detach child writes to .soup/loop.log; a foreground watch may be
@@ -985,7 +989,7 @@ def watch_cmd(
         cfg = replace(cfg, on_cycle=rotate_open_log)
     final_state, ran = watch(cfg)
     console.print(
-        f"[green]watch exited[/] iterations={ran} status={escape(final_state.status)}"
+        f"[green]watch exited[/] iterations={ran} status={for_terminal(final_state.status)}"
     )
 
 
@@ -1013,7 +1017,7 @@ def canary_cmd(
             traffic_pct=pct,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]invalid canary policy:[/] {escape(str(exc))}")
+        console.print(f"[red]invalid canary policy:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
     # ``write_state`` refreshes updated_at on every persist, so we
     # explicitly route through replace() rather than mutate in place.
@@ -1042,7 +1046,7 @@ def canary_cmd(
     # Reload so the in-memory value reflects the persisted updated_at.
     new_state = read_state()
     console.print(
-        f"[green]canary set:[/] {escape(policy.canary or '')} @ "
+        f"[green]canary set:[/] {for_terminal(policy.canary or '')} @ "
         f"{policy.traffic_pct:.1f}% (autoroll={autoroll_on_regress})"
     )
     _warn_log(log)
@@ -1084,7 +1088,7 @@ def rollback_cmd() -> None:
             )
         )
         console.print(
-            f"[green]canary withdrawn:[/] {escape(state.canary_active)}; the served model "
+            f"[green]canary withdrawn:[/] {for_terminal(state.canary_active)}; the served model "
             "keeps all traffic"
         )
         _warn_log(log)
@@ -1129,7 +1133,7 @@ def rollback_cmd() -> None:
     )
     label = target or "the served model"
     console.print(
-        f"[green]rolled back:[/] {escape(state.production_name)} -> {escape(label)}"
+        f"[green]rolled back:[/] {for_terminal(state.production_name)} -> {for_terminal(label)}"
         + (f" ([yellow]{for_terminal(note)}[/])" if note else "")
     )
     _warn_log(log)
@@ -1151,12 +1155,12 @@ def replay_cmd(
         if not ids:
             console.print("[yellow]no iterations recorded yet[/]")
             return
-        console.print("\n".join(escape(i) for i in ids))
+        console.print("\n".join(for_terminal(i) for i in ids))
         return
     try:
         record = read_iteration(iteration_id)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]replay failed:[/] {escape(str(exc))}")
+        console.print(f"[red]replay failed:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
 
     if extract is not None:
@@ -1166,7 +1170,7 @@ def replay_cmd(
         can_path = os.path.join(".soup-loops", iteration_id, "iteration.can")
         if not os.path.isfile(can_path):
             console.print(
-                f"[red]no .can for {escape(iteration_id)} "
+                f"[red]no .can for {for_terminal(iteration_id)} "
                 "(was it run with `watch --pack-cans`?)[/]"
             )
             raise typer.Exit(code=1)
@@ -1174,18 +1178,18 @@ def replay_cmd(
             enforce_under_cwd_and_no_symlink(extract, "extract")
             dest = extract_can(can_path, extract)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]extract failed:[/] {escape(str(exc))}")
+            console.print(f"[red]extract failed:[/] {for_terminal(str(exc))}")
             raise typer.Exit(code=2)
         console.print(
-            f"[green]extracted {escape(iteration_id)} -> {escape(str(dest))}[/]"
+            f"[green]extracted {for_terminal(iteration_id)} -> {for_terminal(str(dest))}[/]"
         )
         return
 
-    table = Table(title=f"replay {escape(record.iteration_id)}", show_header=False)
+    table = Table(title=f"replay {for_terminal(record.iteration_id)}", show_header=False)
     table.add_column("field", style="bold")
     table.add_column("value")
     for k, v in record.to_dict().items():
-        table.add_row(escape(str(k)), escape(str(v)))
+        table.add_row(for_terminal(str(k)), for_terminal(str(v)))
     console.print(table)
 
 
@@ -1233,7 +1237,7 @@ def _parse_traffic(raw: str, *, flag: str = "--traffic") -> float:
     try:
         pct = float(txt)
     except ValueError:
-        console.print(f"[red]invalid {flag}:[/] {escape(raw)}")
+        console.print(f"[red]invalid {flag}:[/] {for_terminal(raw)}")
         raise typer.Exit(code=2)
     if not (0.0 <= pct <= 100.0):
         console.print(f"[red]{flag} must be in [0, 100][/]")
