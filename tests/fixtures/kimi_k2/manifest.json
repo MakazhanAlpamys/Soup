@@ -1,0 +1,131 @@
+{
+  "gate": "benchmarks/gate-kimi-k2-resident.md (#2104)",
+  "fixtures": {
+    "path": "tests/fixtures/kimi_k2/resident_parity_fixtures.npz",
+    "sha256": "a8679f7f73559b40590abf947efaa2e8932b99516b6155038668daf9e9f9a304",
+    "entries": [
+      "ids_0",
+      "ids_1",
+      "ids_2",
+      "logits_0",
+      "logits_1",
+      "logits_2",
+      "loss_0",
+      "loss_1",
+      "loss_2",
+      "logits_fp8_0",
+      "logits_fp8_1",
+      "logits_fp8_2",
+      "loss_fp8_0",
+      "loss_fp8_1",
+      "loss_fp8_2"
+    ],
+    "reference_runs": [
+      "logits_/loss_: K2's own code on the pristine bf16 tiny checkpoint",
+      "logits_fp8_/loss_fp8_: K2's own code on the dequantised FP8 round trip (the exact weights the gate's FP8 cell materialises); the gate's FP8 cell references these"
+    ]
+  },
+  "modeling_deepseek.py": {
+    "repo_id": "moonshotai/Kimi-K2-Base",
+    "revision": "ce72df012259dcc55d945e890f815fe7ef69159c",
+    "sha256": "ce753fc9076ce13ce9557e680e2f5bd68ae8929a8225772968a9a22a1d17b7d4"
+  },
+  "configuration_deepseek.py": {
+    "repo_id": "moonshotai/Kimi-K2-Base",
+    "revision": "ce72df012259dcc55d945e890f815fe7ef69159c",
+    "sha256": "54f29dd0d56e9a13f639c703e524daa71794e360050012aea3788ad7cfc38b17"
+  },
+  "checkpoint_config_json": {
+    "path": "<tiny k2-bf16 folder>/config.json (tests/kimi_k2_tiny.py _tiny_k2_raw())",
+    "sha256": "21d64a11d303bcc86dfc744bfcd62485150f3779610f67b2cb121fb9488b1260"
+  },
+  "reference_checkpoint": {
+    "path": "tests/fixtures/kimi_k2/resident_reference.safetensors.xz",
+    "sha256": "6f05521e442a126c59b8ffee6ccd21865b334b53d271f5fabcf04e2d61597042",
+    "provenance": "Reconstructed on the original x86 software stack; its logits reproduce the recorded fixtures. The original checkpoint hash was not recorded."
+  },
+  "recording_env": {
+    "python": "3.12.3",
+    "torch": "2.15.0+cpu",
+    "transformers": "4.53.3",
+    "numpy": "2.5.4"
+  },
+  "transformers_pin": "4.53.3",
+  "inputs": {
+    "seed": 977,
+    "vocab_size": 128,
+    "lengths": [
+      8,
+      16,
+      33
+    ],
+    "note": "exact ids are stored in the npz as ids_0..ids_2 and mirrored below",
+    "ids": [
+      [
+        127,
+        61,
+        105,
+        114,
+        112,
+        13,
+        40,
+        94
+      ],
+      [
+        8,
+        97,
+        5,
+        31,
+        9,
+        41,
+        37,
+        100,
+        13,
+        44,
+        1,
+        104,
+        36,
+        2,
+        32,
+        122
+      ],
+      [
+        22,
+        9,
+        37,
+        52,
+        49,
+        28,
+        66,
+        56,
+        121,
+        102,
+        127,
+        36,
+        71,
+        36,
+        126,
+        41,
+        16,
+        71,
+        55,
+        25,
+        29,
+        58,
+        106,
+        51,
+        14,
+        90,
+        105,
+        71,
+        9,
+        69,
+        117,
+        100,
+        0
+      ]
+    ]
+  },
+  "recording_command": "benchmarks/harness/kimi_k2_resident_parity_record.py",
+  "recorded_with_python": "3.12.3"
+}

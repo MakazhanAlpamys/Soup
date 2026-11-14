@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import (
+    KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
+    resident_kimi_k2_quantization_refusal,
+)
 
 
 @dataclass(frozen=True)
@@ -2813,7 +2816,7 @@ output: ./output
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
-        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
+        unavailable_reason=resident_kimi_k2_quantization_refusal("4bit"),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
