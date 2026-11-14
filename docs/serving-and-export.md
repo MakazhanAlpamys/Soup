@@ -975,7 +975,7 @@ soup serve --model ./output \
 
 The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`; a host written only as numbers that is not a valid IPv4 address is rejected too. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
-> **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
+> **Note:** `max_tokens` is capped at 16,384 per request. `--max-tokens`, the default for a request that omits `max_tokens`, must be at least 1: `soup serve` refuses 0 or a negative value at startup with exit 2, on every backend. Error details are never exposed in HTTP responses.
 
 
 ## Web UI
