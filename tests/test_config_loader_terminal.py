@@ -128,6 +128,8 @@ def test_unknown_key_reports_keep_original_mapping_and_api_reason(
         assert _plain(printed.getvalue()) == (
             "Config validation error: " + " ".join(display.split())
         )
+        # The heading is bold red; plain red belongs to the key lines.
+        assert "\x1b[31m" in printed.getvalue()
         with pytest.raises(ValueError) as api:
             loader.config_from_mapping(raw)
         assert str(api.value) == reason

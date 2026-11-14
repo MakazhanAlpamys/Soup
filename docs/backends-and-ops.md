@@ -1354,11 +1354,11 @@ soup --verbose eval benchmark --model ./output --benchmarks mmlu
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
 
 
-## Unknown config keys
-
 Config-loader diagnostics display paths, keys and values literally, including emoji
 aliases and backslashes. Terminal controls and bidi marks are removed only from the
 display; loaded config values and API/UI exception messages retain their original text.
+
+## Unknown config keys
 
 Every config model used to run with Pydantic's default `extra="ignore"`, so a key the
 schema did not declare was dropped without a word. `soup train --dry-run` printed
