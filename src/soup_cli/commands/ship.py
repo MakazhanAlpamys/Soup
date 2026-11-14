@@ -190,16 +190,18 @@ def _validate_noise_floor_flag(value: Optional[int]) -> Optional[int]:
 
 
 def _screen_adapter_weights(path: str, flag: str) -> None:
-    """Refuse an adapter directory holding loadable pickle weights, before PEFT reads it.
+    """Refuse an adapter directory holding pickle-format weights, before PEFT reads it.
 
-    The same screen ``soup serve`` applies to an adapter it loads
-    (``strict_safetensors.assert_safe_top_level_weights``): a ``.bin`` / ``.pt`` pickle runs
-    code when it is loaded, and a safetensors file with a bad header is not what it claims.
+    A ``.bin`` / ``.pt`` / ``.pth`` / ``.pkl`` / ``.pickle`` / ``.ckpt`` weight file (or a
+    ``.safetensors`` file that is really a pickle or zip) runs code when it is loaded.
+    Only that is refused: a safetensors file that is unreadable, truncated or has a bad
+    header is not a code-execution vector, and ``soup ship`` keeps warning about it and
+    carrying on (``_adapter_is_noop``).
     """
-    from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+    from soup_cli.utils.strict_safetensors import assert_no_pickle_top_level_weights
 
     try:
-        assert_safe_top_level_weights(path)
+        assert_no_pickle_top_level_weights(path)
     except ValueError as exc:
         _fail(f"{flag} {path}: {exc}", _EXIT_USAGE)
 

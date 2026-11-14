@@ -486,3 +486,75 @@ def test_safetensors_adapters_still_pass_the_screen(work):
     res = _live("--base-adapter", "prod", "--adapter", "cand")
     assert res.exit_code == 0, (res.output, repr(res.exception))
     assert fake.adapters() == ["prod", "cand"]
+
+
+# What the screen refuses is a PICKLE, not a broken file: a pickle extension by name, or a
+# pickle / zip posing as safetensors. A safetensors file that is merely unreadable keeps
+# the behaviour of v0.77.2: soup ship warns and carries on (tests/test_ship_adapter_noop.py).
+
+PICKLE_EXTENSIONS = [".bin", ".pt", ".pth", ".pkl", ".pickle", ".ckpt"]
+
+
+def _adapter_with(path: Path, filename: str, payload: bytes) -> None:
+    path.mkdir()
+    (path / filename).write_bytes(payload)
+    (path / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": 4}), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("ext", PICKLE_EXTENSIONS)
+@pytest.mark.parametrize("flag", ["--adapter", "--base-adapter"])
+def test_every_pickle_extension_is_refused_by_name_on_both_flags(work, ext, flag):
+    root, fake = work
+    # protocol 0 pickle text: no magic bytes, only the extension gives it away
+    _adapter_with(root / "pickled", "adapter_model" + ext, b"cos\nsystem\n(S'true'\ntR.")
+    other = {"--adapter": "--base-adapter", "--base-adapter": "--adapter"}[flag]
+
+    res = _live(flag, "pickled", other, "cand" if other == "--adapter" else "prod")
+
+    assert res.exit_code == 3, (res.output, repr(res.exception))
+    flat = _flat(res.output)
+    assert f"{flag} pickled" in flat and f"adapter_model{ext}" in flat
+    assert "unsafe weight file (pickle / PyTorch-classic)" in flat
+    assert "safe_serialization=True" in flat
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("magic", [bytes([0x80, 0x04]) + b"N.", b"PK" + bytes([3, 4]) + b"x"])
+def test_a_pickle_or_zip_posing_as_safetensors_is_refused(work, magic):
+    root, fake = work
+    _adapter_with(root / "disguised", "adapter_model.safetensors", magic)
+
+    res = _live("--adapter", "disguised")
+
+    assert res.exit_code == 3, (res.output, repr(res.exception))
+    assert "adapter_model.safetensors" in _flat(res.output)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("payload", [b"", b"local fixture weights", bytes(16), b'{"a": 1}'])
+def test_a_broken_safetensors_adapter_is_not_refused_on_either_flag(work, payload):
+    root, fake = work
+    _adapter_with(root / "broken", "adapter_model.safetensors", payload)
+
+    res = _live("--base-adapter", "broken", "--adapter", "cand")
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert fake.adapters() == ["broken", "cand"]
+
+    res = _live("--adapter", "broken")
+    assert "unsafe weight file" not in _flat(res.output), (res.output, repr(res.exception))
+
+
+def test_the_trainers_own_pickles_are_not_weights(work):
+    root, fake = work
+    _write_adapter(root / "trained", 0.7)
+    (root / "trained" / "training_args.bin").write_bytes(bytes([0x80, 0x04]) + b"N.")
+    (root / "trained" / "checkpoint-5").mkdir()
+    (root / "trained" / "checkpoint-5" / "optimizer.pt").write_bytes(bytes([0x80, 0x04]) + b"N.")
+
+    res = _live("--base-adapter", "prod", "--adapter", "trained")
+
+    assert res.exit_code in (0, 2), (res.output, repr(res.exception))
+    assert "unsafe weight file" not in _flat(res.output)
+    assert fake.adapters() == ["prod", "trained"]
