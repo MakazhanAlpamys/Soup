@@ -618,3 +618,54 @@ def open_no_follow(
         os.close(fd)
         raise
     return fd
+
+
+def sanitize_run_output_dir(
+    output_dir: Optional[str],
+    base: Optional[Union[str, Path]] = None,
+) -> Optional[str]:
+    """Relativize or shorten a run's output directory for machine-readable surfaces.
+
+    The experiment tracker records ``output_dir`` as an absolute path (#2725)
+    so that CLI readers (``soup runs clean``, ``soup rewind``, ``soup runs show``)
+    can locate the run from any directory. Machine-readable surfaces exposed over
+    a network or IPC boundary (the Web UI API and the MCP server) should not
+    reveal more of the host filesystem layout than they did before:
+
+    - When ``output_dir`` is inside ``base`` (default: the current working
+      directory), return the path relative to ``base``.
+    - When ``output_dir`` is outside ``base``, return only its last path
+      component (e.g. ``"output"``).
+    - If ``output_dir`` is empty or ``None``, return it unchanged.
+    """
+    if not output_dir or not isinstance(output_dir, str):
+        return output_dir
+
+    if os.name != "nt" and (
+        ntpath.splitdrive(output_dir)[0] or output_dir.startswith(("\\\\", "//"))
+    ):
+        return ntpath.basename(output_dir.rstrip("/\\"))
+
+    if base is None:
+        base = Path.cwd()
+
+    if is_under(output_dir, base):
+        return os.path.relpath(
+            os.path.realpath(output_dir), os.path.realpath(str(base))
+        )
+
+    return os.path.basename(output_dir.rstrip("/\\"))
+
+
+def sanitize_run_row(
+    run: Optional[dict],
+    base: Optional[Union[str, Path]] = None,
+) -> Optional[dict]:
+    """Return a copy of ``run`` with its ``output_dir`` sanitized."""
+    if not run or not isinstance(run, dict):
+        return run
+    if "output_dir" not in run:
+        return run
+    run_copy = dict(run)
+    run_copy["output_dir"] = sanitize_run_output_dir(run_copy["output_dir"], base=base)
+    return run_copy
