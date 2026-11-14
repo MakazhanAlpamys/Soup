@@ -154,13 +154,13 @@ class TestConstant:
         assert config.training.lora.r == DEFAULT_SFT_RECIPE["lora_r"]
         assert config.training.lora.alpha == DEFAULT_SFT_RECIPE["lora_alpha"]
 
-    def test_the_values_are_candidate_b(self):
+    def test_the_values_are_candidate_b_at_a_learning_rate_of_2e_4(self):
         """The one pin: change it together with the constant."""
         assert dict(DEFAULT_SFT_RECIPE) == {
             "target_modules": "all-linear",
             "lora_r": 64,
             "lora_alpha": 128,
-            "lr": 5e-4,
+            "lr": 2e-4,
             "epochs": 8,
             "batch_size": 2,
             "gradient_accumulation_steps": 4,
@@ -864,9 +864,10 @@ class TestInitFlags:
         _cli(*_INIT, "--sft-epochs", "3")
         before = Path(_LOOP_YAML).read_bytes()
 
-        result, _, _ = _cli(*_INIT, "--sft-epochs", "0", "--force")
+        result, text, _ = _cli(*_INIT, "--sft-epochs", "0", "--force")
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "epochs must be an int in [1, 100], got 0" in text
         assert Path(_LOOP_YAML).read_bytes() == before
 
     def test_the_user_input_in_a_refusal_cannot_restyle_the_terminal(self, cwd):
@@ -1022,3 +1023,54 @@ class TestStatus:
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "loop state invalid" in text and "epochs must be" in text
+
+
+class TestTheDefaultLearningRateIs2e4:
+    """A new loop trains sft at 2e-4 (candidate B's 5e-4 regressed a format suite by 0.10 to
+    0.175 in a study on one project: 13 harvested rows, one seed, a 0.6B model; all five runs at
+    2e-4 or 1e-4 kept both quick suites within 0.05; whether the lower rate still learns the
+    corrections as well was not measured). Nothing else of the recipe moved."""
+
+    def test_a_new_loop_stores_no_recipe_and_trains_at_2e_4(self, cwd):
+        result, _, _ = _cli(*_INIT)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+        state = read_state()
+
+        assert state.sft_recipe is None
+        assert state.effective_sft_recipe()["lr"] == 2e-4
+        assert _render(state)["training"]["lr"] == 2e-4
+
+    def test_everything_but_the_rate_is_what_it_was(self):
+        recipe = effective_sft_recipe(None)
+
+        assert {key: value for key, value in recipe.items() if key != "lr"} == {
+            "target_modules": "all-linear", "lora_r": 64, "lora_alpha": 128, "epochs": 8,
+            "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
+            "quantization": "auto",
+        }
+
+    def test_a_loop_yaml_that_stores_its_own_rate_keeps_it(self, cwd):
+        write_state(_state(sft_recipe={"lr": 5e-4}), str(cwd / ".soup" / "loop.yaml"))
+
+        state = read_state()
+
+        assert state.effective_sft_recipe()["lr"] == 5e-4
+        assert state.effective_sft_recipe()["epochs"] == 8  # the rest still the built-in
+        assert _render(state)["training"]["lr"] == 5e-4
+
+    def test_the_flag_still_overrides(self, cwd):
+        result, _, _ = _cli(*_INIT, "--sft-lr", "5e-4")
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+        state = read_state()
+
+        assert state.sft_recipe == {"lr": 5e-4}
+        assert _render(state)["training"]["lr"] == 5e-4
+
+    def test_status_shows_the_default_rate(self, cwd):
+        _cli(*_INIT)
+
+        _, _, panel = _cli("status")
+
+        assert "lr 0.0002" in _recipe_row(panel)

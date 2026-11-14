@@ -10,8 +10,8 @@ Decided from measured recipe experiments:
 - an edit wins over thumbs and ratings for dpo, kto and sft alike: the latest real edit
   decides, before or after any thumb;
 - the sft config is the loop's sft recipe (tests/test_loop_sft_recipe.py): candidate B of the
-  fit runs, lr 5e-4, 8 epochs, micro-batch 2 x accumulation 4, seed 42, LoRA r 64 /
-  alpha 128 on all-linear, quantization auto (4bit here: no CUDA device, unknown size;
+  fit runs (lr since lowered to 2e-4), 8 epochs, micro-batch 2 x accumulation 4, seed 42,
+  LoRA r 64 / alpha 128 on all-linear, quantization auto (4bit here: no CUDA device, unknown size;
   tests/test_loop_sft_quantization.py);
 - with an sft loop and a feedback log, training starts at ``min_new_edits`` (8) new edits or
   ``min_new_rated`` (30) new rated answers, whichever comes first.
@@ -1218,6 +1218,7 @@ class TestCli:
         result, text, _ = _cli(*_INIT, flag, "many")
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert flag in text and "not a valid integer" in text
         assert not os.path.exists(os.path.join(".soup", "loop.yaml"))
 
     def test_help_names_the_flags_and_the_default(self, cwd):

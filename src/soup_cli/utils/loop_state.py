@@ -58,7 +58,11 @@ SFT_QUANTIZATIONS: tuple = ("4bit", "none", "auto")
 # The sft recipe of a loop whose loop.yaml names none (or only some) of the keys.
 # target_modules None would write no line, so the config schema's default ("auto", peft decides)
 # applies.
-# Fit runs, 2026-11-06: candidate B in bf16.
+# Fit runs, 2026-11-06: candidate B in bf16. Its learning rate was 5e-4; the default is now 2e-4:
+# in a study on one project (13 harvested rows, one seed, a 0.6B model) both runs at 5e-4
+# regressed a format suite by 0.10 to 0.175 with and without replay, and all five runs at 2e-4 or
+# 1e-4 kept both quick suites within 0.05; whether the lower rate still learns the corrections as
+# well was not measured. A loop.yaml that stores its own lr keeps it; --sft-lr overrides.
 # batch_size, gradient_accumulation_steps and seed are the config's own fields, pinned so a
 # run inherits nothing: a live run on the same rows inherited batch 1 and no seed, made 152
 # optimizer steps instead of 80 at lr 5e-4, and its quality fell (format_json 1.00 to 0.775).
@@ -66,7 +70,7 @@ DEFAULT_SFT_RECIPE: Mapping[str, object] = MappingProxyType({
     "target_modules": "all-linear",
     "lora_r": 64,
     "lora_alpha": 128,
-    "lr": 5.0e-4,
+    "lr": 2.0e-4,
     "epochs": 8,
     "batch_size": 2,
     "gradient_accumulation_steps": 4,
