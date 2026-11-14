@@ -59,8 +59,10 @@ LLAVA_DATASET = [
 class TestVisionConfig:
     """Test modality config field validation."""
 
-    @pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference"])
-    @pytest.mark.parametrize("data_format", ["llava", "sharegpt4v"])
+    @pytest.mark.parametrize(
+        "task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model"]
+    )
+    @pytest.mark.parametrize("data_format", ["llava", "sharegpt4v", "video", "multimodal"])
     def test_preference_tasks_reject_vision_row_formats(self, task, data_format):
         from soup_cli.config.loader import load_config_from_string
 
@@ -80,7 +82,9 @@ class TestVisionConfig:
         assert "no vision-preference row path" in message
         assert "text preference format" in message
 
-    @pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference"])
+    @pytest.mark.parametrize(
+        "task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model"]
+    )
     def test_preference_tasks_accept_text_preference_format(self, task):
         from soup_cli.config.loader import load_config_from_string
 
@@ -94,6 +98,18 @@ class TestVisionConfig:
         cfg = load_config_from_string(raw)
         assert cfg.task == task
         assert cfg.data.format == "dpo"
+
+    def test_kto_accepts_native_kto_data_format(self):
+        """kto accepts format: kto as a valid text format."""
+        from soup_cli.config.loader import load_config_from_string
+
+        raw = (
+            "base: org/model\ntask: kto\nmodality: vision\n"
+            "data:\n  train: ./data.jsonl\n  format: kto\n"
+        )
+        cfg = load_config_from_string(raw)
+        assert cfg.task == "kto"
+        assert cfg.data.format == "kto"
 
     def test_modality_default_is_text(self):
         """Default modality should be 'text'."""

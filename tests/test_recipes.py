@@ -118,8 +118,10 @@ class TestRecipeCatalog:
 
         from soup_cli.recipes.catalog import RECIPES
 
-        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
-        vision_preference_formats = {"llava", "sharegpt4v"}
+        preference_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model",
+        }
+        vision_preference_formats = {"llava", "sharegpt4v", "video", "multimodal"}
         for name, recipe in RECIPES.items():
             parsed = yaml.safe_load(recipe.yaml_str)
             data_format = parsed.get("data", {}).get("format", "auto")
