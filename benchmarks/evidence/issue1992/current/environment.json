@@ -1,0 +1,48 @@
+{
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "versions": {
+    "mlx": "0.32.4",
+    "mlx-lm": "0.32.2",
+    "mlx-metal": "0.32.4",
+    "transformers": "5.22.2",
+    "numpy": "2.5.4",
+    "tokenizers": "0.23.3",
+    "huggingface-hub": "2.4.0",
+    "safetensors": "0.8.0",
+    "pytest": "9.2.0"
+  },
+  "chip": "Apple M4",
+  "unified_memory_bytes": 17179869184,
+  "source_sha": "345c1f6105b8bd3bf3004f9c575b1517075080e9",
+  "command": [
+    "python",
+    "-m",
+    "pytest",
+    "tests/test_mlx_full_finetune.py",
+    "tests/test_mlx_full_finetune_native.py",
+    "-q",
+    "--no-cov"
+  ],
+  "fixture_revision": "local native Llama construction; seed 7, no Hub revision",
+  "source_files_sha256": {
+    "src/soup_cli/trainer/mlx_full.py": "f0689e414ae4d15e3f49287e7658110e48a94af3779d0ae171ed32323950ab15",
+    "src/soup_cli/trainer/mlx_sft.py": "6c9ee78eaa4676cd64027cee6097b114fda2544267bfa998d9f5d01d74dd3f52",
+    "tests/test_mlx_full_finetune_native.py": "29cf6303f8d177ab5b6d398bb28966b2f843e17c2cc8434220a20d2d2f5a2c1f"
+  },
+  "exit_code": 0,
+  "pytest_summary": "46 passed in 13.70s",
+  "device_probe": {
+    "default_device": "Device(gpu, 0)",
+    "metal_available": true,
+    "device_info": {
+      "device_name": "Apple M4",
+      "max_recommended_working_set_size": 12713115648,
+      "memory_size": 17179869184,
+      "architecture": "applegpu_g16g",
+      "max_buffer_length": 9534832640,
+      "resource_limit": 499000
+    }
+  },
+  "case_config_serialization": "Default-valued config fields omitted after generation; exact round-trip to the resolved config asserted against source schema. The resolved-config SHA-256 uses sorted compact JSON."
+}

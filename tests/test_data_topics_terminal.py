@@ -1,7 +1,6 @@
 """soup data topics prints paths, the embedding model and errors as typed, not as Rich markup."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,27 +8,24 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 _NAMES = [
     "x[red]n.json",
     "x[bold]n.json",
-    pytest.param("n:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.json", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 _MISSING = [
     "x[red]n.jsonl",
     "x[bold]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 

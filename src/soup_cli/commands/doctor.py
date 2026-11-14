@@ -565,6 +565,39 @@ def _format_gpu_capability(torch, idx: int) -> tuple[str, bool]:
     return f"sm_{major}{minor} ({architecture})", supported
 
 
+#: #776 - the one architecture the NF4 dispatch note was measured on (RTX 5070 Laptop, bnb 0.50.2).
+_NF4_NOTE_CAPABILITY = (12, 0)
+
+_NF4_SM120_NOTE: tuple[str, ...] = (
+    "NF4 on sm_120: bitsandbytes' fused 4-bit GEMM and dequantize + matmul round",
+    "differently at small row counts, so NF4 outputs can differ in the last bits",
+    "between the two (measured with bitsandbytes 0.50.2). Streamed NF4 follows",
+    "bitsandbytes' own choice of kernel. Details and numbers:",
+    "https://github.com/MakazhanAlpamys/Soup/issues/776",
+)
+
+
+def _nf4_blackwell_note(major: int, minor: int) -> list[str]:
+    """Return the NF4 rounding note for sm_120 (RTX 50-series), else an empty list.
+
+    Only the architecture the divergence was measured on carries the note: sm_121,
+    sm_100 and older cards select bitsandbytes kernels by different rules and have
+    not been measured, so saying the same thing there would be a guess.
+    """
+    if (major, minor) != _NF4_NOTE_CAPABILITY:
+        return []
+    return list(_NF4_SM120_NOTE)
+
+
+def _nf4_note_lines_for_device(torch, idx: int) -> list[str]:
+    """Return the NF4 note for one CUDA device; a failed capability probe gives none."""
+    try:
+        major, minor = torch.cuda.get_device_capability(idx)
+    except (AttributeError, RuntimeError, AssertionError):
+        return []
+    return _nf4_blackwell_note(major, minor)
+
+
 def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     """Return hardware/software support for the reported precision features."""
     from soup_cli.utils.advanced_precision import (
@@ -619,6 +652,10 @@ def _check_gpu():
                 gpus.append(
                     f"  GPU {idx}: [bold]{name}[/] "
                     f"({total_gb:.1f} GB) — {capability}{arch_warning}"
+                )
+                # #776 — rounding note for sm_120; plain text, no brackets to escape.
+                gpus.extend(
+                    f"    [dim]{line}[/]" for line in _nf4_note_lines_for_device(torch, idx)
                 )
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"

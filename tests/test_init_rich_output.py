@@ -1,6 +1,5 @@
 """Rich init output keeps emoji aliases literal while stripping terminal controls."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from rich.console import Console
 from soup_cli.cli import app
 from soup_cli.commands import init as init_cmd
 from soup_cli.templates import load_template
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -16,9 +16,6 @@ runner = make_cli_runner()
 _CONTROLS = "\x9b\u202e"
 _VISIBLE = "starter[bold]:rocket:"
 _FILENAME = f"{_VISIBLE}{_CONTROLS}.yaml"
-_REQUIRES_COLON_FILENAME = pytest.mark.skipif(
-    os.name == "nt", reason="Windows filenames cannot contain colons"
-)
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +44,7 @@ def test_unknown_template_keeps_its_emoji_alias_literal():
     assert not Path("soup.yaml").exists()
 
 
-@_REQUIRES_COLON_FILENAME
+@skip_colon_on_windows
 @pytest.mark.requires_symlink
 def test_link_refusal_keeps_its_emoji_alias_literal():
     victim = Path("victim.txt")
@@ -66,7 +63,7 @@ def test_link_refusal_keeps_its_emoji_alias_literal():
     assert victim.read_bytes() == b"must not be overwritten\n"
 
 
-@_REQUIRES_COLON_FILENAME
+@skip_colon_on_windows
 def test_saved_path_panel_keeps_its_emoji_alias_literal():
     result = runner.invoke(app, ["init", "--template", "chat", "--output", _FILENAME])
 

@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,17 +10,13 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.registry.store import RegistryStore
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _SHA = "a" * 64
 _CONTROLS = "\x9b\u202e"
-
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +74,7 @@ def test_unsupported_format_strips_controls_from_the_display():
     [
         "../x[red]e.json",
         "../x[/]e.json",
-        pytest.param("../e:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+        pytest.param("../e:warning:.json", marks=skip_colon_on_windows, id="emoji-code"),
     ],
 )
 def test_rejected_energy_path_is_named_as_typed(name):
@@ -100,7 +95,7 @@ def test_rejected_energy_path_strips_bidi_controls_from_the_display():
 
 @pytest.mark.parametrize(
     "name",
-    ["x[red]e.json", pytest.param("e:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code")],
+    ["x[red]e.json", pytest.param("e:warning:.json", marks=skip_colon_on_windows, id="emoji-code")],
 )
 def test_missing_energy_file_is_named_as_typed(name):
     result = _emit("--energy", name)
@@ -160,7 +155,7 @@ def test_invalid_energy_measurement_names_the_key_as_typed(key):
     [
         "../x[red]o",
         "../x[/]o",
-        pytest.param("../o:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+        pytest.param("../o:warning:", marks=skip_colon_on_windows, id="emoji-code"),
     ],
 )
 def test_write_failure_is_named_as_typed(output):
@@ -181,7 +176,7 @@ def test_write_failure_strips_bidi_controls_from_the_display():
 
 @pytest.mark.parametrize(
     "output",
-    ["../x[red]o", pytest.param("../o:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code")],
+    ["../x[red]o", pytest.param("../o:warning:", marks=skip_colon_on_windows, id="emoji-code")],
 )
 def test_write_failure_of_both_formats_is_named_as_typed(output):
     result = _emit("--format", "both", "--output", output)
@@ -208,7 +203,7 @@ def _written(text: str, label: str, name: str) -> bool:
     [
         "x[red]o.json",
         "x[bold]o.json",
-        pytest.param("o:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+        pytest.param("o:warning:.json", marks=skip_colon_on_windows, id="emoji-code"),
     ],
 )
 def test_written_bom_path_is_named_as_typed(name):
@@ -229,7 +224,7 @@ def test_written_bom_path_strips_controls_from_the_display():
 
 @pytest.mark.parametrize(
     "prefix",
-    ["x[red]o", pytest.param("o:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code")],
+    ["x[red]o", pytest.param("o:warning:", marks=skip_colon_on_windows, id="emoji-code")],
 )
 def test_written_both_bom_paths_are_named_as_typed(prefix):
     result = _emit("--format", "both", "--output", prefix)
@@ -265,7 +260,7 @@ def test_attach_failure_names_the_reference_as_typed(ref):
     "name",
     [
         "x[red]o.json",
-        pytest.param("o:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+        pytest.param("o:warning:.json", marks=skip_colon_on_windows, id="emoji-code"),
         f"x[bold]o{_CONTROLS}.json",
     ],
 )

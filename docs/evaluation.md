@@ -269,11 +269,21 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+`soup eval gate` refuses YAML booleans such as `false` and `true` before model
+construction; use numeric `0` when a zero cutoff is intended.
+
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
 handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
+
+`training.eval_gate.baseline: previous` is not implemented and is refused when the
+config loads; use a path to a baseline results file instead. A baseline set in
+`training.eval_gate` that cannot be resolved (a missing or invalid file, an unknown
+`registry://` reference) stops `soup train` when training starts, with an error naming
+`training.eval_gate.baseline`, instead of running the gate with no baseline (#2523).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
@@ -725,8 +735,13 @@ every PR instead of relying on a hand-edited JSON file.
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
   best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
-  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
-  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  `bfloat16` / `float16` / `float32`) — the actual load, not the training field.
+  Full-precision live eval uses native `bfloat16` on the requested CUDA card when
+  supported, `float16` on older CUDA cards such as T4/V100, and `float32` on CPU or
+  without an available CUDA runtime. Indexed devices such as `cuda:1` are checked
+  independently of the current card. Both model loaders, the console line and the
+  evidence use the same dtype. Unsupported quantization formats fall back to this
+  full-precision policy. With `--evidence` alone, `--config` GATES: it refuses
   (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
   *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
   warns rather than failing closed.
@@ -817,6 +832,11 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+`--write-baseline` refuses an output resolving to the suite, custom-task file,
+or judge-prompts file before model construction (exit 3), preserving those inputs.
+Fresh output paths and intentional refreshes of an existing baseline remain allowed.
+Final-component symlinks and directory outputs still refuse with exit 1, now before model loading.
+
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
@@ -879,15 +899,25 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   earlier version prints a warning that names it.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
-the same helpers: bfloat16 on CUDA and float32 elsewhere; `--config soup.yaml` reuses
+the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
+and float32 elsewhere; `--config soup.yaml` reuses
 the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
 is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
 variables (a Qwen3 model scores differently with thinking on or off). Every recorded
 version carries these **numerics** (`dtype`, `device` family, `quantization`,
 `chat_template_kwargs`), and a run whose numerics differ from any recorded version is
 refused before the model loads (exit `3`), naming each differing key with this run's
-value and the recorded one. A CPU run (float32) and a GPU run (bfloat16) are therefore
-never mixed in one ledger; start a new ledger with `--ledger NEW.json` to change them.
+value and the recorded one. CPU runs (float32), native-BF16 CUDA runs (bfloat16), and
+pre-Ampere CUDA runs (float16) therefore use separate ledgers; start a new ledger with
+`--ledger NEW.json` to change those settings.
+
+**Existing pre-Ampere histories.** Before the device-aware precision change (#2409),
+full-precision runs on T4, V100 and RTX 20xx also recorded `dtype: bfloat16`. The same
+card now selects `float16`, so continuing that existing BF16 ledger is refused **before
+the model loads**, with exit `3` naming the old and new dtype. Start a separate ledger
+with `--ledger NEW.json`, register the control tasks again with `--add-task`, and record
+a new FP16 baseline. Historical scores retain their BF16 stamp and are not migrated
+into the FP16 series, since scores measured under different dtypes are not comparable.
 
 **Failed generations.** A generation that raises, or returns something that is not
 text, is a failure and not a wrong answer. If any sample of a control task fails (an
@@ -1120,6 +1150,13 @@ unusable reply rather than a transient outage: it is not retried. The error name
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
 
+Rubric files supplied to `soup eval judge --rubric` and
+`training.grpo_judge_rubric` require unique criterion names after trimming
+surrounding whitespace and ignoring case. In v0.78.0, previously accepted
+duplicate names are refused when the file is loaded. Rename or remove the
+duplicate. The eval CLI exits `1` before sending a judge request, and GRPO
+ranking rejects the rubric at trainer setup.
+
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
 the saved banner reports the saved count. It exits `0` when at least one result was
@@ -1128,7 +1165,22 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
+With `--rubric`, `soup eval judge` exits `1` before sending a request if a weight
+is non-finite or non-numeric. The error names the rubric, criterion and value.
+Weighted and aggregate means use an overflow-safe fallback when intermediate totals
+overflow; calculations whose totals stay finite retain their existing rounding.
+Zero or negative total weights keep the existing zero result. If a signed-weight
+mean is unrepresentable, the command skips that row with
+`Warning: judge failed for prompt: Weighted judge score must be finite`.
+It exits `1` if every row fails. In the SDK, `JudgeResults.compute()` raises
+`ValueError` for non-finite aggregate input. Ranking rubrics still ignore weights.
+Re-evaluate any previously saved scores affected by overflow before reusing them.
+
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
+
+`soup eval compare` reads results for the full run IDs resolved from its arguments.
+When `soup eval aider --run-id` accepts a unique prefix, it saves the result under
+the matching full run ID. Existing evaluation rows keep their stored run IDs.
 
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;
@@ -1219,6 +1271,53 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
+
+#### Compare generation performance in the same report
+
+Use `--performance` to add latency, generated tokens/s and CUDA allocated peak
+alongside the existing quality verdict, with before/after percentage changes:
+
+```bash
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --device cuda:0 --format json
+
+# Defaults: one unscored warm-up, three measured generations of every task prompt.
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --performance-warmup 1 \
+  --performance-repeats 5 --device cpu --format markdown
+```
+
+This path loads, warms, measures and releases the first model before loading
+the second. It pins one device: `auto` selects CUDA when available, otherwise
+CPU; explicit `cpu`, `cuda`, `cuda:<index>` and `mps` are supported. It uses the
+same inference dtype policy as `soup infer` (FP32 on CPU, FP16 on CUDA/MPS),
+and records the actual model dtype/device. The quality-only command keeps its
+existing loading behavior. Both sides use greedy decoding, at most 256 new
+tokens per call, and the same task prompts. Only the first measured answer per
+task contributes to quality; the other repeats measure performance. The first
+task prompt supplies the unscored warm-ups. `--allow-stub` is incompatible with
+`--performance` because stubs cannot supply model performance measurements.
+
+Latency includes tokenization, input transfer, generation and text decoding,
+with the selected accelerator synchronized at both boundaries. Loading is
+outside that timer. Generated token/s uses the actual new token IDs, including
+EOS, divided by total measured generation time; different answer lengths can
+therefore change both latency and throughput. CUDA memory is this process's
+allocated peak across measured generations after warm-up, including resident
+weights and generation buffers. It excludes loading/warm-up transients and
+allocator-reserved bytes. CPU/MPS memory is reported as `null` in JSON and
+`N/A` in tables, rather than a zero-byte footprint.
+
+The optional JSON `performance` object includes the raw per-task latency/token
+samples and the mean suite latency for each repeat. The report labels overlap
+between the two observed repeat ranges; small differences inside that spread
+may be noise. This is a descriptive within-model repeat check, not a confidence
+interval or a comparison of independent model-loading runs. With one repeat,
+noise cannot be estimated (`latency_ranges_overlap: null`). Use several
+representative prompts and additional independent runs for conclusions about
+speed. Performance remains informational: **quality alone determines exit 2**.
+The table, JSON and markdown all include this additional result only when
+`--performance` is enabled.
 
 ### Custom Eval Format
 
@@ -1341,7 +1440,7 @@ The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
 integers beyond float range) with a named `ValueError` after existing report
 errors; finite custom limits and equality boundaries are unchanged (#2467).
 
-The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
+The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent. A report claiming `calibrated=True` must have `num_pairs >= 1`; a zero-pair calibrated report is refused with a `ValueError` (#2496).
 
 Persist a calibration once and reuse it across runs (v0.71.1): `write_judge_calibration(report, "calib.json")` writes a cwd-contained JSON, and `load_judge_calibration("calib.json")` re-validates it on load (a corrupt or out-of-range field on disk is rejected, since it's the production-gate safety net). The artifact attaches to the registry under the new `judge_calibration` kind.
 

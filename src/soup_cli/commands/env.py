@@ -28,7 +28,7 @@ from soup_cli.utils.env_lock import (
     write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
 
@@ -94,8 +94,12 @@ def env_status_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[yellow]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="yellow",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
@@ -147,8 +151,12 @@ def env_check_cmd(
         locked = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         lock_exit = 1
     except (TypeError, ValueError) as exc:
@@ -228,8 +236,12 @@ def env_fix_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {for_terminal(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
@@ -262,7 +274,7 @@ def env_fix_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote requirements to {for_terminal(output)}[/]")
+        console.print(Text.assemble("Wrote requirements to ", terminal_text(output), style="green"))
 
 
 __all__ = ["env_app"]

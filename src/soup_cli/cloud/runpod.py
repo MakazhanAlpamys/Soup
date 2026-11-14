@@ -144,7 +144,15 @@ def plan_runpod_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_runpod_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
+    """Build a RunPod controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed: the caller passes the *effective*
+    config, with every CLI override applied, so the remote run trains what the
+    local run said it would (#1430). Reading ``config_path`` is the fallback for
+    a direct caller. The embedded text is validated either way (``_validate_config``).
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     for value, field in (
@@ -154,8 +162,9 @@ def plan_runpod_run(
     ):
         validate_path_shape(value, field)
         enforce_under_cwd_and_no_symlink(value, field)
-    with open(config_path, encoding="utf-8") as source:
-        config_yaml = source.read(_MAX_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as source:
+            config_yaml = source.read(_MAX_CONFIG_BYTES + 1)
     if os.path.lexists(output_dir):
         raise ValueError("output_dir already exists; choose a fresh directory for retrieval")
     stub = render_runpod_stub(

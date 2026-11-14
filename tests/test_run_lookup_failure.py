@@ -4,6 +4,7 @@ The tracker returns ``None`` both for an id that names no run and for a prefix
 that names several, so each caller asks ``run_lookup_failure`` which one it was.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,8 @@ def db(tmp_path, monkeypatch) -> Path:
         monkeypatch.setattr(f"soup_cli.commands.{module}.console", Console(width=500))
     workdir = tmp_path / "work"
     workdir.mkdir()
+    (workdir / "tasks.jsonl").write_text(json.dumps({"prompt": "q"}) + "\n")
+    (workdir / "model").mkdir()
     monkeypatch.chdir(workdir)
     tracker = ExperimentTracker(db_path=path)
     try:
@@ -66,6 +69,16 @@ def _commands():
             lambda r: ["eval", "aider", "--model", "m", "--output", "out", "--run-id", r],
             id="eval-aider",
         ),
+        pytest.param(
+            lambda r: ["eval", "benchmark", "--model", "model", "--run-id", r],
+            id="eval-benchmark",
+        ),
+        pytest.param(
+            lambda r: [
+                "eval", "custom", "--tasks", "tasks.jsonl", "--model", "model", "--run-id", r,
+            ],
+            id="eval-custom",
+        ),
     ]
 
 
@@ -91,6 +104,34 @@ def test_missing_run_keeps_run_not_found(argv):
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, SystemExit), repr(result.exception)
     assert MISSING_LINE in _lines(result)
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("run_baseline_v1", "run_candidate_v1"),
+        ("run_baseline", "run_candidate_v1"),
+        ("run_baseline_v1", "run_candidate"),
+        ("run_baseline", "run_candidate"),
+    ],
+)
+def test_eval_compare_loads_scores_for_resolved_runs(db: Path, left: str, right: str) -> None:
+    tracker = ExperimentTracker(db_path=db)
+    try:
+        for run_id, score in (("run_baseline_v1", 0.9), ("run_candidate_v1", 0.7)):
+            tracker.start_run({}, "cpu", "CPU", {}, run_id=run_id)
+            tracker.save_eval_result("model", "synthetic", score, {}, run_id=run_id)
+    finally:
+        tracker.close()
+
+    result = runner.invoke(app, ["eval", "compare", left, right])
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert f"Eval Comparison: {left} vs {right}" in output
+    assert "0.9000" in output
+    assert "0.7000" in output
+    assert "-0.2000" in output
 
 
 @pytest.mark.parametrize("run_id", [AMBIGUOUS, MISSING])

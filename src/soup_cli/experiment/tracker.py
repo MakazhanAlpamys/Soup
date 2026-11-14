@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS runs (
     base_revision   TEXT,
     base_revision_source TEXT,
     training_data_sha256 TEXT,
+    code_commit     TEXT,
+    code_dirty      INTEGER,
     task            TEXT,
     cost_usd        REAL,
     cost_gpu_label  TEXT,
@@ -225,6 +227,8 @@ class ExperimentTracker:
              "ALTER TABLE runs ADD COLUMN base_revision_source TEXT"),
             ("runs", "training_data_sha256",
              "ALTER TABLE runs ADD COLUMN training_data_sha256 TEXT"),
+            ("runs", "code_commit", "ALTER TABLE runs ADD COLUMN code_commit TEXT"),
+            ("runs", "code_dirty", "ALTER TABLE runs ADD COLUMN code_dirty INTEGER"),
             ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
             ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
             ("runs", "run_kind",
@@ -286,7 +290,8 @@ class ExperimentTracker:
             conn.execute(
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
-                   base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL
+                   base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL,
+                   code_commit = NULL, code_dirty = NULL
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
@@ -307,6 +312,20 @@ class ExperimentTracker:
         )
         conn.commit()
         return run_id
+
+    def record_code_revision(
+        self, run_id: str, *, commit: Optional[str], dirty: Optional[bool],
+    ) -> None:
+        """Save the startup observation; historical and unavailable values stay NULL."""
+        from soup_cli.utils.code_revision import CodeRevision
+
+        CodeRevision(commit=commit, dirty=dirty)
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE runs SET code_commit=?, code_dirty=? WHERE run_id=?",
+            (commit, dirty, run_id),
+        )
+        conn.commit()
 
     def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
         """Record startup source bytes, leaving unsupported/incomplete sources unknown."""
@@ -423,7 +442,7 @@ class ExperimentTracker:
         loss: Optional[float] = 0.0,
         lr: float = 0.0,
         grad_norm: Optional[float] = None,
-        speed: float = 0.0,
+        speed: Optional[float] = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
         val_reward: Optional[float] = None,
@@ -434,7 +453,8 @@ class ExperimentTracker:
         than ``0.0``: an omitted measurement must not look like a genuinely
         measured zero. ``loss`` is None for a training log that carried no loss
         (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
-        task leaves it NULL.
+        task leaves it NULL. ``speed`` is None on a row with no measured rate
+        yet, such as the trainer callback's first step row (#2791).
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
@@ -461,7 +481,17 @@ class ExperimentTracker:
 
         Also computes an informational per-run cost estimate based on the
         device_name captured at start_run() and the elapsed duration.
+
+        ``output_dir`` is stored as an absolute path, resolved against the
+        directory the run trained in (#2725). The default ``output: ./output``
+        arrives here as ``"output"``, and ``soup runs --cwd-only`` and
+        ``soup runs clean`` used to resolve that against whatever directory
+        they were run from. An empty or missing value is stored as given. A
+        row recorded before this change keeps its relative value, and the
+        readers still resolve it against the current directory, as before.
         """
+        if output_dir:
+            output_dir = os.path.abspath(output_dir)
         conn = self._get_conn()
         # Look up device name for cost estimate (best-effort).
         cost_usd: Optional[float] = None
