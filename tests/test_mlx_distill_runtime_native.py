@@ -74,6 +74,32 @@ def rows():
     )], "val": [{"text": "alpha beta gamma"}]}
 
 
+def test_tracker_rows_distinguish_training_and_validation(pair, tmp_path):
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    class Tracker:
+        def __init__(self):
+            self.rows = []
+
+        def log_metrics(self, **kwargs):
+            self.rows.append(kwargs)
+
+    tracker = Tracker()
+    trainer = MLXDistillTrainerWrapper(config(*pair, tmp_path / "tracked"))
+    trainer.setup(rows())
+    result = trainer.train(tracker=tracker, run_id="native-distill-kind")
+
+    assert [(row["step"], row["kind"]) for row in tracker.rows] == [
+        (1, "train"), (2, "train"), (3, "train"), (3, "eval"),
+    ]
+    assert all(row["loss"] is not None for row in tracker.rows[:3])
+    assert all(row.get("val_loss") is None for row in tracker.rows[:3])
+    assert tracker.rows[-1]["loss"] is None
+    assert tracker.rows[-1]["val_loss"] == pytest.approx(
+        result["evaluation_history"][-1]["loss"]
+    )
+
+
 def test_real_multiturn_boundaries_padding_eos_and_truncation(pair):
     _, tok = load(str(pair[0]))
     tok.pad_token = tok.eos_token
