@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:loop:progress:1",
+  "title": "Soup loop progress event",
+  "description": "One line per progress event, appended to .soup-loops/progress.jsonl (default layout). The shape of a soup ship --progress jsonl event (event, done, total, and phase/side/suite/repeat when a verdict is running) plus ts, iteration_id and stage. Lines carry no model or user content. Readers ignore unknown fields.",
+  "type": "object",
+  "required": ["schema_version", "iteration_id", "ts", "stage", "event"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "iteration_id": {
+      "description": "The iteration this work belongs to; null for a job run outside an iteration.",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "not": {"pattern": "[.][.]"}
+        },
+        {"type": "null"}
+      ]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
+      "description": "ISO 8601 UTC."
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Open vocabulary. soup loop writes harvest, train, verdict, deploy, canary, promote, rollback; Soup Zero writes data, merge, train, ship, export, deploy. Other lowercase names are accepted."
+    },
+    "event": {"enum": ["start", "progress", "end", "error"]},
+    "done": {
+      "description": "Units finished so far; null when the stage cannot count (indeterminate).",
+      "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+    },
+    "total": {
+      "description": "Units in the stage; null when unknown. Never a made-up 100.",
+      "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+    },
+    "message": {
+      "description": "Short status text for a person; no prompts, answers or user data.",
+      "oneOf": [{"type": "string", "maxLength": 1024}, {"type": "null"}]
+    },
+    "error": {
+      "description": "A short error code on event error (soup ship writes execution_aborted).",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]
+    },
+    "job_id": {
+      "description": "The producer's own job id, to link a job log.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]
+    },
+    "phase": {"description": "Forwarded from soup ship --progress jsonl.", "oneOf": [{"type": "string"}, {"type": "null"}]},
+    "side": {"description": "Forwarded from soup ship --progress jsonl.", "oneOf": [{"type": "string"}, {"type": "null"}]},
+    "suite": {"description": "Forwarded from soup ship --progress jsonl.", "oneOf": [{"type": "string"}, {"type": "null"}]},
+    "repeat": {
+      "description": "Forwarded from soup ship --progress jsonl.",
+      "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+    }
+  },
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  }
+}
