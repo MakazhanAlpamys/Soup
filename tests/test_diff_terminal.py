@@ -167,8 +167,8 @@ def test_diff_model_titles_summary_and_output_receipt_keep_literal_paths(
     for label, path in zip(["A", "B"], paths):
         displayed = str(path).replace(_filename(value), _filename(shown))
         basename = path.name.replace(_filename(value), _filename(shown))
-        assert f"Model {label}: {displayed}" in text
-        assert f"Model {label}: {basename}" in text
+        # One occurrence in the plan and one in the response-panel title.
+        assert text.count(f"Model {label}: {displayed}") == 2
         assert f"Model {label} ({basename})" in text
     assert f"Results saved to {str(output).replace(_filename(value), _filename(shown))}" in text
     assert "<empty>" in text
