@@ -1,6 +1,7 @@
 """Calibration SDK input validation names non-finite and unrepresentable numbers."""
 
 import json
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -71,9 +72,17 @@ def test_persisted_report_revalidates_unrepresentable_float_fields(
     assert str(error.value) == f"{field} must be finite"
 
 
-def test_representable_integer_logits_and_calibration_keep_their_results():
+@pytest.mark.parametrize("sign", [1, -1], ids=["positive", "negative"])
+def test_oversized_fraction_has_the_kl_input_reason(sign):
+    with pytest.raises(ValueError) as error:
+        kl_divergence([Fraction(sign * 10**400), 0], [0, 0])
+    assert str(error.value) == "p_logits must be finite"
+
+
+def test_representable_numeric_logits_and_calibration_keep_their_results():
     for large in (1, 10**300, -(10**300)):
         assert kl_divergence([large, 0], [large, 0]) == 0.0
+    assert kl_divergence([Fraction(1, 2), 0], [0.5, 0]) == 0.0
     result = run_calibration([[0, 1]], [[0, 1]])
     assert result.mean_kl == 0.0
     assert result.per_prompt_kl == (0.0,)
@@ -91,9 +100,9 @@ def test_integer_scores_and_alpha_preserve_conformal_threshold(alpha, expected):
     assert conformal_threshold([0, 0.5, 1], alpha=alpha) == expected
 
 
-def test_report_keeps_valid_integer_fields_and_unbounded_integer_pair_count():
+def test_report_keeps_valid_integer_fields():
     values = dict(position_bias=-1, conformal_threshold=0, agreement_rate=1,
-                  num_pairs=10**400, calibrated=True)
+                  num_pairs=10, calibrated=True)
     assert JudgeCalibrationReport(**values).to_dict() == values
 
 
