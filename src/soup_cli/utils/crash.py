@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.redaction import REDACTED, RedactionReport, redact_config, redact_text
 
 CRASH_FORMAT_VERSION = 1
 
@@ -64,7 +65,9 @@ _SAFE_ENV_KEYS = (
     "LOCAL_RANK",
 )
 
-# Token-shaped patterns we redact from any captured string.
+# The token shapes redacted before ``utils/redaction.py`` existed. They stay as a last layer
+# so nothing the bundle used to redact can come back, and because the RunPod controller
+# (``cloud/_runpod_controller.py``) mirrors this tuple (tests/test_runpod_remote_diagnostics.py).
 _SECRET_PATTERNS = (
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
@@ -84,11 +87,24 @@ def classify_crash(message: str) -> str:
 
 
 def redact_secrets(value: str) -> str:
-    """Replace anything resembling a token with '<redacted>'."""
-    if not isinstance(value, str):
+    """Replace credentials in ``value`` with '<redacted>'.
+
+    Covers URL userinfo and sensitive query parameters, the common token shapes,
+    ``Authorization`` headers, JWTs, PEM private keys and ``key=value`` pairs whose key
+    name says it is a credential (see ``utils/redaction.py``).
+    """
+    return _redact_string(value)
+
+
+def _redact_string(value: str, report: Optional[RedactionReport] = None) -> str:
+    """The shared redaction, then the legacy token shapes; counts go to ``report``."""
+    if not isinstance(value, str) or not value:
         return value
+    value = redact_text(value, report)
     for pattern in _SECRET_PATTERNS:
-        value = pattern.sub("<redacted>", value)
+        value, count = pattern.subn(REDACTED, value)
+        if report is not None:
+            report.count += count
     return value
 
 
@@ -133,19 +149,6 @@ def _safe_call(func: Callable[..., Any], *args: Any) -> Optional[Any]:
         return None
 
 
-def _redact_value(value: Any) -> Any:
-    """Recursively redact secret-shaped strings in nested dict/list/str values."""
-    if isinstance(value, str):
-        return redact_secrets(value)
-    if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_value(item) for item in value)
-    return value
-
-
 def _safe_output_dir(value: Optional[str]) -> Optional[str]:
     """Strip leading path components so a shared `.crash` doesn't leak $HOME."""
     if not value or not isinstance(value, str):
@@ -153,7 +156,7 @@ def _safe_output_dir(value: Optional[str]) -> Optional[str]:
     return os.path.basename(value.rstrip("/\\")) or value
 
 
-def _capture_env() -> Dict[str, Any]:
+def _capture_env(report: Optional[RedactionReport] = None) -> Dict[str, Any]:
     info: Dict[str, Any] = {
         "python": sys.version,
         "platform": platform.platform(),
@@ -163,7 +166,7 @@ def _capture_env() -> Dict[str, Any]:
     safe_env: Dict[str, str] = {}
     for key in _SAFE_ENV_KEYS:
         if key in os.environ:
-            safe_env[key] = redact_secrets(os.environ[key])
+            safe_env[key] = _redact_string(os.environ[key], report)
     info["env"] = safe_env
 
     # Library versions
@@ -190,8 +193,16 @@ def build_crash_bundle(
     run_id: Optional[str] = None,
     output_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the bundle dict. Always returns; never raises."""
-    error_message = redact_secrets(str(error))
+    """Build the bundle dict. Always returns; never raises.
+
+    The error message, the traceback, the metrics and the config are redacted before
+    they are stored; ``bundle["redaction"]`` says how many values were replaced
+    (counts only, never the values).
+    """
+    message_report = RedactionReport()
+    trace_report = RedactionReport()
+    env_report = RedactionReport()
+    error_message = _redact_string(str(error), message_report)
     bundle: Dict[str, Any] = {
         "format_version": CRASH_FORMAT_VERSION,
         "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -202,24 +213,33 @@ def build_crash_bundle(
             "message": error_message,
             "kind": classify_crash(error_message),
             "traceback": [
-                redact_secrets(line)
+                _redact_string(line, trace_report)
                 for line in traceback.format_exception(type(error), error, error.__traceback__)
             ],
         },
         "gpu_state": _capture_gpu_state(),
-        "environment": _capture_env(),
+        "environment": _capture_env(env_report),
+    }
+    counts: Dict[str, int] = {
+        "error_message": message_report.count,
+        "traceback": trace_report.count,
+        "environment": env_report.count,
     }
     if metrics:
         tail = list(metrics[-TAIL_METRICS:])
-        bundle["metrics_tail"] = _redact_value(tail)
+        bundle["metrics_tail"], metrics_report = redact_config(tail, _redact_string)
+        counts["metrics_tail"] = metrics_report.count
     if config is not None:
-        # Re-serialise to drop non-JSON-able values cleanly, then redact
-        # secret-shaped strings recursively so the .crash is shareable.
+        # Re-serialise to drop non-JSON-able values cleanly, then redact: strings as
+        # text, and anything under a key whose name says it is a credential, so the
+        # .crash is shareable.
         try:
             text = json.dumps(config, default=str)
-            bundle["config"] = _redact_value(json.loads(text))
+            bundle["config"], config_report = redact_config(json.loads(text), _redact_string)
+            counts["config"] = config_report.count
         except Exception:
             bundle["config"] = {"_unserialisable": True}
+    bundle["redaction"] = {"values_redacted": sum(counts.values()), **counts}
     return bundle
 
 
@@ -253,6 +273,7 @@ def write_crash_bundle(
             "created_at": bundle.get("created_at"),
             "error": bundle.get("error"),
             "gpu_state": bundle.get("gpu_state"),
+            "redaction": bundle.get("redaction"),
             "_truncated": True,
             "_note": "full bundle exceeded MAX_BUNDLE_BYTES; metrics + config dropped",
         }
