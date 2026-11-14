@@ -343,12 +343,14 @@ def init_cmd(
             "30d, default 24h). Then --canary-on-timeout applies."
         ),
     ),
-    canary_on_timeout: str = typer.Option(
-        "errors-only", "--canary-on-timeout",
+    canary_on_timeout: Optional[str] = typer.Option(
+        None, "--canary-on-timeout",
         help=(
             "What happens when --canary-max-wait runs out: errors-only (the request-error "
             "verdict alone decides; the default), rollback (withdraw the canary) or wait "
-            "(keep waiting, no time limit)."
+            "(keep waiting, no time limit). A canary with no canary answers at all is "
+            "withdrawn (timeout_no_answers) unless errors-only is given here: then it "
+            "promotes with no evidence."
         ),
     ),
     min_new_pairs: int = typer.Option(
@@ -504,7 +506,9 @@ def init_cmd(
         console.print("[red]--canary-traffic must be above 0%[/]")
         raise typer.Exit(code=2)
     max_wait_sec = _parse_wait(canary_max_wait, flag="--canary-max-wait")
-    timeout_policy = canary_on_timeout.strip().lower().replace("_", "-")
+    timeout_policy = (
+        "errors-only" if canary_on_timeout is None else canary_on_timeout
+    ).strip().lower().replace("_", "-")
     if timeout_policy not in CANARY_ON_TIMEOUT:
         console.print(
             f"[red]--canary-on-timeout must be one of {', '.join(CANARY_ON_TIMEOUT)}, "
@@ -614,6 +618,7 @@ def init_cmd(
             paraphraser_model=paraphraser_model,
             canary_max_wait_sec=max_wait_sec,
             canary_on_timeout=timeout_policy,
+            canary_on_timeout_explicit=canary_on_timeout is not None,
             production_adapter=(
                 served_model
                 if os.path.isfile(os.path.join(served_model, "adapter_config.json"))

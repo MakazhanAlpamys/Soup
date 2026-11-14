@@ -993,8 +993,10 @@ def _decide_on_timeout(
 
     ``--canary-on-timeout rollback`` withdraws it; ``errors-only`` lets the request errors
     alone decide with however many answers there are (a canary that failed more than stable is
-    withdrawn when autoroll is on, any other is promoted). The reason says "timeout" and the
-    counts. ``None`` leaves the verdict as it was (``wait``).
+    withdrawn when autoroll is on, any other is promoted) - except a canary with NO answers
+    at all, which is withdrawn (``timeout_no_answers``) unless ``errors-only`` was given
+    explicitly. The reason says "timeout" and the counts. ``None`` leaves the verdict as it
+    was (``wait``).
     """
     waited = format_wait_duration(state.canary_max_wait_sec)
     name = state.canary_active
@@ -1011,6 +1013,20 @@ def _decide_on_timeout(
         )
     if state.canary_on_timeout != "errors-only":
         return None
+    if samples == 0 and not state.canary_on_timeout_explicit:
+        # Nothing was answered by the canary (serve restarted without it, a wrong rollout id,
+        # too little traffic for the share): no evidence for it, so it is not promoted.
+        return _CanaryReading(
+            verdict="UNKNOWN",
+            rollback=rollback(policy, reason="timeout_no_answers"),
+            samples=samples,
+            stable_samples=stable_samples,
+            rollback_note=(
+                f"canary {name} withdrawn on timeout: {counts_text} in {waited}, nothing to "
+                "judge it by (timeout_no_answers; --canary-on-timeout errors-only given "
+                "explicitly promotes with no evidence)"
+            ),
+        )
     error_verdict = stats.verdict(min_samples=1)
     if error_verdict == "UNKNOWN":
         error_verdict = "OK"  # no canary answer failed: nothing against it

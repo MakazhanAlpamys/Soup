@@ -33,12 +33,16 @@ def cwd(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _state(*, waited: float, on_timeout: str = "errors-only", autoroll: bool = True) -> LoopState:
+def _state(
+    *, waited: float, on_timeout: str = "errors-only", autoroll: bool = True,
+    explicit: bool = False,
+) -> LoopState:
     return LoopState(
         served_model="base", eval_suite="e.json", baseline="b", status="running",
         canary_active="cand", canary_traffic_pct=5.0, canary_rollout_id="r1",
         canary_adapter="out/cand", canary_started_ts=NOW.timestamp() - waited,
         canary_autoroll_on_regress=autoroll, canary_on_timeout=on_timeout,
+        canary_on_timeout_explicit=explicit,
     )
 
 
@@ -73,11 +77,39 @@ class TestWithoutAFeedbackLog:
         assert state.canary_active is None and state.production_name == "cand"
         assert "timeout" in record.notes and "5 canary answers" in record.notes
 
-    def test_errors_only_promotes_a_canary_that_got_no_answers_at_all(self, cwd):
+    def test_the_default_withdraws_a_canary_that_got_no_answers_at_all(self, cwd):
         state, record = _run(cwd, _state(waited=2 * DAY))
+
+        assert state.canary_active is None and state.production_name is None
+        assert record.rolled_back is True
+        assert "withdrawn on timeout" in record.notes
+        assert "0 canary answers" in record.notes and "timeout_no_answers" in record.notes
+
+    def test_an_explicit_errors_only_still_promotes_a_canary_with_no_answers(self, cwd):
+        state, record = _run(cwd, _state(waited=2 * DAY, explicit=True))
 
         assert state.production_name == "cand"
         assert "timeout" in record.notes and "0 canary answers" in record.notes
+
+    def test_one_answer_is_enough_for_the_default_to_decide_on_errors(self, cwd):
+        _answers(cwd, canary_ok=1, stable_ok=20)
+
+        state, record = _run(cwd, _state(waited=2 * DAY))
+
+        assert state.production_name == "cand"
+        assert "1 canary answers" in record.notes
+
+    def test_rollback_on_timeout_with_no_answers_keeps_its_own_reason(self, cwd):
+        state, record = _run(cwd, _state(waited=2 * DAY, on_timeout="rollback"))
+
+        assert state.canary_active is None and record.rolled_back is True
+        assert "timeout_no_answers" not in record.notes
+        assert "rolled back on timeout" in record.notes
+
+    def test_wait_with_no_answers_still_waits(self, cwd):
+        state, _record = _run(cwd, _state(waited=30 * DAY, on_timeout="wait"))
+
+        assert state.canary_active == "cand"
 
     def test_errors_only_withdraws_a_canary_that_failed_more_than_stable(self, cwd):
         _answers(cwd, canary_ok=1, canary_bad=4, stable_ok=20)

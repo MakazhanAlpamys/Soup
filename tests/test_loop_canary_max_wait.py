@@ -387,6 +387,31 @@ class TestInit:
         assert read_state().canary_on_timeout == policy
         assert f"canary_on_timeout: {policy}" in text
 
+    def test_the_default_is_not_recorded_as_an_explicit_choice(self, cwd):
+        result, _ = _cli(*_INIT)
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert read_state().canary_on_timeout_explicit is False
+
+    @pytest.mark.parametrize("policy", ["errors-only", "rollback", "wait"])
+    def test_a_policy_given_on_the_command_line_is_recorded_as_explicit(self, cwd, policy):
+        result, _ = _cli(*_INIT, "--canary-on-timeout", policy)
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert read_state().canary_on_timeout_explicit is True
+
+    def test_the_help_says_errors_only_promotes_with_no_evidence(self, cwd):
+        from typer.main import get_command
+
+        from soup_cli.commands.loop import app
+
+        init = get_command(app).commands["init"]
+        option = next(param for param in init.params if param.name == "canary_on_timeout")
+        help_text = " ".join(option.help.split())
+
+        assert "timeout_no_answers" in help_text
+        assert "errors-only is given here: then it promotes with no evidence" in help_text
+
     @pytest.mark.parametrize("spelling", ["ROLLBACK", " rollback ", "Rollback"])
     def test_a_policy_is_case_and_space_insensitive(self, cwd, spelling):
         result, _ = _cli(*_INIT, "--canary-on-timeout", spelling)

@@ -265,6 +265,12 @@ class LoopState:
     # Why the latest cycle's training or deploy failed (exit code and stderr tail, or the
     # deploy's refusal), for ``soup loop status``; None once a cycle went through.
     last_failure: Optional[str] = None
+    # True once ``--canary-on-timeout`` was given on the command line. A canary that got NO
+    # answers by the time its wait is over is withdrawn (reason ``timeout_no_answers``) unless
+    # this is set and the policy is ``errors-only``, which is then taken to mean "promote on
+    # request errors alone, even with nothing to judge by". A loop.yaml from before it loads
+    # as False. Last, so adding it shifted no existing positional field.
+    canary_on_timeout_explicit: bool = False
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -406,6 +412,8 @@ class LoopState:
                 f"canary_on_timeout must be one of {list(CANARY_ON_TIMEOUT)}, "
                 f"got {self.canary_on_timeout!r}"
             )
+        if not isinstance(self.canary_on_timeout_explicit, bool):
+            raise ValueError("canary_on_timeout_explicit must be bool")
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -1123,6 +1131,7 @@ def init_state(
     train_method: str = "dpo",
     canary_max_wait_sec: float = DEFAULT_CANARY_MAX_WAIT_SEC,
     canary_on_timeout: str = "errors-only",
+    canary_on_timeout_explicit: bool = False,
     min_new_edits: int = 8,
     min_new_rated: int = 30,
     sft_recipe: Optional[dict] = None,
@@ -1168,6 +1177,7 @@ def init_state(
         train_method=train_method,
         canary_max_wait_sec=canary_max_wait_sec,
         canary_on_timeout=canary_on_timeout,
+        canary_on_timeout_explicit=canary_on_timeout_explicit,
         min_new_edits=min_new_edits,
         min_new_rated=min_new_rated,
         sft_recipe=sft_recipe,
