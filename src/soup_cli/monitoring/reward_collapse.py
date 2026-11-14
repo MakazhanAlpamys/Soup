@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Optional
 
+ZERO_SPREAD_FRACTION_THRESHOLD = 0.5
+ZERO_SPREAD_REQUIRED_STEPS = 5
+
 
 def reward_group_fraction(value: object) -> Optional[float]:
     """Accept a finite measured fraction, including a genuine zero."""
@@ -33,8 +36,9 @@ class RewardCollapseMonitor:
             self._streak = 0
         self._last_step = step
         self.fraction = reward_group_fraction(value)
-        self._streak = self._streak + 1 if self.fraction is not None and self.fraction > .5 else 0
-        if self._streak >= 5 and not self._warned:
+        high = self.fraction is not None and self.fraction > ZERO_SPREAD_FRACTION_THRESHOLD
+        self._streak = self._streak + 1 if high else 0
+        if self._streak >= ZERO_SPREAD_REQUIRED_STEPS and not self._warned:
             self._warned = True
             return True
         return False

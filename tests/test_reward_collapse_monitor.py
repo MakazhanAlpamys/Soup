@@ -1,5 +1,6 @@
 """The GRPO monitor reports existing TRL measurements without changing training."""
 
+import logging
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -36,15 +37,28 @@ def _render(display):
     return out.getvalue()
 
 
+def _callback_warnings(caplog):
+    return [
+        record for record in caplog.records
+        if record.name == "soup_cli.monitoring.callback" and record.levelno == logging.WARNING
+    ]
+
+
 def test_five_distinct_high_measurements_warn_once(caplog):
     callback, display = _callback()
     for step in range(1, 5):
         _log(callback, step)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     _log(callback, 5)
     for step in range(6, 12):
         _log(callback, step)
-    assert caplog.text.count("GRPO reward diversity is low") == 1
+    records = _callback_warnings(caplog)
+    assert len(records) == 1
+    assert records[0].getMessage() == (
+        "GRPO reward diversity is low: more than 50% of groups had zero "
+        "reward spread for 5 distinct logged steps. These groups have "
+        "no group-relative advantage signal; inspect the rewards and prompts."
+    )
     assert "60.0%" in _render(display)
 
 
@@ -53,7 +67,7 @@ def test_healthy_and_boundary_measurements_do_not_warn(caplog, value):
     callback, display = _callback()
     for step in range(1, 8):
         _log(callback, step, value)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     assert f"Zero-spread groups: {value:.1%}" in _render(display)
 
 
@@ -64,19 +78,19 @@ def test_healthy_measurement_resets_the_streak(caplog):
     _log(callback, 5, .1)
     for step in range(6, 10):
         _log(callback, step)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     _log(callback, 10)
-    assert "GRPO reward diversity is low" in caplog.text
+    assert len(_callback_warnings(caplog)) == 1
 
 
 def test_duplicate_log_events_cannot_trigger_warning(caplog):
     callback, _ = _callback()
     for _ in range(8):
         _log(callback, 1)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     for step in range(2, 6):
         _log(callback, step)
-    assert caplog.text.count("GRPO reward diversity is low") == 1
+    assert len(_callback_warnings(caplog)) == 1
 
 
 @pytest.mark.parametrize("value", [True, False, float("nan"), float("inf"), -.1, 1.1, "0.6", None])
@@ -84,7 +98,7 @@ def test_invalid_values_neither_count_nor_create_a_measurement(caplog, value):
     callback, display = _callback()
     for step in range(1, 7):
         _log(callback, step, value)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     assert "Zero-spread groups" not in _render(display)
 
 
@@ -93,7 +107,7 @@ def test_summary_and_eval_logs_keep_the_last_measured_row_without_counting(caplo
     _log(callback, 1)
     for step in range(2, 9):
         _log(callback, step, extra={"eval_frac_reward_zero_std": .9, "eval_reward": 1.})
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     assert "Zero-spread groups: 60.0%" in _render(display)
 
 
@@ -101,7 +115,7 @@ def test_non_grpo_run_ignores_the_metric(caplog):
     callback, display = _callback("sft")
     for step in range(1, 8):
         _log(callback, step)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
     assert "Zero-spread groups" not in _render(display)
 
 
@@ -109,7 +123,7 @@ def test_only_world_rank_zero_warns(caplog):
     callback, _ = _callback()
     for step in range(1, 8):
         _log(callback, step, rank_zero=False)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
 
 
 def test_a_new_training_run_resets_the_warning_latch(caplog, monkeypatch):
@@ -120,7 +134,7 @@ def test_a_new_training_run_resets_the_warning_latch(caplog, monkeypatch):
         callback.on_train_begin(SimpleNamespace(), state, SimpleNamespace())
         for step in range(1, 6):
             _log(callback, step)
-    assert caplog.text.count("GRPO reward diversity is low") == 2
+    assert len(_callback_warnings(caplog)) == 2
 
 
 def test_invalid_reading_breaks_the_warning_streak(caplog):
@@ -129,7 +143,21 @@ def test_invalid_reading_breaks_the_warning_streak(caplog):
         _log(callback, step)
     _log(callback, 5, float("nan"))
     _log(callback, 6)
-    assert "reward diversity" not in caplog.text
+    assert not _callback_warnings(caplog)
+
+
+def test_invalid_reading_hides_the_row_until_next_valid_measurement(caplog):
+    callback, display = _callback()
+    _log(callback, 1)
+    assert "Zero-spread groups: 60.0%" in _render(display)
+    _log(callback, 2, float("nan"))
+    assert display.frac_reward_zero_std is None
+    assert "Zero-spread groups" not in _render(display)
+    _log(callback, 3, extra={"loss": 1.})
+    assert "Zero-spread groups" not in _render(display)
+    _log(callback, 4, .1)
+    assert "Zero-spread groups: 10.0%" in _render(display)
+    assert not _callback_warnings(caplog)
 
 
 def test_display_accepts_existing_config_stand_ins_without_task():

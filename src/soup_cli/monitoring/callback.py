@@ -12,7 +12,11 @@ if TYPE_CHECKING:
     from transformers import TrainerControl, TrainerState, TrainingArguments
 
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.monitoring.reward_collapse import RewardCollapseMonitor
+from soup_cli.monitoring.reward_collapse import (
+    ZERO_SPREAD_FRACTION_THRESHOLD,
+    ZERO_SPREAD_REQUIRED_STEPS,
+    RewardCollapseMonitor,
+)
 from soup_cli.monitoring.step_rate import StepRate
 
 logger = logging.getLogger(__name__)
@@ -380,9 +384,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         ):
             if self._reward_group_monitor.observe(step, logs["frac_reward_zero_std"]):
                 logger.warning(
-                    "GRPO reward diversity is low: more than 50% of groups had zero "
-                    "reward spread for five distinct logged steps. These groups have "
-                    "no group-relative advantage signal; inspect the rewards and prompts."
+                    "GRPO reward diversity is low: more than %.0f%% of groups had zero "
+                    "reward spread for %d distinct logged steps. These groups have "
+                    "no group-relative advantage signal; inspect the rewards and prompts.",
+                    ZERO_SPREAD_FRACTION_THRESHOLD * 100,
+                    ZERO_SPREAD_REQUIRED_STEPS,
                 )
             reward_metrics["frac_reward_zero_std"] = self._reward_group_monitor.fraction
 
