@@ -1711,7 +1711,7 @@ Usage: `soup deploy hf-space [OPTIONS]`
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | HuggingFace model repo id to wrap in the Space (e.g. user/my-model) |
 | `--space`, `-s` | text |  | yes | HuggingFace Space repo id to create (e.g. user/my-space) |
-| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat |
+| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat. Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer creates new Streamlit Spaces. Use gradio-chat. |
 | `--template-dir` | text |  |  | Custom template directory (overrides --template). Must contain app.py + README.md, optionally requirements.txt. Use {MODEL_REPO} placeholder for substitution. |
 | `--hardware` | text |  |  | Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g) |
 | `--private` | flag | off |  | Create the Space as private |
