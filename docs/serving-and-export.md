@@ -872,6 +872,28 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters
 
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
+#### Loading an adapter into a running server
+
+A continual-learning loop trains a fresh adapter while the server runs. `POST /v1/adapters/load` adds it to the running server without a restart, so it can then be activated or canaried. The route is off unless the server was started with `--adapter-dir`, the one directory adapters may be loaded from:
+
+```bash
+soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "$TOKEN"
+
+curl -X POST http://localhost:8000/v1/adapters/load \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "v2", "path": ".soup-loops/adapters/loop-train-1a2b3c4d"}'
+# → {"name": "v2", "status": "loaded"}
+```
+
+- **A token is required on every bind**, loopback included: a server started without `--tool-auth-token` answers 401 and names the flag. A server started without `--adapter-dir` answers 404, and only to a caller that sent the token.
+- **The path must be inside `--adapter-dir`.** A relative path is resolved against the server's working directory; a `..` or a symlink that leaves the directory is refused with 403. The directory must hold an `adapter_config.json` (400 otherwise). Adapters stored as pickle (`adapter_model.bin`) are refused: use safetensors.
+- **Loading does not activate.** The adapter shows up in `GET /v1/adapters`; select it with `POST /v1/adapters/activate/v2` or the `adapter` field of a request.
+- **Name rules:** the pattern above, at most 64 characters; a name that is already loaded (at startup or at runtime, or the `default` adapter of a `--model` that is itself an adapter) answers 409.
+- **At most 16 adapters** can be loaded this way per server process (adapters given with `--adapters` do not count); the 17th answers 409.
+- A load that fails answers 400 `adapter could not be loaded` (the cause goes to the server log) and leaves the server as it was.
+- **Transformers backend only.** `--adapter-dir` with `--backend vllm`, `sglang` or `mii`, or together with `--mole`, is refused at startup (exit 2); on a server started with `--bank` the route answers 409.
+
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
 Serve many per-user personas from one model at KB-per-user instead of a full LoRA each.
