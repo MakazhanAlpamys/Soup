@@ -1,0 +1,32 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "data": "dolly",
+  "stream": true,
+  "quant": "4bit",
+  "prefix_tree": false,
+  "batch_size": 1,
+  "max_length": 512,
+  "epochs": 1,
+  "lr": 0.0001,
+  "seed": 3,
+  "train_examples": 600,
+  "held_out_examples": 100,
+  "planned": {
+    "examples": 600,
+    "rows": 215,
+    "source_tokens": 98247,
+    "tree_tokens": 88875,
+    "ratio": 1.1054514767932488,
+    "examples_per_row": 2.7906976744186047
+  },
+  "optimizer_steps": 600,
+  "wall_seconds": 283.1091950000264,
+  "train_runtime": 270.3093,
+  "first_logged_loss": 1.955159068107605,
+  "last_logged_loss": 1.585150122642517,
+  "held_out_loss_before": 2.140000343322754,
+  "held_out_loss_after": 1.4805761575698853,
+  "peak_gb": 1.243996672,
+  "in_training_eval_seconds": 12.1,
+  "training_seconds": 258.2
+}

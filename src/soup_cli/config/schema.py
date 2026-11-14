@@ -4057,6 +4057,23 @@ class TrainingConfig(BaseModel):
             "(v0.37.0)."
         ),
     )
+    # Prefix-tree batches — tokens several examples share are computed once
+    prefix_tree: bool = Field(
+        default=False,
+        description=(
+            "Lay each training batch out as prefix trees: tokens that several "
+            "examples begin with (one system prompt, one tool schema, one "
+            "document) and that are not trained on are held once, with a 4D "
+            "ancestor attention mask and tree-depth position ids. The loss and "
+            "its gradient are those of the ordinary batch holding the same "
+            "examples; the step runs the trees' tokens instead of the sum of "
+            "the examples' lengths. A step is still at most batch_size rows of "
+            "data.max_length tokens. Needs untrained prompt tokens (e.g. "
+            "data.train_on_responses_only) to have anything to share. "
+            "task='sft' on the transformers backend; works with "
+            "stream_layers. Mutually exclusive with packing and multipack."
+        ),
+    )
     # NEFTune — noisy embeddings for better fine-tuning
     neftune_alpha: Optional[float] = Field(
         default=None,
@@ -4317,6 +4334,31 @@ class TrainingConfig(BaseModel):
                 "pick one (multipack uses FFD bin-packing; packing "
                 "uses TRL's basic packer). For most uses, multipack=true "
                 "is the better choice."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
+        """``prefix_tree`` decides which examples share a row, as packing and
+        multipack do; two of them at once have no defined result.
+
+        ``stream_loss_chunk`` is refused beside it until the chunked loss has
+        been checked on prefix-tree rows: it is correct by construction (a row
+        is still scored by the row shift), but not measured.
+        """
+        if not self.prefix_tree:
+            return self
+        others = [name for name in ("packing", "multipack") if getattr(self, name)]
+        if others:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with {' and '.join(others)}: "
+                "each of them decides which examples share a row. Keep one."
+            )
+        if self.stream_loss_chunk is not None:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.stream_loss_chunk "
+                "yet: the chunked loss has not been checked on prefix-tree rows. "
+                "Remove one of the two."
             )
         return self
 
@@ -6325,6 +6367,53 @@ class SoupConfig(BaseModel):
                 f"multipack=true is not supported for task={self.task!r} "
                 "in v0.37.0 (only sft and pretrain are wired). "
                 "Set multipack: false or switch task."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prefix_tree_supported(self) -> "SoupConfig":
+        """``training.prefix_tree`` is wired where its equality was checked:
+        text SFT through the HF trainer (resident or layer-streamed).
+
+        Every refusal names what to change: a switch that silently did nothing
+        would leave a run at its ordinary speed with no sign of why.
+        """
+        if not self.training.prefix_tree:
+            return self
+        from soup_cli.utils.prefix_tree_trainer import supports_prefix_tree
+
+        if self.backend == "mlx":
+            raise ValueError(
+                "training.prefix_tree is not supported on the mlx backend (it "
+                "replaces the HF Trainer's dataloader). Use backend='transformers' "
+                "or set prefix_tree: false."
+            )
+        if not supports_prefix_tree(self.task):
+            raise ValueError(
+                f"training.prefix_tree supports task='sft' only; got task={self.task!r}. "
+                "It shares tokens that are not trained on, and only the SFT path is "
+                "wired. Set prefix_tree: false or switch task."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.prefix_tree supports modality='text' only; got "
+                f"{self.modality!r} (its collator carries input_ids, labels and an "
+                "attention mask, nothing else). Set prefix_tree: false."
+            )
+        if self.data.format == "raft":
+            raise ValueError(
+                "training.prefix_tree cannot be combined with data.format='raft': RAFT "
+                "builds its own trainer and collator. Set prefix_tree: false."
+            )
+        if self.data.replay is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.replay (grouping "
+                "examples by their shared beginning breaks the replay ratio)"
+            )
+        if self.data.interleave is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.interleave (grouping "
+                "examples by their shared beginning breaks the per-source mixture ratio)"
             )
         return self
 

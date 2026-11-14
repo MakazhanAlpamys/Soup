@@ -1,0 +1,61 @@
+{
+  "model": "unsloth/mistral-7b-instruct-v0.3",
+  "data": "glaive-fixed",
+  "stream": true,
+  "quant": "4bit",
+  "max_length": 2048,
+  "device": "NVIDIA GeForce RTX 3050 Laptop GPU",
+  "torch": "2.14.1+cu130",
+  "timed_examples": 239,
+  "timed_groups": 6,
+  "planned": {
+    "examples": 600,
+    "rows": 15,
+    "source_tokens": 227027,
+    "tree_tokens": 30297,
+    "ratio": 7.493382183054428,
+    "examples_per_row": 40.0
+  },
+  "arms": {
+    "one": {
+      "seconds_per_pass": 637.3303616002668,
+      "examples_per_second": 0.37500174854356094,
+      "steps": 239,
+      "row_tokens": 89949,
+      "tokens_per_second": 141.13402627508268,
+      "peak_gb": 1.145993728,
+      "spread": 0.0032335854747205317
+    },
+    "tree": {
+      "seconds_per_pass": 63.432700800243765,
+      "examples_per_second": 3.767772725815918,
+      "steps": 6,
+      "row_tokens": 12131,
+      "tokens_per_second": 191.2420541291753,
+      "peak_gb": 1.944109056,
+      "spread": 0.011107923688827225
+    }
+  },
+  "worst_relative_loss_difference_batch_vs_tree": null,
+  "worst_relative_loss_difference_one_vs_batch": null,
+  "worst_relative_loss_difference_one_vs_tree": 0.0031621042514321683,
+  "losses_first_round": {
+    "one": [
+      2.7757252090973474,
+      2.8599728569040925,
+      2.4970619441626907,
+      3.0681752326526923,
+      2.7911506810325246,
+      2.8170861010485617
+    ],
+    "tree": [
+      2.7776403427124023,
+      2.8634774684906006,
+      2.504957914352417,
+      3.0704667568206787,
+      2.795381546020508,
+      2.82513427734375
+    ]
+  },
+  "system_in_user": true
+}

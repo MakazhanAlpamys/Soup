@@ -9,6 +9,7 @@
 - [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
 - [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
+- [Prefix-Tree Batches](#prefix-tree-batches)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
 - [LLaMA Pro Block Expansion](#llama-pro-block-expansion)
 - [Optimizer & PEFT Zoo](#optimizer--peft-zoo)
@@ -162,6 +163,82 @@ training:
 
 The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover non-standard `message.<field>` references (`tool_calls`, `name`, `weight`, `train`) — used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of fields beyond `role` / `content`. The analyzer parses templates without rendering them, so a crafted `soup.yaml` cannot trigger SSRF.
 
+
+## Prefix-Tree Batches
+
+When several training examples begin with the same tokens (one system prompt, one tool
+schema, one document asked about several times), an ordinary batch computes that beginning
+once per example. `prefix_tree` lays a batch out as trees instead: the shared beginning once,
+the continuations after it.
+
+```yaml
+training:
+  prefix_tree: true
+  batch_size: 1          # a step is still at most batch_size rows ...
+data:
+  max_length: 512        # ... of at most max_length tokens
+```
+
+**Why it is the same training signal.** In a causal model a token's state depends only on the
+tokens before it. Each row gets a 4D attention mask (a token attends to itself and its
+ancestors in the tree) and `position_ids` equal to the depth in the tree, so every token sees
+exactly the context it had in its own example. The loss and its gradient are those of the
+ordinary batch holding the same examples: logits bit-identical on CPU for Llama, Mistral and
+Qwen2, 1e-5 of the logit range in fp32 on a GPU. In bf16 the two layouts agree as closely as
+two ordinary layouts of the same examples agree with each other, which on some models is a
+few percent of the loss (`benchmarks/gate-prefix-tree.md`, section 4).
+
+**What is shared.** Only tokens that are not trained on, so a trained token is still counted
+once per example in the loss. With `data.train_on_responses_only` (the default) that is the
+prompt: system message, tool list, user turn. Sharing stops at an example's first trained
+token.
+
+**What it changes about a run.**
+
+- A step runs the trees' tokens instead of the sum of the examples' lengths, and holds as many
+  examples as fit. An epoch therefore has fewer, larger optimizer steps: the same data in less
+  time, and fewer updates. Compare runs by wall time or by examples seen, not by step count,
+  and expect to revisit the learning rate or the number of epochs.
+- Examples that share a long beginning (16 tokens or more beyond what the whole set shares)
+  are batched together; within and across such groups the order is random and seeded by
+  `training.seed`. The rows are planned once; each epoch draws a new grouping of rows into
+  batches.
+- Rows that share nothing still fill a row together (several short unrelated examples, each
+  isolated by the mask), so the option never runs more tokens than before.
+- Evaluation is untouched.
+
+**Checked before the first step.** The trainer runs two or three of your training examples
+through the model as an ordinary batch and as one prefix-tree row and compares the logits,
+against the model's own layout noise and against two deliberately wrong rows (a plain causal
+mask, positions left at the row index). A model that ignores `position_ids` or the 4D mask is
+refused with the measurement, instead of training on rows it does not compute faithfully.
+The console prints what the check measured and how many tokens an epoch now runs.
+
+**Works with layer streaming.** A step stays within `batch_size` x `max_length` tokens, so the
+streaming VRAM pre-flight holds and `prefix_tree` is allowed beside `stream_layers` (where
+`packing` and `multipack` are refused). A streamed step also pays a cost per sweep of the
+model, which a row of several examples pays once, so the gain is larger than the token count
+alone. Measured on an RTX 3050 Laptop 4 GB, streamed NF4, examples per second, one example per
+step against prefix-tree rows:
+
+| | tool calling, one 4-function schema | tool calling as published | plain instructions (dolly) |
+|---|---|---|---|
+| Mistral-7B, 512-token rows | 0.400 -> 1.404 (3.5x) | 0.479 -> 1.130 (2.4x) | 0.563 -> 1.235 (2.2x) |
+| Mistral-7B, 1024 / 2048-token rows | 3.109 (7.9x) / 3.768 (10.0x) | | |
+| Qwen2.5-0.5B, 512-token rows | 2.42 -> 10.72 (4.4x) | 2.63 -> 5.03 (1.9x) | 2.69 -> 7.34 (2.7x) |
+
+Peak VRAM stays near batch 1's (1.19 GB against 1.14 GB on the 7B model at 512 tokens), which
+is what leaves room for the longer rows. Loss on 100 held-out rows after about the same
+training time, ordinary against prefix tree: 0.1488 against 0.1340 (Mistral-7B, in 66 % of the
+time), 0.2556 against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806
+against 1.4848 (Qwen2.5-0.5B, dolly: no gain). One epoch of prefix-tree rows is 1.7x to 4.3x
+shorter and ends 0.02 to 0.10 higher in held-out loss at the same learning rate. One card, one
+seed, loss only; see `benchmarks/gate-prefix-tree.md`, including what is not explained.
+
+**Limits.** `task: sft`, `modality: text`, single process, not the mlx backend. Refused beside
+`packing`, `multipack`, `stream_loss_chunk`, `data.format: raft`, `data.replay` and
+`data.interleave`. A dataset must have a length (no `data.streaming`). The 4D mask keeps
+attention off its flash path.
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 

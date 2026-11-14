@@ -1,0 +1,16 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "data": "one-schema",
+  "stream": true,
+  "quant": "4bit",
+  "prefix_tree": true,
+  "batch_size": 1,
+  "epochs": 24,
+  "examples_per_epoch": 40,
+  "optimizer_steps": 96,
+  "wall_seconds": 53.20978039968759,
+  "train_runtime": 52.5576,
+  "first_loss": 2.02670955657959,
+  "last_loss": 0.158463254570961,
+  "peak_gb": 1.263587328
+}
