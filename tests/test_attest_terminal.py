@@ -21,8 +21,8 @@ from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
 
-CONTROLS = "\x9b‮"
-VALUES = ["plain", "x[red]n", "[/]n", "n:rocket:", "x\\[n", "x" + CONTROLS + "n"]
+CONTROLS = "\x9b\u202e"
+VALUES = ["plain", "x[red]n", "[/]n", "n:rocket:", "x\\[n", "x" + CONTROLS + "n", "x\x1b\x07n"]
 #: Values that can also be part of a file name on every CI platform.
 FILE_VALUES = [
     "plain",
@@ -37,9 +37,14 @@ FILE_VALUES = [
 SHA = "a" * 64
 SIGSTORE_FLAGS = ("--cert-identity", "me@example.com", "--cert-oidc-issuer", "https://issuer")
 
+#: What the display drops: C0 controls, a C1 CSI and a bidi override.
+DROPPED = ("\x1b", "\x07", "\x9b", "\u202e")
+
 
 def shown(value: str) -> str:
-    return value.replace(CONTROLS, "")
+    for char in DROPPED:
+        value = value.replace(char, "")
+    return value
 
 
 def plain(result) -> str:
@@ -141,6 +146,23 @@ def test_a_write_failure_is_shown_as_typed(monkeypatch, value):
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert f"Write failed: {shown(value)}" in plain(result)
+
+
+@pytest.mark.parametrize("value", VALUES)
+def test_without_output_the_signature_lines_are_shown_as_typed(monkeypatch, value):
+    """``emit`` with no ``-o`` prints the statement, then the backend and signature lines."""
+    monkeypatch.setattr(
+        attest_cmd,
+        "sign_attestation",
+        lambda *args, **kwargs: {"backend": value, "signature": value},
+    )
+
+    result = _emit()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"signature backend: {shown(value)}" in plain(result)
+    assert f"signature: {shown(value)}..." in plain(result)
+    assert '"_type": "https://in-toto.io/Statement/v1"' in result.output
 
 
 @pytest.mark.parametrize("value", FILE_VALUES)
@@ -307,7 +329,9 @@ def coloured(monkeypatch):
     monkeypatch.setattr(
         attest_cmd,
         "console",
-        Console(width=1000, height=100, force_terminal=True, color_system="standard"),
+        Console(
+            width=1000, height=100, force_terminal=True, color_system="standard", no_color=False
+        ),
     )
 
 
