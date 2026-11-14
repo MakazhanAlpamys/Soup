@@ -948,7 +948,8 @@ Use with `data.format: pre_tokenized` and `data.tokenized_path: ./.soup-tokenize
 
 ## Data Pipeline Pro
 
-Soup speaks the same dataset surface as Axolotl + LlamaFactory + Unsloth — remote URIs, streaming, sharding, multi-dataset interleaving, vocab expansion, and document ingestion all live in one schema.
+The data configuration covers remote URIs, streaming, multi-dataset interleaving,
+vocabulary expansion and document ingestion.
 
 **Remote datasets** are loaded through the matching fsspec backend:
 
@@ -957,13 +958,24 @@ data:
   train: s3://my-bucket/datasets/train.jsonl   # also gs:// gcs:// az:// abfs:// abfss:// oci://
   streaming: true
   buffer_size: 8192
-  shards: 4
 ```
 
-**HuggingFace Hub names** (a single `data.train` like `org/dataset`): `data.streaming: true`
-is forwarded to `datasets.load_dataset(..., streaming=True)` and `buffer_size` shuffles
-that stream, then Soup materialises up to 1M rows — the same shape as remote (#689).
-An all-hub *list* with `streaming: true` is still refused (#459). `buffer_size` shuffles the train split only; a capped validation split takes the first N rows unshuffled.
+| `data.train` | `streaming: true` | `buffer_size` | `shards` |
+|---|---|---|---|
+| Single local file | Refused | Refused | Refused |
+| Single Hugging Face Hub dataset name | Passed to HF datasets | Shuffles the streaming train split | Refused |
+| Single remote URI | Uses HF datasets when available | Shuffles on the HF streaming path | Refused |
+| List of local files or remote URIs with `data.interleave` | Uses HF datasets | Shuffles the combined stream | Refused |
+| List of Hub dataset names with `data.interleave` | Refused | Refused | Refused |
+
+Soup materialises up to one million rows on each streaming path and prints a warning
+when it reaches the cap. For a single Hub dataset, the validation split takes the first
+rows up to the cap in their original order. A remote URI falls back to reading JSONL
+with fsspec if HF datasets cannot stream it.
+
+In v0.78.0, remove `data.shards` and remove `data.streaming: true` and
+`data.buffer_size` for a single local file. A shard count alone cannot select the shard
+to keep.
 
 **Image and audio paths** in `llava` / `sharegpt4v` / `audio` / `asr` rows resolve the same
 way on every load path: a local file, a local or streaming interleave, a remote URI, a Hub
