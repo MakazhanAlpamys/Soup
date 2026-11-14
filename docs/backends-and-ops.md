@@ -1578,14 +1578,14 @@ A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
 `runs.final_loss`: when a trainer's summary says `loss_summary_kind: unavailable`
 (its numeric `initial_loss` / `final_loss` are a `0.0` placeholder), `soup train` and
 `soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
-`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged (`inf`) tail is
-kept, and a run-level `train_loss` mean on a run too short to log a step is stored as
+`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged `inf` tail is
+kept as logged, a NaN end stores NULL for both (SQLite cannot hold a NaN, and a half-NULL pair would contradict the kind below; the completion panel still prints it), and a run-level `train_loss` mean on a run too short to log a step is stored as
 before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
 below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
 with no loss cannot be the best run.
 
 Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
-omitted `loss` / `lr` NULL, and HF's final runtime-summary event (`train_runtime`, the
+omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; an infinity is kept), and HF's final runtime-summary event (`train_runtime`, the
 `train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
 no training row and pushes no live event, while the terminal panel keeps showing the last
 real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
@@ -1605,7 +1605,8 @@ before they existed; nothing is backfilled. Their values are module constants in
 - `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
   and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
   step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
-  `unavailable`: the run observed no loss and both columns are NULL. `soup train` and
+  `unavailable`: the run observed no loss (or only a NaN one) and both columns are NULL; a
+  pair is never stored with one NULL end. `soup train` and
   `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
   from the trainer's summary (`delta` and `single` are `per_step`).
 - `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the

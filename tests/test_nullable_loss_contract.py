@@ -32,6 +32,7 @@ so).
 from __future__ import annotations
 
 import ast
+import math
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,7 +47,11 @@ from soup_cli.commands.train import _format_training_complete_loss
 from soup_cli.experiment import row_kinds
 from soup_cli.experiment.tracker import ExperimentTracker
 from soup_cli.monitoring.callback import SoupTrainerCallback
-from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
+from soup_cli.trainer.loss_summary import (
+    stored_loss_summary_kind,
+    stored_run_losses,
+    summarize_training_loss,
+)
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -134,8 +139,108 @@ def test_stored_run_losses_never_fails_or_invents_for_a_result_without_numbers(r
     assert stored_run_losses(result) == (None, None)
 
 
-def test_stored_run_losses_judges_each_end_on_its_own():
-    assert stored_run_losses({"initial_loss": None, "final_loss": 0.5}) == (None, 0.5)
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"initial_loss": None, "final_loss": 0.5, "loss_summary_kind": "delta"},
+        {"initial_loss": 0.5, "final_loss": None, "loss_summary_kind": "delta"},
+        {"initial_loss": "x", "final_loss": 0.5},
+    ],
+)
+def test_stored_run_losses_keeps_a_pair_whole_or_not_at_all(result):
+    """``unavailable`` means both columns are NULL and ``per_step`` / ``mean`` mean both
+    hold a number: a row with one NULL end would match neither, so the pair is never
+    split."""
+    assert stored_run_losses(result) == (None, None)
+    assert stored_loss_summary_kind(result) == "unavailable"
+
+
+_NAN = float("nan")
+_INF = float("inf")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"initial_loss": 2.0, "final_loss": _NAN, "loss_summary_kind": "delta"},
+        {"initial_loss": _NAN, "final_loss": 1.0, "loss_summary_kind": "delta"},
+        {"initial_loss": _NAN, "final_loss": _NAN, "loss_summary_kind": "single"},
+        {"initial_loss": _NAN, "final_loss": _NAN, "loss_summary_kind": "mean"},
+        {"initial_loss": 2.0, "final_loss": _NAN},
+    ],
+)
+def test_a_nan_loss_is_no_stored_value_and_the_kind_says_unavailable(result, tracker):
+    """SQLite stores a NaN as NULL, so a NaN end used to leave ``final_loss`` NULL beside
+    ``loss_summary_kind = per_step``: a row that contradicted the contract (unavailable =
+    both NULL). The NaN is now refused at the boundary and the kind follows."""
+    assert stored_run_losses(result) == (None, None)
+    assert stored_loss_summary_kind(result) == "unavailable"
+    run_id = _start(tracker)
+    initial, final = stored_run_losses(result)
+    tracker.finish_run(
+        run_id, initial, final, 3, 1.0, "./out",
+        loss_summary_kind=stored_loss_summary_kind(result),
+    )
+    run = tracker.get_run(run_id)
+    assert (run["initial_loss"], run["final_loss"], run["loss_summary_kind"]) == (
+        None, None, "unavailable",
+    )
+
+
+@pytest.mark.parametrize("infinity", [_INF, -_INF])
+def test_an_infinite_loss_is_kept_as_logged_and_the_kind_stays_per_step(infinity, tracker):
+    """Unlike NaN, SQLite holds an infinity, and the readers already present it (``soup
+    runs`` prints it, the UI sends null, ``soup why`` names it; #2750): a diverged run is
+    a result, and both columns are set, so ``per_step`` is true."""
+    result = {"initial_loss": 2.0, "final_loss": infinity, "loss_summary_kind": "delta"}
+    assert stored_run_losses(result) == (2.0, infinity)
+    assert stored_loss_summary_kind(result) == "per_step"
+    run_id = _start(tracker)
+    tracker.finish_run(
+        run_id, *stored_run_losses(result), 3, 1.0, "./out",
+        loss_summary_kind=stored_loss_summary_kind(result),
+    )
+    run = tracker.get_run(run_id)
+    assert (run["initial_loss"], run["final_loss"], run["loss_summary_kind"]) == (
+        2.0, infinity, "per_step",
+    )
+
+
+def test_a_run_whose_last_logged_loss_is_nan_stores_no_loss_pair(tracker):
+    """The whole chain: the trainer's own numbers keep the NaN (sweep ranking and the
+    panel read them), the ``runs`` row does not."""
+    result = summarize_training_loss([{"loss": 2.0}, {"loss": 1.5}, {"loss": _NAN}])
+    assert result["initial_loss"] == 2.0 and math.isnan(result["final_loss"])
+    assert result["loss_summary_kind"] == "delta"
+    assert stored_run_losses(result) == (None, None)
+    assert stored_loss_summary_kind(result) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"initial_loss": 2.0, "final_loss": 1.0, "loss_summary_kind": "delta"},
+        {"initial_loss": 1.0, "final_loss": 1.0, "loss_summary_kind": "single"},
+        {"initial_loss": 3.8, "final_loss": 3.8, "loss_summary_kind": "mean"},
+        {"initial_loss": 0.0, "final_loss": 0.0, "loss_summary_kind": "unavailable"},
+        {"initial_loss": 2.0, "final_loss": _INF, "loss_summary_kind": "delta"},
+        {"initial_loss": 2.0, "final_loss": _NAN, "loss_summary_kind": "delta"},
+        {"initial_loss": None, "final_loss": 0.5, "loss_summary_kind": "delta"},
+        {"initial_loss": 2.0, "final_loss": 1.0},
+        {"initial_loss": 2.0, "final_loss": 1.0, "loss_summary_kind": "bogus"},
+        {},
+    ],
+)
+def test_the_stored_pair_always_matches_its_kind(result):
+    initial, final = stored_run_losses(result)
+    kind = stored_loss_summary_kind(result)
+    assert (initial is None) == (final is None), "a pair is never stored split"
+    if kind == "unavailable":
+        assert (initial, final) == (None, None)
+    if kind in ("per_step", "mean"):
+        assert initial is not None and final is not None
+    if initial is not None:
+        assert not math.isnan(initial) and not math.isnan(final)
 
 
 def test_stored_run_losses_keeps_a_numpy_scalar_a_trainer_left_in_its_result():
@@ -208,8 +313,7 @@ def test_metric_rows_have_increasing_positive_integer_ids_even_at_one_step(track
 # ---------------------------------------------------------------------------
 
 
-def _finish_run_calls(path: Path) -> list[ast.Call]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+def _finish_run_calls(tree: ast.Module) -> list[ast.Call]:
     return [
         node for node in ast.walk(tree)
         if isinstance(node, ast.Call)
@@ -217,30 +321,81 @@ def _finish_run_calls(path: Path) -> list[ast.Call]:
     ]
 
 
+def _enclosing_function(tree: ast.Module, node: ast.AST) -> ast.AST:
+    parents = {
+        child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+    }
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current
+    return tree
+
+
+def _is_call_of(node: ast.AST, function: str, argument: str) -> bool:
+    """``function(argument)``: one positional Name argument, no keywords."""
+    return (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == function and len(node.args) == 1 and not node.keywords
+        and isinstance(node.args[0], ast.Name) and node.args[0].id == argument
+    )
+
+
+def _bindings_of(scope: ast.AST, name: str) -> list[ast.Name]:
+    return [
+        node for node in ast.walk(scope)
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Store)
+    ]
+
+
+def _tuple_unpacks_stored_run_losses(tree: ast.Module, call: ast.Call, name: str, index: int):
+    """True when ``name`` is bound exactly once in the function around ``call``, and that
+    binding is position ``index`` of ``a, b = stored_run_losses(result)``."""
+    scope = _enclosing_function(tree, call)
+    stores = _bindings_of(scope, name)
+    if len(stores) != 1:
+        return False
+    for node in ast.walk(scope):
+        if (
+            isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+            and len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)
+            and len(node.targets[0].elts) == 2 and node.targets[0].elts[index] is stores[0]
+        ):
+            return _is_call_of(node.value, "stored_run_losses", "result")
+    return False
+
+
 @pytest.mark.parametrize("relative", ["commands/train.py", "commands/sweep.py"])
-def test_finish_run_callers_do_not_index_the_result_for_the_loss(relative):
+def test_finish_run_callers_persist_what_stored_run_losses_returns(relative):
     """``result["initial_loss"]`` raised KeyError on a short result and stored the
-    trainer's 0.0 placeholder; both callers go through ``stored_run_losses``."""
-    calls = _finish_run_calls(SRC / relative)
+    trainer's 0.0 placeholder; ``result.get("final_loss", 0.0)`` would store it again.
+    Both callers pass the two losses from ``stored_run_losses(result)`` and the kind from
+    ``stored_loss_summary_kind(result)``, by value and not merely by keyword name."""
+    path = SRC / relative
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls = _finish_run_calls(tree)
     assert calls, f"{relative} no longer calls finish_run: update this guard"
     for call in calls:
-        for keyword in call.keywords:
-            if keyword.arg not in {"initial_loss", "final_loss"}:
-                continue
-            offenders = [
-                node for node in ast.walk(keyword.value)
-                if isinstance(node, ast.Subscript)
-                and isinstance(node.value, ast.Name) and node.value.id == "result"
-            ]
-            assert not offenders, (
-                f"{relative}:{call.lineno} passes {keyword.arg}=result[...] to finish_run; "
-                "use stored_run_losses(result)"
+        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+        for index, name in enumerate(("initial_loss", "final_loss")):
+            assert name in keywords, f"{relative}:{call.lineno} must pass {name} to finish_run"
+            value = keywords[name]
+            assert not any(
+                isinstance(node, ast.Name) and node.id == "result" for node in ast.walk(value)
+            ), f"{relative}:{call.lineno} reads result for {name}; use stored_run_losses(result)"
+            assert isinstance(value, ast.Name) and value.id == name, (
+                f"{relative}:{call.lineno} must pass {name}={name} (bound from "
+                f"stored_run_losses), got {ast.unparse(value)}"
             )
-    source = (SRC / relative).read_text(encoding="utf-8")
-    assert "stored_run_losses" in source, f"{relative} must use stored_run_losses"
-    for call in calls:
-        assert "loss_summary_kind" in {keyword.arg for keyword in call.keywords}, (
-            f"{relative}:{call.lineno} must pass loss_summary_kind to finish_run"
+            assert _tuple_unpacks_stored_run_losses(tree, call, name, index), (
+                f"{relative}:{call.lineno}: {name} must be bound exactly once, as "
+                "`initial_loss, final_loss = stored_run_losses(result)`"
+            )
+        kind = keywords.get("loss_summary_kind")
+        assert kind is not None and _is_call_of(kind, "stored_loss_summary_kind", "result"), (
+            f"{relative}:{call.lineno} must pass loss_summary_kind=stored_loss_summary_kind"
+            f"(result), got {ast.unparse(kind) if kind is not None else 'nothing'}"
         )
 
 
@@ -317,6 +472,16 @@ def test_sweep_persists_the_stored_losses(trainer_result, expected, kind):
 )
 def test_completion_panel_says_unavailable_instead_of_raising(result):
     assert _format_training_complete_loss(result) == "Loss: [bold]unavailable[/]"
+
+
+def test_completion_panel_still_shows_a_diverged_tail():
+    """Only the stored row drops a NaN; the panel keeps telling the user the run diverged."""
+    assert _format_training_complete_loss(
+        {"initial_loss": 2.0, "final_loss": _NAN, "loss_summary_kind": "delta"}
+    ) == "Loss: [bold]2.0000 -> nan[/]"
+    assert _format_training_complete_loss(
+        {"initial_loss": 2.0, "final_loss": _INF, "loss_summary_kind": "delta"}
+    ) == "Loss: [bold]2.0000 -> inf[/]"
 
 
 def test_completion_panel_still_formats_real_values():
@@ -750,11 +915,18 @@ def test_the_callback_marks_training_rows_train_and_evaluation_rows_eval(session
     assert (rows[1]["val_loss"], rows[1]["loss"], rows[1]["lr"]) == (2.5, 3.0, 1e-4)
 
 
-def test_the_callback_writes_no_summary_row_so_summary_is_never_written_by_it(session):
+def test_a_final_runtime_summary_adds_a_summary_row_only_when_it_carries_throughput(session):
+    """The callback is the one writer of ``kind = "summary"`` (#2810): a summary without
+    throughput measured nothing and adds no row; one with throughput adds a row that
+    carries that speed and no loss."""
     callback, tracker, run_id, _ = session
     _event(callback, 10, loss=3.0, learning_rate=1e-4)
     _event(callback, 10, train_runtime=3.38, train_loss=3.828)
     assert [row["kind"] for row in tracker.get_metrics(run_id)] == ["train"]
+    _event(callback, 10, train_runtime=3.38, train_loss=3.828, train_steps_per_second=6.5)
+    rows = sorted(tracker.get_metrics(run_id), key=lambda row: row["id"])
+    assert [row["kind"] for row in rows] == ["train", "summary"]
+    assert (rows[1]["speed"], rows[1]["loss"], rows[1]["lr"]) == (6.5, None, None)
 
 
 def test_the_live_event_carries_the_row_kind(session):
@@ -776,6 +948,111 @@ def test_a_train_event_without_a_kind_omits_it_and_a_bad_kind_is_refused():
     assert to_payload(TrainEvent(type="metric", step=1, kind="summary"))["kind"] == "summary"
     with pytest.raises(ValueError, match="kind must be one of train, eval, summary"):
         TrainEvent(type="metric", step=1, kind="val")
+
+
+# What each in-repo writer of metrics rows passes for ``kind=``, in source order. A writer
+# that swaps ``train`` and ``eval`` changes this table, so its author has to change a test.
+# MLX SFT and MLX DPO are also driven below; PPO needs a trl trainer and cannot be.
+_WRITER_KINDS = {
+    "monitoring/callback.py": ["summary", "<row_kind>"],
+    "trainer/mlx_dpo.py": ["metric_row_kind(val_loss=val_loss)"],
+    "trainer/mlx_grpo.py": ["eval"],
+    "trainer/mlx_sft.py": ["eval", "train"],
+    "trainer/ppo.py": ["train"],
+}
+
+
+def _describe_kind(value: ast.expr, imported: set[str]) -> str:
+    """A ``kind=`` value as a string: a literal as itself, a ``row_kinds`` constant as its
+    value (and only when the file imports it from ``row_kinds``), a call or another name
+    as its source."""
+    if isinstance(value, ast.Constant):
+        return str(value.value)
+    if isinstance(value, ast.Name):
+        constant = getattr(row_kinds, value.id, None)
+        if value.id.startswith("ROW_KIND_") and isinstance(constant, str):
+            assert value.id in imported, f"{value.id} is not imported from row_kinds"
+            return constant
+        return f"<{value.id}>"
+    return ast.unparse(value)
+
+
+def _writer_kinds() -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            alias.name for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "soup_cli.experiment.row_kinds"
+            for alias in node.names
+        }
+        calls = sorted(
+            (node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "log_metrics"),
+            key=lambda node: node.lineno,
+        )
+        for call in calls:
+            kinds = {keyword.arg: keyword.value for keyword in call.keywords}
+            found.setdefault(path.relative_to(SRC).as_posix(), []).append(
+                _describe_kind(kinds["kind"], imported) if "kind" in kinds else "<missing>"
+            )
+    return found
+
+
+def test_each_in_repo_metric_row_writer_passes_the_kind_it_is_documented_to():
+    assert _writer_kinds() == _WRITER_KINDS
+
+
+class _KindTracker:
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    def log_metrics(self, **kwargs):
+        self.rows.append(kwargs)
+
+
+def test_mlx_sft_writes_train_rows_for_training_reports_and_eval_rows_for_validation(
+    monkeypatch, tmp_path,
+):
+    from tests.test_issue23_mlx_val_loss_producer import (
+        _TRAIN_1,
+        _TRAIN_2,
+        _VAL_1,
+        _RecordingDisplay,
+        _run,
+    )
+
+    tracker = _KindTracker()
+    # A training row is written only beside a display (the panel guard returns first).
+    _run(
+        monkeypatch, tmp_path, tracker=tracker, display=_RecordingDisplay(),
+        sequence=[("train", _TRAIN_1), ("val", _VAL_1), ("train", _TRAIN_2)],
+    )
+    assert [row["kind"] for row in tracker.rows] == ["train", "eval", "train"]
+    # The eval row is the one that carries the validation number.
+    assert [row["kind"] for row in tracker.rows if row.get("val_loss") is not None] == ["eval"]
+    assert [row["kind"] for row in tracker.rows if row.get("val_loss") is None] == [
+        "train", "train",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("val", "kind"),
+    [(None, "train"), ({"val_loss": 1.5}, "eval"), ({"val_loss": 0.0}, "eval")],
+)
+def test_mlx_dpo_marks_a_row_eval_exactly_when_it_carries_a_validation_loss(val, kind):
+    from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+    from soup_cli.utils.train_event_buffer import reset_global_buffer
+
+    tracker = _KindTracker()
+    reset_global_buffer()
+    MLXDPOTrainerWrapper._report(
+        SimpleNamespace(), MagicMock(), tracker, "run-kind", step=5, epoch=1.0, loss=0.7,
+        lr=1e-5, speed=2.0, metrics={}, val=val,
+    )
+    reset_global_buffer()
+    assert [row["kind"] for row in tracker.rows] == [kind]
 
 
 def test_every_in_repo_metric_row_writer_states_its_kind():

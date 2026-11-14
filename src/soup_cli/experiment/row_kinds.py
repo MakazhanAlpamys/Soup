@@ -12,7 +12,10 @@ row states its kind; the strings below are the contract, and are pinned by
                   one step, when the run logged a single step);
 * ``mean``        a run too short to log a step: both columns hold the run-level
                   ``train_loss`` mean, which is not a per-step loss (#908);
-* ``unavailable`` the run observed no loss; both columns are NULL.
+* ``unavailable`` the run observed no loss, or only a NaN one (SQLite cannot hold a NaN, so
+                  it is refused rather than left as a NULL end beside ``per_step``); both
+                  columns are NULL. A pair is never stored with one NULL end. An infinite
+                  loss is kept as logged and is ``per_step``.
 
 ``metrics.kind`` -- what a ``metrics`` row (and the live ``metric`` event that mirrors it)
 is:

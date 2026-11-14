@@ -25,7 +25,11 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
-from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
+from soup_cli.trainer.loss_summary import (
+    measured_run_losses,
+    stored_loss_summary_kind,
+    stored_run_losses,
+)
 from soup_cli.utils.gpu import (
     apply_quantization_guard,
     configure_cuda_alloc_hint,
@@ -129,9 +133,10 @@ def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
     # Neither the kind-"unavailable" placeholder nor a result without numbers (a
-    # missing key, None) is a loss to print: say so instead of formatting None.
-    stored_initial, stored_final = stored_run_losses(result)
-    if stored_initial is None or stored_final is None:
+    # missing key, None) is a loss to print: say so instead of formatting None. A NaN
+    # tail is printed (a diverged run says so); only the stored row has no NaN.
+    measured_initial, measured_final = measured_run_losses(result)
+    if measured_initial is None or measured_final is None:
         return "Loss: [bold]unavailable[/]"
     loss_key = result.get("loss_key")
     label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
