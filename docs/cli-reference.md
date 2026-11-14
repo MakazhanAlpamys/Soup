@@ -2713,6 +2713,7 @@ Subcommands:
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
 - [`rollback`](#soup-loop-rollback)
+- [`set`](#soup-loop-set)
 - [`status`](#soup-loop-status)
 - [`watch`](#soup-loop-watch)
 
@@ -2801,6 +2802,17 @@ Return to the version that was production before the last promotion.
 Usage: `soup loop rollback`
 
 Takes no options or arguments.
+
+### `soup loop set`
+
+Change ONE setting of an existing loop: base_model, trace_dir or verify.
+
+Usage: `soup loop set KEY VALUE`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `KEY` | text |  | yes | base_model, trace_dir or verify. |
+| `VALUE` | text |  | yes | The new value. |
 
 ### `soup loop status`
 
