@@ -60,6 +60,7 @@ from soup_cli.utils.ship_loop_gate import (
     decide_loop_gate,
     gate_lines,
     gate_reason,
+    held_out_note,
 )
 from soup_cli.utils.terminal import strip_control as for_terminal
 
@@ -587,9 +588,16 @@ def _failed_rule_explanation(verdict: ShipVerdict) -> str:
         # The task win does not decide under the gate, so "even though the task improved" and
         # "task did not improve" would both be wrong here.
         if verdict.failed_rule is None:
+            note = held_out_note(verdict.loop_gate.held_out)
+            if verdict.loop_gate.held_out.outcome == "not_measured":
+                return (
+                    f"Corrections learned and no general benchmark regressed past "
+                    f"{verdict.forgetting_threshold:.2%}; the {note}."
+                )
             return (
                 "Corrections learned, no held-out edit significantly worse, and no general "
                 f"benchmark regressed past {verdict.forgetting_threshold:.2%}."
+                + (f" Note: {note}." if note else "")
             )
         reason = gate_reason(verdict.failed_rule, verdict.loop_gate)
         if reason is not None:
@@ -1106,6 +1114,8 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
         data["corrections"] = verdict.loop_gate.corrections.to_dict()
         data["held_out"] = verdict.loop_gate.held_out.to_dict()
         data["canary_decides"] = verdict.loop_gate.canary_decides
+        # In words, so a SHIP is never read as "the held-out edits passed" (None = checked).
+        data["held_out_note"] = held_out_note(verdict.loop_gate.held_out)
         data["reason"] = (
             None if verdict.decision == DECISION_SHIP else _failed_rule_explanation(verdict)
         )

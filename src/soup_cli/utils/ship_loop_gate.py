@@ -71,6 +71,8 @@ about any some such own same each all both
 
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE | re.ASCII)
+_THINK_OPEN = re.compile(r"<think>", re.IGNORECASE | re.ASCII)
 
 
 def scoring() -> Dict[str, object]:
@@ -86,12 +88,14 @@ def strip_think(text: Optional[str]) -> str:
     precedes it is.
     """
     text = _THINK_BLOCK.sub("", text or "")
-    lowered = text.lower()
-    if "</think>" in lowered:
-        text = text[lowered.rindex("</think>") + len("</think>"):]
-    lowered = text.lower()
-    if "<think>" in lowered:
-        text = text[:lowered.index("<think>")]
+    # Offsets are taken on ``text`` itself: lower-casing first would move them (U+0130 lower-cases
+    # to two code points) and cut the answer one character off.
+    closes = list(_THINK_CLOSE.finditer(text))
+    if closes:
+        text = text[closes[-1].end():]
+    opening = _THINK_OPEN.search(text)
+    if opening is not None:
+        text = text[: opening.start()]
     return text.strip()
 
 
@@ -567,6 +571,26 @@ def gate_reason(failed_rule: Optional[str], loop_gate: LoopGate) -> Optional[str
     return None
 
 
+def held_out_note(check: HeldOutCheck) -> Optional[str]:
+    """In words: the held-out check did not run (or ran on few edits), or ``None`` if it did.
+
+    The check can only fail on a handful of discordant edits, and the held-out set is a share of
+    one iteration's new prompts, so it is often below ``MIN_HELD_OUT`` edits. A SHIP then says
+    nothing about the held-out edits and must not be read as "held-out passed".
+    """
+    if check.outcome == "not_measured":
+        return (
+            f"held-out edits not checked: {check.n} of {MIN_HELD_OUT} needed; this verdict "
+            "says nothing about them"
+        )
+    if check.outcome == "weak":
+        return (
+            f"held-out edits checked on few edits ({check.n}; {WEAK_BELOW} for a firm check): "
+            "weak evidence"
+        )
+    return None
+
+
 def gate_lines(loop_gate: LoopGate) -> List[str]:
     """The gate's measurements as plain lines, for the panel and the rubric."""
     corrections, held_out = loop_gate.corrections, loop_gate.held_out
@@ -579,6 +603,9 @@ def gate_lines(loop_gate: LoopGate) -> List[str]:
         + (f" (p={_p(held_out.p_value)})" if held_out.p_value is not None else "")
         + f" - {held_out.outcome}",
     ]
+    note = held_out_note(held_out)
+    if note is not None:
+        lines.append(f"  Note: {note}")
     if held_out.style is not None:
         style = held_out.style
         lines.append(

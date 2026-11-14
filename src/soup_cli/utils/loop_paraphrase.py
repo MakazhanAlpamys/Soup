@@ -109,6 +109,8 @@ about any some such own same each all both
 
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE | re.ASCII)
+_THINK_OPEN = re.compile(r"<think>", re.IGNORECASE | re.ASCII)
 
 
 def strip_think(text: str) -> str:
@@ -116,12 +118,14 @@ def strip_think(text: str) -> str:
     the opening was in the chat template, so what follows is the answer; an unclosed
     ``<think>`` is a thought cut off, so what precedes it is."""
     text = _THINK_BLOCK.sub("", text or "")
-    lowered = text.lower()
-    if "</think>" in lowered:
-        text = text[lowered.rindex("</think>") + len("</think>"):]
-    lowered = text.lower()
-    if "<think>" in lowered:
-        text = text[: lowered.index("<think>")]
+    # Offsets are taken on ``text`` itself: lower-casing first would move them (U+0130 lower-cases
+    # to two code points) and cut the answer one character off.
+    closes = list(_THINK_CLOSE.finditer(text))
+    if closes:
+        text = text[closes[-1].end():]
+    opening = _THINK_OPEN.search(text)
+    if opening is not None:
+        text = text[: opening.start()]
     return text.strip()
 
 

@@ -224,9 +224,13 @@ class BucketStats:
             stable_total = self.stable_ok + self.stable_major
             if canary_total < min_samples:
                 return "UNKNOWN"
-            stable_rate = (self.stable_ok / stable_total) if stable_total > 0 else 1.0
-            canary_rate = self.canary_ok / canary_total
-            if stable_rate - canary_rate > regression_threshold:
+            # Exact fractions: a canary exactly ``regression_threshold`` below stable is OK
+            # (1.0 - 38/40 is 0.05000000000000004 in floats, which is MAJOR at "5 points").
+            stable_rate = (
+                Fraction(self.stable_ok, stable_total) if stable_total > 0 else Fraction(1)
+            )
+            canary_rate = Fraction(self.canary_ok, canary_total)
+            if stable_rate - canary_rate > Fraction(str(regression_threshold)):
                 return "MAJOR"
             return "OK"
 

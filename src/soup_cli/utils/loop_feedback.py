@@ -61,6 +61,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Collection, Iterator, Mapping, Optional
@@ -176,6 +177,16 @@ def _is_int(value: object) -> bool:
     return type(value) is int  # a bool is not a number here
 
 
+def _whole_number(value: object) -> Optional[int]:
+    """``value`` as an int when it is ``3`` or ``3.0`` (JSON Schema counts both as the integer
+    3), else ``None``; a bool is not a number here."""
+    if _is_int(value):
+        return value  # type: ignore[return-value]
+    if type(value) is float and value.is_integer():
+        return int(value)
+    return None
+
+
 def _warn_future_ts(stats: LogStats, what: str) -> None:
     if stats.future_ts:
         logger.warning(
@@ -241,9 +252,10 @@ def _read_value(obj: dict, kind: str) -> "tuple[bool, object]":
     value = obj["value"]
     if value is None:
         return True, None
+    value = _whole_number(value)  # 4.0 is the integer 4 (serve accepts and stores it as 4)
     if kind == "thumb":
-        return (True, value) if _is_int(value) and value in (1, -1) else (False, None)
-    return (True, value) if _is_int(value) and 1 <= value <= 5 else (False, None)
+        return (True, value) if value in (1, -1) else (False, None)
+    return (True, value) if value is not None and 1 <= value <= 5 else (False, None)
 
 
 def read_feedback(path: Optional[str]) -> FeedbackLog:
@@ -359,15 +371,35 @@ def _conversation(obj: dict) -> Optional[Conversation]:
     )
 
 
+_ROTATED_RE = re.compile(r"^(?P<base>.+\.jsonl)(?:\.(?P<n>[0-9]{1,6}))?$", re.ASCII)
+
+
 def conversation_files(directory: Optional[str]) -> "list[str]":
-    """The ``*.jsonl`` files of ``directory`` in name order (what ``parse_soup_serve`` reads)."""
+    """The conversation logs of ``directory``: ``*.jsonl`` and the files serve rotated away.
+
+    ``soup serve --trace-log`` renames a full ``serve.jsonl`` to ``serve.jsonl.<n>``. Per log,
+    the rotated files come first, the highest ``n`` (the oldest) first, then the live file;
+    logs are in name order (what ``parse_soup_serve`` reads, plus the rotated files).
+    """
     if not directory or not os.path.isdir(directory):
         return []
     try:
-        names = sorted(name for name in os.listdir(directory) if name.endswith(".jsonl"))
+        names = os.listdir(directory)
     except OSError:
         return []
-    paths = [os.path.join(directory, name) for name in names]
+    logs: "dict[str, list[tuple[int, str]]]" = {}
+    for name in names:
+        match = _ROTATED_RE.match(name)
+        if match is None:
+            continue
+        # the live file sorts last: rotated files count down from their number to 0
+        number = int(match.group("n")) if match.group("n") is not None else -1
+        logs.setdefault(match.group("base"), []).append((number, name))
+    paths = [
+        os.path.join(directory, name)
+        for base in sorted(logs)
+        for _number, name in sorted(logs[base], key=lambda item: -item[0])
+    ]
     return [path for path in paths if os.path.isfile(path)]
 
 
