@@ -445,6 +445,8 @@ soup can run ./llama31-chat.can --yes --deploy --env-capture ./env.txt
 soup can publish ./llama31-chat.can --hf-hub me/llama31-chat-recipe
 ```
 
+**Credentials** — `soup can pack` and `soup can fork` replace credentials in the config and the description with `<redacted>` before the can is written (the same rules as crash bundles: URL userinfo and sensitive query parameters, token shapes, values under credential-named keys) and print the key paths that were changed, never the values. A can packed from a config that carried one therefore holds `<redacted>` in its place.
+
 **Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version supports `1` and `2` (additive bump in v0.33.0 added `deploy_targets`). `soup can run` requires `--yes` (mandatory consent — auto-downloads data + auto-trains). `soup can publish` validates `repo_id` and resolves the HF token via env / cache files; commit messages are first-line + 200-char capped.
 
 
