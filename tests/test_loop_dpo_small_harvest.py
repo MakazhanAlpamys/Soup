@@ -31,6 +31,8 @@ def cwd(tmp_path, monkeypatch):
 def _state(**kwargs):
     from soup_cli.utils.loop_state import LoopState
 
+    # A registry:// served model needs a known base to reach training.
+    kwargs.setdefault("base_model", "hf-internal-testing/tiny-random-gpt2")
     return LoopState(served_model="registry://dummy", eval_suite="e", baseline="b", **kwargs)
 
 

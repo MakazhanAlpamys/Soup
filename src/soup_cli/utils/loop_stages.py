@@ -226,15 +226,104 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
 # ---------------------------------------------------------------------------
 
 
+_REGISTRY_SCHEME = "registry://"
+# What `pack_iteration_as_can` records when it does not know the base.
+_UNKNOWN_BASE = "unknown"
+_BASE_HINT = "pass soup loop init --base-model <model> to name the model to train"
+_MAX_ADAPTER_CONFIG_BYTES = 1024 * 1024
+
+
+def _adapter_dir_base(served_model: str) -> Optional[str]:
+    """``base_model_name_or_path`` of a local LoRA adapter directory.
+
+    ``None`` when ``served_model`` is not a directory holding an
+    ``adapter_config.json``. Raises ``ValueError`` when it is one but names no
+    readable base: training from the adapter directory itself would start
+    from the wrong model or fail deep inside model loading.
+    """
+    config_path = os.path.join(served_model, "adapter_config.json")
+    if not os.path.isfile(config_path):
+        return None
+    problem = f"{served_model}: its adapter_config.json"
+    try:
+        if os.path.getsize(config_path) > _MAX_ADAPTER_CONFIG_BYTES:
+            raise ValueError(f"{problem} exceeds 1 MiB; {_BASE_HINT}")
+        with open(config_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"{problem} could not be read ({type(exc).__name__}); {_BASE_HINT}"
+        ) from exc
+    base = data.get("base_model_name_or_path") if isinstance(data, dict) else None
+    if not isinstance(base, str) or not base.strip():
+        raise ValueError(f"{problem} names no base_model_name_or_path; {_BASE_HINT}")
+    return base
+
+
+def resolve_base_model_source(
+    served_model: str, base_model: Optional[str] = None
+) -> Tuple[str, str]:
+    """Return ``(base model, where it came from)``; see ``resolve_base_model``."""
+    if base_model:
+        return base_model, "--base-model"
+    if not served_model.startswith(_REGISTRY_SCHEME):
+        adapter_base = _adapter_dir_base(served_model)
+        if adapter_base is not None:
+            return adapter_base, f"adapter_config.json in {served_model}"
+        return served_model, "the served model"
+    ref = served_model[len(_REGISTRY_SCHEME):]
+    hint = _BASE_HINT
+    from soup_cli.registry.store import RegistryStore, _default_db_path
+
+    # Checked before RegistryStore(), whose constructor creates the database.
+    db_path = _default_db_path()
+    if not db_path.is_file():
+        raise ValueError(
+            f"{served_model}: no registry database at {quote_path(str(db_path))} to look "
+            f"the base model up in; {hint}"
+        )
+    try:
+        with RegistryStore(db_path) as store:
+            entry_id = store.resolve(ref)
+            entry = store.get(entry_id) if entry_id else None
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        raise ValueError(
+            f"{served_model}: the registry could not be read ({type(exc).__name__}: {exc}); {hint}"
+        ) from exc
+    if entry is None:
+        raise ValueError(
+            f"{served_model}: no registry entry matches {ref!r} (soup registry list shows them); "
+            f"{hint}"
+        )
+    base = entry.get("base_model")
+    if not isinstance(base, str) or not base.strip() or base == _UNKNOWN_BASE:
+        raise ValueError(f"{served_model}: registry entry {entry_id} records no base model; {hint}")
+    return base, f"registry entry {entry_id}"
+
+
+def resolve_base_model(served_model: str, base_model: Optional[str] = None) -> str:
+    """Return the model the pre-wired train stage starts from.
+
+    ``base_model`` (``soup loop init --base-model`` / ``loop.yaml``) wins. A
+    ``registry://<ref>`` served model resolves to its registry entry's
+    ``base_model``; a local LoRA adapter directory to the
+    ``base_model_name_or_path`` of its ``adapter_config.json``; any other
+    served model is trained from itself. Raises ``ValueError`` naming why the
+    base is unknown: the stage never falls back to a stand-in model, which
+    used to be the tiny random test model.
+    """
+    return resolve_base_model_source(served_model, base_model)[0]
+
+
 def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
-    """Render a minimal DPO ``soup.yaml`` referencing the harvested pairs."""
+    """Render a minimal DPO ``soup.yaml`` referencing the harvested pairs.
+
+    Raises ``ValueError`` when the base model cannot be determined
+    (``resolve_base_model``).
+    """
     import yaml
 
-    base = (
-        state.served_model
-        if state.served_model and not state.served_model.startswith("registry://")
-        else "hf-internal-testing/tiny-random-gpt2"
-    )
+    base = resolve_base_model(state.served_model, state.base_model)
     config = {
         "base": base,
         "task": "dpo",
@@ -271,14 +360,14 @@ def train_dpo_from_pairs(
 
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)
+    try:
+        rendered = _render_dpo_yaml(state, str(pairs_path), output_dir)
+    except ValueError as exc:
+        return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
     yaml_dir = Path(_ADAPTERS_DIR)
     yaml_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
-    atomic_write_text(
-        _render_dpo_yaml(state, str(pairs_path), output_dir),
-        yaml_path,
-        field="train yaml",
-    )
+    atomic_write_text(rendered, yaml_path, field="train yaml")
 
     argv = [
         sys.executable,
