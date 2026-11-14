@@ -529,7 +529,9 @@ decide`).
 
 `--output` gains `gate` (`"loop-v2"`), `corrections` and `held_out` (the loop iteration format's
 `verdict.corrections` and `verdict.held_out`, with `scoring: {"method": "added_recall",
-"threshold": 0.5, "template": null}`), `reason` (null on SHIP) and `canary_decides`, which is
+"threshold": 0.5, "template": null}`), `reason` (null on SHIP), `held_out_note` (in words: `held-out edits not checked: 2 of 5 needed;
+this verdict says nothing about them`, or `checked on few edits` below 10; null when the check
+ran on enough edits) and `canary_decides`, which is
 `true` only for `no_corrections` when nothing else is wrong, so the canary's ratings, not this
 gate, settle the rollout. Known limits: the stop list is English only (a Russian answer's "в"
 counts as a content word); the gate emits no extra `--progress jsonl` phases; `--emit-evidence` is

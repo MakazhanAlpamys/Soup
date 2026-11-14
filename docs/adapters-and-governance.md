@@ -194,7 +194,7 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #        whose newest label is good: a thumb up or a rating of 4-5 in the feedback log, an
 #        `up` thumb in the --thumbs-db database (the newest thumb per prompt and answer), a
 #        `thumbs_up` serve trace. An answer that was only rated bad gives no training row. The
-#        same prompt and answer count once. It trains with the recipe below (lr 5e-4, 8 epochs,
+#        same prompt and answer count once. It trains with the recipe below (lr 2e-4, 8 epochs,
 #        LoRA r 64 / alpha 128 on all linear modules, micro-batch 2 x accumulation 4, seed 42);
 #   dpo  an edit is a pair (chosen = the edited text, rejected = the answer), next to the
 #        pairs from serve traces and the thumbs database;
@@ -271,9 +271,13 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
 # built-in recipe is the one the fit runs of 2026-11-06 chose (candidate B in bf16):
-# all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, micro-batch 2 x accumulation 4, seed
+# all-linear, LoRA r 64 / alpha 128, lr 2e-4, 8 epochs, micro-batch 2 x accumulation 4, seed
 # 42, quantization auto, where the loop used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16
-# on the schema's default modules. A loop that must not move if a later release changes the
+# on the schema's default modules. The learning rate is 2e-4, not the fit runs' 5e-4: in a study
+# on one project (13 harvested rows, one seed, a 0.6B model), both runs at 5e-4 regressed a format
+# suite by 0.10 to 0.175 with and without replay, and all five runs at 2e-4 or 1e-4 kept both
+# quick suites within 0.05; whether the lower rate still learns the corrections as well was not
+# measured. A loop.yaml that stores its own lr keeps it, and --sft-lr overrides. A loop that must not move if a later release changes the
 # built-in recipe names every key. A value out of range, a bool where a number goes, or a key
 # that is not one of the nine is refused (init exits 2 naming the flag; reading a loop.yaml
 # with a bad "sft_recipe" fails the command with the reason). The flags are refused for a
@@ -343,7 +347,12 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #   graduation         failed, does not use it up) and is that iteration's held-out check.
 #                      From the next iteration on it trains, counts in the corrections check
 #                      and is never kept aside again, whatever the verdict was
-#                      (dataset.graduated counts them). .soup-loops/holdout.jsonl records which
+#                      (dataset.graduated counts them). The held-out check is `not_measured`
+#                      below 5 edits and `weak` below 10, and it fails only on a significant
+#                      worsening, so at the default trigger it is often not measured at all:
+#                      the verdict then says `held-out edits not checked: N of 5 needed` and a
+#                      SHIP must not be read as "the held-out edits passed".
+#                      .soup-loops/holdout.jsonl records which
 #                      edit was kept aside or graduated in which iteration (append only).
 #   the plan-time wait the edits that would train in a cycle are the new ones (newer than the
 #                      lineage cursor above) left after the keep-aside, plus the graduated ones.
@@ -377,7 +386,15 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
 # when it exits normally, but only if the file still holds its own pid; a killed child
-# leaves a stale file, which the next --detach replaces. There is no `stop` command yet.
+# leaves a stale file, which the next --detach replaces. The child runs in its own session
+# (POSIX) or process group without a console (Windows), with stdin on the null device, so
+# closing the terminal or Ctrl+C there does not reach it. There is no `stop` command yet.
+# A loop.yaml that is gone or invalid stops the daemon with a reason in its log and exit 1; a
+# permission denial or a locked file is retried next cycle. The commands that write loop.yaml
+# (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
+# is invalid (exit 2). The train and ship children write their output to
+# .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
+# train_log, verify_log); only the last lines go into a failure note.
 soup loop watch --detach
 
 # `soup loop status` has a daemon row: "running (pid N), log .soup/loop.log",
@@ -484,7 +501,7 @@ quality verdict is `MAJOR` when the canary's negative share exceeds stable's by 
 five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
 false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
 `OK` at the minimum means no significant regression was found, not that the canary is
-proven equal, and a gap of five points on a few dozen ratings is often chance. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts; `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
+proven equal, and a gap of five points on a few dozen ratings is often chance. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
 ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
 canary against). The two verdicts
 combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is
@@ -503,7 +520,11 @@ and `--canary-on-timeout` (default `errors-only`) decides:
 - `errors-only`: the request-error verdict decides alone. A canary whose requests succeeded
   is promoted, and the iteration notes say so: `promoted on errors only - quality
   unverified: 7/30 canary rated in 24h`. One whose requests failed is withdrawn as ever,
-  and one with too few answers for the error verdict keeps waiting.
+  and one with too few answers for the error verdict keeps waiting. **A canary that got no
+  answers at all** (serve restarted without it, a wrong rollout id, too little traffic for the
+  share) is not promoted on a timeout: it is withdrawn, the reason is `timeout_no_answers`, and
+  the notes say `withdrawn on timeout: 0 canary answers`. Only `--canary-on-timeout errors-only`
+  given explicitly on `soup loop init` promotes it with no evidence.
 - `rollback`: the canary is withdrawn and production is untouched, even without
   `--autoroll-on-regress`. The notes name the timeout and `--canary-on-timeout rollback`.
 - `wait`: no time limit; the quality verdict stays `UNKNOWN`.

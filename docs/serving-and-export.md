@@ -991,7 +991,7 @@ Each line is one conversation record in the version 1 format of [Loop data forma
 - A request whose messages use a role outside `system`, `developer`, `user`, `assistant` and `tool` is answered but not logged (the reason goes to the server log), so every written line is valid against the schema.
 - Lines written before this format have no `schema_version`, a bare integer `tokens` and no `id`. `soup data from-traces --format soup-serve` and `soup loop` read both; a line with a `schema_version` other than 1 is skipped.
 
-Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` in `messages`, `response` and `prompt` before write. Failures (disk full, serialisation errors) never crash the request handler. A streamed answer is logged once it is generated, before its first chunk is sent.
+Path-containment validated, hard rotation cap (default 100 MB, one backup retained as `serve.jsonl.1`; `soup loop` reads the rotated files too, oldest first), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` in `messages`, `response` and `prompt` before write. Failures (disk full, serialisation errors) never crash the request handler. A streamed answer is logged once it is generated, before its first chunk is sent.
 
 
 ## Response IDs and Feedback
