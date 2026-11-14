@@ -162,6 +162,50 @@ def test_push_collection_failure_is_shown_as_typed(model_dir, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("slug", "refusal"),
+    [
+        # An empty slug cannot be typed on the CLI: typer delivers it as "",
+        # which `if collection` already treats as unset, so it never reaches
+        # validate_collection_slug from the command line.
+        ("has space/x", "collection slug must not contain whitespace or null bytes"),
+        ("own\x00er/x", "collection slug must not contain whitespace or null bytes"),
+        ("../x", "collection slug has invalid segments"),
+        ("/x", "collection slug has invalid segments"),
+        ("x/", "collection slug has invalid segments"),
+        ("a" * 200 + "/" + "b" * 100, "collection slug too long (max 256 chars)"),
+        ("no-slash", "collection slug must be 'owner/slug-hash'"),
+    ],
+)
+def test_push_collection_slug_refusals_print_whole_message(model_dir, monkeypatch, slug, refusal):
+    """Each validate_collection_slug refusal is printed in full (#2824, #2829)."""
+    monkeypatch.setattr(hf_utils, "get_hf_api", lambda **kwargs: _WorkingApi(""))
+
+    result = _push("--model", str(model_dir), "--repo", "user/model", "--collection", slug)
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert ("Invalid --collection slug: " + refusal) in _plain(result), _plain(result)
+
+
+def test_push_valid_collection_slug_still_reaches_add_to_collection(model_dir, monkeypatch):
+    """Control: a valid slug passes the up-front check and is added after the upload."""
+    calls: list[dict] = []
+
+    def _record(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(hf_utils, "get_hf_api", lambda **kwargs: _WorkingApi(""))
+    monkeypatch.setattr(hf_utils, "add_to_collection", _record)
+
+    result = _push(
+        "--model", str(model_dir), "--repo", "user/model", "--collection", "user/slug-abc123"
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert calls and calls[0]["collection_slug"] == "user/slug-abc123"
+    assert "Added to collection" in _plain(result)
+
+
+@pytest.mark.parametrize(
     ("name", "shown"),
     [
         ("plain", "plain"),
