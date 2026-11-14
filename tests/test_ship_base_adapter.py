@@ -44,7 +44,7 @@ HELP_TEXT = (
 )
 
 
-def _flat(text: str) -> str:
+def _plain(text: str) -> str:
     """ANSI-free, box-drawing-free, whitespace-collapsed CLI output.
 
     Rich puts colour escapes inside flag names on Linux/macOS CI, and wraps help text
@@ -176,7 +176,7 @@ def test_noise_floor_repeats_are_served_by_the_base_adapter_generator(work, monk
 def test_the_base_adapter_is_stated_in_the_load_message(work):
     res = _live("--base-adapter", "prod", "--adapter", "cand")
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    assert "base side = base + --base-adapter prod" in _flat(res.output)
+    assert "base side = base + --base-adapter prod" in _plain(res.output)
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ def test_refusal_is_a_usage_error_naming_the_flag_and_loads_nothing(work, argv, 
     root, fake = work
     res = _ship(*argv)
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    assert message in _flat(res.output), res.output
+    assert message in _plain(res.output), res.output
     assert fake.calls == []
     assert not (root / "emitted.json").exists()
 
@@ -280,7 +280,7 @@ def test_a_symlink_to_the_adapter_is_the_same_path(work):
     (root / "link").symlink_to(root / "cand", target_is_directory=True)
     res = _live("--base-adapter", "link", "--adapter", "cand")
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    assert "--base-adapter and --adapter are the same path" in _flat(res.output)
+    assert "--base-adapter and --adapter are the same path" in _plain(res.output)
     assert fake.calls == []
 
 
@@ -306,7 +306,7 @@ def test_lm_eval_names_from_a_config_are_refused_too(work):
     res = _ship("--base", "m", "--base-adapter", "prod", "--adapter", "cand",
                 "--config", "soup.yaml", "--device", "cpu")
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    assert "--base-adapter cannot score non-bundled benchmark(s) hellaswag" in _flat(res.output)
+    assert "--base-adapter cannot score non-bundled benchmark(s) hellaswag" in _plain(res.output)
     assert fake.calls == []
 
 
@@ -342,7 +342,7 @@ def test_refusal_message_does_not_echo_terminal_escapes(work):
     res = _live("--base-adapter", "bad\x1b[2Jname", "--adapter", "cand")
     assert res.exit_code == 3, (res.output, repr(res.exception))
     assert "\x1b[2J" not in res.output
-    assert "--base-adapter must be an existing directory" in _flat(res.output)
+    assert "--base-adapter must be an existing directory" in _plain(res.output)
     assert fake.calls == []
 
 
@@ -385,14 +385,14 @@ def test_panel_names_the_base_adapter(work):
     _root, _fake = work
     res = _live("--base-adapter", "prod", "--adapter", "cand")
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    assert "Base adapter: prod" in _flat(res.output)
+    assert "Base adapter: prod" in _plain(res.output)
 
 
 def test_panel_has_no_base_adapter_line_without_the_flag(work):
     _root, _fake = work
     res = _live("--adapter", "cand")
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    assert "Base adapter" not in _flat(res.output)
+    assert "Base adapter" not in _plain(res.output)
 
 
 def test_panel_escapes_markup_and_control_bytes_in_the_base_adapter():
@@ -432,7 +432,7 @@ def test_a_verdict_defaults_to_no_base_adapter():
 def test_help_lists_the_flag():
     res = _ship("--help")
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    flat = _flat(res.output)
+    flat = _plain(res.output)
     assert "--base-adapter" in flat
     assert HELP_TEXT in flat
 
@@ -456,7 +456,7 @@ def test_a_base_adapter_with_pickle_weights_is_refused_by_name(work):
     _pickle_adapter(root / "pickled")
     res = _live("--base-adapter", "pickled", "--adapter", "cand")
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    flat = _flat(res.output)
+    flat = _plain(res.output)
     assert "--base-adapter" in flat and "adapter_model.bin" in flat
     assert "unsafe weight file" in flat
     assert fake.calls == []
@@ -467,7 +467,7 @@ def test_an_adapter_with_pickle_weights_is_refused_with_a_base_adapter(work):
     _pickle_adapter(root / "pickled")
     res = _live("--base-adapter", "prod", "--adapter", "pickled")
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    flat = _flat(res.output)
+    flat = _plain(res.output)
     assert "--adapter" in flat and "adapter_model.bin" in flat
     assert fake.calls == []
 
@@ -477,7 +477,7 @@ def test_an_adapter_with_pickle_weights_is_refused_without_a_base_adapter(work):
     _pickle_adapter(root / "pickled")
     res = _live("--adapter", "pickled")
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    assert "adapter_model.bin" in _flat(res.output)
+    assert "adapter_model.bin" in _plain(res.output)
     assert fake.calls == []
 
 
@@ -514,7 +514,7 @@ def test_every_pickle_extension_is_refused_by_name_on_both_flags(work, ext, flag
     res = _live(flag, "pickled", other, "cand" if other == "--adapter" else "prod")
 
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    flat = _flat(res.output)
+    flat = _plain(res.output)
     assert f"{flag} pickled" in flat and f"adapter_model{ext}" in flat
     assert "unsafe weight file (pickle / PyTorch-classic)" in flat
     assert "safe_serialization=True" in flat
@@ -529,7 +529,7 @@ def test_a_pickle_or_zip_posing_as_safetensors_is_refused(work, magic):
     res = _live("--adapter", "disguised")
 
     assert res.exit_code == 3, (res.output, repr(res.exception))
-    assert "adapter_model.safetensors" in _flat(res.output)
+    assert "adapter_model.safetensors" in _plain(res.output)
     assert fake.calls == []
 
 
@@ -543,7 +543,7 @@ def test_a_broken_safetensors_adapter_is_not_refused_on_either_flag(work, payloa
     assert fake.adapters() == ["broken", "cand"]
 
     res = _live("--adapter", "broken")
-    assert "unsafe weight file" not in _flat(res.output), (res.output, repr(res.exception))
+    assert "unsafe weight file" not in _plain(res.output), (res.output, repr(res.exception))
 
 
 def test_the_trainers_own_pickles_are_not_weights(work):
@@ -556,5 +556,5 @@ def test_the_trainers_own_pickles_are_not_weights(work):
     res = _live("--base-adapter", "prod", "--adapter", "trained")
 
     assert res.exit_code in (0, 2), (res.output, repr(res.exception))
-    assert "unsafe weight file" not in _flat(res.output)
+    assert "unsafe weight file" not in _plain(res.output)
     assert fake.adapters() == ["prod", "trained"]
