@@ -162,7 +162,7 @@ def test_without_output_the_signature_lines_are_shown_as_typed(monkeypatch, valu
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert f"signature backend: {shown(value)}" in plain(result)
     assert f"signature: {shown(value)}..." in plain(result)
-    assert '"_type": "https://in-toto.io/Statement/v1"' in result.output
+    assert '"_type": "https://in-toto.io/Statement/v1"' in strip_ansi(result.output)
 
 
 @pytest.mark.parametrize("value", FILE_VALUES)
