@@ -2,7 +2,6 @@
 
 import copy
 import io
-import sys
 import warnings
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from soup_cli.cli import app
 from soup_cli.config import loader
 from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 VALUES = [
@@ -57,15 +57,16 @@ def _path(value):
     return Path("cfg-" + value.replace("\x1b", "").replace("\x07", "") + ".yaml")
 
 
-@pytest.mark.parametrize("value,shown", VALUES)
+@pytest.mark.parametrize(
+    "value,shown",
+    [pytest.param(*case.values, id=case.id,
+                  marks=skip_colon_on_windows if ":" in case.values[0] else ())
+     for case in VALUES],
+)
 @pytest.mark.parametrize("kind", ["directory", "utf8", "yaml", "os-error"])
 def test_file_refusals_keep_paths_literal_and_preserve_input(
     printed, monkeypatch, kind, value, shown
 ):
-    if ":" in value:
-        # Only real filenames need the platform restriction.
-        if sys.platform == "win32":
-            pytest.skip("':' is not valid in a Windows filename")
     path = _path(value)
     path.parent.mkdir(parents=True, exist_ok=True)
     prefix = f"Config file {_path(shown)}"
