@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Tuple
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 from soup_cli.utils.terraform_plan import (
     DEFAULT_STATE_FILE,
     TrainingState,
@@ -108,10 +108,10 @@ def plan_cmd(
     try:
         cfg, soup_config = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
-        console.print(f"[red]Config not found: {escape(config)}[/]")
+        console.print(terminal_text(f"Config not found: {config}", "red"))
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     try:
@@ -121,7 +121,7 @@ def plan_cmd(
             on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE}[/]"),
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     state = TrainingState(
@@ -133,38 +133,42 @@ def plan_cmd(
     try:
         write_state(state, state_file)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     table = Table(title="Training plan")
     table.add_column("Field")
     table.add_column("Value")
-    table.add_row("base", escape(plan.base))
-    table.add_row("task", escape(plan.task))
-    table.add_row("config_sha", escape(plan.config_sha[:16] + "..."))
-    table.add_row("dataset_sha", escape(plan.dataset_sha[:16] + "..."))
+    table.add_row("base", terminal_text(plan.base))
+    table.add_row("task", terminal_text(plan.task))
+    table.add_row("config_sha", terminal_text(plan.config_sha[:16] + "..."))
+    table.add_row("dataset_sha", terminal_text(plan.dataset_sha[:16] + "..."))
     table.add_row("estimated_cost", f"${plan.estimated_cost_usd:.4f}")
     table.add_row("estimated_minutes", f"{plan.estimated_minutes:.1f}")
-    peak = (
+    peak = terminal_text(
         f"{plan.peak_vram_gb:.1f}"
         if plan.peak_vram_gb is not None
-        else f"unknown: {escape(plan.peak_vram_reason or '')}"
+        else f"unknown: {plan.peak_vram_reason or ''}"
     )
     training = cfg.get("training")
     offloading = training.get("activation_offloading") if isinstance(training, dict) else None
     if plan.peak_vram_gb is not None and offloading:
         # #2327: the figure charges every saved tensor as resident.
-        peak += (
-            f"\n[dim]training.activation_offloading: {escape(str(offloading))} is not "
-            "modelled; activations are charged as resident[/]"
+        peak.append(
+            terminal_text(
+                f"\ntraining.activation_offloading: {offloading} is not "
+                "modelled; activations are charged as resident", "dim",
+            )
         )
     table.add_row("peak_vram_gb", peak)
     table.add_row("spot_price_usd_per_hour", f"${plan.spot_price_usd_per_hour:.2f}")
     console.print(table)
     console.print(
         Panel(
-            f"[green]Plan written to {escape(state_file)}.[/]\n"
-            "Review the numbers, then run `soup apply` to record the plan.",
+            Text.assemble(
+                terminal_text(f"Plan written to {state_file}.", "green"),
+                "\nReview the numbers, then run `soup apply` to record the plan.",
+            ),
             title="plan",
             border_style="green",
         )
@@ -196,28 +200,28 @@ def apply_cmd(
     try:
         cfg, _ = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
-        console.print(f"[red]Config not found: {escape(config)}[/]")
+        console.print(terminal_text(f"Config not found: {config}", "red"))
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     try:
         state = read_state(state_file)
     except FileNotFoundError:
         console.print(
-            f"[red]No state file at {escape(state_file)}; run `soup plan` first.[/]"
+            terminal_text(f"No state file at {state_file}; run `soup plan` first.", "red")
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     try:
         # Drift compares hashes, never the estimate, so the model is not read (no Hub request).
         plan_now = build_plan(cfg, estimate_vram=False)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     drift = detect_drift(state, plan_now)
@@ -225,8 +229,11 @@ def apply_cmd(
         fields = ", ".join(drift.changed_fields)
         console.print(
             Panel(
-                f"[red]Drift detected.[/] Plan no longer matches state: {escape(fields)}\n"
-                f"Run `soup plan` again to refresh, then re-apply.",
+                Text.assemble(
+                    ("Drift detected.", "red"),
+                    terminal_text(f" Plan no longer matches state: {fields}\n"),
+                    "Run `soup plan` again to refresh, then re-apply.",
+                ),
                 title="apply",
                 border_style="red",
             )
@@ -255,15 +262,18 @@ def apply_cmd(
     try:
         write_state(new_state, state_file)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(2) from exc
 
     train_flag = " --minillm-on-policy" if minillm_on_policy else ""
     console.print(
         Panel(
-            f"[green]Plan locked in {escape(state_file)}.[/]\n"
-            f"Now run: [bold]soup train --config {escape(config)}{train_flag}[/]\n"
-            "This records the plan; it does not start training.",
+            Text.assemble(
+                terminal_text(f"Plan locked in {state_file}.", "green"),
+                "\nNow run: ",
+                terminal_text(f"soup train --config {config}{train_flag}", "bold"),
+                "\nThis records the plan; it does not start training.",
+            ),
             title="apply",
             border_style="green",
         )

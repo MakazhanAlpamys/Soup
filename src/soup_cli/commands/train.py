@@ -25,6 +25,11 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+from soup_cli.trainer.loss_summary import (
+    measured_run_losses,
+    stored_loss_summary_kind,
+    stored_run_losses,
+)
 from soup_cli.utils.gpu import (
     apply_quantization_guard,
     configure_cuda_alloc_hint,
@@ -46,13 +51,15 @@ console = Console()
 # tables live with the shared estimate in utils/hardware_fit.py (#2049).
 _HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
 
-_UNWIRED_TRAINING_TUNABLES = (
+_UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
     # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
     # config/staged_fields.py (#808), and early_stop_patience moved in #761:
     # the loader refuses them (config/staged_fields.py), so they are not listed here.
-    "forgetting_threshold",
+    # forgetting_threshold moved to the loader too (#1814): it warns at load with the
+    # release that refuses it (config/deprecation.py), so it is not listed twice. That
+    # warning carries the --gate hint this note gave it.
 )
 
 
@@ -105,19 +112,35 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
     if cfg.task in UNSUPPORTED_RESUME_TASKS:
         return f"{flag} is not supported for task {cfg.task!r}"
+    if cfg.task == "sft" and cfg.backend == "mlx" and cfg.training.lora.r == 0:
+        from soup_cli.trainer.mlx_full import RESUME_REFUSAL as FULL_RESUME_REFUSAL
+
+        return FULL_RESUME_REFUSAL.replace("--resume", flag, 1)
     if cfg.task == "grpo" and cfg.backend == "mlx":
         # #1976: the native MLX GRPO loop saves the adapter only. The message
         # lives with the trainer (imported lazily: it pulls in mlx-free code only).
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "ppo":
+        # trl's PPOTrainer.train() takes no checkpoint, so a resumed run would start
+        # over from step 0 on top of the old progress. Refused here, before the dataset
+        # is read, a model is loaded or the output directory is touched; `--resume auto`,
+        # `--resume <path>` and `--hf-resume` all pass through this function.
+        from soup_cli.trainer.ppo import RESUME_REFUSAL as PPO_RESUME_REFUSAL
+
+        return PPO_RESUME_REFUSAL.replace("--resume", flag)
     return None
 
 
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
-    if summary_kind == "unavailable":
+    # Neither the kind-"unavailable" placeholder nor a result without numbers (a
+    # missing key, None) is a loss to print: say so instead of formatting None. A NaN
+    # tail is printed (a diverged run says so); only the stored row has no NaN.
+    measured_initial, measured_final = measured_run_losses(result)
+    if measured_initial is None or measured_final is None:
         return "Loss: [bold]unavailable[/]"
     loss_key = result.get("loss_key")
     label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
@@ -658,14 +681,20 @@ def _loads_on_unsloth(cfg) -> bool:
     unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
     instead of a list kept here: the dumped config is validated again with the
     backend changed. Only that pass's ``ValidationError`` means no; anything
-    else is a bug and must surface.
+    else is a bug and must surface. A deprecation warning the dump raises again
+    (#1814) is the loader's line already printed, so the probe drops it.
     """
+    import warnings
+
     from pydantic import ValidationError
 
+    from soup_cli.config.deprecation import SoupConfigDeprecationWarning
     from soup_cli.config.schema import SoupConfig
 
     try:
-        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SoupConfigDeprecationWarning)
+            SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
     except ValidationError:
         return False
     return True
@@ -828,7 +857,19 @@ def train(
         "--push-as",
         help=(
             "Auto-push each save_steps checkpoint to HF Hub as "
-            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model)"
+            "'checkpoint-<step>' branch of the given repo (e.g. user/my-model). "
+            "A repository created by this flag is private unless --push-public "
+            "is given; an existing repository is used as it is and its "
+            "visibility is not changed."
+        ),
+    ),
+    push_public: bool = typer.Option(
+        False,
+        "--push-public",
+        help=(
+            "Create the --push-as repository public instead of private. "
+            "Requires --push-as. It does not change the visibility of a "
+            "repository that already exists."
         ),
     ),
     hf_resume: bool = typer.Option(
@@ -1067,6 +1108,17 @@ def train(
     """Start training from a soup.yaml config."""
     from soup_cli.utils.launcher import validate_multi_node_options
 
+    # Refused before every other path (--cloud, --find-lr, --dry-run, the config
+    # load): a visibility switch for a repository that is never created would
+    # otherwise be dropped without a word.
+    if push_public and not push_as:
+        console.print(
+            "[red]--push-public requires --push-as <repo>:[/] it sets the "
+            "visibility of the repository --push-as creates, so it does nothing "
+            "without it."
+        )
+        raise typer.Exit(1)
+
     try:
         validate_multi_node_options(nodes, node_rank, master_addr, master_port)
         if nodes > 1:
@@ -1129,6 +1181,12 @@ def train(
             raise typer.Exit(1) from exc
         console.print(f"[green]LR finder report written to:[/] {find_lr_output}")
         raise typer.Exit(0)
+
+    # Observe the launching directory before data/model setup can write artifacts.
+    # The config file's directory and Soup's installation may be other repositories.
+    from soup_cli.utils.code_revision import CodeRevision, capture_code_revision
+
+    code_revision = capture_code_revision() if not dry_run else CodeRevision()
 
     # Load & validate config
     console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
@@ -1386,10 +1444,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
-    # but not enforced mid-training in this build. Their other tuning knobs are
-    # reported by the loader with refusal dates, so only active flags and
-    # non-default forgetting_threshold are reported here.
+    # Honesty guard: these staged flags are accepted but not enforced mid-training in
+    # this build. Their tuning knobs, forgetting_threshold included (#1814), are
+    # reported by the loader with refusal dates, so only the active flags are
+    # reported here.
     _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
@@ -1596,6 +1654,7 @@ def train(
                         reward_hack_mitigation=reward_hack_mitigation,
                         gate=gate,
                         push_as=push_as,
+                        push_public=push_public,
                         hf_resume=hf_resume,
                         trust_remote_code=trust_remote_code,
                         tracker=tracker,
@@ -2047,6 +2106,9 @@ def train(
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
     tracker.record_training_data_hash(run_id, training_data_sha256)
+    tracker.record_code_revision(
+        run_id, commit=code_revision.commit, dirty=code_revision.dirty,
+    )
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
@@ -2185,29 +2247,44 @@ def train(
 
         # --- HF auto-push callback (Part B of v0.29.0) ---
         if push_as:
-            from soup_cli.monitoring.hf_push import build_push_callback
+            from soup_cli.monitoring.hf_push import (
+                build_push_callback,
+                describe_prepare_failure,
+                describe_push_repo,
+            )
 
+            # A repository this run creates is private unless --push-public;
+            # one that already exists is left exactly as it is (the visibility
+            # is only ever sent when the repository is found missing).
+            push_private = not push_public
             push_cb = build_push_callback(
                 repo_id=push_as,
                 output_dir=cfg.output,
-                private=False,
+                private=push_private,
             )
+            hf_trainer = getattr(trainer_wrapper, "trainer", None)
             if push_cb is None:
                 console.print(
                     "[yellow]--push-as: no HF token available; skipping auto-push[/]"
                 )
+            elif hf_trainer is None or not hasattr(hf_trainer, "add_callback"):
+                console.print(
+                    "[yellow]--push-as: trainer does not expose add_callback; "
+                    "auto-push disabled for this run[/]"
+                )
             else:
-                hf_trainer = getattr(trainer_wrapper, "trainer", None)
-                if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                # The repository is prepared here, once, so the line below is
+                # printed before training starts and the callback finds it ready.
+                repo_state = push_cb.prepare_repo()
+                if repo_state is None:
+                    failure = describe_prepare_failure(push_as, push_cb.prepare_error)
+                    console.print(f"[yellow]{for_terminal(failure)}[/]")
+                else:
+                    console.print(for_terminal(describe_push_repo(push_as, repo_state)))
                     hf_trainer.add_callback(push_cb)
                     console.print(
                         f"[green]HF auto-push enabled[/] -> {push_as} "
                         "(one branch per save_steps)"
-                    )
-                else:
-                    console.print(
-                        "[yellow]--push-as: trainer does not expose add_callback; "
-                        "auto-push disabled for this run[/]"
                     )
 
         # Train with live display and experiment tracking
@@ -2274,14 +2351,17 @@ def train(
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker
+        # Save completion to tracker. A run that observed no loss stores NULL, not
+        # the trainer's 0.0 placeholder (stored_run_losses).
+        initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
-            initial_loss=result["initial_loss"],
-            final_loss=result["final_loss"],
+            initial_loss=initial_loss,
+            final_loss=final_loss,
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
 
         _run_auto_eval_after_training(
@@ -2319,6 +2399,9 @@ def train(
 
     # Report
     merge_hint = (
+        "Full fine-tuning output is a standalone model; no soup merge is needed"
+        if cfg.backend == "mlx" and cfg.training.lora.r == 0
+        else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
         else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"

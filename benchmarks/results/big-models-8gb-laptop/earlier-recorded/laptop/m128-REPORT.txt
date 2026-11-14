@@ -1,0 +1,78 @@
+Stage34: full dense Mistral123B NF4 LoRA on the laptop
+Status: COMPLETE - TRAIN, FRESH RELOAD, ARTIFACT AUDIT AND FULL INPUT REHASH PASSED.
+Updated 2026-11-03T17:59:44.082966+05:00
+
+Measured training result
+  Base: 122,610,069,504 logical parameters, all88 layers, original vocabulary,
+  embeddings, head and norms. Source unsloth/Mistral-Large-Instruct-2407-bnb-4bit revision a76e109f4b66807d88fa92b5d7e0dead1a354494.
+  RTX5070Laptop8151MiB,32GB installed RAM, NVMe SSD. Existing Windows system
+  commit limit54,471,286,784B includes pagefile; no OS/pagefile/app settings changed.
+  Three batch1/seq128 updates; q/v LoRA rank8/alpha16, FP32 adapters/AdamW,
+  original NF4 base with BF16 computation. 26,673,152 trainable params,
+  352 adapter tensors. This is adapter training, not full-weight finetuning.
+  Step times: [67.81542230000196, 62.49067449998984, 60.60230080000474]; median 62.491s.
+  Timings include durable diagnostics and validation, not isolated kernel timing.
+  Whole-device sampled peak 4598MiB (4.490GiB).
+  Torch peak allocated 3757965824B; reserved 4638900224B.
+  Worker sampled peak RSS 4.264GiB;
+  private commit 9.542GiB. These are different metrics.
+  Minimum available physical RAM 5.513GiB;
+  minimum global commit headroom 3.799GiB.
+  Host source backing 2324713472B, zero pinned source bytes,
+  actual direct I/O enabled, two GPU decoder slots, one shared GPU vocab slot.
+
+Evidence
+  Full13shard source acquired and hash verified; byte-preserving NF4 import
+  verified2645 destination tensors/64,449,162,720 payload bytes. No requantization.
+  The preserved pinned-v1 attempt completed two full forwards but stopped at the
+  original global commit floor before an optimizer step. All inputs reverified.
+  Separately frozen pageable-v2 passed CPU parity and independent review.
+  Initial full heldout logits/losses exactly match pinned-v1 before any update.
+  All3 update records contain352 finite gradient/update entries; A is zero only
+  at the expected first zero-B step, then every A/B tensor changes.
+  Original138source/store files hash-identical before/after training.
+  Saved adapter SHA256 6547809035c6d509644e70245c94587a8737bd6273c39ebe9c311d56a975f1f0.
+  Training guard completed exit0, cleaned worker/conhost, monitor stopped;
+  device returned0MiB before the separate reload process started.
+
+Interpretation and limits
+  This demonstrates a short full-depth123B LoRA training workload on this
+  hardware. Three authored training sequences/381shifted targets and two
+  heldout sequences/254targets do not establish general model quality.
+  Heldout losses [3.7749664783477783, 3.84488582611084] -> [3.651911735534668, 3.692650079727173].
+  No world-first, useful-long-context, full-precision-quality or speedup claim.
+  Around129GBSSD holds source and native store together; full base is external
+  to the portable code/checkpoint archive and pinned by immutable SHA manifests.
+  Adapter weights are saved; optimizer moments/RNG resume state are not.
+  Exact continuation of the same optimizer trajectory is not supported yet.
+
+Memory causality
+  Pageable backing saves896,512,000 requested bytes versus the pinned arena.
+  A changing global/background memory residual is a major confound between
+  attempts. The successful run cannot be attributed solely to that change.
+  See MEMORY_COMPARISON34.txt for synchronized-counter limitations and numbers.
+
+Next gates
+  Then test packed-state autograd for native fallback on real3layer/two-slot
+  parity at512tokens before applying it to all88layers. See FALLBACK_DESIGN.txt.
+  It targets about1.92GiB of dense-weight lifetime reduction, unmeasured.
+  After a successful512token gate: useful100+step adaptation with resumable
+  optimizer state, fixed evaluation and fair baseline; then vertical microbatch
+  reuse to amortize SSD reads. These are future work, not completed results.
+
+Fresh-process verification completed
+  TrainPID20560 and reloadPID32524 both exited0 under unchanged guards.
+  All352 saved FP32 adapters reloaded exactly; both complete BF16 output tensors
+  [1,128,32768] plus losses/dtypes/shapes match trained outputs bit for bit.
+  All138protected source/store hashes unchanged in both processes.
+  FINAL_ARTIFACT_AUDIT.json passed1056gradients/1056updates,3guardcleanups,
+  adapter payload SHA/layout/provenance, and both full-logits comparisons.
+  GPU returned0MiB after reload. Root independently rehashed1746files including
+  all source/store weights, saved adapter, frozen runtime, code and inputs.
+  Every SHA256 matched; FINAL_INPUT_HASHES.json records206.403seconds.
+
+Saved checkpoint
+  <SNAPSHOTS>\stage-34-full123b-lora-cold-reload-complete-20261103-175944.zip
+  Snapshot includes frozen runtime, experiment code/dependencies, all raw
+  receipts/failures, fixed data and trained adapter. Full model assets remain
+  external and immutable. SNAPSHOT_RECEIPT.json is written after archive checks.
