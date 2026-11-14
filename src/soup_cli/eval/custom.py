@@ -487,3 +487,49 @@ def _create_default_generator(model_path: str, trust_remote_code: bool = False):
         return out[0]["generated_text"] if out else ""
 
     return generate
+
+
+def load_native_eval_tasks(path: Path) -> tuple[list[EvalTask], str]:
+    """Parse and hash the same snapshot, including original UTF-8/newline bytes."""
+    import hashlib
+    import io
+
+    if not path.exists():
+        raise FileNotFoundError(f"Eval tasks file not found: {path}")
+    if path.suffix.lower() != ".jsonl":
+        raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8") as stream:
+        tasks = parse_eval_task_lines(stream, path)
+    return tasks, digest
+
+
+def native_eval_identity(
+    model_path: Path, dataset_sha256: str, max_tokens: int, temperature: float,
+    trust_remote_code: bool,
+) -> dict:
+    """Record the actual corpus and bounded native generation contract."""
+    import importlib.metadata
+    import platform
+
+    from soup_cli.utils.mlx_generation import read_native_adapter
+
+    metadata = read_native_adapter(model_path)
+    versions = {}
+    for package in ("soup-cli", "mlx", "mlx-lm", "transformers"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = None
+    return {
+        "backend": "mlx", "base": metadata["model"] if metadata else str(model_path),
+        "adapter": str(model_path) if metadata else None,
+        "adapter_metadata": metadata,
+        "dataset_sha256": dataset_sha256,
+        "runtime": {"python": platform.python_version(), "platform": platform.platform(),
+                    "packages": versions},
+        "generation": {"max_tokens": max_tokens, "temperature": temperature,
+                       "top_p": 0.9 if temperature > 0 else 1.0,
+                       "prompt_format": "single-user-chat", "trust_remote_code": trust_remote_code},
+    }
