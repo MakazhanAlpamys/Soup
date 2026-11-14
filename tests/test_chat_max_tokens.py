@@ -55,6 +55,8 @@ def test_a_count_below_one_is_refused_before_the_model_loads(
     assert result.exit_code == 2, result.output
     plain = " ".join(strip_ansi(result.output).split())
     assert "--max-tokens" in plain
+    # Click's text for a bound with no maximum.
+    assert f"{value} is not in the range x>=1" in plain
     assert never_loaded == []
 
 
