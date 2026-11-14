@@ -216,11 +216,24 @@ The console prints what the check measured and how many tokens an epoch now runs
 
 **Works with layer streaming.** A step stays within `batch_size` x `max_length` tokens, so the
 streaming VRAM pre-flight holds and `prefix_tree` is allowed beside `stream_layers` (where
-`packing` and `multipack` are refused). Measured on an RTX 3050 Laptop 4 GB, streamed NF4
-Qwen2.5-0.5B, 40 tool-calling examples sharing one tool schema: 2.01 s per pass against
-19.07 s one example per step, at a 1.26 GB peak; the ordinary batch of the same examples
-needs 5.85 GB. On the same fixture with its 27 different tool lists: 6.99 s against 17.97 s.
-One card, one small model; see `benchmarks/gate-prefix-tree.md`.
+`packing` and `multipack` are refused). A streamed step also pays a cost per sweep of the
+model, which a row of several examples pays once, so the gain is larger than the token count
+alone. Measured on an RTX 3050 Laptop 4 GB, streamed NF4, examples per second, one example per
+step against prefix-tree rows:
+
+| | tool calling, one 4-function schema | tool calling as published | plain instructions (dolly) |
+|---|---|---|---|
+| Mistral-7B, 512-token rows | 0.400 -> 1.404 (3.5x) | 0.479 -> 1.130 (2.4x) | 0.563 -> 1.235 (2.2x) |
+| Mistral-7B, 1024 / 2048-token rows | 3.109 (7.9x) / 3.768 (10.0x) | | |
+| Qwen2.5-0.5B, 512-token rows | 2.42 -> 10.72 (4.4x) | 2.63 -> 5.03 (1.9x) | 2.69 -> 7.34 (2.7x) |
+
+Peak VRAM stays near batch 1's (1.19 GB against 1.14 GB on the 7B model at 512 tokens), which
+is what leaves room for the longer rows. Loss on 100 held-out rows after about the same
+training time, ordinary against prefix tree: 0.1488 against 0.1340 (Mistral-7B, in 66 % of the
+time), 0.2556 against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806
+against 1.4848 (Qwen2.5-0.5B, dolly: no gain). One epoch of prefix-tree rows is 1.7x to 4.3x
+shorter and ends 0.02 to 0.10 higher in held-out loss at the same learning rate. One card, one
+seed, loss only; see `benchmarks/gate-prefix-tree.md`, including what is not explained.
 
 **Limits.** `task: sft`, `modality: text`, single process, not the mlx backend. Refused beside
 `packing`, `multipack`, `stream_loss_chunk`, `data.format: raft`, `data.replay` and

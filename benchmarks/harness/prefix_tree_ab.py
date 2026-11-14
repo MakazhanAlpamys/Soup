@@ -70,7 +70,16 @@ GLAIVE_PREAMBLE = (
 _FUNCTION_NAME = re.compile(r'"name":\s*"([A-Za-z0-9_]+)",\s*"description"')
 
 
+#: ``--system-in-user``: put the system text at the start of the user message. For chat
+#: templates with no system role (Mistral's instruct format renders none: its own
+#: convention is to prepend the system text to the user turn).
+SYSTEM_IN_USER = False
+
+
 def _chat(system: str, user: str, assistant: str) -> Dict[str, Any]:
+    if system and SYSTEM_IN_USER:
+        user = system + "\n\n" + user
+        system = ""
     messages = [{"role": "system", "content": system}] if system else []
     messages += [
         {"role": "user", "content": user},
@@ -418,18 +427,31 @@ def run_train(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
             return None
         return float(trainer.evaluate()["eval_loss"])
 
+    from transformers import TrainerCallback
+
+    measured: Dict[str, Any] = {"after": None, "peak": None}
+
+    class HeldOutAtTheEnd(TrainerCallback):
+        """The held-out loss after the last step, taken INSIDE ``train()``: a
+        streamed run closes its layer stream when ``wrapper.train()`` returns,
+        and a forward after that finds no layer loaded."""
+
+        def on_train_end(self, *_args: Any, **_kwargs: Any) -> None:
+            measured["peak"] = torch.cuda.max_memory_allocated() / 1e9 if cuda else None
+            measured["after"] = held_out()
+
     planned = _planned(wrapper, args)
     before = held_out()
+    trainer.add_callback(HeldOutAtTheEnd())
     if cuda:
         torch.cuda.reset_peak_memory_stats()
     start = time.perf_counter()
     try:
         wrapper.train()
         seconds = time.perf_counter() - start
-        peak = torch.cuda.max_memory_allocated() / 1e9 if cuda else None
-        after = held_out()
     finally:
         wrapper._close_stream_runtime()
+    after, peak = measured["after"], measured["peak"]
     logged = [entry["loss"] for entry in trainer.state.log_history if "loss" in entry]
     final = [entry for entry in trainer.state.log_history if "train_runtime" in entry]
     return {
@@ -447,6 +469,7 @@ def run_train(args: argparse.Namespace, work: Path) -> Dict[str, Any]:
         "held_out_examples": 0 if trainer.eval_dataset is None else len(trainer.eval_dataset),
         "planned": planned,
         "optimizer_steps": int(trainer.state.global_step),
+        # Includes the held-out evaluation at the end; train_runtime does not.
         "wall_seconds": seconds,
         "train_runtime": final[-1]["train_runtime"] if final else None,
         "first_logged_loss": logged[0] if logged else None,
@@ -476,6 +499,11 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--groups", type=int, default=0, help="time the first N groups (0 = all)")
     parser.add_argument("--no-batch-arm", action="store_true", help="skip the ordinary-batch arm")
+    parser.add_argument(
+        "--system-in-user",
+        action="store_true",
+        help="prepend the system text to the user message (templates without a system role)",
+    )
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=3)
@@ -483,6 +511,8 @@ def main() -> int:
     parser.add_argument("--prefix-tree", action="store_true", help="with --train")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
+    global SYSTEM_IN_USER
+    SYSTEM_IN_USER = bool(args.system_in_user)
 
     with tempfile.TemporaryDirectory(prefix="prefix_tree_ab_") as tmp:
         result = run_train(args, Path(tmp)) if args.train else run_ab(args, Path(tmp))

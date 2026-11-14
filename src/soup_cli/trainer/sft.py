@@ -1561,11 +1561,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             f"{0.0 if verdict.control is None else verdict.control:.3g}[/]"
         )
         if stats.ratio < 1.02:
+            per_row = stats.examples / max(stats.rows, 1)
             console.print(
                 "[yellow]Prefix-tree batches:[/] these examples share almost no "
-                "untrained beginning, so the step runs as many tokens as before. "
-                "Sharing needs prompt tokens that are not trained on "
-                "(data.train_on_responses_only) and that several examples begin with."
+                "untrained beginning, so an epoch runs as many tokens as before; a row "
+                f"still holds {per_row:.1f} examples on average. Sharing needs prompt "
+                "tokens that are not trained on (data.train_on_responses_only) and that "
+                "several examples begin with."
             )
 
     @staticmethod
