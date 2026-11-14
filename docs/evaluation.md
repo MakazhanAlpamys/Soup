@@ -837,8 +837,8 @@ model far larger than the 0.05 gate. That is why unstamped files still warn.
 
 ### Adapter update size, and what it does not tell you (#2762)
 
-A `soup ship --adapter <local dir>` run prints one more line beside the verdict: how much
-of the base the adapter's merged update actually changes.
+A `soup ship --adapter ./out` run prints one more line beside the verdict: how much of
+the base the adapter's merged update actually changes.
 
 ```text
 Adapter update: changes 8,534,916 of 1,310,195,712 elements of its 196 target modules
