@@ -97,6 +97,17 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         task_fmt = _TASK_FORMAT_MAP.get(task)
         if task_fmt:
             data["format"] = task_fmt
+        elif isinstance(ds_type, dict):
+            # axolotl's custom prompt format: field names plus a template string,
+            # which no Soup data.format expresses.
+            data["format"] = "auto"
+            warnings.append(
+                "datasets[0].type is an axolotl custom prompt format "
+                f"({', '.join(sorted(str(key) for key in ds_type))}). Soup has no "
+                "equivalent: the template is not carried over and data.format is auto. "
+                "Rename the columns to a Soup format (alpaca: instruction / input / "
+                "output) or set data.format."
+            )
         else:
             data["format"] = _FORMAT_MAP.get(ds_type, ds_type)
         if len(datasets) > 1:

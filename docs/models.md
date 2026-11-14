@@ -36,29 +36,62 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 **Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
 
-**Resident Kimi K2 is refused on the supported Transformers 5.x stack.**
-The known Hugging Face Base, Instruct, Instruct-0905 and Thinking IDs load remote
-code using removed APIs, including `is_torch_fx_available`, and an inference-only
-MoE training path. `trust_remote_code` does not repair that incompatibility.
-This is a behaviour change: these resident configurations previously passed validation
-and failed later at model loading; now config validation stops before model loading.
-For Base and Instruct only, use the guarded `training.stream_layers: true` route
+**Resident Kimi K2 trains natively for `sft` and `grpo` on Kimi-K2-Base and
+Kimi-K2-Instruct.**
+The known Hugging Face Base and Instruct IDs declare `model_type: kimi_k2` and an
+`auto_map` onto repository code that uses removed transformers APIs, including
+`is_torch_fx_available`, and an inference-only MoE training path, so a plain
+resident load still fails and `trust_remote_code` does not repair that. For
+`task: sft` and `task: grpo` only, Soup instead passes the checkpoint's
+`config.json` through the field-by-field guard of
+[#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107) into transformers' own
+`DeepseekV3Config` (rewritten in memory; the config read passes
+`trust_remote_code=False`, so no repository code is executed) and loads
+the safetensors natively, dequantising each FP8 block weight to bf16 per tensor at
+load. The route requires `training.quantization: none` — any other value is refused
+at config validation — and the tokenizer is still repository code on this route: it
+needs `--trust-remote-code` and `pip install tiktoken` to load. Migration: for
+`task: sft` and `task: grpo` with `modality: text` on the transformers backend, a
+local directory whose `config.json` declares `model_type: kimi_k2` no longer loads
+through `from_pretrained`; it loads through the guarded native route or is refused
+naming every failing field, and `training.rope_scaling_type` on it is refused; other
+tasks, other model types and `training.stream_layers: true` are unchanged. The load
+never holds a second whole model; its largest transient is one
+layer's fused routed experts at the fuse step (about 33.8 GB per layer at published
+K2 scale), not a single tensor's working set. A
+`quantization_config` menu entry (the 4-bit path) is refused on this route: 4-bit
+K2 stays streamed-only. The other trainers still refuse K2 bases on the resident
+path at config validation, as do the Instruct-0905 and Thinking IDs for every task:
+they have no supported route yet. This refusal does not
+qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
+native `kimi_k25` registration and are outside this boundary.
+
+For a Hub checkpoint, the resident route checks available cache space against the
+files not already cached at the resolved revision before downloading. With
+`HF_HUB_OFFLINE=1`, it uses the local snapshot without requesting Hub metadata.
+
+For a 4-bit K2 base, use the guarded `training.stream_layers: true` route
 added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires
 `--trust-remote-code` for the tokenizer and `pip install tiktoken`; see
 [streaming guide, Kimi K2 paragraph](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)
 for the guard and prerequisites. Its evidence is CPU-only parity on a tiny
 K2-like checkpoint; full K2 weights, training and GPU execution remain unverified.
-Thinking and Instruct-0905 have no supported route yet. This refusal does not
-qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
-native `kimi_k25` registration and are outside this boundary.
+The resident route's own evidence is CPU-only parity against K2's own pinned
+modelling code on a tiny K2-shaped checkpoint
+([gate](../benchmarks/gate-kimi-k2-resident.md)); routing at real scale is
+unverified.
 
-`kimi-k2-sft` and `kimi-k2-thinking-grpo` remain discoverable with an unsupported
-resident-route description. `soup recipes show` preserves their YAML for inspection;
-`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe unavailability
-reason and writes no config.
-Catalog snapshots explicitly record this refusal rather than a usable config.
-This implements #2104's diagnostic option; native resident parity and full K2
-weight validation remain separate work.
+`kimi-k2-sft` stays unavailable: its YAML carries `quantization: 4bit`, which
+this route refuses at config validation (the refusal names the remedy —
+`training.quantization: none` for the resident route, or 4-bit through
+`training.stream_layers: true`, where the tokenizer still needs
+`--trust-remote-code` and `pip install tiktoken`).
+`kimi-k2-thinking-grpo` remains discoverable with an unsupported resident-route
+description: `soup recipes show` preserves its YAML for inspection and
+`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe
+unavailability reason, writing no config.
+Catalog snapshots record both unavailability reasons.
+Full K2-weight validation remains separate work.
 
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.

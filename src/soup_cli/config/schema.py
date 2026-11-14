@@ -9731,14 +9731,27 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _reject_resident_kimi_k2(self) -> "SoupConfig":
-        """K2 remote code cannot import or train on the supported 5.x stack."""
-        from soup_cli.utils.kimi import resident_kimi_k2_refusal
+        """Resident K2 remote code cannot import or train on the supported 5.x stack.
+
+        #2104 task 2: Kimi-K2-Base / -Instruct are admitted on sft/grpo (the resident
+        route); every other task, and Thinking / 0905 for all tasks, stays refused.
+        Review round 2: the admission holds only at ``training.quantization: none``
+        (the resident route loads bf16 only); any other quantization is refused here,
+        at config validation, instead of failing inside the model loader.
+        """
+        from soup_cli.utils.kimi import (
+            _ResidentKimiK2QuantizationRefusal,
+            resident_kimi_k2_refusal,
+        )
 
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
-            stream_layers=self.training.stream_layers,
+            stream_layers=self.training.stream_layers, task=self.task,
+            modality=self.modality, quantization=self.training.quantization,
         )
         if reason is not None:
+            if isinstance(reason, _ResidentKimiK2QuantizationRefusal):
+                raise ValueError(str(reason))
             raise ValueError(
                 f"{reason} base={self.base}. Its remote code uses removed APIs "
                 "and an inference-only MoE training path. Choose a compatible base."
