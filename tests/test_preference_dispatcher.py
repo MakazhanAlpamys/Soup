@@ -56,6 +56,17 @@ class TestPreferenceStreaming:
             "Use dpo, orpo or simpo, or set stream_layers=false."
         )
 
+    @pytest.mark.parametrize("task", ["ipo", "bco"])
+    def test_legacy_unported_tasks_keep_the_generic_streaming_refusal(self, task):
+        with pytest.raises(ValidationError) as caught:
+            self.config(task=task)
+        message = caught.value.errors()[0]["msg"]
+        assert message == (
+            "Value error, training.stream_layers supports task in "
+            f"['dpo', 'kto', 'orpo', 'sft', 'simpo']; got task={task!r}."
+        )
+        assert "preference_loss" not in message
+
     def test_weighted_losses_are_refused_by_name(self):
         with pytest.raises(ValidationError) as caught:
             self.config(preference_loss_weights={"dpo": 0.5, "orpo": 0.5})
