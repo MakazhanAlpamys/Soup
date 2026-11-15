@@ -129,7 +129,7 @@ def test_legacy_option_conflict_exit_two_is_not_a_numerical_fail(
         args.extend(["--validate-onnx", "--prompts", str(prompts)])
     result = _invoke(tmp_path, args)
     assert result.exit_code == 2, result.output
-    assert "require --format gguf" in " ".join(strip_ansi(result.output).split())
+    assert "requires --format gguf" in " ".join(strip_ansi(result.output).split())
     assert "ONNX Logits Validation" not in result.output
     assert "FAIL" not in result.output
     exporter.assert_not_called()
