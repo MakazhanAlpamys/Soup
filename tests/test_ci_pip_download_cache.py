@@ -37,8 +37,16 @@ from tests.test_ci_full_matrix_on_approval import (
 ROOT = Path(__file__).absolute().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PROJECT_JOBS = ("test", "mlx-smoke", "torchao-contract", "pytorch-smoke", "transformers-floor")
-#: The only `if:` a project install may have: none, or the docs-only guard of its job.
-DOCS_ONLY_GUARDS = ("", "env.RUN_SUITE == 'true'", "needs.plan.outputs.docs_only != 'true'")
+#: The only `if:` a project install may have: none, the docs-only guard of its job, or (2026-11-15,
+#: tests/test_ci_suite_result_reuse.py) that guard plus the one that skips the whole ubuntu / 3.12
+#: cell of a pull request when this exact merge commit already passed the suite. The last is a
+#: result of an earlier RUN, never of pip's download cache.
+DOCS_ONLY_GUARDS = (
+    "",
+    "env.RUN_SUITE == 'true'",
+    "env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'",
+    "needs.plan.outputs.docs_only != 'true'",
+)
 RUN_KINDS = (
     pytest.param((_push(), _pull_request("opened")), "QUICK", id="quick-main-and-pr"),
     pytest.param(

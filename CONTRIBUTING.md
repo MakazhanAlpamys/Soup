@@ -698,6 +698,18 @@ other test cells and the three smoke jobs still report, as success, without
 running a step. If the file list cannot be read, or is not the whole list, the
 full set runs. A push, the nightly run and a release branch are never docs-only.
 
+**A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
+the approval run of a pull request check out the same merge commit when `main` has
+not moved between them (`github.sha` of a pull-request run is the merge commit, and
+adding `ci:full` does not rebuild it). When the quick run's cell ends green it
+leaves a few bytes in the Actions cache under a key made of `github.sha`, the
+runner and the Python version, and the approval run's cell looks for that key
+before it does anything else. On a hit it runs no other step and still reports
+`test (ubuntu-latest, 3.12)` as success under the same name; the log says which run
+the result came from. A new push, a moved `main` (a rebuilt merge commit), a red
+first run and every other cell are misses: the suite runs as before, and the other
+three required cells always run at approval.
+
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
 `dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
