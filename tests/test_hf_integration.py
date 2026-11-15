@@ -264,6 +264,7 @@ class TestHFPushCallback:
         (ckpt_dir / "adapter_config.json").write_text("{}")
 
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False  # a new repository
         monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
 
         callback = HFPushCallback(
@@ -277,8 +278,9 @@ class TestHFPushCallback:
         control = types.SimpleNamespace()
         callback.on_save(args, state, control)
 
+        # Private by default; see tests/test_push_as_visibility.py.
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
         assert fake_api.upload_folder.called
         kwargs = fake_api.upload_folder.call_args.kwargs
@@ -1093,6 +1095,7 @@ class TestBuildPushCallback:
 class TestCallbackLifecycle:
     def _fake_api(self, monkeypatch):
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False  # a new repository
         monkeypatch.setattr(
             "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
         )
@@ -1111,7 +1114,7 @@ class TestCallbackLifecycle:
             control=types.SimpleNamespace(),
         )
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model", private=True, exist_ok=False,
         )
 
     def test_on_train_begin_swallows_failure(self, monkeypatch):
