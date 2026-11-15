@@ -206,3 +206,31 @@ def test_canary_exposure_display_keeps_original_secret_scoring_and_report(
     assert Path("manifest.json").read_bytes() == original
     if os.name != "nt":
         assert Path("report.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("value,shown", FILE_VALUES)
+def test_canary_report_receipt_keeps_literal_output_path_and_green_label(
+    printed, monkeypatch, value, shown
+):
+    canary = Canary("carrier", "secret")
+    write_manifest([canary], "manifest.json", "alpaca")
+    original_manifest = Path("manifest.json").read_bytes()
+    output = Path("report-" + _filename(value) + ".json")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    displayed = Path("report-" + _filename(shown) + ".json")
+    monkeypatch.setattr(command, "_load_pair", lambda *a: (object(), object(), "cpu"))
+    monkeypatch.setattr(command, "compute_pair_losses", lambda *a, **k: [2.0] + [1.0] * 4)
+
+    result = CliRunner().invoke(app, [
+        "data", "canary", "check", "--manifest", "manifest.json", "--base", "model",
+        "--device", "cpu", "--controls", "4", "-o", str(output),
+    ])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert f"Report written: {displayed}" in _plain(printed.getvalue())
+    assert "\x1b[32mReport written:" in printed.getvalue()
+    expected = build_canary_report([2.0], [1.0] * 4, [canary.secret])
+    assert json.loads(output.read_text()) == canary_report_to_dict(expected)
+    assert Path("manifest.json").read_bytes() == original_manifest
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o777 == 0o600
