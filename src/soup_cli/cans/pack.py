@@ -47,6 +47,29 @@ def _redact_for_pack(
     return redacted, description, report
 
 
+def _redact_field(value: str, label: str, report: RedactionReport) -> str:
+    """One text field written next to the config (a name, a tag, an author, ...)."""
+    if not isinstance(value, str) or not value:
+        return value
+    before = report.count
+    new = redact_text(value, report)
+    if report.count != before:
+        report.add_path(label)
+    return new
+
+
+def _redact_name(name: str, label: str, report: RedactionReport) -> str:
+    """A can name that is itself a credential cannot be stored: refuse, without the value."""
+    before = report.count
+    new = redact_text(name, report)
+    if report.count != before:
+        raise ValueError(
+            f"the can {label} looks like a credential; rename it before packing "
+            "(the value is not shown)"
+        )
+    return new
+
+
 def _announce_redactions(report: RedactionReport, console: Optional[Console]) -> None:
     """Say which keys were changed before the can was written (paths, never values)."""
     if not report.count:
@@ -54,9 +77,14 @@ def _announce_redactions(report: RedactionReport, console: Optional[Console]) ->
     shown = [for_terminal(redact_text(path)) for path in report.paths[:_MAX_LISTED_PATHS]]
     more = len(report.paths) - len(shown)
     listing = ", ".join(shown) + (f" (+{more} more)" if more > 0 else "")
-    (console or Console()).print(
+    target = console or Console()
+    target.print(
         f"[yellow]Redacted {report.count} credential value(s) before packing, "
         f"keys changed:[/] {listing}",
+        soft_wrap=True, highlight=False,
+    )
+    target.print(
+        "[dim]The redacted values are not in the can: supply them again before it is run.[/]",
         soft_wrap=True, highlight=False,
     )
 
@@ -102,16 +130,25 @@ def pack_entry(
     config, safe_description, report = _redact_for_pack(
         config, description or entry.get("notes"),
     )
+    # the fields written next to the config are redacted too (recipe.md prints three of them)
+    safe_name = _redact_name(entry["name"], "name", report)
+    safe_author = _redact_field(author, "author", report)
+    safe_tags = [
+        _redact_field(tag, f"tags[{index}]", report)
+        for index, tag in enumerate(entry.get("tags", []))
+    ]
+    base_model = _redact_field(entry["base_model"], "base_model", report)
+    task = _redact_field(entry["task"], "task", report)
     _announce_redactions(report, console)
 
     manifest = Manifest(
         can_format_version=CAN_FORMAT_VERSION,
-        name=entry["name"],
-        author=author,
+        name=safe_name,
+        author=safe_author,
         created_at=datetime.now().isoformat(timespec="seconds"),
         base_hash=entry.get("entry_hash", ""),
         description=safe_description,
-        tags=list(entry.get("tags", [])),
+        tags=safe_tags,
         attestations=list(attestations or []),
     )
 
@@ -126,8 +163,8 @@ def pack_entry(
             sort_keys=False,
         ))
         _add_text(tar, "recipe.md",
-                  f"# {manifest.name}\n\nBase: {entry['base_model']}\n"
-                  f"Task: {entry['task']}\n\n"
+                  f"# {manifest.name}\n\nBase: {base_model}\n"
+                  f"Task: {task}\n\n"
                   f"{manifest.description or ''}\n")
 
     # Enforce size cap — reject anything larger than 100 MB
@@ -203,15 +240,21 @@ def fork_can(
     for mod in modifications:
         _apply_modification(config, mod)
     config, safe_description, report = _redact_for_pack(config, manifest.description)
+    safe_name = _redact_name(manifest.name, "name", report)
+    safe_author = _redact_field(author, "author", report)
+    safe_tags = [
+        _redact_field(tag, f"tags[{index}]", report) for index, tag in enumerate(manifest.tags)
+    ]
     _announce_redactions(report, console)
 
     with tarfile.open(out, mode="w:gz") as tar:
         _add_text(tar, "manifest.yaml", yaml.safe_dump({
             **manifest.model_dump(),
             "description": safe_description,
-            "author": author,
+            "author": safe_author,
+            "tags": safe_tags,
             "created_at": datetime.now().isoformat(timespec="seconds"),
-            "name": f"{manifest.name}-fork",
+            "name": f"{safe_name}-fork",
         }, sort_keys=False))
         _add_text(tar, "config.yaml", yaml.safe_dump(config, sort_keys=False))
         _add_text(tar, "data_ref.yaml", yaml.safe_dump(
