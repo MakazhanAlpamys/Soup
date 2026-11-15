@@ -29,6 +29,7 @@ from soup_cli.eval.custom import EvalTask
 from soup_cli.utils import ship_task_rows
 from soup_cli.utils.live_eval import GeneratedText
 from soup_cli.utils.ship_task_rows import (
+    JUDGE_MEAN_TOLERANCE,
     MAX_FILE_BYTES,
     MAX_LINE_BYTES,
     MAX_TEXT_CHARS,
@@ -137,7 +138,7 @@ def test_the_rows_file_name_is_the_stem_of_the_anchor_plus_the_suffix(anchor, ex
         ("out\x00.json", "must not contain null bytes"),
         ("o\n.json", "has a control character"),
         ("o\x1b[2J.json", "has a control character"),
-        ("x" * 300 + ".json", "at most 255 characters"),
+        ("x" * 300 + ".json", "is too long"),
         ("\\\\host\\share\\out.json", "network share or a device"),
         ("//host/share/out.json", "network share or a device"),
     ],
@@ -478,6 +479,7 @@ def test_a_file_that_is_not_ours_is_left_alone_and_the_refusal_says_why(tmp_path
     "content",
     [b"not json at all\n", b'["a list"]\n', b'{"leg": "judge"}\n', b'{"leg": "task"}\n',
      b'{"leg": "task", "schema_version": true}\n', b"\xff\xfe\n"],
+    ids=["not-json", "list", "judge-leg", "task-leg-only", "bool-version", "not-utf8"],
 )
 def test_only_a_line_that_looks_like_ours_is_replaced(tmp_path, monkeypatch, content):
     monkeypatch.chdir(tmp_path)
@@ -773,13 +775,13 @@ def test_the_text_cut_flag_lets_a_cut_prompt_keep_the_hash_of_the_whole_one(tmp_
 
 
 def _write_pair(tmp_path, *, pointer="v.task-rows.jsonl", key="task_win", n=3, base=None,
-                tuned=None, rows_block=True, directory=None):
+                tuned=None, rows_block=True, directory=None, mode="metric"):
     directory = directory or tmp_path
     entries = _good_lines(n)
     loaded = load_task_rows(_write_lines(tmp_path, entries))
     if Path(directory) != tmp_path:
         (tmp_path / "v.task-rows.jsonl").replace(Path(directory) / "v.task-rows.jsonl")
-    leg = {"mode": "metric", "base": loaded.base_mean if base is None else base,
+    leg = {"mode": mode, "base": loaded.base_mean if base is None else base,
            "tuned": loaded.tuned_mean if tuned is None else tuned}
     if rows_block:
         leg["rows"] = {"better": loaded.better, "worse": loaded.worse, "same": loaded.same,
@@ -1132,7 +1134,7 @@ def test_cli_metric_run_writes_one_row_per_task_next_to_the_output(monkeypatch, 
     assert (rows[6]["base_score"], rows[6]["tuned_score"], rows[6]["change"]) == (
         0.0, 1.0, "better",
     )
-    assert "Wrote task rows out.task-rows.jsonl (8 rows)" in run.plain
+    assert "Wrote task rows out.task-rows.jsonl (8 rows;" in run.plain
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -1236,6 +1238,16 @@ BASE_WEIGHTS = [1.7, 2.9, 4.3, 3.1, 2.2, 4.9, 1.1, 3.7]
 TUNED_WEIGHTS = [2.3, 2.9, 3.9, 3.3, 4.4, 1.9, 1.3, 3.7]
 
 
+def _evaluator_number(weights):
+    """What the judge leg reports for these per-row weighted scores: the evaluator's overall
+    score on the 1-5 rubric, rescaled to [0, 1]."""
+    from soup_cli.eval.judge import JudgeResults, JudgeScore
+
+    results = JudgeResults(scores=[JudgeScore("p", "r", weighted_score=w) for w in weights])
+    results.compute()
+    return max(0.0, min(1.0, (results.overall_score - 1.0) / 4.0))
+
+
 def _patch_judge(monkeypatch):
     from soup_cli.eval.judge import JudgeEvaluator, JudgeScore
 
@@ -1257,7 +1269,7 @@ def _judge_gens(shape):
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_cli_judge_score_rows_average_to_the_reported_number_exactly(monkeypatch, shape):
+def test_cli_judge_score_rows_average_to_the_reported_number_within_1e_12(monkeypatch, shape):
     _patch_judge(monkeypatch)
     base, tuned = _judge_gens(shape)
     run = _run(monkeypatch, _tasks(), base, tuned,
@@ -1268,12 +1280,14 @@ def test_cli_judge_score_rows_average_to_the_reported_number_exactly(monkeypatch
     base_scores = [row["base_score"] for row in rows]
     tuned_scores = [row["tuned_score"] for row in rows]
     # the scores are the judge's, rescaled to [0, 1] on its 1-5 rubric
-    assert base_scores == [max(0.0, min(1.0, (w - 1.0) / 4.0)) for w in BASE_WEIGHTS]
+    assert base_scores == [(w - 1.0) / 4.0 for w in BASE_WEIGHTS]
     assert any(Fraction(score) != Fraction(str(score)) for score in base_scores)  # not binary
-    assert row_mean(base_scores) == win["base"]
-    assert row_mean(tuned_scores) == win["tuned"]
-    # and the rescaled mean of the raw scores, which is what 0.77.x reported, to float noise
-    assert win["base"] == pytest.approx((sum(BASE_WEIGHTS) / 8 - 1) / 4, abs=1e-12)
+    # the reported number is the evaluator's own, byte for byte (what 0.77.x reported); the rows
+    # add up to it within 1e-12, which is all a judge leg claims
+    assert win["base"] == _evaluator_number(BASE_WEIGHTS)
+    assert win["tuned"] == _evaluator_number(TUNED_WEIGHTS)
+    assert abs(row_mean(base_scores) - win["base"]) <= JUDGE_MEAN_TOLERANCE
+    assert abs(row_mean(tuned_scores) - win["tuned"]) <= JUDGE_MEAN_TOLERANCE
     assert [row["scoring"] for row in rows] == [None] * 8
     assert [row["base_failed"] for row in rows] == [False] * 8
     assert [row["base_truncated"] for row in rows][0:3] == [True, False, False]
@@ -1282,6 +1296,7 @@ def test_cli_judge_score_rows_average_to_the_reported_number_exactly(monkeypatch
     changes = [row["change"] for row in rows]
     assert changes.count("better") == win["rows"]["better"]
     assert changes.count("worse") == win["rows"]["worse"]
+    assert changes.count("same") == win["rows"]["same"]
 
 
 def test_cli_the_judge_number_of_a_row_file_that_cannot_be_audited_stays_the_judges(monkeypatch):
@@ -1345,7 +1360,7 @@ def test_cli_a_pointer_is_a_name_even_when_the_output_is_in_a_subdirectory(monke
     assert run.json("deep/er/out.json")["task_rows"] == "out.task-rows.jsonl"
     assert "deep/er/out.task-rows.jsonl" in run.files
     assert run.json("deep/er/ev.json")["task_rows"] == "out.task-rows.jsonl"
-    assert "Wrote task rows deep/er/out.task-rows.jsonl (8 rows)" in run.plain.replace("\\", "/")
+    assert "Wrote task rows deep/er/out.task-rows.jsonl (8 rows;" in run.plain.replace("\\", "/")
 
 
 def test_cli_the_evidence_names_the_file_only_when_it_sits_in_the_same_directory(monkeypatch):
@@ -1356,14 +1371,6 @@ def test_cli_the_evidence_names_the_file_only_when_it_sits_in_the_same_directory
     assert "a/out.task-rows.jsonl" in run.files
     assert "task_rows" not in run.json("b/ev.json")  # a name that would not resolve next to it
     assert not any(name.startswith("b/") and name.endswith(".jsonl") for name in run.files)
-
-
-def test_cli_without_an_output_the_evidence_anchors_the_file(monkeypatch):
-    base = _scripted(_answers(correct={0}))
-    tuned = _scripted(_answers(correct={0, 1}))
-    run = _run(monkeypatch, _tasks(), base, tuned, output=None, evidence="sub/ev.json")
-    assert "sub/ev.task-rows.jsonl" in run.files
-    assert run.json("sub/ev.json")["task_rows"] == "ev.task-rows.jsonl"
 
 
 def test_cli_without_output_or_evidence_there_is_nowhere_to_put_the_file(monkeypatch):
@@ -1434,7 +1441,7 @@ def test_cli_paths_with_a_space_or_a_bracket_work_and_print_literally(monkeypatc
     stem = output[: -len(".json")]
     assert f"{stem}.task-rows.jsonl" in run.files
     assert run.json(output)["task_rows"] == os.path.basename(stem) + ".task-rows.jsonl"
-    assert f"Wrote task rows {stem}.task-rows.jsonl (8 rows)" in run.plain
+    assert f"Wrote task rows {stem}.task-rows.jsonl (8 rows;" in run.plain
 
 
 def test_cli_an_absolute_path_in_the_platform_form_works(monkeypatch):
@@ -1491,15 +1498,17 @@ def test_cli_a_network_share_output_is_refused_before_any_model_loads(monkeypatc
 
 
 def test_cli_an_evidence_path_that_is_the_rows_file_is_refused_before_the_run(monkeypatch):
-    def boom(*args, **kwargs):
-        raise AssertionError("a model was loaded")
+    called = []
 
-    base = _scripted(_answers(correct={0}))
-    monkeypatch.setattr(ship_cmd, "_verdict_live", boom)
-    run = _run(monkeypatch, _tasks(), base, base, output="out.json",
+    def generate(prompt):
+        called.append(prompt)
+        return "x"
+
+    run = _run(monkeypatch, _tasks(), generate, generate, output="out.json",
                evidence="out.task-rows.jsonl")
     assert run.result.exit_code == 3, (run.result.output, repr(run.result.exception))
     assert "is the same file as --emit-evidence" in run.plain
+    assert called == []
 
 
 def test_cli_a_task_file_that_is_the_rows_file_is_refused_and_untouched(monkeypatch):
@@ -1575,13 +1584,14 @@ def test_cli_a_run_that_writes_no_rows_is_not_asked_about_the_rows_path(monkeypa
     assert run.json("out.json")["task_rows"] is None
 
 
-# the write fails: the verdict stands, the exit code is 1 (the spec: the file is part of the
-# evidence, as the judge rows are), and nothing is claimed that was not written
+# the write fails: the verdict stands, a SHIP becomes exit 1 (the spec: the file is part of the
+# evidence, as the judge rows are), a DON'T SHIP keeps its exit 2, and nothing is claimed that was
+# not written
 
 
-@pytest.mark.parametrize("correct", [{0, 1, 2}, set()])
-def test_cli_a_failed_write_is_exit_1_after_the_verdict_and_the_evidence_are_written(
-    monkeypatch, correct
+@pytest.mark.parametrize(("correct", "code"), [({0, 1, 2}, 1), (set(), 2)])
+def test_cli_a_failed_write_is_reported_after_the_verdict_and_the_evidence_are_written(
+    monkeypatch, correct, code
 ):
     def broken(rows, anchor):
         raise OSError("no space left on device")
@@ -1590,7 +1600,7 @@ def test_cli_a_failed_write_is_exit_1_after_the_verdict_and_the_evidence_are_wri
     base = _scripted(_answers(correct={0}))
     tuned = _scripted(_answers(correct=correct))
     run = _run(monkeypatch, _tasks(), base, tuned)
-    assert run.result.exit_code == 1, (run.result.output, repr(run.result.exception))
+    assert run.result.exit_code == code, (run.result.output, repr(run.result.exception))
     assert "cannot write the task rows next to --output: OSError: no space left on device" in (
         run.plain
     )
@@ -1669,8 +1679,8 @@ def test_cli_a_failed_write_message_is_made_safe_for_the_terminal(monkeypatch):
 
     monkeypatch.setattr(ship_cmd, "write_task_rows", broken)
     base = _scripted(_answers(correct={0}))
-    run = _run(monkeypatch, _tasks(), base, base)
-    assert run.result.exit_code == 1
+    run = _run(monkeypatch, _tasks(), base, base)  # a tie: DON'T SHIP keeps its exit 2
+    assert run.result.exit_code == 2
     assert "\x1b[31mred" not in run.result.output
     assert "[bold]name" in run.plain  # markup is printed, not interpreted
 
@@ -1713,3 +1723,462 @@ def test_cli_a_hostile_row_text_is_exact_in_the_file_and_never_printed(monkeypat
     assert run.result.exit_code == 0, (run.result.output, repr(run.result.exception))
     assert run.rows()[0]["prompt"] == hostile  # the file is exact
     assert "\x1b" not in run.result.output and "owned" not in run.result.output
+
+
+# -- second read: the judge number, the anchor, the refusals, the exit code ------------------------
+
+
+def _patch_judge_weighted(monkeypatch, table):
+    """A judge whose weighted score for an answer is ``table[answer]`` (any number, in or out of
+    the rubric's scale)."""
+    from soup_cli.eval.judge import JudgeEvaluator, JudgeScore
+
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+
+    def evaluate(self, prompt, response, category="default"):
+        return JudgeScore(prompt, str(response), weighted_score=table[str(response)])
+
+    monkeypatch.setattr(JudgeEvaluator, "evaluate", evaluate)
+
+
+def _patch_judge_criteria(monkeypatch, table):
+    """A judge whose criteria scores for an answer are ``table[answer]`` on the built-in rubric
+    (3 criteria, weight 1, scale 1-5), weighted by the real ``_compute_weighted_score``."""
+    from soup_cli.eval.judge import (
+        DEFAULT_RUBRIC,
+        JudgeEvaluator,
+        JudgeScore,
+        _compute_weighted_score,
+    )
+
+    names = [criterion["name"] for criterion in DEFAULT_RUBRIC["criteria"]]
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+
+    def evaluate(self, prompt, response, category="default"):
+        scores = dict(zip(names, table[str(response)]))
+        return JudgeScore(
+            prompt, str(response), scores=scores,
+            weighted_score=_compute_weighted_score(scores, self.rubric), category=category,
+        )
+
+    monkeypatch.setattr(JudgeEvaluator, "evaluate", evaluate)
+
+
+def test_cli_a_mathematical_tie_of_a_judge_stays_a_tie_and_never_wins_by_one_ulp(monkeypatch):
+    # Both sides earn 12 criteria points over two rows on the built-in rubric: 0.25 against
+    # 0.25, a tie, DON'T SHIP. Reporting the mean of the rescaled rows made it 0.24999999999999997
+    # against 0.25 = a win. The evaluator's own number stays the reported number, byte for byte.
+    _patch_judge_criteria(
+        monkeypatch,
+        {"b0": (1, 1, 2), "b1": (1, 2, 5), "t0": (1, 1, 1), "t1": (1, 3, 5)},
+    )
+    base = _scripted({"q0": ("b0", False), "q1": ("b1", False)})
+    tuned = _scripted({"q0": ("t0", False), "q1": ("t1", False)})
+    run = _run(monkeypatch, _tasks(2), base, tuned,
+               "--task-mode", "judge_score", "--judge-model", "ollama://judge")
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    verdict = run.json("out.json")
+    assert verdict["task_win"]["base"] == 0.25
+    assert verdict["task_win"]["tuned"] == 0.25
+    assert verdict["task_win"]["won"] is False
+    assert verdict["decision"] == "DON'T SHIP" and verdict["failed_rule"] == "task_win"
+    # the file is there and adds up to the number within 1e-12, which is all it claims
+    rows = run.rows()
+    assert abs(row_mean([row["base_score"] for row in rows]) - 0.25) <= JUDGE_MEAN_TOLERANCE
+    assert abs(row_mean([row["tuned_score"] for row in rows]) - 0.25) <= JUDGE_MEAN_TOLERANCE
+    assert verdict["task_win"]["rows"] == {"better": 1, "worse": 1, "same": 0, "n": 2}
+    assert [row["change"] for row in rows] == ["worse", "better"]
+
+
+def test_a_judge_leg_may_differ_from_its_row_mean_by_1e_12_and_no_more():
+    assert JUDGE_MEAN_TOLERANCE == 1e-12
+    scores = [0.1, 0.2, 0.3, 0.7]
+    mean = row_mean(scores)
+    tuned = _leg(scores, prefix="t")
+    for offset in (0.0, 9e-13, -9e-13):  # inside
+        build_task_rows(_leg(scores, value=mean + offset), tuned, scoring_applies=False)
+    for offset in (1.1e-12, -1.1e-12):  # outside
+        with pytest.raises(ValueError, match="the base row scores average"):
+            build_task_rows(_leg(scores, value=mean + offset), tuned, scoring_applies=False)
+    with pytest.raises(ValueError, match="the tuned row scores average"):
+        build_task_rows(_leg(scores), _leg(scores, prefix="t", value=mean + 1.1e-12),
+                        scoring_applies=False)
+
+
+def test_a_metric_leg_still_has_to_equal_its_row_mean_exactly():
+    scores = [0.0, 1.0, 1.0]
+    mean = row_mean(scores)
+    with pytest.raises(ValueError, match="the base row scores average"):
+        build_task_rows(_leg(scores, value=mean + 1e-15), _leg(scores, prefix="t"),
+                        scoring_applies=True)
+
+
+def test_the_loader_takes_the_judge_tolerance_only_when_asked_to(tmp_path):
+    entries = _good_lines(3)
+    for entry, score in zip(entries, (0.1, 0.2, 0.3)):
+        entry["base_score"] = score
+        entry["tuned_score"] = score
+        entry["change"] = "same"
+    path = _write_lines(tmp_path, entries)
+    mean = row_mean([0.1, 0.2, 0.3])
+    load_task_rows(path, base=mean + 9e-13, mean_tolerance=JUDGE_MEAN_TOLERANCE)
+    with pytest.raises(ValueError, match="is not the reported base"):
+        load_task_rows(path, base=mean + 1.1e-12, mean_tolerance=JUDGE_MEAN_TOLERANCE)
+    with pytest.raises(ValueError, match="is not the reported tuned"):
+        load_task_rows(path, tuned=mean - 1.1e-12, mean_tolerance=JUDGE_MEAN_TOLERANCE)
+    with pytest.raises(ValueError, match="is not the reported base"):
+        load_task_rows(path, base=mean + 9e-13)  # the default is exact
+
+
+def test_the_verdict_names_its_mode_and_that_picks_the_tolerance(tmp_path):
+    entries = _good_lines(3)
+    for entry, score in zip(entries, (0.1, 0.2, 0.3)):
+        entry["base_score"] = score
+        entry["tuned_score"] = score
+        entry["change"] = "same"
+    mean = row_mean([0.1, 0.2, 0.3])
+    rows_path = _write_lines(tmp_path, entries)
+    assert Path(rows_path).name == "v.task-rows.jsonl"
+    for mode, loads in (("judge_score", True), ("metric", False), ("pairwise", False)):
+        payload = {
+            "task_win": {"mode": mode, "base": mean + 9e-13, "tuned": mean,
+                         "rows": {"better": 0, "worse": 0, "same": 3, "n": 3}},
+            "task_rows": "v.task-rows.jsonl",
+        }
+        (tmp_path / "verdict.json").write_text(json.dumps(payload), encoding="utf-8")
+        if loads:
+            assert len(load_task_rows_for(str(tmp_path / "verdict.json")).rows) == 3
+        else:
+            with pytest.raises(ValueError, match="is not the reported base"):
+                load_task_rows_for(str(tmp_path / "verdict.json"))
+
+
+def test_cli_judge_rows_are_rescaled_without_clamping_and_the_counts_are_the_files(monkeypatch):
+    # scores outside the rubric's scale (a judge with a negative criterion weight can give them)
+    # are not clamped together: 6 and 7 on the 1-5 scale stay two different rows, better by one.
+    # The row file cannot hold a score above 1, so it is left out, and says so.
+    _patch_judge_weighted(monkeypatch, {"b0": 6.0, "b1": 3.0, "t0": 7.0, "t1": 3.0})
+    base = _scripted({"q0": ("b0", False), "q1": ("b1", False)})
+    tuned = _scripted({"q0": ("t0", False), "q1": ("t1", False)})
+    run = _run(monkeypatch, _tasks(2), base, tuned,
+               "--task-mode", "judge_score", "--judge-model", "ollama://judge")
+    assert run.result.exit_code == 0, (run.result.output, repr(run.result.exception))
+    win = run.json("out.json")["task_win"]
+    assert win["rows"] == {"better": 1, "worse": 0, "same": 1, "n": 2}
+    assert win["base"] == (4.5 - 1.0) / 4.0 and win["tuned"] == 1.0
+    assert run.json("out.json")["task_rows"] is None
+    assert not [name for name in run.files if name.endswith(".task-rows.jsonl")]
+    assert "Task rows file (per-row results) could not be built and is left out: ValueError" in (
+        run.plain
+    )
+
+
+def test_cli_the_counts_of_a_judge_run_are_the_classes_of_its_file(monkeypatch):
+    _patch_judge(monkeypatch)
+    base, tuned = _judge_gens("scalar")
+    run = _run(monkeypatch, _tasks(), base, tuned,
+               "--task-mode", "judge_score", "--judge-model", "ollama://judge")
+    block = run.json("out.json")["task_win"]["rows"]
+    changes = [row["change"] for row in run.rows()]
+    assert block == {"better": changes.count("better"), "worse": changes.count("worse"),
+                     "same": changes.count("same"), "n": len(changes)}
+
+
+# the row file belongs to --output only: with --emit-evidence alone nothing new appears
+
+
+def test_cli_with_only_emit_evidence_no_row_file_is_written_and_the_evidence_has_no_pointer(
+    monkeypatch,
+):
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct={0, 1}))
+    run = _run(monkeypatch, _tasks(), base, tuned, output=None, evidence="sub/ev.json")
+    assert run.result.exit_code == 0, (run.result.output, repr(run.result.exception))
+    assert not [name for name in run.files if name.endswith(".task-rows.jsonl")]
+    assert "task_rows" not in run.json("sub/ev.json")
+    assert "task rows" not in run.plain.lower()
+
+
+def test_cli_the_terminal_line_says_the_file_holds_the_prompts_and_the_answers(monkeypatch):
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct={0, 1}))
+    run = _run(monkeypatch, _tasks(), base, tuned)
+    assert (
+        "Wrote task rows out.task-rows.jsonl (8 rows; it holds your prompts and the answers)"
+        in run.plain
+    )
+
+
+# a failed write keeps the verdict's own exit code unless that is 0
+
+
+def test_cli_a_failed_write_keeps_dont_ship_at_exit_2_and_prints_the_error(monkeypatch):
+    def broken(rows, anchor):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(ship_cmd, "write_task_rows", broken)
+    base = _scripted(_answers(correct={0, 1, 2}))
+    tuned = _scripted(_answers(correct={0}))  # tuned is worse: DON'T SHIP
+    run = _run(monkeypatch, _tasks(), base, tuned)
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    assert "cannot write the task rows next to --output: OSError: no space left on device" in (
+        run.plain
+    )
+    assert run.json("out.json")["decision"] == "DON'T SHIP"
+
+
+def test_cli_a_failed_write_turns_a_ship_into_exit_1(monkeypatch):
+    def broken(rows, anchor):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(ship_cmd, "write_task_rows", broken)
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct={0, 1, 2}))
+    run = _run(monkeypatch, _tasks(), base, tuned)
+    assert run.result.exit_code == 1, (run.result.output, repr(run.result.exception))
+    assert run.json("out.json")["decision"] == "SHIP"
+
+
+# early checks: an adapter that changes nothing writes no file, so it is not asked about one
+
+
+def test_cli_an_adapter_that_changes_nothing_is_not_refused_over_a_foreign_rows_file(
+    monkeypatch,
+):
+    monkeypatch.setattr(ship_cmd, "_adapter_is_noop", lambda adapter: True)
+
+    def put_foreign():
+        Path("out.task-rows.jsonl").write_bytes(b'{"mine": 1}\n')
+
+    base = _scripted(_answers(correct={0}))
+    run = _run(monkeypatch, _tasks(), base, base, before=put_foreign)
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    assert run.json("out.json")["failed_rule"] == "adapter_noop"
+    assert run.files["out.task-rows.jsonl"] == b'{"mine": 1}\n'
+
+
+def test_cli_a_config_that_is_the_rows_file_is_refused_before_the_run(monkeypatch):
+    called = []
+
+    def generate(prompt):
+        called.append(prompt)
+        return "x"
+
+    def put_config():
+        Path("out.task-rows.jsonl").write_text(
+            "base: owner/base\ndata: {train: train.jsonl}\n", encoding="utf-8"
+        )
+
+    run = _run(monkeypatch, _tasks(), generate, generate, "--config", "out.task-rows.jsonl",
+               before=put_config)
+    assert run.result.exit_code == 3, (run.result.output, repr(run.result.exception))
+    assert "is the same file as --config" in run.plain
+    assert called == []
+    assert run.files["out.task-rows.jsonl"].startswith(b"base: owner/base")
+
+
+# a path that cannot be checked is a named refusal, not a traceback
+
+
+@pytest.mark.parametrize("error", [NotADirectoryError, PermissionError])
+def test_a_path_that_cannot_be_checked_is_a_named_refusal_not_a_traceback(
+    tmp_path, monkeypatch, error
+):
+    monkeypatch.chdir(tmp_path)
+    real = os.lstat
+
+    def broken(path, *args, **kwargs):
+        if str(path).endswith(".task-rows.jsonl"):
+            raise error("cannot look")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", broken)
+    with pytest.raises(ValueError, match=rf"cannot be checked \({error.__name__}\)"):
+        write_task_rows([_row()], "v.json")
+    assert not list(tmp_path.glob("*.task-rows.jsonl"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows reports a path under a file as not found")
+def test_a_path_under_a_regular_file_is_a_named_refusal_on_posix(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("blocker").write_text("a file, not a directory", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"cannot be checked \(NotADirectoryError\)"):
+        write_task_rows([_row()], "blocker/out.json")
+
+
+@pytest.mark.parametrize("error", [NotADirectoryError, PermissionError])
+def test_cli_a_path_that_cannot_be_checked_is_exit_3_before_any_model_loads(monkeypatch, error):
+    real = os.lstat
+
+    def broken(path, *args, **kwargs):
+        if str(path).endswith(".task-rows.jsonl"):
+            raise error("cannot look")
+        return real(path, *args, **kwargs)
+
+    called = []
+
+    def generate(prompt):
+        called.append(prompt)
+        return "x"
+
+    monkeypatch.setattr(os, "lstat", broken)
+    run = _run(monkeypatch, _tasks(), generate, generate)
+    assert run.result.exit_code == 3, (run.result.output, repr(run.result.exception))
+    assert f"cannot be checked ({error.__name__})" in run.plain
+    assert called == []
+
+
+# a file is ours only if its first line has exactly our keys
+
+
+def _own_first_line(**changes) -> bytes:
+    line = json.loads(rows_to_jsonl([_row()]))
+    line.update(changes)
+    return (json.dumps(line, separators=(",", ":")) + "\n").encode("ascii")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _own_first_line(schema_version=99),  # a row of a version this one does not write
+        _own_first_line(extra_key="mine"),  # our keys plus one of the user's own
+        b'{"leg": "task", "schema_version": 1, "prompt": "mine", "expected": "mine"}\n',
+        b'{"leg":"task","schema_version":99}\n',
+    ],
+    ids=["version-99", "extra-key", "user-jsonl-with-our-two-keys", "two-keys-version-99"],
+)
+def test_a_file_whose_first_line_is_not_exactly_ours_is_left_alone(
+    tmp_path, monkeypatch, content
+):
+    monkeypatch.chdir(tmp_path)
+    Path("v.task-rows.jsonl").write_bytes(content)
+    with pytest.raises(ValueError, match="not a task-rows file written by soup ship"):
+        write_task_rows([_row()], "v.json")
+    assert Path("v.task-rows.jsonl").read_bytes() == content
+
+
+@pytest.mark.parametrize("variant", ["bom", "crlf", "bom-and-crlf"])
+def test_a_copy_of_our_own_file_with_a_bom_or_crlf_is_still_ours(tmp_path, monkeypatch, variant):
+    monkeypatch.chdir(tmp_path)
+    own = rows_to_jsonl([_row()]).encode("ascii")
+    content = {
+        "bom": b"\xef\xbb\xbf" + own,
+        "crlf": own.replace(b"\n", b"\r\n"),
+        "bom-and-crlf": b"\xef\xbb\xbf" + own.replace(b"\n", b"\r\n"),
+    }[variant]
+    Path("v.task-rows.jsonl").write_bytes(content)
+    write_task_rows([_row(index=0, base_answer="again")], "v.json")
+    assert b"again" in Path("v.task-rows.jsonl").read_bytes()
+
+
+# the loader: huge numbers, long messages, open failures
+
+
+HUGE = 10 ** 400
+
+
+@pytest.mark.parametrize("value", [HUGE, -HUGE], ids=["huge", "huge-negative"])
+def test_a_huge_integer_score_is_a_named_refusal_not_an_overflow(tmp_path, value):
+    entries = _mutate(_good_lines(3), 1, "base_score", value)
+    with pytest.raises(ValueError, match=r"task-rows line 2 base_score must be in \[0, 1\]"):
+        load_task_rows(_write_lines(tmp_path, entries))
+
+
+def test_a_huge_integer_is_not_a_row_score_or_a_mean_of_row_scores():
+    with pytest.raises(ValueError, match="must be finite"):
+        row_mean([HUGE])
+    with pytest.raises(ValueError, match=r"must be in \[0, 1\]"):
+        build_task_rows(_leg([HUGE], value=0.5), _leg([0.5], prefix="t"), scoring_applies=True)
+
+
+@pytest.mark.parametrize("key", ["base", "tuned"])
+def test_a_huge_reported_number_is_a_named_refusal_not_an_overflow(tmp_path, key):
+    path = _write_pair(tmp_path, **{key: HUGE})
+    with pytest.raises(ValueError, match=f"the reported {key} must be a finite number"):
+        load_task_rows_for(path)
+
+
+def test_a_reported_number_that_is_not_finite_is_refused_by_name(tmp_path):
+    path = _write_pair(tmp_path)
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data["task_win"]["base"] = float("inf")
+    # json writes it as Infinity; the literal 1e999 is what parses to infinity without a constant
+    Path(path).write_text(json.dumps(data).replace("Infinity", "1e999"), encoding="utf-8")
+    with pytest.raises(ValueError, match="the reported base must be a finite number"):
+        load_task_rows_for(path)
+
+
+@pytest.mark.parametrize("block", [
+    {"better": 1, "worse": 1, "same": 1, "n": HUGE},
+    {"better": HUGE, "worse": 1, "same": 1, "n": 3},
+    {"better": 1, "worse": 1, "same": 1, "n": True},
+    {"better": 1, "worse": 1, "same": "1", "n": 3},
+    {"better": 1, "worse": 1, "same": 1, "n": -3},
+])
+def test_a_bad_rows_block_is_refused_without_echoing_its_numbers(tmp_path, block):
+    path = _write_pair(tmp_path)
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data["task_win"]["rows"] = block
+    Path(path).write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        load_task_rows_for(path)
+    assert "the rows block of the verdict or evidence file" in str(caught.value)
+    assert "0" * 50 not in str(caught.value) and len(str(caught.value)) < 200
+
+
+def test_the_unknown_field_message_names_at_most_five_keys(tmp_path):
+    entry = dict(_good_lines(1)[0])
+    entry.update({f"k{i}": 1 for i in range(5000)})
+    path = _write_lines(tmp_path, [entry])
+    with pytest.raises(ValueError) as caught:
+        load_task_rows(path)
+    message = str(caught.value)
+    assert message.startswith("task-rows line 1 has unsupported field(s): ")
+    assert message.count("'k") == 5 and "and 4995 more" in message
+    assert len(message) < 300
+
+
+def test_an_open_failure_after_the_stat_is_a_named_refusal(tmp_path, monkeypatch):
+    path = _write_lines(tmp_path, _good_lines(3))
+
+    def broken(*args, **kwargs):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(ship_task_rows, "open", broken, raising=False)
+    with pytest.raises(ValueError, match="task-rows file cannot be read: PermissionError"):
+        load_task_rows(path)
+
+
+# the file name is limited in what the file system counts, not in characters
+
+
+@pytest.mark.parametrize(
+    ("anchor", "ok"),
+    [
+        ("x" * 230 + ".json", True),  # derived name 246: a name that worked before still works
+        ("x" * 239 + ".json", True),  # derived name 255: exactly the limit
+        ("x" * 240 + ".json", False),  # derived name 256: cannot exist
+        ("x" * 245 + ".json", False),  # an --output name that worked, whose derived name cannot
+    ],
+)
+def test_the_derived_name_is_refused_only_when_it_cannot_exist(anchor, ok):
+    if ok:
+        assert task_rows_path(anchor).endswith(TASK_ROWS_SUFFIX)
+    else:
+        with pytest.raises(ValueError, match="is too long"):
+            task_rows_path(anchor)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bytes on POSIX, UTF-16 units on Windows")
+def test_on_posix_the_name_limit_counts_encoded_bytes_not_characters():
+    assert task_rows_path("中" * 79 + ".json")  # 79 * 3 + 16 = 253 bytes
+    with pytest.raises(ValueError, match="is too long"):
+        task_rows_path("中" * 80 + ".json")  # 256 bytes, though only 96 characters
+
+
+@pytest.mark.skipif(os.name != "nt", reason="bytes on POSIX, UTF-16 units on Windows")
+def test_on_windows_the_name_limit_counts_utf16_units_not_characters():
+    assert task_rows_path("中" * 100 + ".json")  # 100 + 16 units: far more bytes, still fine
+    assert task_rows_path("\U0001f600" * 119 + ".json")  # 2 * 119 + 16 = 254 units
+    with pytest.raises(ValueError, match="is too long"):
+        task_rows_path("\U0001f600" * 120 + ".json")  # 256 units, though only 136 characters
