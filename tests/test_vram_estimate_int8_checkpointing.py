@@ -235,11 +235,15 @@ def test_real_8bit_checkpointed_forward_keeps_what_the_term_charges(tmp_path, kb
     """On the card: an 8-bit forward pass with checkpointing leaves more allocated for the
     backward than the same pass in 4-bit, and the difference is what the term charges.
 
-    A tiny randomly initialised Llama with many layers, so the per-layer inputs dominate,
-    prepared as Soup prepares a k-bit model on a bf16 card (``prepare_kbit_model``, bf16
-    norms) or with PEFT's fp32 norms (``kbit_fp32``). Random weights meet no outlier
-    column, so with fp32 norms the down_proj input is fp32, the case that term prices.
-    Measured as a difference between the two loads, which cancels what both keep."""
+    A tiny randomly initialised Llama with many layers and a wide MLP, so the per-layer
+    inputs dominate, prepared as Soup prepares a k-bit model on a bf16 card
+    (``prepare_kbit_model``, bf16 norms) or with PEFT's fp32 norms (``kbit_fp32``). Random
+    weights meet no outlier column, so with fp32 norms the down_proj input is fp32, the case
+    that term prices. Measured as a difference between the two loads, which cancels what
+    both keep. With bf16 norms 8-bit also keeps about 2 bf16 values a token per hidden unit
+    and layer that are not on ``MatMul8bitLt``'s context (its ``A`` tensors are the four
+    inputs and ``subA`` is empty) and that the term does not charge; the wide MLP keeps that
+    small against the term (see the gate record)."""
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import (
@@ -254,7 +258,7 @@ def test_real_8bit_checkpointed_forward_keeps_what_the_term_charges(tmp_path, kb
     if not torch.cuda.is_bf16_supported(including_emulation=False):
         pytest.skip("the bf16 norms of #2683 need a card with bf16 hardware")
     config = LlamaConfig(
-        hidden_size=256, intermediate_size=1024, num_hidden_layers=16, num_attention_heads=4,
+        hidden_size=256, intermediate_size=4096, num_hidden_layers=16, num_attention_heads=4,
         num_key_value_heads=4, vocab_size=320, max_position_embeddings=1024,
     )
     base = tmp_path / "tiny-llama"

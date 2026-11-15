@@ -205,6 +205,15 @@ estimate for every 8-bit run with checkpointing, and the same for every other ru
   file and the table, and the test leaves them out. With the term, the random Qwen2.5-3B rows
   read 0.942 to 0.975: under-priced at 512 tokens in the same way as the 4-bit rows of the
   same shape (row 15, and #2049's row 32 at 0.915), so that part is not the int8 term.
+- **A small part with bf16 norms that the term does not charge.** On the GPU test's tiny
+  random Llama (16 layers, hidden 256, LoRA on q/v, 512 tokens), 8-bit keeps more than 4-bit
+  after a checkpointed forward pass: 3,328 bf16 values a token per layer with fp32 norms,
+  exactly `5 * 256 + 2 * 1024`, but 2,312 with bf16 norms against the `3 * 256 + 1 * 1024`
+  = 1,792 charged. The 520 above it stay at 520 with an intermediate size of 4,096 (5,384
+  against 4,864), so they are hidden-sized. `MatMul8bitLt`'s context holds the four inputs
+  (`A` shares their storage) and an empty `subA`, so they are kept elsewhere; this record
+  does not trace them. The pretrained `bf16` rows read 1.103 to 1.144 with the term, inside
+  the band, and the test uses the 4,096-wide MLP, where the term is 0.95 of the gap.
 - One card, one software stack, one memory cap, three pretrained models of 1.5B parameters
   and below, at up to 4,096 tokens a step.
 - Not the cause, but noted: the `A` that bitsandbytes keeps is never read in its backward,
