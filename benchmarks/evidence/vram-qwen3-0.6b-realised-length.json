@@ -1,0 +1,114 @@
+{
+  "description": "Qwen3 training peaks on an RTX 5070 Laptop (8 GB), with the length of the longest training row of each run. They show what `max_length x batch` over-prices when the data is short, and how the estimate priced at the data's own length compares with the peaks. tests/test_vram_estimate_realised_length.py prices each run through profiler.profile_from_config. `rows` and `downstream_added_rows` were measured by a downstream application with its own runner; `bench_rows` were measured by the maintainers with `soup bench train` (torch's allocated and reserved peaks) beside a 200 ms whole-card nvidia-smi sampler.",
+  "hardware": "NVIDIA GeForce RTX 5070 Laptop GPU, 8151 MiB, Windows 11 Pro",
+  "stack": {
+    "torch": "2.14.0+cu130",
+    "downstream_soup_cli": "0.73.3 (a downstream build)",
+    "bench_soup_cli": "origin/main 945a385dc"
+  },
+  "peak_kinds": {
+    "torch_reserved_mib": "torch.cuda.max_memory_reserved() at the end of the downstream application's training run, MiB. It includes the caching allocator's slack and excludes the CUDA context. Reserved peaks of different runners are not comparable to better than about 10%: one recipe and data file gave 3388 MiB in the downstream runner and 3732 MiB in `soup bench train` (M3).",
+    "max_memory_allocated_bytes": "torch.cuda.max_memory_allocated() from `soup bench train` (bench_rows only): the quantity the estimate's coefficients were calibrated on.",
+    "device_mib": "whole-card nvidia-smi memory.used, maximum over the run's window, MiB. Sampled every 3-5 s in the downstream rows (a lower bound) and every 200 ms in bench_rows. device_clean is true only when nothing else was on the card (baseline 0 MiB before the run)."
+  },
+  "cuda_context": {
+    "device_mib_with_cuda_and_cublas_initialised_and_nothing_else": 226,
+    "device_minus_reserved_mib_in_every_bench_row": 162,
+    "note": "The estimate's fixed overhead is 0.5e9 bytes (477 MiB)."
+  },
+  "longest_row_tokens": "The longest row of the run's training file under the Qwen3 chat template, counted with the model's tokenizer (the data is not shipped). With batch 2 the longest micro-batch the collator can build is 2 x this, because it pads to the longest row of the micro-batch. null with fills_max_length: every row is at least max_length tokens, so every micro-batch is batch x max_length.",
+  "models": {
+    "Qwen/Qwen3-0.6B": {
+      "config": {
+        "model_type": "qwen3",
+        "architectures": [
+          "Qwen3ForCausalLM"
+        ],
+        "hidden_size": 1024,
+        "intermediate_size": 3072,
+        "num_hidden_layers": 28,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "tie_word_embeddings": true,
+        "torch_dtype": "bfloat16"
+      },
+      "params": 751632384,
+      "params_note": "Sum of the safetensors header. The checkpoint stores lm_head.weight although tie_word_embeddings is true, so transformers loads 596,049,920 parameters; the estimate counts the stored 751,632,384 (a known limit)."
+    },
+    "Qwen/Qwen3-1.7B": {
+      "config": {
+        "model_type": "qwen3",
+        "architectures": [
+          "Qwen3ForCausalLM"
+        ],
+        "hidden_size": 2048,
+        "intermediate_size": 6144,
+        "num_hidden_layers": 28,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "tie_word_embeddings": true,
+        "torch_dtype": "bfloat16"
+      },
+      "params": 2031739904,
+      "params_note": "Sum of the safetensors headers. Like Qwen3-0.6B the checkpoint stores lm_head.weight (311,164,928 parameters) although tie_word_embeddings is true, so the estimate counts it twice."
+    },
+    "Qwen/Qwen3-4B": {
+      "config": {
+        "model_type": "qwen3",
+        "architectures": [
+          "Qwen3ForCausalLM"
+        ],
+        "hidden_size": 2560,
+        "intermediate_size": 9728,
+        "num_hidden_layers": 36,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "tie_word_embeddings": true,
+        "torch_dtype": "bfloat16"
+      },
+      "params": 4022468096,
+      "params_note": "Sum of the safetensors index; no lm_head.weight is stored (tied), so nothing is counted twice."
+    }
+  },
+  "rows": [
+    {"id": "qa7-helpdesk-train-r16", "kind": "train", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": 2274, "device_mib": 2436, "device_clean": true},
+    {"id": "qa7-turnscheck-train-r16", "kind": "train", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": 2274, "device_mib": 3542, "device_clean": false, "device_note": "1268 MiB above its own torch peak and another GPU process is listed in the window: not used as a clean reading"},
+    {"id": "qa7-helpdesk-improve-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2662, "device_mib": 5007, "device_clean": false},
+    {"id": "qa7-turnscheck-improve-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 147, "torch_reserved_mib": 3360, "device_mib": 7877, "device_clean": false},
+    {"id": "qa8-helpdesk-improve-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": 2746, "device_mib": 5027, "device_clean": false},
+    {"id": "qa8-turnscheck-improve-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 147, "torch_reserved_mib": 3388, "device_mib": 5025, "device_clean": false},
+    {"id": "study-V0-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2662, "device_mib": 7879, "device_clean": false},
+    {"id": "study-V1-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2662, "device_mib": 7881, "device_clean": false},
+    {"id": "study-V2-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2662, "device_mib": 7881, "device_clean": false},
+    {"id": "study-V3-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2662, "device_mib": 5048, "device_clean": false},
+    {"id": "study-V5-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 68, "torch_reserved_mib": 2720, "device_mib": 5025, "device_clean": false},
+    {"id": "study-V6-r64", "kind": "improve", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 68, "torch_reserved_mib": 2720, "device_mib": 5027, "device_clean": false},
+    {"id": "study-V8-r16", "kind": "improve", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 63, "torch_reserved_mib": 2114, "device_mib": 4995, "device_clean": false},
+    {"id": "arm-B-r64", "kind": "train", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "longest_row_basis": "longest row of the 72-row file; the train split may omit it", "torch_reserved_mib": 2808, "device_mib": null, "device_clean": false},
+    {"id": "arm-C-r64", "kind": "train", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "longest_row_basis": "longest row of the 72-row file; the train split may omit it", "torch_reserved_mib": 2808, "device_mib": null, "device_clean": false},
+    {"id": "arm-D-r16", "kind": "train", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "longest_row_basis": "longest row of the 72-row file; the train split may omit it", "torch_reserved_mib": 2274, "device_mib": null, "device_clean": false},
+    {"id": "arm-E-r16", "kind": "train", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "longest_row_basis": "longest row of the 72-row file; the train split may omit it", "torch_reserved_mib": 2274, "device_mib": null, "device_clean": false}
+  ],
+  "downstream_added_rows": [
+    {"id": "B1-qwen3-1.7b-bf16-r16", "model": "Qwen/Qwen3-1.7B", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": 4784, "device_mib": 4946, "device_clean": true},
+    {"id": "B2-qwen3-4b-4bit-r16", "model": "Qwen/Qwen3-4B", "quantization": "4bit", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": null, "device_mib": 5140, "device_clean": true},
+    {"id": "B3-qwen3-0.6b-4bit-r16", "model": "Qwen/Qwen3-0.6B", "quantization": "4bit", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "gradient_accumulation_steps": 4, "longest_row_tokens": 79, "torch_reserved_mib": null, "device_mib": 2006, "device_clean": true}
+  ],
+  "bench_rows": [
+    {"id": "M1-r16-bf16-helpdesk", "model": "Qwen/Qwen3-0.6B", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "longest_row_tokens": 79, "batch_size": 2, "gradient_accumulation_steps": 4, "max_memory_allocated_bytes": 2209963008, "max_memory_reserved_bytes": 2411724800, "device_mib": 2462, "device_baseline_mib": 0, "device_clean": true},
+    {"id": "M2-r16-bf16-helpdesk-max_length-256", "model": "Qwen/Qwen3-0.6B", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 256, "longest_row_tokens": 79, "batch_size": 2, "gradient_accumulation_steps": 4, "max_memory_allocated_bytes": 2209963008, "max_memory_reserved_bytes": 2411724800, "device_mib": 2462, "device_baseline_mib": 0, "device_clean": true},
+    {"id": "M3-r64-bf16-turnscheck", "model": "Qwen/Qwen3-0.6B", "quantization": "none", "lora_r": 64, "lora_alpha": 128, "target_modules": "all-linear", "max_length": 1024, "longest_row_tokens": 147, "batch_size": 2, "gradient_accumulation_steps": 4, "max_memory_allocated_bytes": 3209885184, "max_memory_reserved_bytes": 3913285632, "device_mib": 3894, "device_baseline_mib": 0, "device_clean": true},
+    {"id": "M4-r16-4bit-helpdesk", "model": "Qwen/Qwen3-0.6B", "quantization": "4bit", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "longest_row_tokens": 79, "batch_size": 2, "gradient_accumulation_steps": 4, "max_memory_allocated_bytes": 2182051328, "max_memory_reserved_bytes": 2292187136, "device_mib": 2348, "device_baseline_mib": 0, "device_clean": true},
+    {"id": "M6-r16-bf16-filled-512", "model": "Qwen/Qwen3-0.6B", "quantization": "none", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 512, "longest_row_tokens": null, "fills_max_length": true, "batch_size": 2, "gradient_accumulation_steps": 4, "max_memory_allocated_bytes": 5693389312, "max_memory_reserved_bytes": 6656360448, "device_mib": 6510, "device_baseline_mib": 0, "device_clean": true}
+  ],
+  "device_only_rows": [
+    {"id": "arm-F-r16-4bit", "quantization": "4bit", "lora_r": 16, "lora_alpha": 32, "target_modules": "all-linear", "max_length": 1024, "batch_size": 2, "longest_row_tokens": 79, "torch_reserved_mib": null, "device_mib": 2004, "device_clean": true, "device_note": "whole card, otherwise idle"},
+    {"id": "arm-A-r64-4bit-qv", "quantization": "4bit", "lora_r": 64, "lora_alpha": 16, "target_modules": ["q_proj", "v_proj"], "max_length": 1024, "batch_size": 2, "longest_row_tokens": 79, "torch_reserved_mib": null, "device_mib": 1996, "device_clean": true, "device_note": "harness reading; sampling not described"}
+  ]
+}
