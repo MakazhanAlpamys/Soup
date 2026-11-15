@@ -135,8 +135,8 @@ def test_the_rows_file_name_is_the_stem_of_the_anchor_plus_the_suffix(anchor, ex
     [
         ("", "must be a non-empty path"),
         ("out\x00.json", "must not contain null bytes"),
-        ("o\n.json", "control character"),
-        ("o\x1b[2J.json", "control character"),
+        ("o\n.json", "has a control character"),
+        ("o\x1b[2J.json", "has a control character"),
         ("x" * 300 + ".json", "at most 255 characters"),
         ("\\\\host\\share\\out.json", "network share or a device"),
         ("//host/share/out.json", "network share or a device"),
@@ -806,6 +806,20 @@ def test_a_pointer_that_names_nothing_or_nothing_in_this_directory_is_refused(tm
     path = _write_pair(tmp_path, pointer="../v.task-rows.jsonl", directory=sub)
     with pytest.raises(ValueError, match="task_rows must be a bare file name"):
         load_task_rows_for(path)
+
+
+@pytest.mark.requires_symlink
+def test_a_pointer_to_a_link_that_leaves_the_directory_is_refused(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    path = _write_pair(tmp_path, directory=outside)
+    os.symlink(outside / "v.task-rows.jsonl", inside / "v.task-rows.jsonl")
+    (inside / "verdict.json").write_bytes((outside / "verdict.json").read_bytes())
+    with pytest.raises(ValueError, match="resolves outside the directory"):
+        load_task_rows_for(str(inside / "verdict.json"))
+    assert len(load_task_rows_for(path).rows) == 3  # the same file in its own directory is fine
 
 
 def test_a_pointer_to_a_file_that_is_not_there_says_so(tmp_path):
