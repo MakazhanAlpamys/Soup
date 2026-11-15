@@ -190,7 +190,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 179 ready-made recipes
+soup recipes list                             List all 180 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
@@ -232,6 +232,7 @@ soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via sw
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
+soup ship ... --output v.json  `schema_version: 2` verdict JSON: `task_win.rows` (better / worse / same), `task_win.truncated` (answers cut off at the token cap, plus the `truncation_growth` warning), `task_win.generation_failures`, `judged` (adapter, checkpoint step); a warning never changes the verdict or exit code, a side whose every generation failed is refused (exit 1); `--emit-evidence` carries the same blocks, which soup-cli 0.77.x refuses as `unsupported field(s)`
 soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance.config_sha and numerics family, --emit-evidence STAMPS both (v0.71.39 / #367); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
 soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
 soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)

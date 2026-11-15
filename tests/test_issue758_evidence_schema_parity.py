@@ -51,6 +51,45 @@ EVIDENCE_CORPUS = (
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "4bit",
     },
+    # schema version 2 (soup-cli 0.78): the task detail and what was judged. Truncation 5 -> 14
+    # of 64 raises the truncation_growth warning, which changes neither decision nor exit code.
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.59,
+            "tuned": 0.72,
+            "rows": {"better": 25, "worse": 17, "same": 22, "n": 64},
+            "truncated": {"base": 5, "tuned": 14, "n": 64, "max_new_tokens": 256},
+            "generation_failures": {"base": 0, "tuned": 2, "n": 64},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "judged": {
+            "base": "Qwen/Qwen3-0.6B",
+            "adapter": "out/checkpoint-12",
+            "tuned": None,
+            "base_adapter": "prod",
+            "checkpoint_step": 12,
+        },
+    },
+    # version 2 with nothing measured: every count is null, never 0
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "judge_score",
+            "base": 0.45,
+            "tuned": 0.30,
+            "truncated": {"base": None, "tuned": None, "n": 8, "max_new_tokens": None},
+        },
+        "benchmarks": {"mini_math": {"base": 0.80, "tuned": 0.79}},
+        "judged": {
+            "base": "base-model",
+            "adapter": None,
+            "tuned": "tuned-model",
+            "base_adapter": None,
+            "checkpoint_step": None,
+        },
+    },
 )
 
 
@@ -73,6 +112,35 @@ def test_corpus_covers_every_registered_evidence_field():
                 evidence["noise_floor"].keys()
                 for evidence in EVIDENCE_CORPUS
                 if "noise_floor" in evidence
+            )
+        ),
+        # the schema-version-2 blocks nested in the task and at the root
+        "rows": set().union(
+            *(
+                evidence["task"]["rows"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "rows" in evidence["task"]
+            )
+        ),
+        "truncated": set().union(
+            *(
+                evidence["task"]["truncated"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "truncated" in evidence["task"]
+            )
+        ),
+        "generation_failures": set().union(
+            *(
+                evidence["task"]["generation_failures"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "generation_failures" in evidence["task"]
+            )
+        ),
+        "judged": set().union(
+            *(
+                evidence["judged"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "judged" in evidence
             )
         ),
     }
@@ -135,6 +203,44 @@ MALFORMED_CORPUS = (
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "nf4",
+    },
+    # schema version 2: a version this reader does not know, and v2 keys without the version
+    {
+        "schema_version": 3,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "schema_version": True,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "task": {
+            "mode": "metric",
+            "base": 0.50,
+            "tuned": 0.80,
+            "rows": {"better": 1, "worse": 0, "same": 0, "n": 1},
+        },
+        "benchmarks": {},
+    },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "judged": {
+            "base": "m", "adapter": None, "tuned": None, "base_adapter": None,
+            "checkpoint_step": None,
+        },
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.50,
+            "tuned": 0.80,
+            "rows": {"better": 1, "worse": 1, "same": 1, "n": 4},
+        },
+        "benchmarks": {},
     },
 )
 
