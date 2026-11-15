@@ -446,13 +446,14 @@ class TestRealEvaluation:
         assert metrics["eval_ranking_queries"] == 1
         assert metrics["eval_ranking_queries_split"] == 1
 
-    def test_classifier_evaluation_is_unchanged(self, captured_console: io.StringIO) -> None:
+    def test_classifier_evaluation_has_no_ranking_metrics(
+        self, captured_console: io.StringIO
+    ) -> None:
         from soup_cli.trainer.classifier import ClassifierTrainerWrapper
 
         cfg = _config("classifier", 2, base=_tiny_base(), batch_size=1)
         wrapper = ClassifierTrainerWrapper(cfg, device="cpu")
         wrapper.setup(_ranked_dataset())
-        assert wrapper.trainer.compute_metrics is None
         metrics = wrapper.trainer.evaluate()
         assert "eval_loss" in metrics
-        assert not any("mrr" in key for key in metrics)
+        assert not any("mrr" in key or "ranking" in key for key in metrics)

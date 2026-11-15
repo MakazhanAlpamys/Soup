@@ -55,8 +55,44 @@ def _finite(value: Any) -> bool:
         return False
 
 
+def _validate_adapter_rope_scaling(config: dict[str, Any]) -> None:
+    """Validate RoPE scaling metadata on a native adapter."""
+    if "rope_scaling" not in config:
+        return
+    rope_cfg = config["rope_scaling"]
+    if not isinstance(rope_cfg, dict):
+        raise ValueError("Native MLX metadata rope_scaling must be a dictionary")
+    rope_type = rope_cfg.get("type") or rope_cfg.get("rope_type")
+    if rope_type != "linear":
+        raise ValueError(
+            f"Native MLX generation currently supports linear RoPE scaling only, "
+            f"got {rope_type!r}"
+        )
+    factor = rope_cfg.get("factor")
+    if not _finite(factor) or factor <= 1.0:
+        raise ValueError(
+            "Native MLX metadata rope_scaling factor must be a finite number > 1.0"
+        )
+    orig_max = rope_cfg.get("original_max_position_embeddings")
+    if (
+        orig_max is None
+        or isinstance(orig_max, bool)
+        or not isinstance(orig_max, int)
+        or orig_max <= 0
+    ):
+        raise ValueError(
+            "Native MLX metadata rope_scaling original_max_position_embeddings "
+            "must be a positive integer"
+        )
+
+
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     """Validate metadata before loading optional dependencies or allocating a model."""
+    if (path / "added_tokens.safetensors").exists():
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     config_path = path / "adapter_config.json"
     if not config_path.exists():
         if (path / "adapters.safetensors").exists():
@@ -76,8 +112,14 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Ambiguous or empty native MLX metadata model identity")
     if base is not None and not _same_base(base, config["model"]):
         raise ValueError("--base does not match the native MLX metadata model identity")
+    if config.get("vocab_expansion"):
+        raise ValueError(
+            "Native MLX generation does not currently support artifacts "
+            "with expanded vocabularies (#1986)"
+        )
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
+    _validate_adapter_rope_scaling(config)
     params = config.get("lora_parameters")
     if not isinstance(params, dict):
         raise ValueError("Native MLX metadata requires lora_parameters")
@@ -158,10 +200,54 @@ def load_native_model(
     # newer releases additionally require an explicit architecture trust flag.
     trust = ({"trust_remote_code": trust_remote_code}
              if "trust_remote_code" in inspect.signature(load).parameters else {})
+
+    model_config_arg: dict[str, Any] = {}
+    if config and "rope_scaling" in config:
+        from soup_cli.utils.mlx_rope import _read_checkpoint_config
+
+        raw_base_config, _ = _read_checkpoint_config(base)
+        orig_len = raw_base_config.get("max_position_embeddings")
+        if (
+            orig_len is None
+            or isinstance(orig_len, bool)
+            or not isinstance(orig_len, int)
+            or orig_len <= 0
+        ):
+            raise ValueError(
+                f"Base checkpoint {base!r} original context length ('max_position_embeddings') "
+                f"is missing or invalid (got {orig_len!r}); "
+                "positive integer required for MLX RoPE scaling."
+            )
+        expected_orig = config["rope_scaling"]["original_max_position_embeddings"]
+        if orig_len != expected_orig:
+            raise ValueError(
+                f"Base model max_position_embeddings ({orig_len!r}) does not match "
+                f"adapter original_max_position_embeddings ({expected_orig!r})"
+            )
+        existing = raw_base_config.get("rope_scaling") or raw_base_config.get("rope_parameters")
+        if isinstance(existing, dict):
+            if any(isinstance(v, dict) for v in existing.values()):
+                raise ValueError(
+                    "Base checkpoint has per-layer or nested RoPE configuration; "
+                    "not supported on MLX"
+                )
+            rope_type = existing.get("rope_type") or existing.get("type")
+            if rope_type not in (None, "default"):
+                raise ValueError(
+                    f"Base checkpoint already carries RoPE scaling ({existing!r}); "
+                    "cannot apply adapter RoPE scaling."
+                )
+        model_config_arg["model_config"] = {
+            "rope_scaling": config["rope_scaling"],
+            "max_position_embeddings": config.get(
+                "max_seq_length", int(round(orig_len * config["rope_scaling"]["factor"]))
+            ),
+        }
+
     model, tokenizer, base_config = load(
         base,
         tokenizer_config={"trust_remote_code": trust_remote_code},
-        return_config=True, **trust,
+        return_config=True, **trust, **model_config_arg,
     )
     # MLX-LM 0.31.3 replaces tokenizer EOS with model EOS; retain both as newer
     # versions do. Use the declared ID, never a guessed control-token string.
@@ -172,6 +258,41 @@ def load_native_model(
         for architecture in base_config.get("architectures", [])
     ):
         raise ValueError("Native MLX generation supports text causal language models only")
+    if config and "rope_scaling" in config:
+        quantized_types = [
+            getattr(nn, "QuantizedLinear", ()),
+            getattr(nn, "QuantizedEmbedding", ()),
+        ]
+        try:
+            from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+            quantized_types.append(QuantizedSwitchLinear)
+        except ImportError:
+            pass
+        quantized_tuple = tuple(t for t in quantized_types if isinstance(t, type))
+        for name, mod in model.named_modules():
+            if isinstance(mod, quantized_tuple):
+                raise ValueError(
+                    "Native MLX generation with RoPE scaling does not support "
+                    "quantized base models; use an unquantized base."
+                )
+        expected_scale = 1.0 / config["rope_scaling"]["factor"]
+        rope_scales = [
+            float(module.scale)
+            for _, module in model.named_modules()
+            if isinstance(module, nn.RoPE)
+        ]
+        if not rope_scales:
+            raise ValueError(
+                f"Base checkpoint {base!r} does not contain rotary embedding (nn.RoPE) modules; "
+                "cannot apply native MLX linear RoPE context extension."
+            )
+        if any(abs(scale - expected_scale) > 1e-5 for scale in rope_scales):
+            raise ValueError(
+                f"Base checkpoint {base!r} does not apply native MLX RoPE scaling "
+                f"(expected scale {expected_scale:.6g}, found {rope_scales}); "
+                "model architecture may not support native linear RoPE scaling."
+            )
     if config:
         layers = getattr(model, "layers", [])
         if config["num_layers"] > len(layers):

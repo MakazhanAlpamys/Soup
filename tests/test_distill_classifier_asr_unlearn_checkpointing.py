@@ -202,7 +202,14 @@ def _build(
 
 
 def _count_layer_calls(model: Any) -> list[int]:
-    """Count calls of the first checkpointable layer; recompute runs it twice a step."""
+    """Count calls inside the first checkpointable layer; recompute runs them twice a step.
+
+    The hook sits on the layer's first child, not on the layer: transformers 5.23.0
+    moved the checkpoint from ``GradientCheckpointingLayer.__call__`` to its ``forward``
+    so module hooks stay outside it. A pre-hook on the layer itself then fires once
+    per step with checkpointing on or off and cannot see the recompute; a hook on a
+    child fires again whenever the checkpoint replays the layer, on every version.
+    """
     from transformers.modeling_layers import GradientCheckpointingLayer
 
     layer = next(m for m in model.modules() if isinstance(m, GradientCheckpointingLayer))
@@ -211,7 +218,7 @@ def _count_layer_calls(model: Any) -> list[int]:
     def hook(*_args: Any) -> None:
         calls[0] += 1
 
-    layer.register_forward_pre_hook(hook)
+    next(layer.children()).register_forward_pre_hook(hook)
     return calls
 
 

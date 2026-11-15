@@ -103,6 +103,9 @@ hidden until the total and a usable speed are known. Evaluation, checkpoint
 saves and changes in step speed can shift the finish time.
 The Speed row uses the panel's measurement when the trainer reports no usable
 speed, and progress stays between 0% and 100%.
+Each step row in the run's record stores the same speed the panel shows: the
+average since the first logged step, empty on that first row, where there is no
+interval yet. The final summary row stores the trainer's own steps per second.
 
 **Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
 generating completions, which costs about as much per row as training on it. So
@@ -139,13 +142,15 @@ weighted by supervised tokens. mlx-lm's own pass would evaluate before the
 update it is scheduled at and read at most 25 whole batches. An evaluation
 takes no step and leaves the training order and the model's mode as they were.
 Unset, MLX keeps mlx-lm's cadence (a quarter of the run). The MLX preference
-tasks (`dpo`, `orpo`) evaluate once per epoch and refuse the field.
+tasks (`dpo`, `orpo`, `simpo`, `kto`) keep their once-per-epoch evaluation
+cadence and refuse this field. MLX GRPO also refuses `training.eval_steps`; it
+reports its held-out reward once after training instead (see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx)).
 
-**Refused at config load.** `training.eval_steps` on the MLX preference tasks
-(see above), on `task: unlearn` (it trains on
-`forget_set` / `retain_set` and has no validation split), and with
-`val_split: 0` on local files or remote URIs, where there would be nothing to
-evaluate.
+**Refused at config load.** `training.eval_steps` on MLX preference tasks or
+GRPO (see above), on `task: unlearn` (it trains on `forget_set` / `retain_set`
+and has no validation split), and with `val_split: 0` on local files or remote
+URIs, where there would be nothing to evaluate.
 
 **Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
 training callback (#802), so their `eval_loss` reaches the trainer's log history
@@ -329,7 +334,7 @@ instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
 
 Requirements, each rejected at config load with the reason named:
-`task: sft`, `backend: transformers`, `modality: text`, and
+`task: sft`, `backend: transformers` (or the native MLX Llama path below), `modality: text`, and
 `quantization: none` (quantized weights cannot be trained directly — use LoRA
 on top of them, i.e. QLoRA). It is mutually exclusive with every LoRA feature
 (`use_dora` / `use_vera` / `use_olora` / `use_rslora` / `rank_pattern` /
@@ -367,6 +372,70 @@ Pick between the three "LoRA off" modes by how much you want to train:
 > a LoRA-shaped model, so on a full-FT run it errs optimistic — set
 > `batch_size` explicitly, or start low and raise it. (This is not new to
 > `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
+
+### Dense Llama training on MLX
+
+Native MLX text SFT supports `lora.r: 0` on unquantized Llama models loaded as
+`mlx_lm.models.llama.Model` (`model_type: llama`). Other architectures and quantized
+loaded modules are refused, even if the recipe says `quantization: none`.
+
+```yaml
+base: ./local-dense-llama
+backend: mlx
+task: sft
+output: ./llama-full
+data:
+  train: ./train.jsonl
+training:
+  quantization: none
+  batch_size: 1
+  freeze_ratio: 0.75      # optional; omit to train every base parameter
+  lora:
+    r: 0
+```
+
+Layers below `freeze_layers`, or `int(num_layers * freeze_ratio)`, remain frozen;
+`freeze_layers` takes priority when both are set. Embeddings, the final norm and
+the output head remain trainable. Tied embedding/head weights receive one update.
+An out-of-range layer count is refused. Even when every decoder block is frozen,
+the embedding, final norm and output head remain trainable. Exact frozen/trainable
+parameter and tensor counts are printed before the first update.
+Frozen tensors receive no optimizer state. Accumulated gradients are weighted by
+the number of supervised tokens, then clipped once per optimizer update.
+
+Trainable weights are promoted to **float32**, including when the input checkpoint
+is bf16/fp16; frozen weights retain their input dtype. AdamW moments and gradients
+are therefore float32 on this path. This avoids fp16 moment/epsilon underflow.
+`gradient_checkpointing: true` is supported. No automatic batch-size estimate
+qualifies a dense model's memory use; choose an explicit small batch size.
+
+The final output and each `checkpoint-000000N/` contain complete weights (including
+frozen layers), config, tokenizer, and `training_config.json` with the effective
+freeze plan and completed update count. Saved trainable tensors are float32 and
+saved frozen tensors keep their input dtype, so a checkpoint can contain both.
+`config.json` preserves the effective model configuration. Any dtype field it
+carries comes from that configuration. `mlx_lm.load` reads each tensor's dtype
+from the safetensors file. An all-trainable 8B model therefore writes about 32 GB
+of weights in decimal units. `save_steps` counts micro-batches; a save
+due within an accumulation group waits for its completed optimizer update. Load
+any saved directory with `mlx_lm.load("./llama-full")`, without the original base
+directory or `adapter_path`. Use a fresh output directory for each run.
+
+LoRA plus freeze settings, non-default LoRA controls, vocabulary expansion, LISA,
+Spectrum, distributed training, `--resume` and `--hf-resume` remain refused.
+Checkpoints contain model weights rather than exact optimizer/RNG training state
+(#1977); a saved standalone model can be the base of a new run.
+
+For a model with `P` total and `T` trainable parameters, the persistent memory
+projection is `4*T + frozen_weight_bytes + 4*T + 8*T` bytes: trainable weights,
+frozen weights, gradients, and two float32 AdamW moments. Activations, temporary
+buffers, accumulation, cache, and macOS need additional memory. With all 8 billion
+parameters trainable this is **128 GB before those extras**; with bf16 frozen
+weights it is `2*(P-T) + 16*T`. Freezing 75% of blocks does not freeze 75% of all
+parameters, because embeddings/norm/head stay trainable. Neither 96 GB nor 128 GB
+unified memory is a measured capacity guarantee. See the
+[native qualification record](../benchmarks/mlx-full-ft-1992.md) for tested shapes,
+peak memory, versions and reproducible checks.
 
 **Load dtype** (#339, #471, #492): a frozen base — LoRA, or QLoRA — loads at
 the checkpoint's own dtype (`dtype="auto"`) instead of always upcasting to fp32,
@@ -787,6 +856,16 @@ training:
   `eval_ranking_queries_split` and reported in one line at setup. Keep all rows of a query on one side
   of the split. Validation rows without `query_id` are left out; with none at all, ranking
   metrics are skipped with one line. `eval_ranking_queries` counts the queries that were scored.
+
+**Classification metrics (`classifier`, #2638).** When there are validation rows, each evaluation
+also reports `eval_accuracy` and `eval_f1_macro` for a single-label head, or
+`eval_subset_accuracy` (every label of a row correct), `eval_f1_micro` and `eval_f1_macro` for a
+multi-label head. They reach the Hugging Face log and `trainer_state.json`; the run's recorded
+validation number stays `val_loss`. A single-label prediction is the argmax of the logits (the
+first index on a tie). A multi-label label is predicted when its logit is above 0, a sigmoid
+probability above 0.5; a logit of exactly 0 is not predicted. A class with no true and no predicted
+row is left out of the macro average instead of counting as 0. `num_labels: 1` with the default
+single-label kind accepts only label 0, so the metrics are skipped with one line saying why.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -1534,6 +1613,16 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+On the Transformers backend the live panel shows **Zero-spread groups**, TRL's
+measured `frac_reward_zero_std` (the fraction of generation groups with identical
+rewards). A real zero displays as 0%; the row is hidden until a valid measurement
+exists. Logs without this metric keep the last reading; an invalid fraction hides
+the row until the next valid measurement and breaks the warning streak. More than
+50% over five distinct logged optimizer steps emits one warning per run. This is
+a diagnostic heuristic, not a quality threshold: it neither stops training nor
+changes rewards or gradients. Evaluation/summary logs do not count as new
+measurements. MLX's existing logging is unchanged.
 
 ```bash
 # Create a reasoning config
