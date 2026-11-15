@@ -217,6 +217,12 @@ Git-for-Windows' bundled bash on Windows.
 
 Halt training automatically if a declarative eval suite regresses beyond a threshold vs a baseline. The gate runs at epoch boundaries — no wasted compute on runs that are already worse.
 
+Eval-gated training requires a live training callback. `soup train` refuses an
+enabled gate on `backend: mlx` and on `task: prm`, `unlearn` or
+`moe_lora_routing`, whether enabled in YAML or through `--gate`. It names the
+unsupported backend or task and exits 1 before building a model. Omit or disable
+`training.eval_gate` and remove `--gate` to train on those paths.
+
 **Configure in `soup.yaml`:**
 
 ```yaml
@@ -257,7 +263,7 @@ tasks:
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
 
-`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` stops with the error and exits 3, and `soup train --gate` and `soup train` with the suite named in `training.eval_gate` stop with it and exit 1, before `--dry-run` returns. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
 An eval gate must contain at least one task. Empty or missing `tasks` lists,
 including a misspelled key that leaves the list empty, are refused with a
