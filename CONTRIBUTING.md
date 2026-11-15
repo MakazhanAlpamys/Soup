@@ -707,19 +707,34 @@ plus the jobs only a run that is not a pull request has (`type-check`,
 matrix (seven cells, newest upstream stack), which the schedule and a dispatch
 without the input run. Measured on 2026-11-12..15: nine full-matrix dispatches on
 one integration branch cost 3,404 job-minutes, and the approval matrix leaves out
-about 95 of the 215 minutes of such a run.
+about 95 of the 215 minutes of such a run. On a pull request's branch the dispatch
+tests the branch tip, not its merge with `main`, and does not replace the label
+run: the pull request's required checks come from its own pull-request run alone.
 
 **A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
-the approval run of a pull request check out the same merge commit when `main` has
-not moved between them (`github.sha` of a pull-request run is the merge commit, and
-adding `ci:full` does not rebuild it). When the quick run's cell ends green it
-leaves a few bytes in the Actions cache under a key made of `github.sha`, the
-runner and the Python version, and the approval run's cell looks for that key
-before it does anything else. On a hit it runs no other step and still reports
-`test (ubuntu-latest, 3.12)` as success under the same name; the log says which run
-the result came from. A new push, a moved `main` (a rebuilt merge commit), a red
-first run and every other cell are misses: the suite runs as before, and the other
-three required cells always run at approval.
+the approval run of a pull request check out the same merge commit:
+`github.sha` of a pull-request run is the merge commit GitHub built when the run
+was created, and adding `ci:full` does not rebuild it (14 of 14 sampled pairs, up
+to six hours apart, logged the same `HEAD is now at ... Merge <head> into
+<main>`). So the approval run's cell would test exactly what the quick run
+tested, and when that run ended green the approval run reuses its result instead
+of repeating it. The quick run's cell leaves a few bytes in the Actions cache
+under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
+the runner and the Python version, with no prefix match), and the approval run's
+cell looks for that key before it does anything else. On a hit it runs no other
+step and still reports `test (ubuntu-latest, 3.12)` as success under the same
+name; the log says which run the result came from. Misses, where the suite runs
+as before: a new push, or anything that makes GitHub rebuild the merge commit (a
+close and reopen, say), because the key names another commit; a first run that
+was red or cancelled; a cache lookup that failed (it is optional and bounded to
+five minutes); and every other cell, which always runs at approval. A moved
+`main` alone is not a miss: the label run tests the same merge commit the quick
+run did, which is what it would have tested without the cache. To force a fresh
+suite on that commit, delete the marker and re-run the job: find it with
+`gh cache list --key suite-green-v1- --ref refs/pull/<number>/merge`, delete it
+with `gh cache delete suite-green-v1-<merge sha>-ubuntu-latest-3.12 --ref
+refs/pull/<number>/merge`, then re-run the job (`gh run rerun <run id> --job
+<job id>`).
 
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
