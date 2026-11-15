@@ -58,6 +58,7 @@ from soup_cli.utils.config_bounds import (
 # The longrope refusal (#1239) lives with the runtime so config load and
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
+from soup_cli.utils.numeric import float_with_overflow_check
 from soup_cli.utils.preference import resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
@@ -1701,7 +1702,7 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             raise ValueError("grpo_beta must not be a boolean")
         if isinstance(v, (int, float)):
-            fval = float(v)
+            fval = float_with_overflow_check(v, "grpo_beta")
             if math.isnan(fval) or math.isinf(fval):
                 raise ValueError("grpo_beta must be finite")
         return v
@@ -3248,7 +3249,7 @@ class TrainingConfig(BaseModel):
             raise ValueError("mole_temperature must be numeric")
         import math as _math
 
-        fv = float(v)
+        fv = float_with_overflow_check(v, "mole_temperature")
         if not _math.isfinite(fv):
             raise ValueError("mole_temperature must be finite")
         # Boundary matches MoleGatingConfig._check_finite_positive
