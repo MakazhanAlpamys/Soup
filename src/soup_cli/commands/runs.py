@@ -14,12 +14,32 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from soup_cli.utils.code_revision import CodeRevision
 from soup_cli.utils.run_cost import format_cost_usd
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
+
+
+def _recorded_code_revision(run: dict) -> CodeRevision:
+    """Validate stored provenance too: a local database can be edited."""
+    dirty = run.get("code_dirty")
+    if type(dirty) is int and dirty in (0, 1):
+        dirty = bool(dirty)
+    try:
+        return CodeRevision(commit=run.get("code_commit"), dirty=dirty)
+    except ValueError:
+        return CodeRevision()
+
+
+def _code_state(run: dict) -> str:
+    """Do not mistake an older or malformed observation for a clean tree."""
+    dirty = _recorded_code_revision(run).dirty
+    if dirty is None:
+        return "unknown"
+    return "dirty" if dirty else "clean"
 
 
 def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
@@ -102,9 +122,10 @@ def list_runs(
             # no longer running.
             status_str = f"[yellow]{status}[/]"
 
-        # Format loss
+        # Format loss. `is not None`, not truthiness: a measured 0.0 is a loss and must
+        # show, while NULL (a run that observed none) shows nothing.
         loss_str = ""
-        if run.get("initial_loss") and run.get("final_loss"):
+        if run.get("initial_loss") is not None and run.get("final_loss") is not None:
             loss_str = f"{run['initial_loss']:.3f} -> {run['final_loss']:.3f}"
 
         # Format duration
@@ -203,6 +224,8 @@ def show(
         f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
+        f"Commit:     {for_terminal(_recorded_code_revision(run).commit or 'unknown')}",
+        f"State:      {_code_state(run)}",
         f"Task:       {for_terminal(run.get('task') or '-')}",
         f"Device:     {for_terminal(run.get('device_name') or '-')} "
         f"({for_terminal(run.get('device') or '-')})",
@@ -251,12 +274,19 @@ def show(
             _plot_loss_curve(metrics)
 
 
-@app.command()
+@app.command(short_help="Compare two local training runs side by side.")
 def compare(
     run_1: str = typer.Argument(..., help="First run ID (or prefix)"),
     run_2: str = typer.Argument(..., help="Second run ID (or prefix)"),
 ):
-    """Compare two training runs side by side."""
+    """Compare two local training runs side by side. The summary includes stored dataset
+    SHA-256 hashes and the Code commit and Code state startup observations. The
+    config table shows differing paths and labels fields absent
+    from one run as not stored. If either full config is unavailable, the command
+    identifies that run and skips the config table. The evaluation table uses the
+    latest stored score for each benchmark and shows the right-minus-left delta
+    when both runs have a score.
+    """
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.registry.diff import config_diff, eval_delta
 
@@ -284,6 +314,9 @@ def compare(
         ("Task", r1.get("task") or "-", r2.get("task") or "-"),
         ("Device", r1.get("device_name") or "-", r2.get("device_name") or "-"),
         ("Status", r1.get("status") or "-", r2.get("status") or "-"),
+        ("Code commit", _recorded_code_revision(r1).commit or "unknown",
+         _recorded_code_revision(r2).commit or "unknown"),
+        ("Code state", _code_state(r1), _code_state(r2)),
         ("Dataset SHA-256", r1.get("training_data_sha256") or "unknown",
          r2.get("training_data_sha256") or "unknown"),
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
@@ -447,6 +480,17 @@ def _checkpoint_to_keep(
     return None, False
 
 
+def _resolved_output_dir(run: dict) -> Optional[Path]:
+    """A run's recorded output directory as ``runs clean`` compares it, or None."""
+    out_dir_str = run.get("output_dir")
+    if not out_dir_str:
+        return None
+    try:
+        return Path(os.path.realpath(out_dir_str))
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -496,41 +540,52 @@ def clean(
         console.print("[yellow]No runs to clean.[/]")
         raise typer.Exit()
 
+    # Cross-platform containment: project convention requires
+    # os.path.realpath + commonpath because Path.resolve() + relative_to()
+    # silently mismatches on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
     total_bytes_to_reclaim = 0
     files_to_delete = []
     dirs_to_delete = []
 
+    # Several runs can share one output directory (#2724). Each directory is
+    # pruned once, so no path is listed, counted or deleted twice.
+    runs_by_dir: dict[Path, list[dict]] = {}
     for run in runs_to_clean:
-        out_dir_str = run.get("output_dir")
-        if not out_dir_str:
+        output_dir = _resolved_output_dir(run)
+        if output_dir is None or not is_under_cwd(output_dir) or not output_dir.exists():
             continue
-        # Cross-platform containment: project convention requires
-        # os.path.realpath + commonpath because Path.resolve() + relative_to()
-        # silently mismatches on Windows 8.3 short names.
-        from soup_cli.utils.paths import is_under_cwd
+        runs_by_dir.setdefault(output_dir, []).append(run)
 
-        try:
-            output_dir = Path(os.path.realpath(out_dir_str))
-        except (OSError, ValueError):
-            continue
-        if not is_under_cwd(output_dir):
-            continue
-        if not output_dir.exists():
-            continue
+    # Every run recorded at a directory keeps its best checkpoint, including
+    # runs that are not being cleaned: `runs clean B` must not prune A's best.
+    # Each directory's list starts from the runs being cleaned, so they are
+    # protected even when `list_runs` does not return them.
+    cleaned_ids = {run["run_id"] for runs in runs_by_dir.values() for run in runs}
+    runs_at_dir = {output_dir: list(runs) for output_dir, runs in runs_by_dir.items()}
+    recorded_runs = runs_to_clean if all_runs else tracker.list_runs(limit=100000)
+    for run in recorded_runs:
+        output_dir = _resolved_output_dir(run)
+        if output_dir in runs_at_dir and run["run_id"] not in cleaned_ids:
+            runs_at_dir[output_dir].append(run)
 
-        metrics = tracker.get_metrics(run["run_id"])
-
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
-        if fallback:
-            console.print(
-                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
-                emoji=False,
-            )
+        keep_steps = set()
+        for run in runs_here:
+            keep_step, fallback = _checkpoint_to_keep(tracker.get_metrics(run["run_id"]), steps)
+            if keep_step is not None:
+                keep_steps.add(keep_step)
+            if fallback and run["run_id"] in cleaned_ids:
+                console.print(
+                    f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                    f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                    emoji=False,
+                )
         for ckpt in checkpoints:
-            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
+            if _checkpoint_step(ckpt) in keep_steps:
                 continue
 
             if keep_weights:
@@ -774,21 +829,28 @@ def curriculum_curve(
     rows = []
     max_lines = 100_000
     with open(real, "r", encoding="utf-8") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]history malformed: line {lineno} is not valid JSON[/]"
+                )
+                raise typer.Exit(2) from exc
             if len(rows) > max_lines:
                 console.print("[red]history exceeds 100k-row cap[/]")
                 raise typer.Exit(2)
     if not rows:
         console.print("[yellow](no curriculum history rows)[/]")
         return
-    nb = len(rows[0].get("weights", []))
     try:
         normalised = parse_history_jsonl(rows)
+        nb = len(normalised[0]["weights"])
+        curve = render_curve(normalised, num_buckets=nb, width=width)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]history malformed: {markup_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    console.print(render_curve(normalised, num_buckets=nb, width=width))
+    console.print(curve)
