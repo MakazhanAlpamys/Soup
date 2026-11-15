@@ -377,7 +377,9 @@ def test_existing_output_keys_are_unchanged(work):
         "forgetting_threshold", "soup_version", "noise_floor", "numerics",
     }
     assert existing <= set(verdict)
-    assert set(verdict["task_win"]) == {"mode", "base", "tuned", "won"}
+    # Version 2 of the verdict (#2870) adds rows, truncated and generation_failures to task_win;
+    # the four keys of version 1 stay.
+    assert {"mode", "base", "tuned", "won"} <= set(verdict["task_win"])
     assert verdict["numerics"] == "float32"
 
 
