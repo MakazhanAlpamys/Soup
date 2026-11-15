@@ -173,3 +173,97 @@ def test_full_model_dir_is_exported_as_is(adapter, quantized, tmp_path):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "merging" not in _plain(result.output)
     assert (Path("out_base") / "config.json").is_file()
+
+
+@pytest.fixture
+def attached(monkeypatch, tmp_path):
+    """Record each registry attach, and whether the export it names was already written."""
+    from soup_cli.commands import export as export_mod
+
+    calls = []
+
+    def attach(*, artifact_path, kind, explicit_id, source_model):
+        calls.append({
+            "artifact_path": artifact_path,
+            "kind": kind,
+            "saved": (Path(artifact_path) / "config.json").is_file(),
+            "scratch_left": [p.name for p in tmp_path.glob(".soup_merge_tmp_*")],
+        })
+
+    monkeypatch.setattr(export_mod, "_maybe_attach_export", attach)
+    return calls
+
+
+def test_registry_attach_runs_once_the_merged_model_is_quantized_and_saved(
+    adapter, quantized, attached
+):
+    result = _export("-o", "out")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert len(quantized) == 1
+    assert attached == [
+        {"artifact_path": "out", "kind": "torchao", "saved": True, "scratch_left": []},
+    ]
+
+
+def test_a_failed_export_attaches_nothing(adapter, attached, monkeypatch):
+    from soup_cli.utils import torchao_compat
+
+    def resolve(name):
+        if name == "quantize_":
+            def quantize_(model, config):
+                raise RuntimeError("no kernel for this device")
+            return quantize_
+        return lambda **kwargs: ("config", name, kwargs)
+
+    monkeypatch.setattr(torchao_compat, "resolve_torchao_class", resolve)
+    assert _export("-o", "out").exit_code == 1
+
+    cfg_path = adapter.dir / "adapter_config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.pop("base_model_name_or_path", None)
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    assert _export("-o", "out2").exit_code == 2
+
+    assert attached == []
+
+
+def test_the_merge_loads_the_base_commit_the_training_run_recorded(
+    adapter, quantized, monkeypatch, tmp_path
+):
+    """The torchao path merges through ``_merge_adapter`` as the other formats do, so a Hub
+    base is loaded at the revision the adapter's run recorded, not at today's head."""
+    import transformers
+
+    from soup_cli.utils import run_provenance
+
+    hub_base, recorded = "org/base", "a" * 40
+    cfg_path = adapter.dir / "adapter_config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["base_model_name_or_path"] = hub_base
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    (adapter.dir / "soup_run.json").write_text(json.dumps({
+        "schema_version": 1, "run_id": "training-run", "base_model": hub_base,
+        "base_revision": recorded, "base_revision_source": "hub_commit",
+    }), encoding="utf-8")
+
+    loads = []
+    real = transformers.AutoModelForCausalLM.from_pretrained
+
+    def from_pretrained(name, *args, **kwargs):
+        loads.append((str(name), kwargs.get("revision")))
+        # The Hub base is the tiny local one; everything else loads as it is.
+        return real(str(adapter.base) if name == hub_base else name, *args, **kwargs)
+
+    def no_hub_resolution():
+        pytest.fail("the merge must use the recorded commit, not ask the Hub for its head")
+
+    monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", from_pretrained)
+    monkeypatch.setattr(run_provenance, "get_hf_api", no_hub_resolution)
+
+    result = _export("-o", "out")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert loads[0] == (hub_base, recorded)
+    assert f"Base revision: {recorded} (recorded run)" in _plain(result.output)
+    assert (tmp_path / "out" / "config.json").is_file()
