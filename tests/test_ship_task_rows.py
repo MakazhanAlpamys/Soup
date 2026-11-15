@@ -1555,6 +1555,26 @@ def test_cli_a_stale_rows_file_is_left_alone_by_a_run_that_writes_none(monkeypat
     assert run.json("out.json")["task_rows"] is None  # and the verdict says there is none
 
 
+def test_cli_a_run_that_writes_no_rows_is_not_asked_about_the_rows_path(monkeypatch):
+    # pairwise writes no per-row file, so a file of the user's own at that name is none of its
+    # business: it neither refuses the run nor is touched
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+    monkeypatch.setattr(JudgeEvaluator, "compare_pair", lambda *args, **kwargs: 1)
+
+    def put_foreign():
+        Path("out.task-rows.jsonl").write_bytes(b'{"mine": 1}\n')
+
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct={0, 1}))
+    run = _run(monkeypatch, _tasks(), base, tuned, "--task-mode", "pairwise",
+               "--judge-model", "ollama://judge", before=put_foreign)
+    assert run.result.exit_code in (0, 2), (run.result.output, repr(run.result.exception))
+    assert run.files["out.task-rows.jsonl"] == b'{"mine": 1}\n'
+    assert run.json("out.json")["task_rows"] is None
+
+
 # the write fails: the verdict stands, the exit code is 1 (the spec: the file is part of the
 # evidence, as the judge rows are), and nothing is claimed that was not written
 
