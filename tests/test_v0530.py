@@ -772,14 +772,16 @@ class TestLFParity:
         ],
     )
     def test_bool_guards_reject_int(self, field):
-        # The inner TypeError from `_validate_v053_bool_fields` propagates
-        # through Pydantic's field_validator(mode='before') unchanged.
-        with pytest.raises(TypeError, match="v0.53.0 flag must be bool"):
-            load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                f"training: {{{field}: 7}}\n"
+        # The TypeError from `_validate_v053_bool_fields` is reported as a
+        # validation error that names the field (#2366).
+        with pytest.raises(ValueError, match=f"{field} must be bool, got int"):
+            SoupConfig.model_validate(
+                {
+                    "base": "a/b",
+                    "task": "sft",
+                    "data": {"train": "x.jsonl"},
+                    "training": {field: 7},
+                }
             )
 
     def test_quantize_ref_model_happy_grpo(self):

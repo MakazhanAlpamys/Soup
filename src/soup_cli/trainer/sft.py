@@ -1460,6 +1460,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         return (mode == "bf16", mode == "fp16")
 
+    def _kbit_compute_dtype(self, tcfg, base_model: str):
+        """The dtype a 4-bit/8-bit run computes in, for ``prepare_kbit_model`` (#2609).
+
+        What ``TrainingArguments`` gets: an ``auto_mixed_precision`` pick of fp16 on a bf16
+        card keeps PEFT's fp32 non-quantised weights, instead of putting bf16 weights under
+        an fp16 run.
+        """
+        from soup_cli.utils.kbit_prepare import kbit_compute_dtype
+
+        if not getattr(tcfg, "auto_mixed_precision", False):
+            return kbit_compute_dtype(self.device)
+        bf16, _fp16 = self._resolve_mixed_precision(tcfg, base_model)
+        return kbit_compute_dtype(self.device, prefer_fp16=not bf16)
+
     def _resolve_load_dtype(self, tcfg):
         """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
@@ -1529,10 +1543,26 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from peft import TaskType, get_peft_model
+        from transformers import AutoTokenizer
 
+        from soup_cli.utils.kimi_k2 import (
+            UnsupportedKimiK2Error,
+            resident_kimi_k2_rope_refusal,
+        )
         from soup_cli.utils.moe import detect_moe_model
+
+        # #2104 — the resident Kimi K2 route rewrites the checkpoint config in memory and
+        # never runs the repository's config code, so there is no config for a rope
+        # override to land on. Refuse before AutoConfig (which would execute that code
+        # under trust_remote_code) or a tokenizer is fetched.
+        rope_refusal = resident_kimi_k2_rope_refusal(
+            cfg.base,
+            getattr(tcfg, "rope_scaling_type", None),
+            stream_layers=getattr(tcfg, "stream_layers", None),
+        )
+        if rope_refusal is not None:
+            raise UnsupportedKimiK2Error(rope_refusal)
 
         if tcfg.quantization_aware == "quest":
             # Fail before ``device_map='auto'`` can shard the model across
@@ -1576,10 +1606,41 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 console.print(f"[yellow]Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}[/]")
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code,
-            **base_revision_kwargs(cfg.base),
+        # Same alignment as the streamed route (stream_setup.py): on the resident K2
+        # route the tokenizer is resolved against the guarded native config, so
+        # AutoTokenizer does not read config.json again under the user's
+        # trust_remote_code and, for a repository with an auto_map (Kimi K2), import
+        # and run its configuration module. Off the K2 route the call is unchanged.
+        from soup_cli.utils.kimi_k2 import (
+            load_resident_model_config,
+            uses_resident_kimi_k2_route,
         )
+
+        resident_tokenizer_config = (
+            load_resident_model_config(cfg.base, **base_revision_kwargs(cfg.base))
+            if uses_resident_kimi_k2_route(cfg.base)
+            else None
+        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                cfg.base,
+                **(
+                    {"config": resident_tokenizer_config}
+                    if resident_tokenizer_config is not None
+                    else {}
+                ),
+                trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
+            )
+        except Exception:
+            # Kimi K2's tokenizer is repository code that imports tiktoken: say so by name.
+            # The streamed route has printed this hint since #2107; the resident route
+            # (#2104) dies at the same tokenizer without it. print_ is K2-gated itself
+            # (the base's config.json must declare model_type: kimi_k2) and never raises.
+            from soup_cli.utils.kimi_k2 import print_kimi_k2_tokenizer_hint
+
+            print_kimi_k2_tokenizer_hint(cfg.base, console, **base_revision_kwargs(cfg.base))
+            raise
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -1635,9 +1696,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            cfg.base, **model_kwargs,
-            **base_revision_kwargs(cfg.base),
+        from soup_cli.utils.kimi_k2 import load_resident_model
+
+        self.model = load_resident_model(
+            cfg.base,
+            model_kwargs={**model_kwargs, **base_revision_kwargs(cfg.base)},
+            console=console,
         )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
@@ -1664,18 +1728,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
         lora_layers_to_transform = None
+        lora_freeze_plan = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
             from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
@@ -1694,6 +1761,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if plan is not None:
                 cutoff, total_layers = plan
+                lora_freeze_plan = plan
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
@@ -1819,21 +1887,44 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "adapter to attach to. Reduce freeze_layers/freeze_ratio."
                 )
 
-            # #1432: peft only applies layers_to_transform when
-            # target_modules is a list, never a string (a regex or
-            # all-linear), so refuse rather than silently ship the same bug
-            # for that shape.
+            # #1432 / #2201: peft applies layers_to_transform only to a LIST
+            # target_modules, never to a string (a regex or all-linear).
+            # Rather than refuse the combination, resolve the string to the
+            # explicit module names it reaches and keep the ones the freeze
+            # plan leaves trainable, so the adapter still respects the plan.
+            scoped_by_names = False
             if lora_layers_to_transform is not None and isinstance(target_modules, str):
-                raise ValueError(
-                    "training.freeze_layers / training.freeze_ratio cannot "
-                    "currently be combined with a string "
-                    f"training.lora.target_modules ({target_modules!r}, a regex "
-                    "or all-linear): peft only restricts layers_to_transform "
-                    "when target_modules is a list of module-name suffixes. "
-                    "Give an explicit training.lora.target_modules list (the "
-                    "module names are in model.named_modules()) instead, or "
-                    "drop freeze_layers/freeze_ratio."
+                from soup_cli.utils.peft_wiring import (
+                    expand_string_target_modules,
+                    restrict_target_modules_to_layers,
                 )
+
+                cutoff, total_layers = lora_freeze_plan
+                resolved_targets = restrict_target_modules_to_layers(
+                    self.model, target_modules, cutoff, total_layers
+                )
+                if not resolved_targets:
+                    reached = len(expand_string_target_modules(self.model, target_modules))
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio leaves "
+                        f"nothing for training.lora.target_modules "
+                        f"{target_modules!r} to attach to: the string reaches "
+                        f"{reached} module(s) in this model, and none of them "
+                        f"sits in the trainable layers {cutoff}.."
+                        f"{total_layers - 1}. Reduce freeze_layers/freeze_ratio, "
+                        "or name a target that reaches those layers."
+                    )
+                console.print(
+                    f"[green]Freeze-scoped targets:[/] "
+                    f"{len(resolved_targets)} module(s) resolved from "
+                    f"target_modules={for_terminal(repr(target_modules))} inside layers "
+                    f"{cutoff}..{total_layers - 1}"
+                )
+                target_modules = resolved_targets
+                # Keep lora_layers_to_transform set: the target_parameters and
+                # VeRA refusals below key off it, and a string target with a
+                # freeze plan must not slip past them (#2201 review, item 2).
+                scoped_by_names = True
 
             # #1432: peft only applies layers_to_transform to a list target
             # that lives inside a numbered decoder layer, or to an exact
@@ -1886,7 +1977,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
-                layers_to_transform=lora_layers_to_transform,
+                layers_to_transform=(
+                    None if scoped_by_names else lora_layers_to_transform
+                ),
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
@@ -1979,7 +2072,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
@@ -2036,13 +2129,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only
@@ -2142,7 +2237,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_audio_transformers(self, cfg, tcfg):
         """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from rich.panel import Panel as RichPanel
         from transformers import AutoModel, AutoProcessor
 
@@ -2204,13 +2299,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only

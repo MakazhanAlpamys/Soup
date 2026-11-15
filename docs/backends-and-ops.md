@@ -87,12 +87,13 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
-It can also be installed with `[train]` when the same environment needs the
-PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
-streaming dataset still needs `datasets` because that data source owns the
-dependency; the local file path below does not.
+`[mlx]` is the standalone extra for all MLX tasks listed in the [optional extras
+table](models.md#optional-extras). For local data, it is sufficient on its own;
+MLX training does not require `[train]`. Add `[train]` only when the same
+environment also needs the PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or streaming
+dataset still needs `datasets` because that data source owns the dependency; the
+local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -126,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -155,6 +164,33 @@ naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+
+#### Vocabulary Expansion on MLX
+
+On `backend: mlx`, text SFT supports vocabulary expansion via `data.add_new_tokens` and
+`data.new_special_tokens` on dense models (`training.quantization: none`) with Llama-style
+architecture (`model.model.embed_tokens` and `model.lm_head`) matching tokenizer length ([#1994](https://github.com/MakazhanAlpamys/Soup/issues/1994)).
+
+The mechanism uses zero-allocation additive parameter slices rather than resizing the base
+embedding matrix in-place:
+- **Base weights frozen:** The base embedding table and LM head remain untouched and frozen.
+- **Registration order:** Special tokens are registered first to ensure semantic precedence,
+  whereas `backend: transformers` (`apply_vocab_expansion`) registers ordinary tokens first.
+- **Additive slice:** Only a new weight matrix $\Delta V \times D$ is allocated and registered
+  as trainable parameters with the optimizer, initialized with a normal distribution
+  matching the base embedding's standard deviation and dtype. The draw is always seeded via
+  `resolve_training_seed` (defaulting to 42 when unset), which reseeds `mx.random.seed`
+  before initialization.
+- **Zero-allocation gather:** The forward pass computes base and extended embeddings separately
+  and merges them via `mx.where(is_new, new_out, base_out)`, avoiding concatenation of large
+  weight tensors.
+- **Memory footprint:** Minimal additional memory during training and on disk:
+  $\Delta V \times D \times \text{sizeof(dtype)}$ bytes for tied embeddings (doubled for untied models).
+  For example, adding 100 tokens to a 4096-dim bf16 model takes only 800 KB of parameters.
+- **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
+  of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
+  Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
 
 #### DPO on MLX
 
@@ -189,7 +225,7 @@ training:
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
 - **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
-- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows), `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), DoRA, `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
 - **Not applied on MLX:** per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
 
 #### ORPO on MLX
@@ -255,7 +291,7 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `modality`, DoRA, LoRA+ and `data.chat_template`. `task: preference` with
   `training.preference_loss: orpo` uses this same native trainer and these
   same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -313,7 +349,7 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `modality`, DoRA, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
@@ -962,7 +998,11 @@ credentials by default.
 export HF_ENDPOINT=https://hf.internal.example.com
 
 # Auto-push each save_steps checkpoint to HF as a 'checkpoint-<N>' branch.
+# A repository this creates is private.
 soup train -c soup.yaml --push-as your-username/my-model
+
+# Create that repository public instead.
+soup train -c soup.yaml --push-as your-username/my-model --push-public
 
 # Resume from the latest branch pushed above.
 soup train -c soup.yaml --push-as your-username/my-model --hf-resume
@@ -982,6 +1022,30 @@ soup deploy hf-space \
     --space your-username/my-chat-space \
     --template streamlit-chat
 ```
+
+**Repository visibility:** a repository that `--push-as` creates is private. Pass
+`--push-public` to create it public instead; the flag needs `--push-as` and is refused
+without it. A repository that already exists is used as it is: its visibility is not
+changed whether or not `--push-public` is given. One line before training starts says
+what happened:
+
+- `Created private Hub repository <repo>.` or `Created public Hub repository <repo>.`,
+  printed only when the Hub confirmed that this run created the repository;
+- `Using existing Hub repository <repo> (private); its visibility is unchanged.` or
+  `... (public); ...` when the repository already existed and its visibility could be
+  read, and `Using existing Hub repository <repo>; its visibility is unchanged.` when it
+  could not (for example a token that cannot read it). A repository another run created
+  a moment earlier is reported this way too, never as created by this run.
+
+If the Hub refuses to create a private repository (a plan limit, or a token without
+permission to create one), the run says so, names the repository and turns auto-push off;
+it does not create a public repository on its own. Pass `--push-public` to create a public
+one, or create the repository yourself first and run again. `--hf-resume` only reads the
+repository; a repository it finds missing is created by the same rule when training starts.
+
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
+
+Hugging Face no longer creates new Spaces with the Streamlit SDK. Soup keeps `streamlit-chat` available for existing deployments and prints a deprecation warning for it and for custom template directories detected as Streamlit in v0.78.0. Use `--template gradio-chat` (or a custom Gradio template) for new Spaces. If the Hub response names the `sdk` field and an SDK value, Soup identifies the Streamlit refusal, suggests `gradio-chat`, and includes the Hub response; unrelated Hub errors keep their usual message.
 
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
@@ -1046,7 +1110,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
 
 `soup runs compare` keeps the side-by-side run summary and lists all differences
 in the stored config, including nested settings such as `training.lora.dropout`
@@ -1058,7 +1122,9 @@ Evaluation comparison uses the latest stored score for each benchmark and run,
 with the signed difference **right minus left**; `-` means that side has no score.
 This reads local experiment records without a registry push, rerunning evaluation
 or hashing the current dataset. It does not establish that two evaluation runs
-used the same scorer or data, and it adds no code-revision provenance.
+used the same scorer or data. The `Code commit` and `Code state` rows show the
+startup observation described under [Recorded project code](#recorded-project-code),
+not proof that the code was identical.
 
 
 ## Alternative Model Hubs
@@ -1336,6 +1402,7 @@ field has been a hard error since v0.74:
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
 # sweep parameter does not match any config field: unknown config key 'lora_rank' - refused.
+# Check the spelling against the docs or a `soup init` template; a key from a newer Soup needs an upgrade (`pip install -U soup-cli`).
 echo $?   # 1
 ```
 
@@ -1384,6 +1451,43 @@ file; a program that starts and exits nonzero still means a failing checkpoint.
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
 
+### Recorded project code
+
+For local `soup train` execution, Soup records the full Git HEAD commit of the
+directory the command starts in, plus `clean`, `dirty` or `unknown`. The observation
+is taken before dataset/model setup writes artifacts. It follows Git discovery
+from that directory, including subdirectories, detached HEADs and linked worktrees;
+it is not the commit of Soup's installation, the config file's directory or the
+model's Hugging Face repository. `dirty` includes staged, unstaged and untracked
+files; ignored files do not count. `soup runs show` and `soup runs compare` show the
+saved values even after the working tree has moved on. In particular, an untracked
+`soup.yaml` or output directory makes the observation dirty.
+
+Git is optional: unavailable Git, a non-repository directory, an unborn HEAD,
+failed probes or a changing HEAD record `unknown` without stopping training. The
+read-only local probe has a two-second total deadline and makes no network calls.
+A large repository whose status scan exceeds that deadline also records `unknown`.
+`soup sweep` arms call `start_run` directly and leave both code fields unknown.
+If repository-local or worktree configuration (including its includes) defines a
+content-filter driver, Soup skips status and records an unknown state while keeping
+the commit, so observing a run does not execute that filter.
+Every Git call disables repository-configured filesystem monitoring and optional
+index updates; Git's `safe.directory` ownership checks are not overridden. Only a
+bounded prefix of status output is read, and the child is stopped as soon as a
+change is observed. Soup stores only the full 40- or 64-digit hexadecimal commit
+and the dirty flag, never a remote URL, branch name, file name or diff. The commit
+is validated before recording and again before display; malformed observations
+in an edited database display as unknown.
+
+The nullable `runs.code_commit` and `runs.code_dirty` columns are added to existing
+databases in place; older rows remain unknown, never backfilled from today's
+checkout. Restarting a preallocated run ID clears its previous code observation.
+This is startup provenance, not a reproducibility guarantee: Soup does not archive
+the diff or untracked file contents, freeze concurrent edits, or add these fields
+to portable model artifacts or reproducibility receipts in this version. Remote
+cloud submission and direct trainer-wrapper calls do not establish this local
+CLI observation.
+
 ### Recorded base identity
 
 For single-process Hugging Face loads on the Transformers backend (resident or
@@ -1427,6 +1531,15 @@ Loading a local adapter folder directly also reuses that commit when its
 `adapter_config.json` names the same base and has no conflicting explicit revision;
 the tokenizer still comes from the adapter folder.
 
+Single-process Hugging Face Transformers `soup sweep` arms use the same identity
+contract. Each arm resolves its own base once, immediately before its first base
+load, and pins that arm's model, tokenizer, config, processor and training-time
+base loads to that outcome. Arms may name different bases or record different
+commits if the Hub moves during a sweep; each arm's `runs` row shows which one it
+used. Each completed arm writes `soup_run.json` beside its final artifact, so a
+copied adapter retains the commit for `soup merge` and `soup export`. A sweep arm's
+training-data hash stays unknown in both its row and file.
+
 For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
 resolves the base once and broadcasts its nullable result before trainer setup.
 Soup initializes or reuses Accelerate's shared process group with Trainer's default
@@ -1445,8 +1558,8 @@ not established by those tests.
 
 **Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
-wrapper/sweep invocations do not automatically establish a run scope. Metadata is
-written for the final artifact, not each intermediate checkpoint. Other exporters
+wrapper invocations and distributed sweep launches do not gain a binding guarantee.
+Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
 and independent teacher/reward/scorer repositories do not gain a binding guarantee.
 Evaluation engines that bypass the shared live-eval loader (including lm-eval's
@@ -1472,6 +1585,53 @@ soup runs replay run_1
 Every completed run also stores an estimated cost (`$` per run) computed from the
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
+
+A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
+`runs.final_loss`: when a trainer's summary says `loss_summary_kind: unavailable`
+(its numeric `initial_loss` / `final_loss` are a `0.0` placeholder), `soup train` and
+`soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
+`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged `inf` tail is
+kept as logged, a NaN end stores NULL for both (SQLite cannot hold a NaN, and a half-NULL pair would contradict the kind below; the completion panel still prints it), and a run-level `train_loss` mean on a run too short to log a step is stored as
+before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
+below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
+with no loss cannot be the best run.
+
+Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
+omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; an infinity is kept), and HF's final runtime-summary event (`train_runtime`, the
+`train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
+no training row and pushes no live event, while the terminal panel keeps showing the last
+real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm` and
+`val_loss` NULL and `speed` set (#2810), so a reader that wants the training curve skips
+rows whose `kind` is `summary`. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
+row written, so a later measurement at the same or a lower step is a new row with a larger
+`id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
+come back ordered by step; sort by `id` for arrival order).
+
+Two nullable columns say what a stored number is, so a reader need not guess. Both are
+added in place to an existing `~/.soup/experiments.db` and are NULL on every row written
+before they existed; nothing is backfilled. Their values are module constants in
+`soup_cli.experiment.row_kinds` and are exactly these:
+
+- `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
+  and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
+  step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
+  `unavailable`: the run observed no loss (or only a NaN one) and both columns are NULL; a
+  pair is never stored with one NULL end. `soup train` and
+  `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
+  from the trainer's summary (`delta` and `single` are `per_step`).
+- `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the
+  same `kind`. `train`: a training log, whose loss / lr / grad norm that log measured.
+  `eval`: an evaluation, carrying a `val_loss` or `val_reward`; its `loss` / `lr` are the
+  last measured training values carried into the row, not a measurement of the evaluation.
+  `summary`: a run-level summary row, written by the HF callback for HF's final runtime
+  event when it carries `train_steps_per_second`: `loss`, `lr`, `grad_norm` and the
+  validation columns are NULL, `speed` is the throughput, and `step` is the last step. Every
+  in-repo writer (the HF callback and the MLX and PPO loops) states its kind through
+  `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
+  and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
+  `ValueError` before anything is written.
 
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
@@ -1931,6 +2091,10 @@ Both commands refuse unreadable inputs before creating or changing the state fil
 Malformed YAML reports the config path and line/column; invalid UTF-8 reports the
 byte offset; an OS read error names its cause. These refusals exit 2. A missing config
 keeps exit 1, and schema validation keeps its existing validation messages and exit code.
+
+Plan and apply display model names, paths and diagnostics literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; config values, hashes and state-file contents keep their original values.
 
 ```bash
 # Render a pre-flight summary + write soup.tfstate
