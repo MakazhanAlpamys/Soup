@@ -667,6 +667,27 @@ def _metric_leg_score(results: "EvalResults") -> LegScore:
     )
 
 
+def _task_detail_or_none(
+    build: Callable[[], Optional[TaskDetail]],
+) -> Optional[TaskDetail]:
+    """The task detail, or ``None`` and one dim line when it cannot be built.
+
+    Display only (the pattern of #2762): the detail decides nothing, so a failure to build it (a
+    per-row judge score that is None or not finite, a flag of the wrong type) must not end a run
+    that has its verdict. Only the type of the error is printed, its text may carry model output.
+    The refusal of a side whose every generation failed is NOT built in here: it is raised by
+    ``_refuse_a_dead_side`` before the detail is built, so this wrapper cannot swallow it.
+    """
+    try:
+        return build()
+    except Exception as exc:  # display only: no failure here may end the run
+        console.print(
+            "[dim]Task detail (rows, truncation) could not be built and is left out: "
+            f"{type(exc).__name__}[/]"
+        )
+        return None
+
+
 def _refuse_a_dead_side(side: str, leg: LegScore) -> None:
     """A side whose every generation failed is a failed measurement, not a score of 0.
 
@@ -702,7 +723,11 @@ def _leg1_metric(
     with group("task_eval", side="tuned", countable=True):
         tuned_leg = _metric_leg_score(run_eval(tuned_id, tasks, generate_fn=tuned_gen))
     _refuse_a_dead_side("tuned", tuned_leg)
-    detail = build_task_detail(base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS)
+    detail = _task_detail_or_none(
+        lambda: build_task_detail(
+            base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        )
+    )
     return build_task_win("metric", base_leg, tuned_leg, detail=detail)
 
 
@@ -754,10 +779,13 @@ def _build_judge_scorer(
         overall = float(getattr(judged, "overall_score", scale_min))
         value = max(0.0, min(1.0, (overall - scale_min) / span))
         # The per-row judge scores (raw weighted scores: the rescale is monotonic, so row
-        # comparisons are the same) and the truncation flags travel with the number.
+        # comparisons are the same) and the truncation flags travel with the number. The values
+        # are carried as they came and checked where the detail is built, which cannot end the
+        # run (``_task_detail_or_none``): a score that is None or not a number leaves the detail
+        # out and never decides the verdict.
         scores = getattr(judged, "scores", None)
         row_scores = (
-            tuple(float(score.weighted_score) for score in scores)
+            tuple(getattr(score, "weighted_score", None) for score in scores)
             if isinstance(scores, list) and len(scores) == len(tasks)
             else None
         )
@@ -782,8 +810,10 @@ def _leg1_judge(
         base_score = score(base_gen)
     with group("task_eval", side="tuned", countable=True):
         tuned_score = score(tuned_gen)
-    detail = build_task_detail(
-        base_score, tuned_score, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+    detail = _task_detail_or_none(
+        lambda: build_task_detail(
+            base_score, tuned_score, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        )
     )
     return build_task_win("judge_score", base_score, tuned_score, detail=detail)
 
@@ -843,19 +873,21 @@ def _leg1_pairwise(
     winrate = _build_pairwise_scorer(task_eval, judge_model)
     with group("task_eval", side="tuned", countable=True):
         rate = winrate(base_gen, tuned_gen)
-    detail = None
-    if (
-        isinstance(rate, LegScore)
-        and rate.truncated is not None
-        and rate.truncated_other is not None
-    ):
-        detail = TaskDetail(
-            truncated=build_truncation(
-                rate.truncated, rate.truncated_other,
-                max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+    def pairwise_detail() -> Optional[TaskDetail]:
+        if (
+            isinstance(rate, LegScore)
+            and rate.truncated is not None
+            and rate.truncated_other is not None
+        ):
+            return TaskDetail(
+                truncated=build_truncation(
+                    rate.truncated, rate.truncated_other,
+                    max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                )
             )
-        )
-    return build_task_win("pairwise", 0.5, rate, detail=detail)
+        return None
+
+    return build_task_win("pairwise", 0.5, rate, detail=_task_detail_or_none(pairwise_detail))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -1296,7 +1328,9 @@ def _verdict_live(
 
     # Read the adapter before either model loads: an all-zero lora_B adds
     # nothing, and the live eval would only reach "task did not improve" (#2410).
-    judged = build_judged(base=base, adapter=adapter, tuned=tuned)
+    # An empty --adapter / --tuned is absent (the checks above treat "" as not given), so it is
+    # recorded as null: an empty string would make the evidence unreadable.
+    judged = build_judged(base=base, adapter=adapter or None, tuned=tuned or None)
     if adapter and _adapter_is_noop(adapter):
         return ShipVerdict(
             decision=DECISION_DONT_SHIP,

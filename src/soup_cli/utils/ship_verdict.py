@@ -41,6 +41,7 @@ Public surface
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, replace
 from fractions import Fraction
@@ -145,7 +146,9 @@ TRUNCATION_GROWTH_MIN_SHARE = 0.10
 ROW_SCORE_EPS = 1e-9
 
 # Bounds on an evidence-supplied detail block (a task file holds at most 10 000 rows, so a count
-# or an ``n`` above that cannot describe a real run).
+# or an ``n`` above that cannot describe a real run). ``_MAX_EVIDENCE_ROWS`` equals
+# ``eval.custom.MAX_EVAL_TASKS``; it is not imported (this module stays light) and a test pins
+# the equality.
 _MAX_EVIDENCE_ROWS = 10_000
 _MAX_EVIDENCE_NEW_TOKENS = 1 << 20
 _MAX_JUDGED_CHARS = 4096  # a path
@@ -155,6 +158,7 @@ _MAX_CHECKPOINT_STEP = 10**15
 #: only, and a bounded digit run so ``int()`` never sees an unbounded string.
 _CHECKPOINT_RE = re.compile(r"checkpoint-([0-9]{1,15})\Z")
 _PATH_SEPARATORS = re.compile(r"[\\/]")
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:[\\/]")
 
 # Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
 # format name; full-precision loads use the torch dtype that actually went to
@@ -1028,24 +1032,50 @@ def detail_lines(win: TaskWin) -> List[Tuple[str, bool]]:
     return lines
 
 
-def judged_line(verdict: ShipVerdict) -> Optional[str]:
+def _public_name(value: str) -> str:
+    """What a judged value may show in text that leaves this machine (the ``--push`` comment).
+
+    A local path shows only its last component, so the directories above it (a user name, a
+    project layout) are not posted. A value is a local path when it looks absolute (a leading
+    separator, a drive letter, ``~``) or names something that exists here; anything else, a Hub
+    id such as ``org/name``, is shown whole. The terminal, the JSON and the evidence keep the
+    value exactly as given.
+    """
+    looks_absolute = value.startswith(("/", "\\", "~")) or _DRIVE_PREFIX.match(value) is not None
+    try:
+        exists = os.path.exists(value)
+    except (OSError, ValueError):
+        exists = False
+    if not (looks_absolute or exists):
+        return value
+    parts = [part for part in _PATH_SEPARATORS.split(value) if part]
+    return parts[-1] if parts else value
+
+
+def judged_line(verdict: ShipVerdict, *, public: bool = False) -> Optional[str]:
     """``Judged: ...`` for the terminal, or ``None`` when the verdict did not record it.
 
     The strings come from the command line (or an evidence file): control bytes are stripped.
+    With ``public`` a local path is cut to its last component (see ``_public_name``): that is
+    the text posted to GitHub by ``--push``.
     """
     judged = verdict.judged
     if judged is None:
         return None
-    parts = [f"base {for_terminal(judged.base)}"]
+
+    def shown(value: str) -> str:
+        return for_terminal(_public_name(value) if public else value)
+
+    parts = [f"base {shown(judged.base)}"]
     if judged.base_adapter is not None:
-        parts.append(f"base-adapter {for_terminal(judged.base_adapter)}")
+        parts.append(f"base-adapter {shown(judged.base_adapter)}")
     if judged.adapter is not None:
-        text = f"adapter {for_terminal(judged.adapter)}"
+        text = f"adapter {shown(judged.adapter)}"
         if judged.checkpoint_step is not None:
             text += f" (checkpoint step {judged.checkpoint_step})"
         parts.append(text)
     if judged.tuned is not None:
-        parts.append(f"tuned {for_terminal(judged.tuned)}")
+        parts.append(f"tuned {shown(judged.tuned)}")
     return "Judged: " + ", ".join(parts)
 
 
@@ -1053,7 +1083,7 @@ def judged_line(verdict: ShipVerdict) -> Optional[str]:
 # Rendering — plain text (for --output / clipboard) and Rich (for the terminal)
 # ---------------------------------------------------------------------------
 
-def format_ship_rubric(verdict: ShipVerdict) -> str:
+def format_ship_rubric(verdict: ShipVerdict, *, public: bool = False) -> str:
     """Plain-text, one-screen verdict (stable output; NO Rich markup applied).
 
     The output may contain user-controlled benchmark names verbatim. Callers
@@ -1071,7 +1101,7 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
         parts.append(f"Judge numerics: {verdict.numerics}")
     else:
         parts.append("Judge numerics: unstamped")
-    judged = judged_line(verdict)
+    judged = judged_line(verdict, public=public)
     if judged is not None:
         parts.append(judged)
     parts.append("")
@@ -1238,7 +1268,8 @@ def render_ship_pr_markdown(verdict: ShipVerdict) -> str:
     """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
-    body = format_ship_rubric(verdict)
+    # Posted to GitHub: a local path in the "Judged:" line is cut to its last component.
+    body = format_ship_rubric(verdict, public=True)
     fence = "`" * max(_MIN_MD_FENCE_LEN, _longest_backtick_run(body) + 1)
     emoji = "✅" if verdict.decision == DECISION_SHIP else "❌"
     return (
@@ -1605,7 +1636,7 @@ def verdict_from_evidence(
     if not isinstance(task, Mapping):
         raise ValueError("evidence.task must be an object with 'mode', 'base', 'tuned'")
     _validate_evidence_fields(task, "task", "evidence.task")
-    if version < SCHEMA_VERSION:
+    if version == 1:  # not "< SCHEMA_VERSION": a reader that learns version 3 still reads 2
         _refuse_v2_fields_under_v1(payload, task)
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
