@@ -122,6 +122,14 @@ _UNSUPPORTED_ADAPTER_FIELDS = (
         "an init that rewrites the base weights (PiSSA, OLoRA, LoftQ, ...) is only valid on "
         "that rewritten base, and a streamed base is the original checkpoint",
     ),
+    (
+        # Valid on the original base (so the low-memory merge takes it), but peft runs the MiCA
+        # init when the adapter is built, before the saved weights are loaded.
+        "init_lora_weights",
+        lambda value: isinstance(value, str) and value.lower() == "mica",
+        "MiCA takes an SVD of the base weight when the adapter is built, and a streamed base "
+        "holds none of it resident",
+    ),
 )
 
 
