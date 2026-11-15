@@ -50,12 +50,18 @@ _BLACKWELL_MIN_CC_MAJOR = 10
 
 # The cards torchao's NVFP4 *training* recipe can run on, which is not every
 # Blackwell card (#2867). Its backward pass quantises the gradients with
-# stochastic rounding, the PTX instruction ``cvt.rs.satfinite.e2m1x4.f32``.
-# ptxas (CUDA 12.9, the one triton 3.6 ships) assembles it for sm_100a and
-# sm_103a and refuses it for sm_101a, sm_120a and sm_121a: "Feature '.rs' not
-# supported on .target 'sm_120a'". So on an RTX 50-series or RTX PRO Blackwell
-# card (SM 12.0) or a DGX Spark (SM 12.1) the model converts, the forward
-# runs, and the first backward fails to compile.
+# stochastic rounding, the PTX instruction ``cvt.rs.satfinite.e2m1x4.f32``
+# (torchao 0.18.0: ``hadamard_utils.py``, called with ``stochastic_rounding=True``
+# from ``nvfp4_linear.py``). Measured with triton 3.6.0 and the ``ptxas-blackwell``
+# it ships (CUDA 12.9, build cuda_12.9.r12.9/compiler.36037853_0): one such
+# instruction assembles for sm_100a and sm_103a and is refused for sm_101a,
+# sm_120a and sm_121a ("Feature '.rs' not supported on .target 'sm_120a'"). So on
+# an RTX 50-series or RTX PRO Blackwell card (SM 12.0) or a DGX Spark (SM 12.1)
+# the model converts, the forward runs, and the first backward fails to compile.
+# SM 11.0 is refused by this list, not by a measurement: that ptxas does not know
+# sm_110a ("Value 'sm_110a' is not defined for option 'gpu-name'"). A newer triton,
+# ptxas or torchao may accept ``.rs`` on more targets; the ``gpu`` test in
+# ``tests/test_nvfp4_training_gate.py`` checks this list against the card it runs on.
 _NVFP4_TRAINING_CAPABILITIES: frozenset[tuple[int, int]] = frozenset({(10, 0), (10, 3)})
 
 #: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).

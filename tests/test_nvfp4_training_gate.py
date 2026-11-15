@@ -21,7 +21,9 @@ from tests.test_v07121 import _install_fake_torchao_quant, _tiny_attn_model
 
 #: SM 10.0 (B200/GB200) and SM 10.3 (B300/GB300) assemble the instruction.
 _TRAINS = [(10, 0), (10, 3)]
-#: Blackwell parts that refuse it (10.1 is Thor's pre-CUDA-13 number), and Hopper.
+#: Blackwell parts that are refused: 10.1 (Thor's pre-CUDA-13 number), 12.0 and 12.1 refuse
+#: the instruction in ptxas; 11.0 is refused by the allow-list, not by a measurement (the
+#: ptxas triton 3.6.0 ships does not know sm_110a).
 _REFUSED_BLACKWELL = [(10, 1), (11, 0), (12, 0), (12, 1)]
 
 
