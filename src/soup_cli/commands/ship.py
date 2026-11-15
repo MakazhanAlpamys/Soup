@@ -74,7 +74,6 @@ from soup_cli.utils.ship_progress import group, jsonl_command
 from soup_cli.utils.ship_task_rows import (
     build_task_rows,
     ensure_replaceable,
-    row_mean,
     task_rows_path,
     write_task_rows,
 )
@@ -140,10 +139,6 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # lm-eval override defaults (kept minimal; the override is for users who
 # already run lm-eval — they can tune via a future flag if needed).
 _LM_EVAL_BATCH_SIZE = 1
-
-# The judge scorer rebuilds a leg's number as the mean of its per-row scores only when that is the
-# number the evaluator reported to this tolerance (they differ by float noise, never by more).
-_ROW_MEAN_TOLERANCE = 1e-9
 
 # Bounds on the leg-2 general suite (DoS / input-hygiene guards).
 _MAX_SUITE_BENCHMARKS = 50
@@ -836,17 +831,13 @@ def _build_judge_scorer(
             isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
             for raw in row_scores
         ):
-            # The rows are scored on the number's own scale, [0, 1]: the same rescale as the
-            # mean above, so the reported number can BE the mean of the rows (``row_mean``, the
-            # one definition) and a per-row file can add up to it exactly. The number the
-            # evaluator reported is kept when it is not that mean to float noise (1e-9): then
-            # the rows cannot be audited against it and no file is written.
-            row_scores = tuple(
-                max(0.0, min(1.0, (raw - scale_min) / span)) for raw in row_scores
-            )
-            from_rows = row_mean(row_scores)
-            if abs(from_rows - value) <= _ROW_MEAN_TOLERANCE:
-                value = from_rows
+            # The rows are scored on the number's own scale, (score - min) / span, NOT clamped
+            # (a score outside the scale stays a different row; the per-row file then cannot hold
+            # it and is left out). The reported number stays the evaluator's own, exactly as
+            # 0.77.x reported it: it is never rebuilt from the rows, which moved it by one
+            # rounding and turned a mathematical tie into a win. A per-row file adds up to it
+            # within 1e-12 (``JUDGE_MEAN_TOLERANCE``), and is left out when it does not.
+            row_scores = tuple((raw - scale_min) / span for raw in row_scores)
         return LegScore(
             value, row_scores=row_scores,
             truncated=tuple(truncation_of(answer) for answer in answers),
@@ -1321,8 +1312,14 @@ def _verdict_live(
     noise_floor_runs: Optional[int] = None,
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    before_models: Optional[Callable[[], None]] = None,
 ) -> ShipVerdict:
-    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
+    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1).
+
+    ``before_models`` runs once the run is known to evaluate (an adapter that changes nothing
+    returns before it) and before any model loads: ``ship`` uses it for the checks of the file
+    its results are written next to.
+    """
     if not base:
         _fail("live run needs --base <model>", _EXIT_USAGE)
     if adapter and tuned:
@@ -1402,6 +1399,8 @@ def _verdict_live(
             judged=judged,
         )
 
+    if before_models is not None:
+        before_models()
     tuned_id = tuned if tuned else base
     try:
         template_options = (
@@ -1522,16 +1521,16 @@ def _check_task_rows_target(
 ) -> None:
     """Refuse before any model loads a file name the per-row file cannot go under (exit 3).
 
-    The file sits next to ``--output`` (else ``--emit-evidence``): a name it cannot be written
-    under, a file of the user's own that it would replace (the task file, the config, the other
-    outputs), or a file at its path that soup ship did not write. A run that would write none
-    (``pairwise``) is not asked.
+    The file sits next to ``--output`` and only there: a name it cannot be written under, a file
+    of the user's own that it would replace (the task file, the config, the other outputs), or a
+    file at its path that soup ship did not write. A run that would write none (``pairwise``,
+    an adapter that changes nothing: ``_verdict_live`` calls this after that is known) is not
+    asked.
     """
-    anchor = output or emit_evidence
-    if not anchor or task_mode not in _TASK_ROWS_MODES:
+    if not output or task_mode not in _TASK_ROWS_MODES:
         return
     try:
-        path = task_rows_path(anchor)
+        path = task_rows_path(output)
         named = (
             ("--output", output), ("--emit-evidence", emit_evidence),
             ("--task-eval", task_eval), ("--config", config),
@@ -1557,17 +1556,16 @@ def _emit_and_exit(
     # The per-row file goes first so the verdict can name it only when it exists. A failure to
     # write it is reported after the verdict, the evidence and the PR comment are out (exit 1):
     # it is part of the evidence, and nothing here claims a file that was not written.
-    anchor = output or emit_evidence
     records = verdict.task_win.detail.records if verdict.task_win.detail is not None else None
     rows_pointer: Optional[str] = None
     rows_error: Optional[Exception] = None
-    if anchor and records:
+    if output and records:
         try:
-            rows_path = write_task_rows(records, anchor)
-            rows_pointer = os.path.basename(task_rows_path(anchor))
+            rows_path = write_task_rows(records, output)
+            rows_pointer = os.path.basename(task_rows_path(output))
             console.print(
                 f"[green]Wrote task rows[/] {escape(for_terminal(rows_path))} "
-                f"({len(records)} rows)"
+                f"({len(records)} rows; it holds your prompts and the answers)"
             )
         except (OSError, ValueError, TypeError) as exc:
             rows_error = exc
@@ -1592,7 +1590,7 @@ def _emit_and_exit(
                 provenance=provenance,
                 task_rows=(
                     rows_pointer
-                    if rows_pointer is not None and _same_directory(emit_evidence, anchor)
+                    if rows_pointer is not None and _same_directory(emit_evidence, output)
                     else None
                 ),
             )
@@ -1610,12 +1608,15 @@ def _emit_and_exit(
     if push:
         _push_pr_comment(verdict, push)
     if rows_error is not None:
-        _fail(
-            "cannot write the task rows next to "
-            f"{'--output' if output else '--emit-evidence'}: "
-            f"{type(rows_error).__name__}: {rows_error}",
-            _EXIT_RUNTIME,
+        message = (
+            f"cannot write the task rows next to --output: {type(rows_error).__name__}: "
+            f"{rows_error}"
         )
+        if verdict.decision == DECISION_SHIP:
+            _fail(message, _EXIT_RUNTIME)
+        # a DON'T SHIP keeps its own exit code (2): a pipeline that retries on exit 1 must not
+        # run a finished verdict again; the error is printed all the same
+        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 
@@ -1848,10 +1849,6 @@ def ship(
                 recorded_runs,
             )
     elif base or tuned or adapter or task_eval:
-        _check_task_rows_target(
-            output=output, emit_evidence=emit_evidence, task_eval=task_eval, config=config,
-            task_mode=task_mode,
-        )
         if emit_evidence:
             binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
         verdict = _verdict_live(
@@ -1867,6 +1864,10 @@ def ship(
             forgetting_threshold=threshold,
             noise_floor_runs=noise_floor,
             quantization=_live_eval_quantization_from_config(soup_config),
+            before_models=lambda: _check_task_rows_target(
+                output=output, emit_evidence=emit_evidence, task_eval=task_eval, config=config,
+                task_mode=task_mode,
+            ),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
         )
         if emit_evidence and binding != capture_binding(

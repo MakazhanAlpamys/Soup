@@ -1,10 +1,10 @@
 """The per-row file of ``soup ship``: one JSON line per judged task row, saved next to ``--output``.
 
 A SHIP is one number against another. This file is what the numbers are made of, so a reader can
-audit a verdict row by row: ``<stem>.task-rows.jsonl`` for ``--output <stem>.<ext>`` (or, with no
-``--output``, for ``--emit-evidence``). It is written by a live ``--task-mode metric`` or
-``judge_score`` run; a replay of evidence, ``--task-mode pairwise`` and an adapter that changes
-nothing write none (``null`` in the verdict's ``task_rows``).
+audit a verdict row by row: ``<stem>.task-rows.jsonl`` for ``--output <stem>.<ext>``, and ONLY
+with ``--output`` (``--emit-evidence`` alone writes nothing new). It is written by a live
+``--task-mode metric`` or ``judge_score`` run; a replay of evidence, ``--task-mode pairwise``
+and an adapter that changes nothing write none (``null`` in the verdict's ``task_rows``).
 
 One line (compact JSON, ASCII only, ``\\n`` ends it, keys in this order, ``ROW_KEYS``)::
 
@@ -20,7 +20,8 @@ One line (compact JSON, ASCII only, ``\\n`` ends it, keys in this order, ``ROW_K
 * ``scoring``: the task's scoring rule; ``null`` for ``judge_score`` (a judge scores, not a rule).
 * ``base_score`` / ``tuned_score``: in [0, 1]. ``metric``: 1.0 when the answer matched, else 0.0
   (never the fractional similarity of ``semantic``). ``judge_score``: the judge's per-row score
-  rescaled to [0, 1] on its rubric scale.
+  rescaled to [0, 1] on its rubric scale, ``(score - min) / (max - min)``, never clamped (a score
+  outside the scale makes the file impossible, and it is then left out).
 * ``change``: ``better`` / ``worse`` / ``same`` (``row_change``: tuned against base, 1e-9).
 * ``base_truncated`` / ``tuned_truncated``: the answer stopped at the new-token cap, from the
   generator's token ids; ``null`` when not measured (a plain-text generator, a failed generation).
@@ -28,17 +29,25 @@ One line (compact JSON, ASCII only, ``\\n`` ends it, keys in this order, ``ROW_K
   answer is ``""``). Always ``false`` for ``judge_score``, where a failed generation ends the run.
 * ``text_cut``: a text field was cut to ``MAX_TEXT_CHARS`` characters (a category to 256).
 
-THE INVARIANT: ``row_mean`` of the ``base_score`` column, in ``index`` order, IS ``task_win.base``
-of the verdict, bit for bit, and the same for ``tuned_score`` / ``task_win.tuned``. ``row_mean`` is
-a plain left-to-right sum divided by the count (no ``sum()``, whose float result changed in Python
-3.12, and no ``fsum``), so a reader in any language gets the same double. Scores are written with
-their shortest round-trip ``repr``, so no digit is lost in the file. The reported number of a leg is
-built from its rows (``build_task_rows`` refuses legs where it is not), never the other way round.
+THE INVARIANT: ``row_mean`` of the ``base_score`` column, in ``index`` order, is ``task_win.base``
+of the verdict and the same for ``tuned_score`` / ``task_win.tuned``: EXACTLY (bit for bit) for
+``metric``, where the number is ``correct / total``; within ``JUDGE_MEAN_TOLERANCE`` (1e-12) for
+``judge_score``, whose reported number is the evaluator's own (the rescaled mean of its raw scores,
+as 0.77.x reported it) and may differ from the mean of the rescaled rows by a rounding. The
+reported number is NEVER rebuilt from the rows: that moved it by one rounding and turned a
+mathematical tie into a win. ``row_mean`` is a plain left-to-right sum divided by the count (no
+``sum()``, whose float result changed in Python 3.12, and no ``fsum``), so a reader in any language
+gets the same double. Scores are written with their shortest round-trip ``repr``.
+``build_task_rows`` refuses legs where the rows do not add up to the reported number, so a file is
+never written that cannot be audited against the verdict next to it.
 
-The file holds the user's prompts and both models' answers: it is local data, written with the
-file mode of a private temp file, and its text never reaches the verdict JSON, the evidence, the
-terminal or the ``--push`` comment. It is replaced only by this command's own next run (an
-existing file whose first line is not one of ours is left alone).
+The file holds the user's prompts and both models' answers: it is local data, and its text never
+reaches the verdict JSON, the evidence, the terminal or the ``--push`` comment. On POSIX it is
+created with mode 0600; on Windows it inherits the ACL of its folder. A run that is killed while
+writing can leave a ``.soup.*.tmp`` temp file with partial rows next to it (the shared writer names
+every command's temp files alike, so they are not removed here). It is replaced only by this
+command's own next run: an existing file whose first line does not have exactly our keys is left
+alone.
 """
 
 from __future__ import annotations
@@ -83,6 +92,12 @@ MAX_FILE_BYTES = 256 << 20
 #: The verdict / evidence JSON that names a rows file is read with the evidence bound.
 MAX_POINTER_FILE_BYTES = 16 * 1024 * 1024
 
+#: A judge leg's reported number is the evaluator's own; its rows add up to it within this.
+JUDGE_MEAN_TOLERANCE = 1e-12
+
+#: What a file name may hold: bytes on POSIX, UTF-16 code units on Windows.
+_MAX_NAME_UNITS = 255
+
 ROW_KEYS: Tuple[str, ...] = (
     "schema_version", "leg", "index", "prompt_hash", "prompt", "expected", "category", "scoring",
     "base_answer", "tuned_answer", "base_score", "tuned_score", "change", "base_truncated",
@@ -107,7 +122,11 @@ def row_mean(scores: Iterable[object]) -> float:
     for score in scores:
         if isinstance(score, bool) or not isinstance(score, (int, float)):
             raise TypeError("a row score must be a number")
-        if not math.isfinite(score):
+        try:
+            finite = math.isfinite(score)
+        except OverflowError:  # an integer too large for a float
+            finite = False
+        if not finite:
             raise ValueError("a row score must be finite")
         total += float(score)
         count += 1
@@ -133,12 +152,15 @@ def prompt_hash(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 def task_rows_path(anchor: str) -> str:
-    """The rows file of ``anchor`` (``--output``, else ``--emit-evidence``): its stem + suffix.
+    """The rows file of ``anchor`` (the ``--output`` path): its stem + suffix.
 
     In the very directory the user named (the text up to the last component is unchanged).
     Raises ``ValueError`` naming the reason when the anchor cannot carry the file: the name would
-    not be a bare file name the verdict can point at (a control character, over 255 characters, a
-    path separator in a name), or the path is a network share or a device.
+    not be a bare file name the verdict can point at (a control character, a path separator in a
+    name), the derived name cannot exist (more than 255 bytes on POSIX, 255 UTF-16 code units on
+    Windows: what the file system counts, not characters), or the path is a network share or a
+    device. An ``--output`` whose own name is within the limit but whose derived name is not (the
+    suffix adds 16) is refused: that file cannot be created.
     """
     if not isinstance(anchor, str) or not anchor:
         raise ValueError("the file the task rows sit next to must be a non-empty path")
@@ -158,6 +180,15 @@ def task_rows_path(anchor: str) -> str:
     if "\\" in name or "/" in name:
         raise ValueError(
             f"the task-rows file name for {quote_path(anchor)} would contain a path separator"
+        )
+    if os.name == "nt":
+        size, unit = len(name.encode("utf-16-le", "surrogatepass")) // 2, "UTF-16 units"
+    else:
+        size, unit = len(name.encode("utf-8", "surrogatepass")), "bytes"
+    if size > _MAX_NAME_UNITS:
+        raise ValueError(
+            f"the task-rows file name for {quote_path(anchor)} is too long "
+            f"({size} {unit}; at most {_MAX_NAME_UNITS} are allowed)"
         )
     reason = task_rows_pointer_error(name)
     if reason is not None:
@@ -200,9 +231,9 @@ def _unit_score(value: object, name: str) -> float:
         raise TypeError(f"{name} must not be bool")
     if not isinstance(value, (int, float)):
         raise TypeError(f"{name} must be a number, got {type(value).__name__}")
-    if not math.isfinite(value):
+    if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{name} must be finite")
-    if not 0.0 <= value <= 1.0:
+    if not 0.0 <= value <= 1.0:  # an integer of any size compares without overflowing
         raise ValueError(f"{name} must be in [0, 1]")
     return float(value)
 
@@ -227,7 +258,8 @@ def build_task_rows(
     """The rows of a task leg from its two ``LegScore`` s; refuses legs that cannot be audited.
 
     ``scoring_applies`` is True when a rule scored the rows (``metric``) and False for a judge.
-    The reported number of each leg must be ``row_mean`` of its rows exactly: when it is not
+    The reported number of each leg must be ``row_mean`` of its rows: exactly for a rule, within
+    ``JUDGE_MEAN_TOLERANCE`` for a judge (whose number is the evaluator's own). When it is not
     (an evaluator whose overall score is not the mean of its rows) nothing is built, so a file
     is never written that does not add up to the verdict it sits next to.
     """
@@ -245,9 +277,10 @@ def build_task_rows(
 
     base_unit = [_unit_score(v, f"base row score[{i}]") for i, v in enumerate(base_scores)]
     tuned_unit = [_unit_score(v, f"tuned row score[{i}]") for i, v in enumerate(tuned_scores)]
+    tolerance = 0.0 if scoring_applies else JUDGE_MEAN_TOLERANCE
     for side, unit, leg in (("base", base_unit, base_leg), ("tuned", tuned_unit, tuned_leg)):
         mean = row_mean(unit)
-        if mean != float(leg):
+        if not abs(mean - float(leg)) <= tolerance:  # written so that a NaN is refused too
             raise ValueError(
                 f"the {side} row scores average {mean!r}, not the reported {float(leg)!r}"
             )
@@ -335,12 +368,39 @@ def rows_to_jsonl(rows: Iterable[TaskRow]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _first_line_is_ours(first: bytes) -> bool:
+    """Whether a first line has exactly the keys of a row of ours (a BOM and CRLF are fine)."""
+    if first.startswith(b"\xef\xbb\xbf"):
+        first = first[3:]
+    try:
+        entry = json.loads(first.rstrip(b"\r\n").decode("utf-8"))
+    except (ValueError, RecursionError):  # UnicodeDecodeError is a ValueError
+        return False
+    return (
+        isinstance(entry, dict)
+        and set(entry) == set(ROW_KEYS)
+        and entry["leg"] == LEG
+        and isinstance(entry["schema_version"], int)
+        and not isinstance(entry["schema_version"], bool)
+        and entry["schema_version"] == SCHEMA_VERSION
+    )
+
+
 def _is_ours_or_absent(path: str) -> bool:
-    """True when nothing is at ``path``, or an empty file, or a file whose first line is ours."""
+    """True when nothing is at ``path``, or an empty file, or a file whose first line is ours.
+
+    Raises ``ValueError`` (a named refusal, never a traceback) when ``path`` cannot be looked at: a
+    parent that is a regular file, a directory that cannot be read.
+    """
     try:
         info = os.lstat(path)
     except FileNotFoundError:
         return True
+    except OSError as exc:
+        raise ValueError(
+            f"{quote_path(path)} cannot be checked ({type(exc).__name__}); "
+            "the task rows are not written there"
+        ) from None
     if not stat.S_ISREG(info.st_mode):
         return False
     if info.st_size == 0:
@@ -348,15 +408,12 @@ def _is_ours_or_absent(path: str) -> bool:
     try:
         with open(path, "rb") as handle:
             first = handle.readline(MAX_LINE_BYTES + 1)
-        entry = json.loads(first.decode("utf-8"))
-    except (OSError, ValueError, RecursionError):  # UnicodeDecodeError is a ValueError
-        return False
-    return (
-        isinstance(entry, dict)
-        and entry.get("leg") == LEG
-        and isinstance(entry.get("schema_version"), int)
-        and not isinstance(entry.get("schema_version"), bool)
-    )
+    except OSError as exc:
+        raise ValueError(
+            f"{quote_path(path)} cannot be checked ({type(exc).__name__}); "
+            "the task rows are not written there"
+        ) from None
+    return _first_line_is_ours(first)
 
 
 def ensure_replaceable(path: str) -> None:
@@ -377,8 +434,8 @@ def write_task_rows(rows: Iterable[TaskRow], anchor: str) -> str:
     Atomically (a temp file in the same directory, then ``os.replace``: a failure leaves an
     earlier file whole), under the working directory, never through a symlink, with LF line
     endings on every platform. An existing file is replaced only if it is empty or its first
-    line is one of ours; anything else is left alone and refused. Raises ``ValueError`` /
-    ``OSError``.
+    line has exactly the keys of a row of ours; anything else is left alone and refused. Raises
+    ``ValueError`` / ``OSError``.
     """
     path = task_rows_path(anchor)
     enforce_under_cwd_and_no_symlink(path, "task rows output")
@@ -433,9 +490,9 @@ def _unit(entry: Mapping[str, object], key: str) -> float:
         raise _LineError(f"{key} must be a number, not a boolean")
     if not isinstance(value, (int, float)):
         raise _LineError(f"{key} must be a number")
-    if not math.isfinite(value):
+    if isinstance(value, float) and not math.isfinite(value):
         raise _LineError(f"{key} must be finite")
-    if not 0.0 <= value <= 1.0:
+    if not 0.0 <= value <= 1.0:  # an integer of any size compares without overflowing
         raise _LineError(f"{key} must be in [0, 1]")
     return float(value)
 
@@ -443,8 +500,11 @@ def _unit(entry: Mapping[str, object], key: str) -> float:
 def _check_row(entry: Mapping[str, object]) -> None:
     unknown = sorted(str(key) for key in entry if key not in ROW_KEYS)
     if unknown:
-        joined = ", ".join(repr(key[:64]) for key in unknown)
-        raise _LineError(f"has unsupported field(s): {joined}")
+        # at most five names of at most 64 characters, and the count of the rest: a line with
+        # thousands of keys must not turn into a message of the same size
+        joined = ", ".join(repr(key[:64]) for key in unknown[:5])
+        more = f" and {len(unknown) - 5} more" if len(unknown) > 5 else ""
+        raise _LineError(f"has unsupported field(s): {joined}{more}")
     missing = [key for key in ROW_KEYS if key not in entry]
     if missing:
         raise _LineError(f"needs {', '.join(missing)}")
@@ -512,6 +572,7 @@ def load_task_rows(
     base: Optional[float] = None,
     tuned: Optional[float] = None,
     counts: Optional[Mapping[str, int]] = None,
+    mean_tolerance: float = 0.0,
 ) -> LoadedTaskRows:
     """Read a rows file strictly; raises ``ValueError`` naming the first defect.
 
@@ -521,8 +582,10 @@ def load_task_rows(
     [0, 1], a ``change`` that the scores contradict, a ``prompt_hash`` that is not the prompt's,
     a repeated or out-of-range row id (``index``), more than ``MAX_TASK_ROWS`` rows, a file over
     ``MAX_FILE_BYTES``. Given the numbers of the verdict or evidence that names the file: a row
-    count that is not ``n``, a column mean that is not ``base`` / ``tuned`` EXACTLY, class counts
-    that are not ``counts`` (``better`` / ``worse`` / ``same``). Messages never echo file text.
+    count that is not ``n``, a column mean that is not ``base`` / ``tuned`` (EXACTLY, or within
+    ``mean_tolerance``: pass ``JUDGE_MEAN_TOLERANCE`` for a ``judge_score`` verdict), class counts
+    that are not ``counts`` (``better`` / ``worse`` / ``same``). A message names the defect and
+    the line; it echoes no value of the file, only at most five key names for unsupported fields.
     """
     try:
         info = os.stat(path)
@@ -539,7 +602,11 @@ def load_task_rows(
 
     entries: List[Tuple[int, dict]] = []
     seen = set()
-    with open(path, "rb") as handle:
+    try:
+        handle = open(path, "rb")
+    except OSError as exc:
+        raise ValueError(f"task-rows file cannot be read: {type(exc).__name__}") from None
+    with handle:
         number = 0
         while True:
             raw = handle.readline(MAX_LINE_BYTES + 2)
@@ -568,9 +635,9 @@ def load_task_rows(
     rows = tuple(sorted((entry for _, entry in entries), key=lambda entry: entry["index"]))
     base_mean = row_mean(row["base_score"] for row in rows)
     tuned_mean = row_mean(row["tuned_score"] for row in rows)
-    if base is not None and base_mean != base:
+    if base is not None and not abs(base_mean - base) <= mean_tolerance:
         raise ValueError(f"the base_score mean {base_mean!r} is not the reported base {base!r}")
-    if tuned is not None and tuned_mean != tuned:
+    if tuned is not None and not abs(tuned_mean - tuned) <= mean_tolerance:
         raise ValueError(
             f"the tuned_score mean {tuned_mean!r} is not the reported tuned {tuned!r}"
         )
@@ -608,11 +675,31 @@ def _read_json_object(path: str) -> dict:
     return payload
 
 
-def _reported(block: Mapping[str, object], key: str) -> Optional[float]:
+def _reported(block: Mapping[str, object], key: str) -> float:
     value = block.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"the reported {key} must be a number")
-    return float(value)
+        raise ValueError(f"the reported {key} must be a finite number")
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float
+        raise ValueError(f"the reported {key} must be a finite number") from None
+    if not math.isfinite(number):
+        raise ValueError(f"the reported {key} must be a finite number")
+    return number
+
+
+def _rows_block(rows: Mapping[str, object]) -> Mapping[str, int]:
+    """The ``rows`` block of a verdict or evidence file, every number an integer in range."""
+    out = {}
+    for key in ("better", "worse", "same", "n"):
+        value = rows.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TASK_ROWS:
+            raise ValueError(
+                "the rows block of the verdict or evidence file must hold integers in "
+                f"[0, {MAX_TASK_ROWS}] for better, worse, same and n"
+            )
+        out[key] = value
+    return out
 
 
 def load_task_rows_for(json_path: str) -> LoadedTaskRows:
@@ -621,7 +708,8 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
     The ``task_rows`` pointer is a bare name resolved next to ``json_path`` (it cannot point
     anywhere else). The file must then agree with the numbers of the JSON that names it: the row
     count is ``task_win.rows.n`` / ``task.rows.n``, the column means are ``base`` / ``tuned``
-    exactly, the class counts are the ``rows`` block.
+    (exactly, except for a ``judge_score`` verdict: within ``JUDGE_MEAN_TOLERANCE``), the class
+    counts are the ``rows`` block.
     """
     payload = _read_json_object(json_path)
     pointer = payload.get("task_rows")
@@ -643,17 +731,19 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
         block = payload.get("task") if isinstance(payload.get("task"), dict) else None
     if block is None:
         raise ValueError("the file has no task_win or task block to check the rows against")
-    rows = block.get("rows") if isinstance(block.get("rows"), dict) else None
+    rows = _rows_block(block["rows"]) if isinstance(block.get("rows"), dict) else None
     return load_task_rows(
         target,
-        n=None if rows is None else rows.get("n"),
+        n=None if rows is None else rows["n"],
         base=_reported(block, "base"),
         tuned=_reported(block, "tuned"),
         counts=rows,
+        mean_tolerance=JUDGE_MEAN_TOLERANCE if block.get("mode") == "judge_score" else 0.0,
     )
 
 
 __all__ = [
+    "JUDGE_MEAN_TOLERANCE",
     "LEG",
     "MAX_FILE_BYTES",
     "MAX_LINE_BYTES",
