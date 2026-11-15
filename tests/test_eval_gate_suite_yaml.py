@@ -127,6 +127,99 @@ def test_load_suite_rejects_duplicate_task_key_with_line_number(
     assert "line 6" in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    ("content", "line"),
+    [
+        (
+            'suite: quoted\ntasks:\n  - type: custom\n    name: math\n'
+            '    threshold: 0.5\n    "threshold": 0.8\n',
+            6,
+        ),
+        (
+            "suite: flow\ntasks:\n  - {type: custom, name: math, threshold: 0.5, threshold: 0.8}\n",
+            3,
+        ),
+        (
+            "suite: later-task\ntasks:\n  - type: custom\n    name: first\n"
+            "  - type: custom\n    name: second\n    threshold: 0.5\n"
+            "    threshold: 0.8\n",
+            8,
+        ),
+        (
+            '{"suite": "json", "tasks": [{"type": "custom", "name": "math", '
+            '"threshold": 0.5, "threshold": 0.8}]}\n',
+            1,
+        ),
+        (
+            "suite: triple\ntasks:\n  - type: custom\n    name: math\n"
+            "    threshold: 0.5\n    threshold: 0.8\n    threshold: 0.9\n",
+            6,
+        ),
+    ],
+    ids=["quoted-key", "flow-mapping", "later-task", "json", "three-occurrences"],
+)
+def test_load_suite_rejects_duplicate_key_spellings_and_reports_second_occurrence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    line: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(tmp_path, content)
+
+    with pytest.raises(gate.MalformedSuiteError) as caught:
+        gate.load_suite(str(path))
+
+    assert "duplicate key 'threshold'" in str(caught.value)
+    assert f"line {line}" in str(caught.value)
+
+
+def test_duplicate_keys_that_differ_only_by_case_are_distinct(
+    tmp_path: Path,
+) -> None:
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, duplicate_keys_in_sequence_mappings
+
+    source = "suite: case\ntasks:\n  - threshold: 0.5\n    Threshold: 0.8\n"
+
+    assert duplicate_keys_in_sequence_mappings(
+        source,
+        "eval-gate suite",
+        sequence_key="tasks",
+        max_bytes=MAX_CONFIG_BYTES,
+    ) == []
+
+
+def test_load_suite_checks_the_last_repeated_root_tasks_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: repeated-root\ntasks: []\ntasks:\n  - type: custom\n"
+        "    name: math\n    threshold: 0.5\n    threshold: 0.8\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="line 7"):
+        gate.load_suite(str(path))
+
+
+def test_load_suite_rejects_duplicate_key_in_a_merged_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-duplicate\ndefaults: &defaults\n  threshold: 0.5\n"
+        "  threshold: 0.8\ntasks:\n  - <<: *defaults\n    type: custom\n"
+        "    name: math\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 4"):
+        gate.load_suite(str(path))
+
+
 def test_load_suite_keeps_explicit_zero_threshold(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -156,6 +249,29 @@ def test_load_suite_allows_explicit_override_of_merged_defaults(
     suite = gate.load_suite(str(path))
 
     assert suite.tasks[0].threshold == 0.8
+
+
+def test_load_suite_allows_multiple_merge_sources_and_explicit_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-sources\ndefaults: &defaults\n  threshold: 0.5\n"
+        "metadata: &metadata\n  scorer: exact\ntasks:\n  - <<: *defaults\n"
+        "    <<: *metadata\n    type: custom\n    name: math\n    tasks: tasks.jsonl\n"
+        "    threshold: 0.8\n",
+    )
+    (tmp_path / "tasks.jsonl").write_text(
+        json.dumps({"prompt": "control", "expected": "gold"}) + "\n",
+        encoding="utf-8",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.8
+    assert suite.tasks[0].scorer == "exact"
 
 
 @pytest.mark.parametrize(
@@ -209,9 +325,46 @@ def test_cli_eval_gate_refuses_invalid_suite_with_usage_error(
     assert factory_calls == []
 
 
+def test_cli_eval_gate_refuses_duplicate_task_key_before_model_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    )
+    factory_calls: list[str] = []
+
+    def factory(model: str) -> Callable[[str], str]:
+        factory_calls.append(model)
+        return lambda prompt: ""
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    result = CliRunner().invoke(
+        app,
+        ["eval", "gate", "--suite", str(path), "--model", "synthetic-model"],
+    )
+    output = " ".join(strip_ansi(result.output).split())
+
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    assert "Cannot load suite:" in output
+    assert "duplicate key 'threshold'" in output
+    assert "line 6" in output
+    assert factory_calls == []
+
+
 @pytest.mark.parametrize(
-    "content", ["suite: [\n", "- suite: bad-root\n  tasks: []\n"],
-    ids=["malformed-yaml", "list-root"],
+    "content",
+    [
+        "suite: [\n",
+        "- suite: bad-root\n  tasks: []\n",
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    ],
+    ids=["malformed-yaml", "list-root", "duplicate-task-key"],
 )
 def test_training_callback_does_not_silently_disable_a_malformed_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str,

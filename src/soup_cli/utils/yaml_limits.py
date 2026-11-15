@@ -422,25 +422,43 @@ def duplicate_keys_in_sequence_mappings(
             and key_node.tag == "tag:yaml.org,2002:str"
             and key_node.value == sequence_key
         ):
+            # Match safe_load: when a root key is repeated, its last value is
+            # the one used to build the resulting mapping.
             sequence_node = value_node
-            break
     if not isinstance(sequence_node, yaml.SequenceNode):
         return []
 
     duplicates: list[tuple[str, int]] = []
-    for mapping_node in sequence_node.value:
-        if not isinstance(mapping_node, yaml.MappingNode):
-            continue
+    visited: set[int] = set()
+
+    def scan_node(node: yaml.Node) -> None:
+        if isinstance(node, yaml.SequenceNode):
+            for child in node.value:
+                scan_node(child)
+            return
+        if not isinstance(node, yaml.MappingNode) or id(node) in visited:
+            return
+        visited.add(id(node))
+
         seen: set[tuple[str, str]] = set()
-        for key_node, _ in mapping_node.value:
+        for key_node, value_node in node.value:
             if key_node.tag == _MERGE_TAG:
+                # Each merged source is checked independently: explicit task
+                # keys may override defaults, and different sources may
+                # intentionally provide the same key with YAML precedence.
+                scan_node(value_node)
                 continue
             if not isinstance(key_node, yaml.ScalarNode):
+                scan_node(value_node)
                 continue
             identity = (key_node.tag, key_node.value)
             if identity in seen:
                 duplicates.append((key_node.value, key_node.start_mark.line + 1))
             seen.add(identity)
+            scan_node(value_node)
+
+    for mapping_node in sequence_node.value:
+        scan_node(mapping_node)
     return duplicates
 
 
