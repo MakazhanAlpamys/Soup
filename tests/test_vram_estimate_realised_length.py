@@ -113,15 +113,15 @@ def _own_length(row: dict):
 def _priced(row: dict, seq_len="own") -> dict:
     """``profile_from_config`` for ``row`` at ``seq_len`` ("own": the longest row, None: max).
 
-    Every 4-bit row was measured before #2683, when peft's fp32 embeddings and head stayed on a
-    bf16 card, so for those the call runs with ``kbit_fp32`` set on the input it builds
-    (``profile_from_config`` has no such argument and prices the bf16 default, which is what a
-    4-bit run on a bf16 card does now; no such run is measured yet).
+    Every 4-bit row except those in ``post_2683_rows`` was measured before #2683, when peft's
+    fp32 embeddings and head stayed on a bf16 card, so for those the call runs with
+    ``kbit_fp32`` set on the input it builds (``profile_from_config`` has no such argument and
+    prices the bf16 default, which is what a 4-bit run on a bf16 card does now).
     """
     seq = _own_length(row) if seq_len == "own" else seq_len
     cfg = load_config_from_string(_text(row, _base(row)))
     with pytest.MonkeyPatch.context() as patch:
-        if row["quantization"] != "none":
+        if row["quantization"] != "none" and not row.get("post_2683"):
             patch.setattr(
                 hardware_fit,
                 "hardware_fit_input_or_reason",
@@ -140,6 +140,8 @@ _DATA = _evidence()
 _TORCH_ROWS = list(_DATA["rows"])
 _ADDED_ROWS = list(_DATA["downstream_added_rows"])
 _BENCH_ROWS = list(_DATA["bench_rows"])
+_POST_2683_ROWS = list(_DATA["post_2683_rows"])
+_DOWNSTREAM_ALLOCATED_ROWS = list(_DATA["downstream_allocated_rows"])
 _CLEAN_ROWS = [
     row
     for row in [*_TORCH_ROWS, *_ADDED_ROWS, *_BENCH_ROWS, *_DATA["device_only_rows"]]
@@ -159,6 +161,8 @@ def test_the_evidence_is_complete_and_says_who_measured_what():
     }
     assert [row["id"][:2] for row in data["bench_rows"]] == ["M1", "M2", "M3", "M4", "M6"]
     assert len(data["downstream_added_rows"]) == 3
+    assert [row["id"][:2] for row in data["post_2683_rows"]] == ["M4", "M1"]
+    assert len(data["downstream_allocated_rows"]) == 2
     assert set(data["models"]) == {"Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B", "Qwen/Qwen3-4B"}
     assert "bench train" in data["description"] and "downstream" in data["description"]
     assert "reserved" in data["peak_kinds"]["torch_reserved_mib"]
@@ -330,6 +334,56 @@ def test_a_4_bit_run_on_a_bf16_card_is_priced_below_the_runs_measured_before_260
         "weights"
     ] == pytest.approx(2 * 151936 * 1024, abs=2)
     assert default["total_memory_bytes"] < as_measured["total_memory_bytes"]
+
+
+def _post_2683(prefix: str) -> dict:
+    return next(row for row in _POST_2683_ROWS if row["id"].startswith(prefix))
+
+
+def test_a_4_bit_run_on_current_main_has_no_margin_the_estimate_covers(models):
+    # M4 re-run on origin/main a6f5e7246, after #2683 kept the embeddings and head in bf16:
+    # the allocated peak fell 674 MiB (2081 -> 1407) but reserved / allocated rose to 1.60,
+    # and the whole-card peak rose 62 MiB (2348 -> 2410). The estimate, priced at the default
+    # that a bf16 card now gets, is about right for the allocated peak and below the whole-card
+    # peak even with the pre-flight's 10% margin. This is the truth the docs state; it is not
+    # a guarantee, so it is pinned as a shortfall, and the clean-row pins above stop at #2683.
+    row = _post_2683("M4")
+    before = next(row for row in _BENCH_ROWS if row["quantization"] == "4bit")
+    result = _priced(row)
+    total = result["total_memory_bytes"]
+    device = row["device_mib"] * MIB
+    allocated = row["max_memory_allocated_bytes"]
+    reserved = row["max_memory_reserved_bytes"]
+    assert 1.00 <= _allocated_terms(result) / allocated <= 1.07  # measured 1.033
+    assert 0.80 <= total / device <= 0.86  # 0.831
+    assert 0.90 <= total * (1 + VRAM_SAFETY_MARGIN) / device < 1.0  # 0.914: below the peak
+    assert 1.55 <= reserved / allocated <= 1.65  # 1.597, against 1.05 before #2683
+    assert row["device_mib"] - round(reserved / MIB) == 162
+    assert before["max_memory_allocated_bytes"] - allocated == pytest.approx(674 * MIB, abs=MIB)
+    assert row["device_mib"] - before["device_mib"] == 62
+
+
+def test_the_bf16_control_on_current_main_is_the_run_before_it(models):
+    control = _post_2683("M1")
+    before = next(row for row in _BENCH_ROWS if row["id"].startswith("M1"))
+    for key in ("max_memory_allocated_bytes", "max_memory_reserved_bytes", "device_mib"):
+        assert control[key] == before[key], key
+    assert _priced(control)["total_memory_bytes"] == _priced(before)["total_memory_bytes"]
+
+
+@pytest.mark.parametrize(
+    "row", _DOWNSTREAM_ALLOCATED_ROWS, ids=_ids(_DOWNSTREAM_ALLOCATED_ROWS)
+)
+def test_the_downstream_runner_logged_allocated_peaks_the_estimate_matches(models, row):
+    # The same recipe through the downstream runner: allocated 2145 (bf16) and 1672 (4-bit, before
+    # #2683) MiB, where `soup bench train` read 2108 and 2081. The 4-bit shortfall of the bench
+    # run (0.84) is not in this runner's figure (1.05), which is what makes the load phase of
+    # `bench train` the first suspect for it.
+    result = _priced(row)
+    ratio = _allocated_terms(result) / (row["allocated_mib"] * MIB)
+    assert 0.97 <= ratio <= 1.08, (row["id"], ratio)
+    assert result["total_memory_bytes"] >= row["reserved_mib"] * MIB
+    assert row["device_mib"] - row["reserved_mib"] in (162, 172)
 
 
 # --- 4. what a shorter length does to the estimate ----------------------------------------
