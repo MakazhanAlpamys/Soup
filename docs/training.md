@@ -15,6 +15,10 @@
 > switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
 > `kto` still hold one copy of the output head per step) — see
 > [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> You can also select `dpo`, `orpo` or `simpo` with `task: preference` and
+> `training.preference_loss`. The same streaming restrictions apply: use a concrete
+> `batch_size`; `stream_vram_probe`, `stream_loss_chunk` and `stream_recompute` other than
+> `on` remain SFT-only. IPO, BCO and `preference_loss_weights` do not stream yet.
 
 **Contents:**
 
