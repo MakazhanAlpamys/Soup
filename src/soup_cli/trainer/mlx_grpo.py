@@ -211,14 +211,16 @@ def log_val_reward(tracker: Any, run_id: Optional[str], *, step: int, epoch: flo
                    lr: float, val_reward: float) -> None:
     """The held-out reward as the run's ``val_reward`` row, as transformers GRPO logs it.
 
-    Its own row at the last update's step, with no training loss: the update's
-    loss was logged on its own row already.
+    Its own row at the last update's step, with no training loss and no speed:
+    the update's loss and step rate were logged on its own row already, and this
+    row measured neither. ``speed=None``, not the tracker's ``0.0`` default, so
+    the row does not read as a measured zero speed (#2830).
     """
     if tracker is None or not run_id:
         return
     try:
         tracker.log_metrics(run_id=run_id, step=step, epoch=epoch, loss=None, lr=lr,
-                            val_reward=float(val_reward), kind=ROW_KIND_EVAL)
+                            val_reward=float(val_reward), speed=None, kind=ROW_KIND_EVAL)
     except Exception:  # noqa: BLE001 — telemetry must not kill a run
         pass
 

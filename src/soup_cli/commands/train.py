@@ -84,6 +84,33 @@ def _confirm_start_training() -> None:
         raise typer.Exit()
 
 
+def _preflight_config_eval_gate(cfg: "SoupConfig") -> None:
+    """Refuse a ``training.eval_gate.suite`` that cannot load, before any data is read.
+
+    ``--gate`` validates its suite up front and exits 1. A gate enabled in
+    ``soup.yaml`` got no such check: ``SoupTrainerCallback._setup_eval_gate``
+    logs a suite it cannot load at WARNING and trains with no gate at all, so
+    ``on_regression: stop`` could never fire. The callback keeps that lenient
+    handling on purpose (#1895); this runs the same check ``--gate`` already
+    runs, with the same exit code, and before ``--dry-run`` returns (#2231).
+    """
+    gate_cfg = getattr(cfg.training, "eval_gate", None)
+    if gate_cfg is None or not gate_cfg.enabled or not gate_cfg.suite:
+        return
+    from soup_cli.eval.gate import load_suite
+    from soup_cli.utils.terminal import for_terminal
+
+    # ``OSError`` covers a missing file and a path that is a directory
+    # (``PermissionError`` / ``IsADirectoryError``), which the callback also
+    # catches; ``TypeError`` is a suite mapping with a non-string key, which
+    # ``EvalSuite(**data)`` raises. ``UnicodeDecodeError`` is a ``ValueError``.
+    try:
+        load_suite(gate_cfg.suite)
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Invalid training.eval_gate.suite: {for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -406,25 +433,27 @@ def _refuse_over_judge_budget(cfg, dataset) -> None:
         raise typer.Exit(1) from exc
 
 
-def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
+def _build_hardware_fit_input(cfg, gpu_memory_gb=None, kbit_fp32=False):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_or_reason``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
-    printed before the model's details are read from the Hub, without the offline
-    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. ``kbit_fp32`` is
+    True on a CUDA card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's
+    fp32 embeddings, norms and head (#2609). A line is printed before the model's
+    details are read from the Hub, without the offline hint used by ``soup plan`` and
+    ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import FitUnavailable
 
-    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb)
+    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb, kbit_fp32=kbit_fp32)
     return None if isinstance(result, FitUnavailable) else result
 
 
 def _hardware_fit_input_or_reason(
-    cfg: SoupConfig, gpu_memory_gb: float | None = None
+    cfg: SoupConfig, gpu_memory_gb: float | None = None, kbit_fp32: bool = False
 ) -> HardwareFitInput | FitUnavailable:
     """Build the train fit input or its reason, announcing any Hub lookup once."""
     from soup_cli.utils.hardware_fit import hardware_fit_input_or_reason
@@ -434,6 +463,7 @@ def _hardware_fit_input_or_reason(
         cfg,
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+        kbit_fp32=kbit_fp32,
     )
 
 
@@ -537,10 +567,16 @@ def _hardware_fit_preflight(
         return
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
+    from soup_cli.utils.gpu import bf16_fp16_flags
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
-    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
-    inp = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=total_bytes / 1024**3)
+    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
+    # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    inp = _hardware_fit_input_or_reason(
+        cfg,
+        gpu_memory_gb=total_bytes / 1024**3,
+        kbit_fp32=bf16_fp16_flags("cuda")[1],
+    )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
@@ -1423,8 +1459,14 @@ def train(
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
+        from soup_cli.config.eval_gate_support import eval_gate_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
+
+        refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
+        if refusal is not None:
+            console.print(f"[red]{for_terminal(refusal)}[/]")
+            raise typer.Exit(1)
 
         try:
             # Validate the suite path up-front (path containment + parse).
@@ -1434,6 +1476,8 @@ def train(
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
+    else:
+        _preflight_config_eval_gate(cfg)
 
     # Honesty guard: these staged flags are accepted but not enforced mid-training in
     # this build. Their tuning knobs, forgetting_threshold included (#1814), are

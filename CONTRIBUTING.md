@@ -426,6 +426,7 @@ take it back.
 | @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
 | @taljeon | Eval gate | `area:eval` |
 | @akkupratap323 | Ingest and feedback sources | `area:ingest` |
+| @vaputa | MLX backend | `area:mlx` |
 
 ## Making Changes
 
