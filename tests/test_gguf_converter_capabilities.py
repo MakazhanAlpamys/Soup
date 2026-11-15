@@ -84,7 +84,7 @@ def export_flow(tmp_path, monkeypatch):
 
             def merge(source, base, output, trust_remote_code=False):
                 calls.append("merge")
-                Path(output).mkdir()
+                Path(output).mkdir(exist_ok=True)
                 (Path(output) / "config.json").write_text(json.dumps(config), encoding="utf-8")
 
             monkeypatch.setattr(export_mod, "_merge_adapter", merge)
@@ -132,7 +132,7 @@ def test_adapter_checks_merged_metadata_and_cleans_up(export_flow, tmp_path, arc
     result, calls = export_flow({"architectures": [architecture]}, adapter=True)
     assert result.exit_code == (0 if allowed else 1), (result.output, result.exception)
     assert calls == (["merge", "clone", "deps", "convert", "quantize"] if allowed else ["merge"])
-    assert not (tmp_path / ".soup_merge_tmp_model").exists()
+    assert not list(tmp_path.glob(".soup_merge_tmp_model*"))
 
 
 def test_managed_missing_dependencies_refuse_before_running_selected_converter(
