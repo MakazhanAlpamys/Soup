@@ -839,7 +839,10 @@ The local controller creates one Secure Cloud GPU Pod with TCP SSH access (RunPo
 REST API v2: `POST /v2/pods` with a nested `gpu: {id, count}`, `disk` for the 80 GB
 container disk, an explicit `22/tcp` port, and the boot command as `entrypoint` and
 `cmd`; v2 attaches no volume unless asked, so `/workspace` is part of that container
-disk). It waits for the Pod's `status` to reach `STARTING` or `RUNNING` and reads the
+disk). `/workspace` now shares the 80 GB container disk with the venv and the model
+cache, and RunPod's v2 reference calls that disk ephemeral (wiped on restart); the size
+is unchanged, and the controller prints one line naming it before it creates the Pod.
+It waits for the Pod's `status` to reach `STARTING` or `RUNNING` and reads the
 SSH address from `ssh.direct`, or from the `runtime.ports` entry for `22/tcp`; only an
 IPv4 literal that is a public address is ever connected to. A Pod in `ERROR`, `EXITED`
 or `TERMINATED` ends the wait at once. The controller then creates
@@ -881,25 +884,41 @@ only the public key enters the Pod environment. Models and datasets must be publ
 accessible remotely: local input files and local credentials are not uploaded.
 
 Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
-until the API returns 404 or reports the Pod as `TERMINATED`. The parent waits through
-interrupts so it does not kill the cleanup controller. Transient transport failures, including truncated HTTP
+until it has evidence that the Pod is gone: RunPod reports it as `TERMINATED`; or a
+DELETE was accepted (HTTP 2xx) and the Pod is then no longer found; or, when RunPod
+answered the DELETE itself with 404 (which v2 uses for "absent or not accessible"),
+the Pod is absent from the paginated Pod list. A 404 alone is never taken as proof, and
+the notice "RunPod termination evidence: ..." names the evidence used before
+"RunPod termination verified." A 429 waits for an integer `Retry-After` (at most 60
+seconds; the HTTP-date form is ignored and 5 seconds is used) and goes on inside the
+same deadlines: 15 minutes for the SSH wait, five for cleanup, 60 seconds for
+reconciling a lost create. The parent waits through interrupts so it does not kill
+the cleanup controller. Transient transport failures, including truncated HTTP
 responses during DELETE or confirmation GET, are retried within the five-minute
 cleanup window. A lost or ambiguous create response (including HTTP 5xx and 408)
 is reconciled by the unique run name, without repeating the create request or
 deleting unrelated Pods: v2 pages the Pod list by cursor (newest first), so the
 controller reads it 100 Pods at a time, follows `pagination.nextCursor` for at most
 20 pages, and refuses any page that is not the documented `{"pods": [...],
-"pagination": {...}}` shape. A definite HTTP 4xx rejection other than 408 reports the
+"pagination": {...}}` shape, a cursor longer than 512 characters, or one that cannot
+be encoded. A list read that fails (a transport error, 429, 5xx or 404) is read again
+until the 60-second deadline. A definite HTTP 4xx rejection other than 408 reports the
 status without claiming that cleanup of an allocated Pod failed, followed by the
 title, detail and first three `errors` of RunPod's `application/problem+json` body
 (RFC 9457) when it sends one. Fixed controller failure reasons are shown; arbitrary
 transport/subprocess exception text is hidden, and the only RunPod text ever shown is
 that problem body: it is stripped of terminal controls and credential patterns like the
-remote stderr tail below, the API key is removed from it, and it is capped at 400
-characters. Any other error body is never shown.
+remote stderr tail below, the API key is removed from it (after the controls are
+stripped, in its plain, percent-encoded, base64 and lower-case spellings), and it is
+capped at 400 characters. Any other error body is never shown. The key travels only
+in an unredirected `Authorization: Bearer` header, and each request carries
+`User-Agent: soup-cli/<version>`, which names the client and its version and nothing
+about the user or the machine.
 Keep the controller running; force-killing it or losing API access can leave cleanup
-unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
-the RunPod console. A single interrupted SSH training session is failed rather
+unconfirmed. An unconfirmed cleanup exits nonzero and prints a CRITICAL line that
+names the Pod id or ids known, says the Pod "may still be running and billed", and
+asks you to look for the Pod named `soup-<run>` in your RunPod console (no address is
+built from anything RunPod sent). A single interrupted SSH training session is failed rather
 than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
 with six missed probes allowed (roughly three minutes); the training command has
 a 25-hour timeout. Artifacts are copied only after a successful training command,
@@ -924,14 +943,19 @@ or claim successful artifact retrieval.
 **RunPod retired its REST API v1 on 2026-11-15.** Earlier releases of soup-cli call it,
 so `--cloud runpod --cloud-submit` cannot create a Pod with them; upgrade with
 `pip install -U soup-cli`. This controller uses REST API v2
-(`https://api.runpod.io/v2`). If RunPod answers a request for the Pod list or the Pod
-create with HTTP 404 or 410, or with a redirect (which the controller never follows),
-the controller stops at once with one message that says RunPod has probably retired or
-moved the API, names `soup train --cloud runpod --cloud-submit`, and points at
+(`https://api.runpod.io/v2`). If RunPod answers the Pod create with a redirect (which
+the controller never follows), or with HTTP 404 or 410 whose body is not RunPod's own
+`application/problem+json`, the controller stops at once with one message that says
+RunPod has probably retired or moved the API, names
+`soup train --cloud runpod --cloud-submit`, and points at
 `pip install -U soup-cli` or a Pod you start yourself in the RunPod console. No Pod is
 created and none is cleaned up, so the exit code is 1 and the notice "RunPod create
-request rejected; no Pod to clean up." follows. A 404 for a single Pod is still read
-as that Pod being gone.
+request rejected; no Pod to clean up." follows. The named message is given only when the
+create itself is answered that way: an ordinary v2 not-found (an unknown GPU type, say)
+carries a problem body and is shown with its text instead, still as a rejected create.
+The Pod list is read only to reconcile a lost create and to confirm a deletion, so a
+404 there is retried like any failed read and, if it persists, ends in the CRITICAL
+line above, not in a clean exit.
 
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The v2 client is
 implemented against the published v2 reference; not exercised against the live service
@@ -941,7 +965,8 @@ PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
 That first live run (#2098) should also record the image's externally-managed
 Python marker and SSH `PATH`, to establish whether the image needed the venv
-workaround tracked in #2192.
+workaround tracked in #2192, and show whether `ssh.direct.host` is ever a host name
+(the controller connects only to an IP literal and refuses anything else).
 API contract: [RunPod REST v2 OpenAPI](https://docs.runpod.io/api-reference-v2/openapi.json),
 [migration from v1](https://docs.runpod.io/api-reference-v2/migrate-from-v1),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).

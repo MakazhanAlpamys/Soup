@@ -5,6 +5,7 @@ SSH contract: https://docs.runpod.io/pods/configuration/use-ssh
 Only main() performs network operations. This module is also copied into plans.
 """
 
+import base64
 import http.client
 import ipaddress
 import json
@@ -50,6 +51,12 @@ _MAX_LIST_PAGES = 20
 _PROBLEM_TYPE = "application/problem+json"
 _MAX_ERROR_BODY = 64 * 1024
 _PROBLEM_CHARS = 400
+# A page cursor longer than this is not one RunPod issued.
+_CURSOR_MAX = 512
+# Retry-After: only the integer form is honoured, and never for longer than this.
+_RETRY_AFTER_MAX = 60
+_RETRY_AFTER = re.compile(r"[0-9]{1,6}")
+_LAUNCH_UNKNOWN = "RunPod launch result is unknown; check the console"
 _LOG_TAIL_LINES = 50
 _LOG_TAIL_BYTES = 50_000
 # Bound scheme matching so long non-URL log lines do not cause quadratic work.
@@ -62,6 +69,9 @@ _SECRET_PATTERNS = (
     re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}"),
 )
 _IMAGE = "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404"
+# The container disk: /workspace, the venv and the model cache all live on it, and
+# RunPod wipes it when the Pod restarts.
+_DISK_GB = 80
 _BOOT = (
     "set -eu; if [ ! -x /usr/sbin/sshd ]; then apt-get update; "
     "apt-get install -y openssh-server; fi; "
@@ -77,20 +87,30 @@ def _notice(message):
 
 
 class _ControllerError(RuntimeError):
-    """Only fixed, controller-owned diagnostics are safe to show to the user."""
+    """A failure whose text is safe to show to the user: fixed, controller-owned text,
+    except for an _APIError, which also carries the problem text RunPod sent with an
+    error status after it was cleaned, capped and stripped of the API key
+    (see _problem_detail)."""
 
 
 class _APIError(_ControllerError):
-    def __init__(self, method: str, status: int, detail: str = "") -> None:
+    def __init__(
+        self, method: str, status: int, detail: str = "", retry_after: int | None = None
+    ) -> None:
         text = f"RunPod API {method} failed: HTTP {status}"
         super().__init__(f"{text} ({detail})" if detail else text)
+        self.status = status
+        # Seconds RunPod asked to wait (integer Retry-After, at most 60), or None.
+        self.retry_after = retry_after
         # A server/request timeout can still have allocated a Pod. Reconcile it.
         self.create_rejected = method == "POST" and 400 <= status < 500 and status != 408
 
 
-# An answer that says "this route is not served": the Pod collection is not found, the
-# route is gone, or the request is redirected (redirects are never followed).
-_NOT_SERVED_STATUSES = frozenset({301, 302, 303, 307, 308, 404, 410})
+# An answer that says "this route is not served": the request is redirected (redirects
+# are never followed), or the route is gone or not found (404, 410) without RunPod's own
+# application/problem+json saying why: a v2 not-found answer is an ordinary one.
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_GONE_STATUSES = frozenset({404, 410})
 _RETIRED_NOTICE = (
     "RunPod answered HTTP {status} where the REST API v2 (https://api.runpod.io/v2) that "
     "this soup-cli version uses for `soup train --cloud runpod --cloud-submit` should "
@@ -105,7 +125,19 @@ class _ApiRetiredError(_APIError):
 
     def __init__(self, method: str, status: int) -> None:
         _ControllerError.__init__(self, _RETIRED_NOTICE.format(status=status))
+        self.status = status
+        self.retry_after = None
         self.create_rejected = method == "POST"
+
+
+class _PodNotFoundError(_ControllerError):
+    """A DELETE of one Pod was answered 404: no such Pod, or not one this key can see.
+    By itself that is not proof that a billed Pod is gone (see _terminate)."""
+
+
+class _ListShapeError(_ControllerError):
+    """A page of the Pod list is not the documented v2 shape. Reading it again will not
+    change that."""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -113,29 +145,71 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _clean_text(text):
+def _clean_text(text, secrets=()):
     """``text`` without terminal controls and with credentials redacted.
 
-    render_runpod_stub serializes the canonical utils/terminal.py table. Controls are
-    stripped before matching credentials, and redaction comes before any truncation:
-    cutting a password first can remove the URL prefix that identifies it.
+    render_runpod_stub serializes the canonical utils/terminal.py table. Controls go
+    first, so that a secret echoed with a control character inside is matched; the
+    ``secrets`` are removed next, then URL credentials and token shapes. Redaction comes
+    before any truncation: cutting a password first can remove the URL prefix that
+    identifies it.
     """
     safe = text.translate(globals()["_TERMINAL_STRIP_TABLE"])
+    for secret in secrets:
+        safe = safe.replace(secret, "<redacted>")
     safe = _URL_CREDENTIALS.sub(r"\1<redacted>@", safe)
     for pattern in _SECRET_PATTERNS:
         safe = pattern.sub("<redacted>", safe)
     return safe
 
 
+def _secret_spellings(secret):
+    """The API key as an error body might echo it: as is, percent-encoded (with and without
+    "/" kept), base64 (padded or not), and lower-cased. Longest first."""
+    if not secret:
+        return []
+    encoded = base64.b64encode(secret.encode("utf-8", errors="replace")).decode("ascii")
+    spellings = {
+        secret,
+        urllib.parse.quote(secret, safe="", errors="replace"),
+        urllib.parse.quote(secret, errors="replace"),
+        encoded,
+        encoded.rstrip("="),
+        secret.lower(),
+    }
+    return sorted((item for item in spellings if item), key=len, reverse=True)
+
+
+def _is_problem(exc):
+    """True when the error response says it is an application/problem+json body."""
+    try:
+        return str(exc.headers.get("Content-Type", "")).lower().startswith(_PROBLEM_TYPE)
+    except Exception:
+        return False
+
+
+def _retry_after(exc):
+    """Seconds RunPod asks to wait: the integer form of Retry-After, at most 60. The
+    HTTP-date form, and anything else that is not plain digits, is ignored on purpose."""
+    try:
+        value = str(exc.headers.get("Retry-After", "")).strip()
+    except Exception:
+        return None
+    if not _RETRY_AFTER.fullmatch(value):
+        return None
+    return min(int(value), _RETRY_AFTER_MAX)
+
+
 def _problem_detail(exc, api_key):
     """The title, detail and first three ``errors`` of an RFC 9457 error body, cleaned for
     the terminal, or "" when the response is not an application/problem+json object.
 
-    Nothing else RunPod sends is ever shown: the key is removed, controls are stripped,
-    and the text is capped, because it is provider-controlled and reaches a terminal.
+    Nothing else RunPod sends is ever shown: the key is removed (in the spellings of
+    _secret_spellings), controls are stripped, and the text is capped, because it is
+    provider-controlled and reaches a terminal.
     """
     try:
-        if not str(exc.headers.get("Content-Type", "")).lower().startswith(_PROBLEM_TYPE):
+        if not _is_problem(exc):
             return ""
         body = json.loads(exc.read(_MAX_ERROR_BODY))
         errors = body.get("errors")
@@ -143,11 +217,11 @@ def _problem_detail(exc, api_key):
         parts += errors[:3] if isinstance(errors, list) else []
     except Exception:
         return ""
+    secrets = _secret_spellings(api_key)
     shown = []
     for part in parts:
         if isinstance(part, str):
-            part = part.replace(api_key, "<redacted>") if api_key else part
-            part = " ".join(_clean_text(part).split())
+            part = " ".join(_clean_text(part, secrets).split())
             if part:
                 shown.append(part)
     return "; ".join(shown)[:_PROBLEM_CHARS]
@@ -156,8 +230,11 @@ def _problem_detail(exc, api_key):
 def _request_json(api_key, path, *, method="GET", payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(_API_BASE + path, data=data, method=method)
-    request.add_header("Authorization", "Bearer " + api_key)
+    # Unredirected: a redirect (never followed here) could not carry the key on.
+    request.add_unredirected_header("Authorization", "Bearer " + api_key)
     request.add_header("Content-Type", "application/json")
+    # The client name and version only: nothing about the user or the machine.
+    request.add_header("User-Agent", "soup-cli/" + (_SOUP_VERSION or "unknown"))
     try:
         with urllib.request.build_opener(_NoRedirect()).open(request, timeout=60) as response:
             raw = response.read(_MAX_RESPONSE + 1)
@@ -171,10 +248,15 @@ def _request_json(api_key, path, *, method="GET", payload=None):
         return parsed
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and method in {"GET", "DELETE"} and path.startswith("/pods/"):
+            if method == "DELETE":
+                raise _PodNotFoundError("RunPod found no such Pod to delete") from None
             return None
-        if exc.code in _NOT_SERVED_STATUSES:
+        gone = exc.code in _GONE_STATUSES and not _is_problem(exc)
+        if exc.code in _REDIRECT_STATUSES or gone:
             raise _ApiRetiredError(method, exc.code) from None
-        raise _APIError(method, exc.code, _problem_detail(exc, api_key)) from None
+        raise _APIError(
+            method, exc.code, _problem_detail(exc, api_key), _retry_after(exc)
+        ) from None
     except (OSError, ValueError, http.client.HTTPException):
         raise _ControllerError("RunPod API transport or JSON response failed") from None
 
@@ -187,7 +269,7 @@ def _launch_payload(public_key, name):
         "image": _IMAGE,
         "cloud": "SECURE",
         "gpu": {"id": _GPU_ID, "count": 1},
-        "disk": 80,
+        "disk": _DISK_GB,
         "ports": ["22/tcp"],
         "env": {"PUBLIC_KEY": public_key},
         "entrypoint": ["/bin/bash", "-lc"],
@@ -240,11 +322,23 @@ def _ssh_address(record):
     return None
 
 
+def _rate_limit_wait(exc, deadline):
+    """Sleep as long as RunPod asked after a 429 (5 s without a usable Retry-After), but
+    never past ``deadline``: a rate limit does not extend any wait."""
+    time.sleep(max(0, min(exc.retry_after or 5, deadline - time.monotonic())))
+
+
 def _wait_for_ssh(api_key, pod_id):
     path = "/pods/" + _valid_id(pod_id)
     deadline = time.monotonic() + 900
     while time.monotonic() < deadline:
-        record = _request_json(api_key, path)
+        try:
+            record = _request_json(api_key, path)
+        except _APIError as exc:
+            if exc.status != 429:
+                raise
+            _rate_limit_wait(exc, deadline)
+            continue
         if not isinstance(record, dict):
             raise _ControllerError("RunPod is unavailable before SSH startup")
         status = record.get("status")
@@ -462,61 +556,124 @@ def _local_destination():
 
 
 def _terminate(api_key, pod_id):
+    """Delete the Pod and return the evidence that it is gone; raise when none arrives.
+
+    The evidence is one of: RunPod reports the Pod as TERMINATED; a DELETE was accepted
+    (2xx) and the Pod is no longer found; or, when RunPod answered the DELETE itself with
+    404 (no such Pod, or not one this key can see), the Pod is absent from the Pod list.
+    A 404 alone is never taken as proof that a billed Pod is gone.
+    """
     path = "/pods/" + _valid_id(pod_id)
     deadline = time.monotonic() + 300
+    accepted = False
     while time.monotonic() < deadline:
         try:
-            _request_json(api_key, path, method="DELETE")
-            # A successful DELETE alone is not evidence of termination.
+            try:
+                _request_json(api_key, path, method="DELETE")
+                accepted = True
+            except _PodNotFoundError:
+                pass
             record = _request_json(api_key, path)
-            # v2: a deleted Pod answers 404, or is still readable in status TERMINATED.
-            if record is None or (
-                isinstance(record, dict) and record.get("status") == "TERMINATED"
-            ):
-                return
+            if isinstance(record, dict) and record.get("status") == "TERMINATED":
+                return "RunPod reports the Pod as TERMINATED"
+            if record is None:
+                if accepted:
+                    return "RunPod accepted the DELETE and no longer finds the Pod"
+                if not _listed(api_key, pod_id, deadline):
+                    return "the Pod is not in RunPod's Pod list"
+        except _APIError as exc:
+            if exc.status == 429:
+                _rate_limit_wait(exc, deadline)
+                continue
         except RuntimeError:
             pass
         time.sleep(5)
     raise _ControllerError("RunPod deletion was not confirmed within five minutes")
 
 
-def _pod_pages(api_key):
+def _listed(api_key, pod_id, deadline):
+    """Whether the Pod list (read page by page, bounded) holds ``pod_id``."""
+    late = "RunPod deletion was not confirmed within five minutes"
+    for pods in _pod_pages(api_key, deadline, late):
+        if any(isinstance(item, dict) and item.get("id") == pod_id for item in pods):
+            return True
+    return False
+
+
+def _pod_pages(api_key, deadline=None, late=_LAUNCH_UNKNOWN):
     """The pages of the account's Pod list, newest first, following the cursor.
 
-    The walk is bounded, and any page that is not the documented v2 shape is refused.
+    The walk is bounded by a page cap and, when ``deadline`` is given, by that deadline
+    (checked before every page). A page that is not the documented v2 shape, or a cursor
+    that is not one RunPod issued (too long, or not encodable), is refused by name.
     """
     refused = "RunPod could not reconcile the launch; check the console"
     path = f"/pods?limit={_LIST_PAGE}"
     for _ in range(_MAX_LIST_PAGES):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _ControllerError(late)
         page = _request_json(api_key, path)
         pods = page.get("pods") if isinstance(page, dict) else None
         paging = page.get("pagination") if isinstance(page, dict) else None
         if not isinstance(pods, list) or not isinstance(paging, dict):
-            raise _ControllerError(refused)
+            raise _ListShapeError(refused)
         yield pods
         if not paging.get("hasNextPage"):
             return
         cursor = paging.get("nextCursor")
         if not isinstance(cursor, str) or not cursor:
-            raise _ControllerError(refused)
-        path = f"/pods?limit={_LIST_PAGE}&cursor=" + urllib.parse.quote(cursor, safe="")
-    raise _ControllerError(refused)
+            raise _ListShapeError(refused)
+        invalid = "RunPod returned an invalid page cursor; check the console"
+        if len(cursor) > _CURSOR_MAX:
+            raise _ListShapeError(invalid)
+        try:
+            encoded = urllib.parse.quote(cursor, safe="")
+        except UnicodeEncodeError:
+            raise _ListShapeError(invalid) from None
+        path = f"/pods?limit={_LIST_PAGE}&cursor=" + encoded
+    raise _ListShapeError(refused)
 
 
 def _recover_created(api_key, name):
-    """A lost POST response must not cause another POST or delete unrelated Pods."""
+    """A lost POST response must not cause another POST or delete unrelated Pods.
+
+    The list is read again until the 60-second deadline: a failed read (a transport
+    error, a 429, a 5xx) is not an answer. A page in the wrong shape is refused at once.
+    """
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        for pods in _pod_pages(api_key):
-            found = [
-                item.get("id")
-                for item in pods
-                if isinstance(item, dict) and item.get("name") == name
-            ]
-            if found:
-                return [_valid_id(item) for item in found]
+        found = []
+        try:
+            for pods in _pod_pages(api_key, deadline):
+                found = [
+                    item.get("id")
+                    for item in pods
+                    if isinstance(item, dict) and item.get("name") == name
+                ]
+                if found:
+                    break
+        except _ListShapeError:
+            raise
+        except _APIError as exc:
+            if exc.status == 429:
+                _rate_limit_wait(exc, deadline)
+                continue
+        except RuntimeError:
+            pass
+        if found:
+            return [_valid_id(item) for item in found]
         time.sleep(5)
-    raise _ControllerError("RunPod launch result is unknown; check the console")
+    raise _ControllerError(_LAUNCH_UNKNOWN)
+
+
+def _critical_notice(ids, name):
+    """The last-resort line when cleanup could not be confirmed. ``ids`` were validated by
+    _valid_id and ``name`` is this run's own; nothing from a response is built into a URL."""
+    known = ("the Pod " + ", ".join(ids)) if ids else "a Pod (its id is unknown)"
+    return (
+        f"CRITICAL: RunPod cleanup unconfirmed; {known} may still be running and billed. "
+        f"Open your RunPod console and look for the Pod named {name}."
+    )
 
 
 def main():
@@ -546,7 +703,12 @@ def main():
     name = "soup-" + uuid.uuid4().hex
     pod_id = None
     launched = False
+    ids = []
     rc = 1
+    _notice(
+        f"RunPod container disk: {_DISK_GB} GB, shared by /workspace, the venv and the "
+        "model cache; RunPod wipes it when the Pod restarts."
+    )
     try:
         launched = True
         response = _request_json(
@@ -569,12 +731,14 @@ def main():
         try:
             ids = [pod_id] if pod_id else (_recover_created(api_key, name) if launched else [])
             for owned_id in ids:
-                _terminate(api_key, owned_id)
+                evidence = _terminate(api_key, owned_id)
+                if evidence:
+                    _notice("RunPod termination evidence: " + evidence + ".")
             _notice("RunPod termination verified." if ids else (
                 "RunPod create request rejected; no Pod to clean up."
             ))
         except Exception:
-            _notice("CRITICAL: RunPod cleanup unconfirmed; check the console for " + name)
+            _notice(_critical_notice(ids, name))
             rc = 1
         finally:
             signal.signal(signal.SIGINT, previous)

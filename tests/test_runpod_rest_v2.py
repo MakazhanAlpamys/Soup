@@ -301,6 +301,9 @@ def test_the_listing_walk_is_bounded(monkeypatch):
 
     def handler(method, path, body, url):
         pages["count"] += 1
+        if pages["count"] > ns["_MAX_LIST_PAGES"] + 1:
+            # A walk that ignored its cap fails here instead of running on.
+            raise AssertionError("the walk went past the page cap")
         return {"pods": [], "pagination": {"nextCursor": f"c{pages['count']}",
                                            "hasNextPage": True}}
 
@@ -308,7 +311,7 @@ def test_the_listing_walk_is_bounded(monkeypatch):
     _clock(ns)
     with pytest.raises(RuntimeError, match="could not reconcile the launch"):
         ns["_recover_created"](KEY, "soup-x")
-    assert pages["count"] == ns["_MAX_LIST_PAGES"] <= 50
+    assert pages["count"] == ns["_MAX_LIST_PAGES"] == 20
 
 
 @pytest.mark.parametrize("pod_id", ["../x", "x" * 65, 17, None, "", "a b"])
@@ -565,7 +568,8 @@ def test_a_404_on_a_single_pod_is_absence_with_the_documented_body(monkeypatch):
     _serve(ns, monkeypatch, lambda m, p, b, url: (_ for _ in ()).throw(
         _http_error(url, 404, DOC_404)))
     assert ns["_request_json"](KEY, "/pods/7h9k2m4n6p") is None
-    assert ns["_request_json"](KEY, "/pods/7h9k2m4n6p", method="DELETE") is None
+    with pytest.raises(ns["_PodNotFoundError"]):
+        ns["_request_json"](KEY, "/pods/7h9k2m4n6p", method="DELETE")
 
 
 def test_a_204_delete_has_no_body_and_returns_nothing(monkeypatch):
