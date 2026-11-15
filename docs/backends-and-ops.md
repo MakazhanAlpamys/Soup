@@ -906,6 +906,16 @@ diagnostics; when training itself fails, the remote script also sends the bounde
 remote training command (25 hours). The diagnostic tail does not preserve the Pod
 or claim successful artifact retrieval.
 
+**RunPod retired its REST API v1 on 2026-11-15**, and this controller still calls it. When
+RunPod answers a request for the Pod list or the Pod create with HTTP 404 or 410, or with a
+redirect (which the controller never follows), `--cloud runpod --cloud-submit` stops at once
+with one message that names the retirement. It says to upgrade with `pip install -U soup-cli`
+to a release that uses RunPod's REST API v2, or to start the run yourself on a Pod from the
+RunPod console. No Pod is created and none is cleaned up, so the exit code is 1 and the
+notice "RunPod create request rejected; no Pod to clean up." follows. What the retired address
+answers is not published, so any other failure (a refused connection, HTTP 5xx) is still
+reported by its own, plainer message.
+
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.

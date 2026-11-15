@@ -78,6 +78,25 @@ class _APIError(_ControllerError):
         self.create_rejected = method == "POST" and 400 <= status < 500 and status != 408
 
 
+# An answer that says "this route is not served": the Pod collection is not found, the
+# route is gone, or the request is redirected (redirects are never followed).
+_NOT_SERVED_STATUSES = frozenset({301, 302, 303, 307, 308, 404, 410})
+_RETIRED_NOTICE = (
+    "RunPod no longer serves the REST API v1 that this soup-cli version uses for "
+    "`soup train --cloud runpod --cloud-submit` (RunPod retired it on 2026-11-15; "
+    "HTTP {status}). Upgrade with `pip install -U soup-cli` to a release that uses RunPod's "
+    "REST API v2, or start the run yourself on a Pod from the RunPod console."
+)
+
+
+class _ApiRetiredError(_APIError):
+    """RunPod says the route this controller calls is not served. Nothing was created."""
+
+    def __init__(self, method: str, status: int) -> None:
+        _ControllerError.__init__(self, _RETIRED_NOTICE.format(status=status))
+        self.create_rejected = method == "POST"
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -102,6 +121,8 @@ def _request_json(api_key, path, *, method="GET", payload=None):
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and method in {"GET", "DELETE"} and path.startswith("/pods/"):
             return None
+        if exc.code in _NOT_SERVED_STATUSES:
+            raise _ApiRetiredError(method, exc.code) from None
         raise _APIError(method, exc.code) from None
     except (OSError, ValueError, http.client.HTTPException):
         raise _ControllerError("RunPod API transport or JSON response failed") from None
