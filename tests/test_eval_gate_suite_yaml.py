@@ -189,6 +189,22 @@ def test_duplicate_keys_that_differ_only_by_case_are_distinct(
     ) == []
 
 
+def test_duplicate_keys_in_unmerged_nested_values_are_ignored() -> None:
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, duplicate_keys_in_sequence_mappings
+
+    source = (
+        "suite: nested\ntasks:\n  - type: custom\n    name: math\n"
+        "    metadata: {threshold: 0.5, threshold: 0.8}\n"
+    )
+
+    assert duplicate_keys_in_sequence_mappings(
+        source,
+        "eval-gate suite",
+        sequence_key="tasks",
+        max_bytes=MAX_CONFIG_BYTES,
+    ) == []
+
+
 def test_load_suite_checks_the_last_repeated_root_tasks_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -217,6 +233,23 @@ def test_load_suite_rejects_duplicate_key_in_a_merged_source(
     )
 
     with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 4"):
+        gate.load_suite(str(path))
+
+
+def test_load_suite_rejects_duplicate_key_in_second_sequence_merge_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-sequence\nfirst: &first\n  threshold: 0.5\n"
+        "second: &second\n  threshold: 0.6\n  threshold: 0.7\n"
+        "tasks:\n  - <<: [*first, *second]\n    type: custom\n"
+        "    name: math\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 6"):
         gate.load_suite(str(path))
 
 

@@ -449,13 +449,11 @@ def duplicate_keys_in_sequence_mappings(
                 scan_node(value_node)
                 continue
             if not isinstance(key_node, yaml.ScalarNode):
-                scan_node(value_node)
                 continue
             identity = (key_node.tag, key_node.value)
             if identity in seen:
                 duplicates.append((key_node.value, key_node.start_mark.line + 1))
             seen.add(identity)
-            scan_node(value_node)
 
     for mapping_node in sequence_node.value:
         scan_node(mapping_node)
