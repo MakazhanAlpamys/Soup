@@ -35,6 +35,15 @@ on:
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
+    inputs:
+      matrix:
+        description: >-
+          full: the nightly matrix (seven test cells, newest upstream stack). approval: the
+          four required test cells and the smoke jobs on the pinned stack, as a pull request
+          labelled ci:full runs them (about half the job-minutes of full).
+        type: choice
+        options: [full, approval]
+        default: full
 
 # Supersede, do not queue.
 #
@@ -187,6 +196,9 @@ jobs:
   #   push to release/**               RELEASE: all nine test cells + the six gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
   #     dispatch                         on 3.11) + the six gated jobs
+  #   manual dispatch with             APPROVAL: the four required cells + the four gated
+  #     matrix=approval (2026-11-15)     jobs, on the pinned stack, plus the jobs that only
+  #                                      a run that is not a pull request has (below)
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
   #                                      on 3.11 and 3.12, Windows and macOS on
   #                                      3.12) + the four gated jobs that run on a
@@ -224,6 +236,17 @@ jobs:
   # the three 3.13 cells) is not caught before merge and shows on `main` in the
   # next nightly run instead. Branch protection must not require any of the
   # three: they came off it together with this change.
+  #
+  # 2026-11-15: a manual dispatch asks for FULL (the default, as before) or for the APPROVAL
+  # matrix with `-f matrix=approval`. Measured 2026-11-12..15: nine dispatches of the full
+  # matrix on one integration branch cost 3,404 job-minutes (15% of everything the repository
+  # ran), and what FULL adds to APPROVAL -- the three Python 3.13 cells, the nightly-only jobs
+  # and the unpinned stack -- is about 95 minutes of a run that costs 215 when nothing is
+  # re-run. A dispatch with `matrix=approval` is exactly what a `ci:full` pull request runs
+  # (same cells, same pinned stack), plus `type-check`, `torchao-contract` and
+  # `typer-vendored`, which a run that is not a pull request has; it measures coverage in
+  # ubuntu / 3.11 as every such run does. Nothing else reads the input: the nightly run, a
+  # push and a pull request never see it.
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
@@ -356,8 +379,8 @@ jobs:
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
-          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
-          APPROVAL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          FULL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.matrix != 'approval') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
+          APPROVAL: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then

@@ -698,6 +698,17 @@ other test cells and the three smoke jobs still report, as success, without
 running a step. If the file list cannot be read, or is not the whole list, the
 full set runs. A push, the nightly run and a release branch are never docs-only.
 
+**A maintainer can run the approval matrix by hand.** `gh workflow run ci.yml
+--ref <branch> -f matrix=approval` starts the four required test cells and the
+smoke jobs on the pinned stack, as a pull request labelled `ci:full` runs them,
+plus the jobs only a run that is not a pull request has (`type-check`,
+`torchao-contract`, `typer-vendored`); coverage is measured in `test
+(ubuntu-latest, 3.11)` as in every such run. The default is still the nightly
+matrix (seven cells, newest upstream stack), which the schedule and a dispatch
+without the input run. Measured on 2026-11-12..15: nine full-matrix dispatches on
+one integration branch cost 3,404 job-minutes, and the approval matrix leaves out
+about 95 of the 215 minutes of such a run.
+
 **A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
 the approval run of a pull request check out the same merge commit when `main` has
 not moved between them (`github.sha` of a pull-request run is the merge commit, and
