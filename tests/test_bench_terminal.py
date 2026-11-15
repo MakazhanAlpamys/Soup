@@ -111,6 +111,25 @@ def test_bench_infer_refusals_keep_literal_outside_text(
         assert "If you meant a HuggingFace repo" in _plain(printed.getvalue())
 
 
+@pytest.mark.parametrize("value,shown", FILE_VALUES)
+def test_bench_infer_directory_prompts_prints_resolved_literal_path(
+    printed, value: str, shown: str,
+) -> None:
+    name = "dir-" + value.replace("\x1b", "").replace("\x07", "")
+    directory = Path(name)
+    directory.mkdir(parents=True)
+    result = CliRunner().invoke(app, [
+        "bench", "infer", "model", "--backend", "transformers",
+        "--prompts-file", str(directory),
+    ])
+    assert result.exit_code == 1, (result.output, result.exception)
+    expected_path = Path(f"dir-{shown}").resolve()
+    output = printed.getvalue()
+    assert f"Prompts file not found: {expected_path}" in _plain(output)
+    _assert_style(output, "Prompts file not found:", "31")
+    assert directory.is_dir() and not any(directory.iterdir())
+
+
 @pytest.mark.parametrize("value,shown", VALUES)
 def test_bench_infer_plan_is_literal_and_preserves_hf_id_and_generation(
     printed, monkeypatch, value, shown
