@@ -835,7 +835,14 @@ Only ed25519 and RSA public keys are accepted:
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 ```
 
-The local controller creates one Secure Cloud GPU Pod with TCP SSH access, creates
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access (RunPod's
+REST API v2: `POST /v2/pods` with a nested `gpu: {id, count}`, `disk` for the 80 GB
+container disk, an explicit `22/tcp` port, and the boot command as `entrypoint` and
+`cmd`; v2 attaches no volume unless asked, so `/workspace` is part of that container
+disk). It waits for the Pod's `status` to reach `STARTING` or `RUNNING` and reads the
+SSH address from `ssh.direct`, or from the `runtime.ports` entry for `22/tcp`; only an
+IPv4 literal that is a public address is ever connected to. A Pod in `ERROR`, `EXITED`
+or `TERMINATED` ends the wait at once. The controller then creates
 `/workspace/venv` with `python3 -m venv --system-site-packages`, and installs the
 running Soup version with `/workspace/venv/bin/python -m pip`. This keeps the
 image's preinstalled torch visible and avoids installing Soup into its system
@@ -874,14 +881,22 @@ only the public key enters the Pod environment. Models and datasets must be publ
 accessible remotely: local input files and local credentials are not uploaded.
 
 Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
-until the API returns 404. The parent waits through interrupts so it does not kill
-the cleanup controller. Transient transport failures, including truncated HTTP
+until the API returns 404 or reports the Pod as `TERMINATED`. The parent waits through
+interrupts so it does not kill the cleanup controller. Transient transport failures, including truncated HTTP
 responses during DELETE or confirmation GET, are retried within the five-minute
 cleanup window. A lost or ambiguous create response (including HTTP 5xx and 408)
 is reconciled by the unique run name, without repeating the create request or
-deleting unrelated Pods. A definite HTTP 4xx rejection other than 408 reports the
-status without claiming that cleanup of an allocated Pod failed. Fixed controller
-failure reasons are shown; arbitrary transport/subprocess exception text is hidden.
+deleting unrelated Pods: v2 pages the Pod list by cursor (newest first), so the
+controller reads it 100 Pods at a time, follows `pagination.nextCursor` for at most
+20 pages, and refuses any page that is not the documented `{"pods": [...],
+"pagination": {...}}` shape. A definite HTTP 4xx rejection other than 408 reports the
+status without claiming that cleanup of an allocated Pod failed, followed by the
+title, detail and first three `errors` of RunPod's `application/problem+json` body
+(RFC 9457) when it sends one. Fixed controller failure reasons are shown; arbitrary
+transport/subprocess exception text is hidden, and the only RunPod text ever shown is
+that problem body: it is stripped of terminal controls and credential patterns like the
+remote stderr tail below, the API key is removed from it, and it is capped at 400
+characters. Any other error body is never shown.
 Keep the controller running; force-killing it or losing API access can leave cleanup
 unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
 the RunPod console. A single interrupted SSH training session is failed rather
@@ -906,23 +921,29 @@ diagnostics; when training itself fails, the remote script also sends the bounde
 remote training command (25 hours). The diagnostic tail does not preserve the Pod
 or claim successful artifact retrieval.
 
-**RunPod retired its REST API v1 on 2026-11-15**, and this controller still calls it. When
-RunPod answers a request for the Pod list or the Pod create with HTTP 404 or 410, or with a
-redirect (which the controller never follows), `--cloud runpod --cloud-submit` stops at once
-with one message that names the retirement. It says to upgrade with `pip install -U soup-cli`
-to a release that uses RunPod's REST API v2, or to start the run yourself on a Pod from the
-RunPod console. No Pod is created and none is cleaned up, so the exit code is 1 and the
-notice "RunPod create request rejected; no Pod to clean up." follows. What the retired address
-answers is not published, so any other failure (a refused connection, HTTP 5xx) is still
-reported by its own, plainer message.
+**RunPod retired its REST API v1 on 2026-11-15.** Earlier releases of soup-cli call it,
+so `--cloud runpod --cloud-submit` cannot create a Pod with them; upgrade with
+`pip install -U soup-cli`. This controller uses REST API v2
+(`https://api.runpod.io/v2`). If RunPod answers a request for the Pod list or the Pod
+create with HTTP 404 or 410, or with a redirect (which the controller never follows),
+the controller stops at once with one message that says RunPod has probably retired or
+moved the API, names `soup train --cloud runpod --cloud-submit`, and points at
+`pip install -U soup-cli` or a Pod you start yourself in the RunPod console. No Pod is
+created and none is cleaned up, so the exit code is 1 and the notice "RunPod create
+request rejected; no Pod to clean up." follows. A 404 for a single Pod is still read
+as that Pod being gone.
 
-**Not yet live-validated.** Tests use local mocked API/SSH transports. The code
+**Not yet live-validated.** Tests use local mocked API/SSH transports. The v2 client is
+implemented against the published v2 reference; not exercised against the live service
+(its request and response fixtures are copied from RunPod's documented examples of
+2026-11-15, not from a live call). The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
 That first live run (#2098) should also record the image's externally-managed
 Python marker and SSH `PATH`, to establish whether the image needed the venv
 workaround tracked in #2192.
-API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
+API contract: [RunPod REST v2 OpenAPI](https://docs.runpod.io/api-reference-v2/openapi.json),
+[migration from v1](https://docs.runpod.io/api-reference-v2/migrate-from-v1),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
 ### Lambda Cloud

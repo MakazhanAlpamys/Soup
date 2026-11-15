@@ -56,7 +56,7 @@ def test_a_route_that_is_not_served_is_named_not_reported_as_a_bare_status(
     text = str(excinfo.value)
     assert isinstance(excinfo.value, ns["_ApiRetiredError"])
     assert "soup train --cloud runpod --cloud-submit" in text
-    assert "retired" in text and "2026-11-15" in text
+    assert "retired" in text and "REST API v2" in text
     assert "pip install -U soup-cli" in text
     assert "RunPod console" in text
     assert f"HTTP {status}" in text
