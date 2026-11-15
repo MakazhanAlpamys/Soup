@@ -170,6 +170,25 @@ def test_any_schema_version_but_1_or_2_is_refused_naming_the_key(value):
 
 
 @pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        (3, "3"), (0, "0"), (-1, "-1"), (True, "bool"), (False, "bool"), (1.0, "float"),
+        (2.0, "float"), ("1", "str"), ("2", "str"), (None, "NoneType"), ([1], "list"),
+        (10**30, "int"),
+    ],
+    ids=repr,
+)
+def test_a_wrong_schema_version_is_refused_for_that_reason_even_without_v2_keys(value, shown):
+    # no v2 key in the file: the only thing wrong with it is the version, so nothing else can
+    # refuse it. True == 1 in Python, so a reader that only tests `value in (1, 2)` would take
+    # a boolean for version 1 and read the file.
+    payload = {**V1_EVIDENCE, "schema_version": value}
+    with pytest.raises(ValueError) as error:
+        verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
+    assert str(error.value) == f"evidence.schema_version must be 1 or 2, got {shown}"
+
+
+@pytest.mark.parametrize(
     ("where", "key", "value"),
     [
         (None, "judged", V2_EVIDENCE["judged"]),
