@@ -131,13 +131,13 @@ ROWS: list[Row] = [
         "AKIA" + _alnum(15, "ABCDEFGH") + " " + AKIA + "X " + AKIA.lower()),
     Row("aws_access_key_id", "ASIA", f"identity {ASIA} was denied", ASIA,
         "ASIA" + _alnum(15, "ABCDEFGH") + " " + ASIA + "X " + ASIA.lower()),
-    Row("aws_secret_access_key", "aws_secret_access_key",
+    Row("assignment", "aws_secret_access_key",
         f"aws_secret_access_key = {AWS_SECRET}", AWS_SECRET,
         f"checksum {AWS_SECRET} aws_region = us-east-1", keeps="aws_secret_access_key"),
     Row("google_api_key", "AIza", f"maps key {GOOGLE} was refused", GOOGLE,
         "AIza" + _alnum(10) + " AIzb" + _alnum(35)),
     *_slack_rows(),
-    Row("wandb", "WANDB_API_KEY", f"WANDB_API_KEY={WANDB}", WANDB,
+    Row("assignment", "WANDB_API_KEY", f"WANDB_API_KEY={WANDB}", WANDB,
         "commit " + WANDB + " WANDB_PROJECT=soup", keeps="WANDB_API_KEY"),
     Row("bearer", "Bearer <x>", f"retrying with Bearer {BEARER_VALUE} again", BEARER_VALUE,
         "Bearer of bad news travels fast; Bearer authentication is required"),
@@ -189,6 +189,8 @@ ROWS: list[Row] = [
         NOT_KEYS, keeps="--api-key="),
     Row("assignment", "dotted key", "client.api.key=plainvalue-77", "plainvalue-77",
         NOT_KEYS, keeps="client.api.key="),
+    Row("assignment", "name longer than 80 characters", "a" * 100 + "_token=plainvalue-77 next",
+        "plainvalue-77", NOT_KEYS, keeps="a" * 100 + "_token="),
     Row("assignment", "long unquoted value", f"access_token={LONG_HEAD}{LONG_TAIL} next",
         LONG_TAIL[:40], NOT_KEYS, keeps="access_token="),
     Row("assignment", "long double-quoted value",
@@ -354,8 +356,16 @@ def test_url_userinfo_is_replaced_and_the_host_is_kept(url, host_part):
     assert out.startswith("fetching ") and out.endswith(" failed")
 
 
+@pytest.mark.parametrize("scheme", ["postgresql+psycopg2", "x" * 30, "git+https"])
+def test_long_schemes_keep_their_query_masked(scheme):
+    out = redact_text(f"open {scheme}://h.example/db?X-Amz-Signature={URL_SECRET}&n=1 now")
+    assert URL_SECRET not in out
+    assert out == f"open {scheme}://h.example/db?X-Amz-Signature={REDACTED}&n=1 now"
+
+
 @pytest.mark.parametrize("text, expected", [
     (f"//u:{URL_SECRET}@h.example/x", f"//{REDACTED}@h.example/x"),
+    (f"//u:{'Lp' * 400}@h.example/x", f"//{REDACTED}@h.example/x"),
     (f"proxy=//{URL_SECRET}@h.example/x", f"proxy=//{REDACTED}@h.example/x"),
     (f"u:{URL_SECRET}@h.example/x", f"{REDACTED}@h.example/x"),
     (f"u:{URL_SECRET}@h.example:8080", f"{REDACTED}@h.example:8080"),
@@ -397,10 +407,24 @@ def test_text_that_only_resembles_userinfo_is_untouched(text):
     assert report.count == 0
 
 
-def test_fragment_parameters_are_masked():
-    out = redact_text(f"redirect https://app.example/cb#access_token={URL_SECRET}&state=xyz")
+@pytest.mark.parametrize("name", ["access_token", "X-Amz-Signature", "sig"])
+def test_fragment_parameters_are_masked(name):
+    out = redact_text(f"redirect https://app.example/cb#{name}={URL_SECRET}&state=xyz")
     assert URL_SECRET not in out
-    assert f"#access_token={REDACTED}&state=xyz" in out
+    assert f"#{name}={REDACTED}&state=xyz" in out
+
+
+def test_unparseable_url_masks_a_parameter_only_the_url_pass_knows():
+    out = redact_text(f"bad http://[::1/path?X-Amz-Signature={URL_SECRET}&x=1 end")
+    assert URL_SECRET not in out
+    assert f"X-Amz-Signature={REDACTED}&x=1 end" in out
+
+
+def test_unparseable_url_with_a_long_userinfo_is_masked():
+    secret = "Lp" * 400
+    out = redact_text(f"bad http://user:{secret}@[::1/path end")
+    assert "Lp" * 20 not in out
+    assert out == f"bad http://{REDACTED}@[::1/path end"
 
 
 def test_url_that_urlsplit_refuses_is_still_masked():
@@ -930,6 +954,9 @@ ADVERSARIAL = {
     "url userinfo": _repeat("http://a@"),
     "bare separators": _repeat("://"),
     "one long word": lambda size: "a" * size,
+    "one long word then colon": lambda size: "a" * size + ":",
+    "one long name then value": lambda size: "a" * size + "=v",
+    "long words, colons": _repeat("a" * 90 + ": "),
     "dotted words": _repeat("x."),
     "distinct key names": lambda size: " ".join(
         f"k{index}_token=v" for index in range(size // 12 + 1)

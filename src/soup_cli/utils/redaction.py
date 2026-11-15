@@ -3,13 +3,15 @@
 Used by the crash bundle (``utils/crash.py``) and by ``.can`` packing
 (``cans/pack.py``), so both drop the same things:
 
-* URLs: userinfo (``scheme://user:secret@host``) and sensitive query or fragment
-  parameters (``token``, ``api_key``, ``X-Amz-Signature``, ...).
+* URLs: userinfo (``scheme://user:secret@host``, also ``//user:secret@host/x`` and
+  ``user:secret@host/x``) and sensitive query or fragment parameters (``token``,
+  ``api_key``, ``X-Amz-Signature``, ...).
 * Credential shapes in free text: Hugging Face, ``sk-`` / ``sk-ant-`` keys, GitHub,
-  AWS, Google, Slack and W&B keys, ``Authorization`` / ``Bearer`` headers, JWTs and PEM
-  private-key blocks.
+  AWS access key ids, Google and Slack keys, ``Authorization`` / ``Bearer`` headers, JWTs
+  and PEM private-key blocks.
 * ``KEY=value`` / ``key: value`` / ``"key": "value"`` pairs whose KEY NAME says the value
-  is a credential, in text and in structured configs (nested dicts and lists).
+  is a credential, in text and in structured configs (nested dicts and lists). This is
+  what catches an AWS secret access key and a W&B key, which have no shape of their own.
 
 Every pattern is linear: no nested quantifiers over overlapping classes, every repeat is
 bounded, possessive, or runs over a character class that cannot also match the next token,
@@ -75,7 +77,7 @@ def _mask_params(raw: str) -> str:
     pairs = []
     for pair in raw.split("&"):
         name, sep, value = pair.partition("=")
-        if sep and value and value != REDACTED and _is_sensitive_param(name):
+        if sep and value and _is_sensitive_param(name):
             pair = f"{name}={REDACTED}"
         pairs.append(pair)
     return "&".join(pairs)
@@ -111,13 +113,14 @@ def redact_url(url: str, *, keep_query: bool = False) -> str:
 # a run of scheme characters, so a long run is scanned once.
 _URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{1,40}://[^\s\"'`\\]+")
 _URL_TRAILING = ".,;:)]}"
-_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s]*@")
 
 # Userinfo with no scheme in front. ``//user:secret@host/x`` (scheme-relative) is matched on
-# the ``//``; ``user:secret@host/x`` and ``user:secret@host:5432`` only when a path or a port
-# follows the host, so an e-mail address or ``git@github.com:org/repo`` is never touched.
+# the ``//``: a scan stops at the next ``/``, ``@`` or space, so scans never overlap and a long
+# userinfo is handled. ``user:secret@host/x`` and ``user:secret@host:5432`` are matched only
+# when a path or a port follows the host, so an e-mail address or ``git@github.com:org/repo``
+# is never touched.
 _REL_USERINFO_RE = re.compile(
-    r"(?<![A-Za-z0-9+.\-])(?P<lead>//)[^/@\s\"'`\\<>]{1,512}@(?=[A-Za-z0-9\[])"
+    r"(?<![A-Za-z0-9+.\-])(?P<lead>//)[^/@\s\"'`\\<>]+@(?=[A-Za-z0-9\[])"
 )
 _BARE_USERINFO_RE = re.compile(
     r"(?<![A-Za-z0-9_.\-+/@%])[A-Za-z0-9_.\-]{1,64}:[^\s@/:<>\"'`\\]{1,512}"
@@ -126,9 +129,11 @@ _BARE_USERINFO_RE = re.compile(
 
 
 def _mask_url_text(raw: str) -> str:
-    """Lenient masking for URL-shaped text that ``urlsplit`` refuses."""
+    """Lenient masking of the query of URL-shaped text that ``urlsplit`` refuses.
+
+    The userinfo of such a URL is replaced by the scheme-relative pass in ``_redact_urls``.
+    """
     head, qmark, rest = raw.partition("?")
-    head = _USERINFO_RE.sub(rf"\g<1>{REDACTED}@", head, count=1)
     return head + qmark + _mask_params(rest)
 
 
@@ -196,28 +201,12 @@ _SHAPES = (
         re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])"),
     ),
     _Shape(
-        "aws_secret_access_key", ("secret",),
-        re.compile(
-            r"(?P<keep>aws[_\-]?secret[_\-]?access[_\-]?key" + _Q + r"[ \t]*[:=][ \t]*" + _Q
-            + r")[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])",
-            re.IGNORECASE,
-        ),
-    ),
-    _Shape(
         "google_api_key", ("aiza",),
         re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_\-]{35}(?![0-9A-Za-z_\-])"),
     ),
     _Shape(
         "slack", ("xox",),
         re.compile(r"(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9\-]{10,}"),
-    ),
-    _Shape(
-        "wandb", ("wandb",),
-        re.compile(
-            r"(?P<keep>wandb[_\-]?api[_\-]?key" + _Q + r"[ \t]*[:=][ \t]*" + _Q
-            + r")[0-9a-f]{40}(?![0-9A-Za-z])",
-            re.IGNORECASE,
-        ),
     ),
     _Shape(
         "bearer", ("bearer",),
@@ -370,9 +359,10 @@ def mask_secret_value(value: str) -> str:
 # ``name`` + separator only: a name that is NOT a credential consumes just itself, so an
 # assignment nested in its value is still seen. The value is read (``_VALUE_RE``) only
 # for a credential-looking name, and a value that is read is consumed whole, so the work
-# done for it is paid once. A name is at most 80 characters.
+# done for it is paid once. A name is at most 80 characters (a longer run of name
+# characters is judged by its last 80), so a start costs a constant.
 _ASSIGN_RE = re.compile(
-    r"(?<![A-Za-z0-9_.\-])(?P<name>[A-Za-z0-9_.\-]{1,80})"
+    r"(?P<name>[A-Za-z0-9_.\-]{1,80})"
     r"\\?[\"']?[ \t]{0,16}[:=][ \t]{0,16}(?=\S)"
 )
 # A value has no length cap (a cap would leave the tail of a long token in the text). Every
