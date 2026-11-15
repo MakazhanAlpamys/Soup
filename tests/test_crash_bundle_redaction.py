@@ -198,8 +198,8 @@ ROWS: list[Row] = [
         '{"refresh_token": "' + LONG_HEAD + LONG_TAIL + '", "n": 1}',
         LONG_TAIL[:40], NOT_KEYS, keeps='"n": 1}'),
     Row("assignment", "long single-quoted value",
-        "{'refresh_token': '" + LONG_HEAD + LONG_TAIL + "'}",
-        LONG_TAIL[:40], NOT_KEYS, keeps="{'refresh_token': '"),
+        "{'refresh_token': '" + LONG_HEAD + LONG_TAIL + "', 'n': 1}",
+        LONG_TAIL[:40], NOT_KEYS, keeps="', 'n': 1}"),
     Row("assignment", "quoted value with an escaped quote",
         '{"password": "plain\\"tail-77x", "n": 1}', "tail-77x", NOT_KEYS, keeps='"n": 1}'),
     Row("assignment", "quoted value with a backslash", "password='ab\\\\cd-77plain' ok",
@@ -453,9 +453,11 @@ def test_url_userinfo_is_replaced_and_the_host_is_kept(url, host_part):
 
 @pytest.mark.parametrize("scheme", ["postgresql+psycopg2", "x" * 30, "git+https"])
 def test_long_schemes_keep_their_query_masked(scheme):
-    out = redact_text(f"open {scheme}://h.example/db?X-Amz-Signature={URL_SECRET}&n=1 now")
+    out = redact_text(
+        f"open {scheme}://h.example/db?X-Amz-Signature={URL_SECRET}&n=1#sig={URL_SECRET} now"
+    )
     assert URL_SECRET not in out
-    assert out == f"open {scheme}://h.example/db?X-Amz-Signature={REDACTED}&n=1 now"
+    assert out == f"open {scheme}://h.example/db?X-Amz-Signature={REDACTED}&n=1#sig={REDACTED} now"
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -562,6 +564,17 @@ def test_url_redaction_is_idempotent_and_counts_each_value():
     again = RedactionReport()
     assert redact_text(once, again) == once
     assert again.count == 0
+
+
+def test_redact_url_with_keep_query_masks_the_query_and_the_fragment():
+    url = f"https://u:{URL_SECRET}@h.example/x?token={URL_SECRET}&a=1#sig={URL_SECRET}&b=2"
+    assert redact_url(url, keep_query=True) == (
+        f"https://{REDACTED}@h.example/x?token={REDACTED}&a=1#sig={REDACTED}&b=2"
+    )
+    only_query = f"https://h.example/x?key={URL_SECRET}&a=1"
+    assert redact_url(only_query, keep_query=True) == f"https://h.example/x?key={REDACTED}&a=1"
+    harmless = "https://h.example/x?a=1#top"
+    assert redact_url(harmless, keep_query=True) == harmless
 
 
 def test_redact_url_keeps_the_judge_behaviour_by_default():
@@ -1040,6 +1053,7 @@ def test_an_error_whose_text_cannot_be_read_still_gives_a_bundle():
     bundle = build_crash_bundle(error=UnprintableError())
     assert bundle["error"]["type"] == "UnprintableError"
     assert bundle["error"]["message"] == crash.REDACTION_FAILED
+    assert "environment" in bundle and bundle["redaction"]["error_message"] == 1  # not minimal
 
 
 def test_the_tracker_records_a_marker_when_redaction_fails(tmp_path, monkeypatch):

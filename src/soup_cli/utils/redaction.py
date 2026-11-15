@@ -135,15 +135,6 @@ _BARE_USERINFO_RE = re.compile(
 _QUERY_RE = re.compile(r"(?<=[A-Za-z0-9_\-./~%])\?(?=[A-Za-z0-9_.\-%]{1,64}=)[^\s\"'`\\<>#]*")
 
 
-def _mask_url_text(raw: str) -> str:
-    """Lenient masking of the query of URL-shaped text that ``urlsplit`` refuses.
-
-    The userinfo of such a URL is replaced by the scheme-relative pass in ``_redact_urls``.
-    """
-    head, qmark, rest = raw.partition("?")
-    return head + qmark + _mask_params(rest)
-
-
 def _redact_urls(text: str, report: RedactionReport) -> str:
     def _sub(match: re.Match[str]) -> str:
         raw = match.group(0)
@@ -152,7 +143,8 @@ def _redact_urls(text: str, report: RedactionReport) -> str:
         try:
             new = redact_url(core, keep_query=True)
         except ValueError:
-            new = _mask_url_text(core)
+            # urlsplit refuses it: the query and userinfo passes below still apply to it
+            return raw
         if new != core:
             report.count += max(1, new.count(REDACTED) - core.count(REDACTED))
         return new + tail
@@ -332,7 +324,7 @@ _BENIGN_NAME_RE = re.compile(
     r"|authentic[a-z0-9]*"
     r"|^tokens$"
     r"|auth_(?:required|enabled|disabled|mode|type|method|scheme)"
-    r"|(?:require|requires|use|enable|disable)_auth(?!_?token)"
+    r"|(?:require|requires|use|enable|disable)_auth"
 )
 _CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
