@@ -174,7 +174,7 @@ def test_merged_reference_lives_until_validation_and_is_cleaned(tmp_path, monkey
     (adapter / "adapter_config.json").write_text('{"base_model_name_or_path": "local-base"}')
     merged = tmp_path / "merged"
     merged.mkdir()
-    monkeypatch.setattr(export, "_merge_dir_for", lambda _: (merged, True))
+    monkeypatch.setattr(export, "_merge_dir_for", lambda _: merged)
     monkeypatch.setattr(export, "_merge_adapter", Mock())
 
     def validate(source, output, prompts, **kwargs):
