@@ -938,6 +938,328 @@ def test_every_per_step_column_of_the_metrics_table_is_a_reserved_training_metri
 
 
 # ---------------------------------------------------------------------------
+# the final runtime-summary log can carry a leftover reward
+# ---------------------------------------------------------------------------
+
+
+def _summary_log(**extra):
+    """HF's end-of-training log, plus whatever TRL merged into it.
+
+    TRL 0.29.1's ``GRPOTrainer.log`` (grpo_trainer.py:2300-2311) merges what is left in its
+    metric buffer into the next log, and HF forces no log on the last step: when the step
+    count is not a multiple of ``logging_steps`` the runtime summary also carries the
+    remainder's ``reward`` / ``reward_std``."""
+    logs = {
+        "train_runtime": 3.38, "train_samples_per_second": 20.0,
+        "train_steps_per_second": 6.5, "total_flos": 1.0, "train_loss": 0.5,
+    }
+    logs.update(extra)
+    return logs
+
+
+def test_a_runtime_summary_with_a_leftover_reward_writes_the_reward_row_then_the_summary(
+    session,
+):
+    """Two rows from one log: the summary row exactly as it is without a reward (throughput
+    only, #2810), and, before it, a ``train`` row at that step that keeps the reward curve's
+    last point (loss / lr / speed NULL: the log measured none of them)."""
+    from soup_cli.utils.train_event_buffer import get_global_buffer
+
+    callback, tracker, run_id, _ = session
+    _event(callback, 20, **_grpo_log(0.4, 0.2, loss=0.1))
+    _event(callback, 23, **_summary_log(reward=0.7, reward_std=0.1))
+    rows = _rows(tracker, run_id)
+    assert [(row["step"], row["kind"]) for row in rows] == [
+        (20, "train"), (23, "train"), (23, "summary"),
+    ]
+    _, reward_row, summary = rows
+    assert (reward_row["reward"], reward_row["reward_std"]) == (0.7, 0.1)
+    for column in ("loss", "lr", "grad_norm", "speed", "val_loss", "val_reward"):
+        assert reward_row[column] is None, column
+    assert summary["speed"] == 6.5
+    for column in ("loss", "lr", "grad_norm", "val_loss", "val_reward", "reward", "reward_std"):
+        assert summary[column] is None, column
+    # the `train_loss` mean of the summary is stored nowhere
+    assert 0.5 not in {value for row in rows for value in row.values()}
+    assert tracker.get_metric_series(run_id, "reward") == [0.4, 0.7]
+    assert tracker.get_reward_summary(run_id) == {"first": 0.4, "last": 0.7, "steps": 2}
+    # live: one event, for the reward row; the summary part sends none
+    events = get_global_buffer().snapshot()
+    assert [(e.step, e.kind, e.loss, e.lr, e.reward, e.reward_std) for e in events] == [
+        (20, "train", 0.1, 5e-6, 0.4, 0.2), (23, "train", None, None, 0.7, 0.1),
+    ]
+
+
+def test_a_runtime_summary_with_only_a_reward_std_leftover_still_keeps_the_summary_row(session):
+    callback, tracker, run_id, _ = session
+    _event(callback, 23, **_summary_log(reward_std=0.1))
+    reward_row, summary = _rows(tracker, run_id)
+    assert (reward_row["kind"], reward_row["reward"], reward_row["reward_std"]) == (
+        "train", None, 0.1,
+    )
+    assert (summary["kind"], summary["speed"], summary["reward_std"]) == ("summary", 6.5, None)
+
+
+def test_a_runtime_summary_with_a_non_finite_leftover_reward_is_just_the_summary(session):
+    from soup_cli.utils.train_event_buffer import get_global_buffer
+
+    callback, tracker, run_id, _ = session
+    _event(callback, 23, **_summary_log(reward=_NAN, reward_std=_INF))
+    (summary,) = tracker.get_metrics(run_id)
+    assert (summary["kind"], summary["speed"], summary["reward"]) == ("summary", 6.5, None)
+    assert get_global_buffer().snapshot() == []
+
+
+def test_a_runtime_summary_without_a_reward_is_unchanged(session):
+    """The case of ``tests/test_nullable_loss_contract.py``, restated next to the new one."""
+    callback, tracker, run_id, _ = session
+    _event(callback, 22, **_summary_log())
+    (summary,) = tracker.get_metrics(run_id)
+    assert (summary["kind"], summary["speed"]) == ("summary", 6.5)
+    for column in ("loss", "lr", "grad_norm", "reward", "reward_std"):
+        assert summary[column] is None, column
+
+
+def test_a_measured_log_that_also_carries_throughput_and_a_reward_stays_one_train_row(session):
+    """Only a log that measured nothing else is a runtime summary."""
+    callback, tracker, run_id, _ = session
+    _event(callback, 5, **_grpo_log(0.3, loss=0.2), train_steps_per_second=2.0)
+    (row,) = tracker.get_metrics(run_id)
+    assert (row["kind"], row["loss"], row["reward"], row["speed"]) == ("train", 0.2, 0.3, 2.0)
+
+
+# ---------------------------------------------------------------------------
+# a log whose only measurement is not a finite number writes nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "logs",
+    [
+        {"objective/scores": _NAN, "lr": 1e-5},                  # a PPO log
+        {"objective/scores": -_INF, "lr": 1e-5, "episode": 64},
+        {"reward": _INF},
+        {"reward": _NAN, "reward_std": _NAN},
+        {"reward_std": _NAN},
+    ],
+)
+def test_a_log_whose_only_measurement_is_a_non_finite_reward_writes_nothing(session, logs):
+    from soup_cli.utils.train_event_buffer import get_global_buffer
+
+    callback, tracker, run_id, _ = session
+    _event(callback, 3, **logs)
+    assert tracker.get_metrics(run_id) == []
+    assert get_global_buffer().snapshot() == []
+
+
+def test_a_non_finite_reward_beside_any_other_measurement_still_writes_the_row(session):
+    callback, tracker, run_id, _ = session
+    _event(callback, 4, reward=_NAN, learning_rate=1e-4)
+    _event(callback, 5, **{"objective/scores": _INF}, grad_norm=0.5)
+    first, second = _rows(tracker, run_id)
+    assert (first["reward"], first["lr"], first["loss"]) == (None, 1e-4, None)
+    assert (second["reward"], second["grad_norm"]) == (None, 0.5)
+
+
+# ---------------------------------------------------------------------------
+# soup why and the loss plot on a run that recorded a reward and no loss
+# ---------------------------------------------------------------------------
+
+
+def _ppo_rows(tracker, run_id, count=30):
+    """What a PPO run now writes: reward set, loss / lr / grad_norm NULL, ``count`` rows."""
+    from soup_cli.utils.train_event_buffer import reset_global_buffer
+
+    reset_global_buffer()
+    callback = SoupTrainerCallback(display=MagicMock(), tracker=tracker, run_id=run_id)
+    for step in range(1, count + 1):
+        _event(callback, step, **_ppo_log(0.1 * step))
+    reset_global_buffer()
+    return tracker.get_metrics(run_id)
+
+
+def test_diagnose_does_not_call_thirty_reward_only_rows_anomaly_free(tracker):
+    """Rows exist, so it is not ``no_metrics``; none carries a loss, lr or grad norm, so the
+    loss-curve verdict "within typical ranges" is not available either. The finding says so
+    and names what WAS recorded."""
+    from soup_cli.utils.why import diagnose
+
+    rows = _ppo_rows(tracker, _start(tracker, "run_ppo_why", task="ppo"))
+    assert len(rows) == 30
+    assert all(row["loss"] is None and row["lr"] is None and row["grad_norm"] is None
+               for row in rows)
+    findings = diagnose(rows, {"base": "m", "task": "ppo", "training": {"lr": 1e-5}})
+    assert [finding.category for finding in findings] == ["no_loss_metrics"]
+    assert findings[0].severity == "info"
+    assert "30 metric rows" in findings[0].message
+    assert "only a reward was recorded" in findings[0].message
+    assert "metrics.reward" in findings[0].suggestion
+
+
+def test_diagnose_names_a_run_with_rows_but_no_training_signal_and_no_reward():
+    from soup_cli.utils.why import diagnose
+
+    rows = [{"step": 3, "kind": "summary", "speed": 6.5, "loss": None, "lr": None,
+             "grad_norm": None, "reward": None}]
+    (finding,) = diagnose(rows, None)
+    assert finding.category == "no_loss_metrics"
+    assert "1 metric row logged" in finding.message
+    assert "reward" not in finding.message
+
+
+def test_diagnose_still_says_no_metrics_for_no_rows_and_leaves_real_runs_alone():
+    from soup_cli.utils.why import diagnose
+
+    assert [finding.category for finding in diagnose([], None)] == ["no_metrics"]
+    sft = [{"step": step, "loss": 3.0 - step * 0.05, "lr": 1e-4, "grad_norm": 0.5,
+            "reward": None} for step in range(1, 40)]
+    assert diagnose(sft, None) == []
+    grpo = [{"step": step, "loss": 0.01, "lr": 5e-6, "grad_norm": None, "reward": 0.1 * step}
+            for step in range(1, 40)]
+    assert "no_loss_metrics" not in [finding.category for finding in diagnose(grpo, None)]
+    # one finite signal anywhere is enough: a loss-less run with a grad norm
+    assert "no_loss_metrics" not in [
+        finding.category for finding in diagnose(
+            [{"step": step, "loss": None, "lr": None, "grad_norm": 0.5} for step in range(40)],
+            None,
+        )
+    ]
+
+
+def test_soup_why_on_a_reward_only_run_prints_the_finding_not_the_all_clear(
+    tracker, monkeypatch
+):
+    import soup_cli.commands.why as why_module
+
+    run_id = _start(tracker, "run_ppo_cli", task="ppo")
+    _ppo_rows(tracker, run_id)
+    tracker.close()
+    output = StringIO()
+    monkeypatch.setattr(
+        why_module, "console",
+        Console(file=output, width=140, force_terminal=False, color_system=None,
+                legacy_windows=False),
+    )
+    result = runner.invoke(app, ["why", run_id])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain_lines(output.getvalue())
+    assert "No anomalies detected" not in text
+    assert "no_loss_metrics" in text
+
+
+def _plot_text(rows, monkeypatch) -> str:
+    import soup_cli.commands.runs as runs_module
+
+    output = StringIO()
+    monkeypatch.setattr(
+        runs_module, "console",
+        Console(file=output, width=120, force_terminal=False, color_system=None,
+                legacy_windows=False),
+    )
+    runs_module._plot_loss_curve(rows)
+    return _plain_lines(output.getvalue())
+
+
+def test_the_loss_plot_says_a_run_recorded_a_reward_and_no_loss(tracker, monkeypatch):
+    rows = _ppo_rows(tracker, _start(tracker, "run_ppo_plot", task="ppo"))
+    assert _plot_text(rows, monkeypatch) == (
+        "No loss data to plot: this run recorded a reward and no loss."
+    )
+
+
+def test_the_loss_plot_keeps_its_old_line_for_a_run_with_neither(monkeypatch):
+    rows = [{"step": 1, "loss": None, "reward": None}]
+    assert _plot_text(rows, monkeypatch) == "No loss data to plot."
+
+
+def test_soup_runs_show_prints_that_sentence_for_a_reward_only_run(tracker, monkeypatch):
+    run_id = _start(tracker, "run_ppo_show", task="ppo")
+    _ppo_rows(tracker, run_id)
+    tracker.close()
+    text = _run_cli(["runs", "show", run_id], monkeypatch)
+    assert "No loss data to plot: this run recorded a reward and no loss." in text
+
+
+# ---------------------------------------------------------------------------
+# gaps the first review found
+# ---------------------------------------------------------------------------
+
+
+def test_get_reward_summary_breaks_ties_at_a_step_by_arrival(tracker):
+    run_id = _start(tracker)
+    for reward in (0.9, 0.1, 0.5):   # three rows at ONE step
+        tracker.log_metrics(run_id, step=7, reward=reward, kind="train")
+    assert tracker.get_reward_summary(run_id) == {"first": 0.9, "last": 0.5, "steps": 3}
+
+
+def test_get_reward_summary_asks_for_step_then_id_order(tracker):
+    """SQLite returns ties in rowid order today whatever the clause says, so no data can
+    tell ``ORDER BY step`` from ``ORDER BY step, id``; the statement is pinned instead."""
+    run_id = _start(tracker)
+    tracker.log_metrics(run_id, step=1, reward=0.1, kind="train")
+    statements: list[str] = []
+    conn = tracker._get_conn()
+    conn.set_trace_callback(statements.append)
+    tracker.get_reward_summary(run_id)
+    conn.set_trace_callback(None)
+    queries = [query for query in statements if "SELECT reward FROM metrics" in query]
+    assert len(queries) == 1 and queries[0].rstrip().endswith("ORDER BY step, id"), queries
+
+
+def test_soup_runs_compare_shows_reward_rows_when_only_the_second_run_has_one(
+    tracker, monkeypatch
+):
+    _golden_run(tracker, "run_sft_a", 1.0)
+    _golden_run(tracker, "run_grpo", 1.0, task="grpo", rewards=[0.1, 0.4, 0.8])
+    tracker.close()
+    lines = _run_cli(["runs", "compare", "run_sft_a", "run_grpo"], monkeypatch).splitlines()
+    final = next(i for i, line in enumerate(lines) if line.startswith("│ Final Loss"))
+    assert lines[final + 1] == "│ Initial Reward │ - │ 0.1000 │"
+    assert lines[final + 2] == "│ Final Reward │ - │ 0.8000 │"
+
+
+@pytest.mark.parametrize("column", ["reward", "reward_std"])
+def test_a_sibling_adding_a_new_column_between_the_check_and_the_alter_is_tolerated(
+    tmp_path, column
+):
+    """The migration loop already tolerates "duplicate column"; this pins it for the two new
+    entries: another process (a second ``soup train``, the UI) wins the race for each."""
+    db = tmp_path / "race.db"
+    _legacy_db(db)
+    real_connect = sqlite3.connect
+    ddl_prefix = f"ALTER TABLE metrics ADD COLUMN {column} REAL"
+
+    class _Racing:
+        """Adds ``column`` through a second connection right before the tracker's ALTER."""
+
+        def __init__(self, conn):
+            self._conn = conn
+            self.raced = False
+
+        def execute(self, sql, *args):
+            if sql.startswith(ddl_prefix) and not self.raced:
+                self.raced = True
+                other = real_connect(str(db))
+                other.execute(sql)
+                other.commit()
+                other.close()
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    store = ExperimentTracker.__new__(ExperimentTracker)
+    store.db_path = db
+    store._conn = None
+    racing = _Racing(store._get_conn())
+    store._conn = racing
+    store._ensure_schema()
+    store.close()
+    assert racing.raced, "the race was never staged"
+    assert _columns(db)[-2:] == _NEW_COLUMNS
+
+
+# ---------------------------------------------------------------------------
 # docs
 # ---------------------------------------------------------------------------
 
@@ -957,6 +1279,13 @@ def test_the_docs_say_what_the_columns_are_and_what_null_means():
     # for them in the column
     for decoy in ("rewards/chosen", "objective/rlhf_reward", "eval_reward"):
         assert decoy in docs
+    # what the number is: the average over the logging window, not "the step's batch"
+    assert "logging window" in section
+    assert "mean reward of the step's batch" not in docs
+    # PPO rows have a NULL lr although TRL logs one under another key
+    assert "TRL logs PPO's learning rate as `lr`" in docs
+    # a runtime-summary log can carry a leftover reward; the docs say what is written
+    assert "leftover reward" in docs
 
 
 def test_the_module_docstring_matches_the_allowlist():
