@@ -9,7 +9,7 @@
   "peak_kinds": {
     "torch_reserved_mib": "torch.cuda.max_memory_reserved() at the end of the downstream application's training run, MiB. It includes the caching allocator's slack and excludes the CUDA context. Reserved peaks of different runners are not comparable to better than about 10%: one recipe and data file gave 3388 MiB in the downstream runner and 3732 MiB in `soup bench train` (M3).",
     "max_memory_allocated_bytes": "torch.cuda.max_memory_allocated() from `soup bench train` (bench_rows only): the quantity the estimate's coefficients were calibrated on.",
-    "device_mib": "whole-card nvidia-smi memory.used, maximum over the run's window, MiB. Sampled every 3-5 s in the downstream rows (a lower bound) and every 200 ms in bench_rows. device_clean is true only when nothing else was on the card (baseline 0 MiB before the run)."
+    "device_mib": "whole-card nvidia-smi memory.used, maximum over the run's window, MiB. Sampling: bench_rows every 200 ms; downstream rows about every 5 s for qa7-helpdesk-train-r16, every 1 s (gaps up to 2 s) for B1-B3, not described for the two device-only rows, so the downstream readings are lower bounds. device_clean is true only when nothing else was on the card (baseline 0 MiB before the run)."
   },
   "cuda_context": {
     "device_mib_with_cuda_and_cublas_initialised_and_nothing_else": 226,

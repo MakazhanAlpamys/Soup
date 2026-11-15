@@ -7,9 +7,10 @@ peaks and a few clean device readings from a downstream application's runner, an
 sampler) that include a run whose rows fill the length. The estimate prices every micro-batch
 as ``max_length x batch`` real tokens (the rows of its calibration table,
 ``test_vram_estimate_calibration.py``, all fill ``max_length``), so on short data it is
-several times the peak: 10.19 GB against 2.1 GB allocated. The coefficients hold for filled
-rows; what is wrong for short data is the length. ``profile_from_config(..., seq_len=)`` prices
-the length the data really has, and these tests hold that number to what was measured:
+several times the peak: 9,718 MiB (10.19 GB) against 2108 MiB allocated. The coefficients hold
+for filled rows; what is wrong for short data is the length.
+``profile_from_config(..., seq_len=)`` prices the length the data really has, and these tests
+hold that number to what was measured:
 
 * priced at ``data.max_length`` (no ``seq_len``) it is still the 10.19 GB it was, so the guard
   #2146 added for filled rows is not undone;
@@ -22,7 +23,7 @@ the length the data really has, and these tests hold that number to what was mea
 
 from __future__ import annotations
 
-import dataclasses
+import functools
 import json
 from pathlib import Path
 
@@ -30,12 +31,8 @@ import pytest
 import yaml
 
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.utils import model_shape
-from soup_cli.utils.hardware_fit import (
-    decide_hardware_fit,
-    estimate_peak_vram_gb,
-    hardware_fit_input_or_reason,
-)
+from soup_cli.utils import hardware_fit, model_shape
+from soup_cli.utils.hardware_fit import decide_hardware_fit, hardware_fit_input_or_reason
 from soup_cli.utils.profiler import profile_from_config
 from soup_cli.utils.vram_estimate import VRAM_SAFETY_MARGIN, fit_verdict
 
@@ -114,26 +111,25 @@ def _own_length(row: dict):
 
 
 def _priced(row: dict, seq_len="own") -> dict:
-    """The estimate for ``row`` at ``seq_len`` ("own": its longest row; None: ``max_length``).
+    """``profile_from_config`` for ``row`` at ``seq_len`` ("own": the longest row, None: max).
 
-    Every 4-bit row was measured before #2683, when peft's fp32 embeddings and head were kept
-    on a bf16 card, so those are priced the way they ran (``kbit_fp32``) through
-    ``hardware_fit``; ``profile_from_config`` has no such argument and prices the bf16 default,
-    which is what a 4-bit run on a bf16 card does now (no such run is measured yet).
+    Every 4-bit row was measured before #2683, when peft's fp32 embeddings and head stayed on a
+    bf16 card, so for those the call runs with ``kbit_fp32`` set on the input it builds
+    (``profile_from_config`` has no such argument and prices the bf16 default, which is what a
+    4-bit run on a bf16 card does now; no such run is measured yet).
     """
     seq = _own_length(row) if seq_len == "own" else seq_len
     cfg = load_config_from_string(_text(row, _base(row)))
-    if row["quantization"] == "none":
+    with pytest.MonkeyPatch.context() as patch:
+        if row["quantization"] != "none":
+            patch.setattr(
+                hardware_fit,
+                "hardware_fit_input_or_reason",
+                functools.partial(hardware_fit.hardware_fit_input_or_reason, kbit_fp32=True),
+            )
         result = profile_from_config(cfg, allow_network=False, seq_len=seq)
-        assert isinstance(result, dict), result
-        return result
-    inp = hardware_fit_input_or_reason(
-        cfg, allow_network=False, profile_defaults=True, kbit_fp32=True
-    )
-    if seq is not None:
-        inp = dataclasses.replace(inp, seq_len=max(64, min(seq, inp.seq_len)))
-    estimate = estimate_peak_vram_gb(inp).estimate
-    return {"total_memory_bytes": estimate.total_bytes, "memory_terms_bytes": dict(estimate.terms)}
+    assert isinstance(result, dict), result
+    return result
 
 
 def _allocated_terms(result: dict) -> int:
@@ -271,6 +267,33 @@ def test_the_tightest_clean_row_is_a_filled_micro_batch_and_clears_the_margin_by
     assert 1.0 <= ratios[tightest] <= 1.02, ratios[tightest]
     # Every other clean row has at least 4% to spare (the next tightest is M3, 1.0497).
     assert all(value >= 1.04 for key, value in ratios.items() if key != tightest), ratios
+
+
+def test_the_loaded_count_of_a_tied_model_takes_the_tightest_row_below_the_margin(
+    models, monkeypatch
+):
+    # The docs say to pass the count the checkpoint stores (751,632,384 for Qwen3-0.6B: the
+    # header sums a tied head twice). The loaded count, 596,049,920, prices 2 x vocab x hidden x
+    # 1.05 bytes lower and the filled micro-batch falls from 1.002 to about 0.95 of the peak.
+    row = next(row for row in _BENCH_ROWS if row["id"].startswith("M6"))
+    stored = _priced(row)["total_memory_bytes"]
+    monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **kw: 596_049_920)
+    loaded = _priced(row)["total_memory_bytes"]
+    assert stored - loaded == pytest.approx(2 * 151936 * 1024 * 1.05, rel=1e-6)
+    device = row["device_mib"] * MIB
+    assert stored * (1 + VRAM_SAFETY_MARGIN) / device == pytest.approx(1.002, abs=0.001)
+    assert loaded * (1 + VRAM_SAFETY_MARGIN) / device == pytest.approx(0.949, abs=0.003)
+
+
+def test_eleven_clean_rows_are_six_downstream_and_five_bench():
+    bench = [row for row in _CLEAN_ROWS if "max_memory_allocated_bytes" in row]
+    downstream = [row for row in _CLEAN_ROWS if "max_memory_allocated_bytes" not in row]
+    assert (len(_CLEAN_ROWS), len(downstream), len(bench)) == (11, 6, 5)
+    # M2 repeats M1's numbers to the byte (a different max_length), so ten are independent.
+    assert {row["device_mib"] for row in bench} == {2462, 3894, 2348, 6510}
+    # Four of the six are among the 20 torch rows, two are device-only.
+    assert sum(row in _TORCH_ROWS + _ADDED_ROWS for row in downstream) == 4
+    assert sum(row in _DATA["device_only_rows"] for row in downstream) == 2
 
 
 @pytest.mark.parametrize("prefix", ["M3", "M4", "M6"])
