@@ -412,7 +412,9 @@ def test_mcp_returns_the_same_dict_as_the_cli_for_a_v2_file(tmp_path, monkeypatc
 # -- a live run writes v2, and replaying it gives the same verdict ------------------------------
 
 
-def _live_then_replay(monkeypatch, base_gen, tuned_gen, *, adapter="out/checkpoint-12"):
+def _live_then_replay(
+    monkeypatch, base_gen, tuned_gen, *, adapter="out/checkpoint-12", flags=None,
+):
     def fake_resolve(base, tuned, adapter, device, quantization=None, **kwargs):
         return base_gen, tuned_gen
 
@@ -423,7 +425,8 @@ def _live_then_replay(monkeypatch, base_gen, tuned_gen, *, adapter="out/checkpoi
         )
         live = runner.invoke(
             ship_cmd.app,
-            ["--base", "base-model", "--adapter", adapter, "--task-eval", "task.jsonl",
+            ["--base", "base-model", *(flags if flags is not None else ["--adapter", adapter]),
+             "--task-eval", "task.jsonl",
              "--general-suite", "mini_arithmetic", "--device", "cpu",
              "--output", "live.json", "--emit-evidence", "ev.json"],
         )
@@ -516,3 +519,105 @@ def test_replaying_a_v1_file_does_not_stamp_a_version_it_has_no_content_for():
         again = json.loads(Path("again.json").read_text(encoding="utf-8"))
     again.pop("provenance")
     assert again == V1_EVIDENCE
+
+
+# -- second read ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flags", "adapter", "tuned", "step"),
+    [
+        (("--adapter", "", "--tuned", "tuned-model"), None, "tuned-model", None),
+        (("--tuned", "", "--adapter", "out/checkpoint-12"), "out/checkpoint-12", None, 12),
+    ],
+    ids=["empty-adapter", "empty-tuned"],
+)
+def test_an_empty_adapter_or_tuned_writes_evidence_that_replays(
+    monkeypatch, flags, adapter, tuned, step
+):
+    base = _scripted(_answers(correct={0}))
+    tuned_gen = _scripted(_answers(correct={0, 1}))
+    live, replay, files = _live_then_replay(monkeypatch, base, tuned_gen, flags=flags)
+    assert live.exit_code == 0, (live.output, repr(live.exception))
+    assert replay.exit_code == 0, (replay.output, repr(replay.exception))  # not refused (exit 3)
+    assert files["ev.json"]["judged"] == {
+        "base": "base-model", "adapter": adapter, "tuned": tuned, "base_adapter": None,
+        "checkpoint_step": step,
+    }
+    # an empty value is absent, never the string "": the reader refuses an empty string
+    live_verdict = {k: v for k, v in files["live.json"].items() if k != "adapter_change"}
+    replay_verdict = {k: v for k, v in files["replay.json"].items() if k != "adapter_change"}
+    assert replay_verdict == live_verdict
+
+
+@pytest.mark.parametrize(
+    "path", ["o/[/]/checkpoint-3", "o/[bold]/checkpoint-3", "o/[red]/checkpoint-3"],
+)
+def test_a_replay_prints_markup_in_a_judged_path_literally(path):
+    payload = _with(V2_EVIDENCE, "judged", "adapter", path)
+    payload["judged"]["checkpoint_step"] = 3
+    result, verdict = _cli(payload)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert result.exception is None  # a bare [/] raises MarkupError if it is not escaped
+    assert f"adapter {path} (checkpoint step 3)" in _plain(result.output)
+    assert verdict["judged"]["adapter"] == path
+
+
+def test_a_future_schema_version_does_not_make_a_v2_file_refuse_its_own_fields(monkeypatch):
+    # the v2 fields are refused under version 1 (and an absent version), not under "anything
+    # below the newest version": a reader that learns version 3 must still read version 2
+    from soup_cli.utils import ship_verdict
+
+    monkeypatch.setattr(ship_verdict, "SCHEMA_VERSION", 3)
+    monkeypatch.setattr(ship_verdict, "SUPPORTED_SCHEMA_VERSIONS", (1, 2, 3))
+    verdict = verdict_from_evidence(V2_EVIDENCE, forgetting_threshold=THRESHOLD)
+    assert verdict.judged is not None and verdict.task_win.detail is not None
+    no_version = {**V1_EVIDENCE, "judged": V2_EVIDENCE["judged"]}
+    with pytest.raises(ValueError, match="schema_version 2"):
+        verdict_from_evidence(no_version, forgetting_threshold=THRESHOLD)  # still refused
+
+
+def _payload_with_n(n: int) -> dict:
+    payload = copy.deepcopy(V2_EVIDENCE)
+    payload["task"]["rows"] = {"better": n, "worse": 0, "same": 0, "n": n}
+    payload["task"]["truncated"] = {"base": 0, "tuned": n, "n": n, "max_new_tokens": 256}
+    payload["task"]["generation_failures"] = {"base": 0, "tuned": 0, "n": n}
+    return payload
+
+
+def test_the_evidence_row_bound_is_the_task_file_bound():
+    from soup_cli.eval.custom import MAX_EVAL_TASKS
+    from soup_cli.utils import ship_verdict
+
+    assert ship_verdict._MAX_EVIDENCE_ROWS == MAX_EVAL_TASKS == 10_000
+
+
+def test_row_counts_are_accepted_at_10000_and_refused_at_10001():
+    verdict = verdict_from_evidence(_payload_with_n(10_000), forgetting_threshold=THRESHOLD)
+    assert verdict.task_win.detail.rows.n == 10_000
+    with pytest.raises(ValueError, match="evidence.task.rows"):
+        verdict_from_evidence(_payload_with_n(10_001), forgetting_threshold=THRESHOLD)
+
+
+def test_max_new_tokens_is_accepted_at_its_bound_and_refused_above_it():
+    ok = _with(V2_EVIDENCE, "task", "truncated",
+               {"base": 5, "tuned": 14, "n": 64, "max_new_tokens": 1 << 20})
+    assert verdict_from_evidence(ok).task_win.detail.truncated.max_new_tokens == 1 << 20
+    too_big = _with(V2_EVIDENCE, "task", "truncated",
+                    {"base": 5, "tuned": 14, "n": 64, "max_new_tokens": (1 << 20) + 1})
+    with pytest.raises(ValueError, match="task.truncated.max_new_tokens"):
+        verdict_from_evidence(too_big)
+
+
+@pytest.mark.parametrize("field", ["base", "adapter", "tuned", "base_adapter"])
+def test_a_judged_string_is_accepted_at_4096_characters_and_refused_at_4097(field):
+    def with_field(length: int) -> dict:
+        payload = copy.deepcopy(V2_EVIDENCE)
+        payload["judged"]["adapter"] = None
+        payload["judged"]["checkpoint_step"] = None
+        payload["judged"][field] = "a" * length
+        return payload
+
+    assert verdict_from_evidence(with_field(4096)).judged is not None
+    with pytest.raises(ValueError, match=f"judged.{field}"):
+        verdict_from_evidence(with_field(4097))

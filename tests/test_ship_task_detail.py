@@ -962,3 +962,274 @@ def test_run_eval_marks_a_generation_that_raised_as_failed_and_an_empty_answer_a
     assert [row.failed for row in results] == [True, False]
     assert [row.matched for row in results] == [False, False]
     assert [row.output for row in results] == ["", ""]
+
+
+# -- second read: empty flags, markup in a path, the PR comment, real generator shapes -----------
+
+
+@pytest.mark.parametrize(
+    ("extra", "adapter", "expected"),
+    [
+        # an empty --adapter is absent: tuned is the model, adapter is null (never "")
+        (("--tuned", "tuned-model"), "", {
+            "base": "base-model", "adapter": None, "tuned": "tuned-model",
+            "base_adapter": None, "checkpoint_step": None,
+        }),
+        # an empty --tuned is absent too
+        (("--tuned", ""), "out/checkpoint-12", {
+            "base": "base-model", "adapter": "out/checkpoint-12", "tuned": None,
+            "base_adapter": None, "checkpoint_step": 12,
+        }),
+    ],
+    ids=["empty-adapter", "empty-tuned"],
+)
+def test_cli_an_empty_adapter_or_tuned_is_null_in_judged(monkeypatch, extra, adapter, expected):
+    base = _scripted(_answers(correct=set()))
+    tuned = _scripted(_answers(correct={0}))
+    result, verdict, evidence = _ship(monkeypatch, _tasks(), base, tuned, *extra, adapter=adapter)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert verdict["judged"] == expected
+    assert evidence["judged"] == expected
+
+
+# Short on purpose: the whole "Judged: ..." line must fit the 80-column panel without wrapping.
+MARKUP_PATHS = [
+    "o/[/]/checkpoint-3",  # a bare closing tag: MarkupError if the panel does not escape it
+    "o/[bold]/checkpoint-3",  # a real tag: would be eaten (and bold the rest) if not escaped
+    "o/[red]/checkpoint-3",
+]
+
+
+@pytest.mark.parametrize("path", MARKUP_PATHS)
+def test_cli_markup_in_an_adapter_path_is_printed_literally(monkeypatch, path):
+    base = _scripted(_answers(correct=set()))
+    tuned = _scripted(_answers(correct={0}))
+    result, verdict, _ = _ship(monkeypatch, _tasks(), base, tuned, adapter=path)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert result.exception is None
+    assert f"adapter {path} (checkpoint step 3)" in _plain(result.output)
+    assert verdict["judged"]["adapter"] == path  # the file is exact
+
+
+@pytest.mark.parametrize("path", MARKUP_PATHS)
+def test_the_panel_prints_markup_in_a_judged_string_literally(path):
+    verdict = _verdict_with(None, build_judged(base="m", adapter=path))
+    text = _plain(_panel_text(verdict))
+    assert f"adapter {path} (checkpoint step 3)" in text
+
+
+def _posted_body(monkeypatch, verdict_args, *, adapter="out/checkpoint-12"):
+    """Run ``soup ship --push`` with the PR comment captured instead of sent."""
+    from soup_cli.utils import adapter_pr
+
+    posted = []
+    monkeypatch.setattr(
+        adapter_pr, "post_pr_comment",
+        lambda target, body: posted.append((target, body)) or "https://example.test/c/1",
+    )
+    base = _scripted(_answers(correct=set()))
+    tuned_gen = _scripted(_answers(correct={0}))
+    extra = ("--push", "owner/repo#42", *verdict_args)
+    result, verdict, _ = _ship(
+        monkeypatch, _tasks(), base, tuned_gen, *extra, adapter=adapter,
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert len(posted) == 1
+    return posted[0][1], verdict, result
+
+
+def test_the_pr_comment_shows_only_the_last_component_of_a_local_path(monkeypatch):
+    body, verdict, _ = _posted_body(monkeypatch, (), adapter="/home/secret-user/runs/checkpoint-12")
+    assert "checkpoint-12" in body
+    assert "Judged: base base-model, adapter checkpoint-12 (checkpoint step 12)" in body
+    for private in ("secret-user", "/home", "runs/"):
+        assert private not in body
+    # the verdict file keeps the value exactly as given
+    assert verdict["judged"]["adapter"] == "/home/secret-user/runs/checkpoint-12"
+
+
+def test_the_pr_comment_hides_a_windows_adapter_path(monkeypatch):
+    path = "C:/Users/secret-user/out/checkpoint-7"
+    body, _verdict, _ = _posted_body(monkeypatch, (), adapter=path)
+    assert "adapter checkpoint-7 (checkpoint step 7)" in body
+    for private in ("secret-user", "Users", "C:/", "out/"):
+        assert private not in body
+
+
+def test_the_pr_comment_hides_the_path_of_a_tuned_model(monkeypatch):
+    body, _verdict, _ = _posted_body(
+        monkeypatch, ("--tuned", "D:/models/secret-user/merged"), adapter="",
+    )
+    assert "tuned merged" in body
+    for private in ("secret-user", "D:/", "models/"):
+        assert private not in body
+
+
+def test_the_pr_comment_keeps_a_hub_id_whole(monkeypatch):
+    body, _verdict, _ = _posted_body(monkeypatch, ("--tuned", "my-org/tuned-model"), adapter="")
+    assert "tuned my-org/tuned-model" in body
+
+
+def test_the_pr_comment_hides_the_parents_of_an_existing_relative_path(monkeypatch):
+    # a relative path that exists on this machine is a local path, not a Hub id
+    from soup_cli.utils.ship_verdict import render_ship_pr_markdown
+
+    with runner.isolated_filesystem():
+        Path("private-project/run1/checkpoint-5").mkdir(parents=True)
+        verdict = _verdict_with(
+            None, build_judged(base="m", adapter="private-project/run1/checkpoint-5"),
+        )
+        markdown = render_ship_pr_markdown(verdict)
+        local = format_ship_rubric(verdict)
+    assert "adapter checkpoint-5 (checkpoint step 5)" in markdown
+    assert "private-project" not in markdown
+    assert "private-project/run1/checkpoint-5" in local  # the local text is not redacted
+
+
+def test_the_local_panel_and_rubric_keep_the_full_value():
+    verdict = _verdict_with(None, build_judged(base="m", adapter="/home/secret-user/checkpoint-2"))
+    assert "/home/secret-user/checkpoint-2" in format_ship_rubric(verdict)
+    assert "secret-user" in _plain(_panel_text(verdict))
+
+
+def test_the_pr_comment_of_an_adapter_with_a_trailing_separator_and_a_bare_root():
+    from soup_cli.utils.ship_verdict import render_ship_pr_markdown
+
+    verdict = _verdict_with(
+        None, build_judged(base="/", adapter="/home/secret-user/run/checkpoint-9/"),
+    )
+    markdown = render_ship_pr_markdown(verdict)
+    assert "adapter checkpoint-9 (checkpoint step 9)" in markdown
+    assert "secret-user" not in markdown
+
+
+def _batched(answers, *, batch_raises=False):
+    """A generator with the shape ``live_eval.make_generator`` returns: a scalar callable that
+    also exposes ``.batch`` / ``.batch_size``."""
+    scalar = _scripted(answers)
+    seen = {"batch": [], "scalar": []}
+
+    def generate(prompt):
+        seen["scalar"].append(prompt)
+        return scalar(prompt)
+
+    def batch(prompts):
+        seen["batch"].append(list(prompts))
+        if batch_raises:
+            raise RuntimeError("the batch failed")
+        return [scalar(prompt) for prompt in prompts]
+
+    generate.batch = batch
+    generate.batch_size = 4
+    generate.seen = seen
+    return generate
+
+
+def test_cli_a_generator_with_batch_gives_measured_truncation_counts(monkeypatch):
+    base = _batched(_answers(correct={0, 1}, truncated={0}))
+    tuned = _batched(_answers(correct={0, 1, 2}, truncated={1, 2}))
+    result, verdict, _ = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert any("q0" in prompts for prompts in base.seen["batch"])  # the batch path ran
+    assert any("q0" in prompts for prompts in tuned.seen["batch"])
+    assert "q0" not in base.seen["scalar"]
+    block = verdict["task_win"]["truncated"]
+    assert (block["base"], block["tuned"]) == (1, 2)  # measured, not null
+    assert verdict["task_win"]["rows"] == {"better": 1, "worse": 0, "same": 7, "n": 8}
+
+
+def test_cli_when_batch_raises_the_scalar_retry_still_gives_measured_counts(monkeypatch):
+    base = _batched(_answers(correct={0, 1}, truncated={0}), batch_raises=True)
+    tuned = _batched(_answers(correct={0, 1, 2}, truncated={1, 2}), batch_raises=True)
+    result, verdict, _ = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert any("q0" in prompts for prompts in base.seen["batch"])  # batch was tried first
+    assert {f"q{i}" for i in range(8)} <= set(base.seen["scalar"])  # then every row, one by one
+    block = verdict["task_win"]["truncated"]
+    assert (block["base"], block["tuned"]) == (1, 2)
+    assert verdict["task_win"]["generation_failures"] == {"base": 0, "tuned": 0, "n": 8}
+
+
+# -- display-only code cannot abort a verdict -----------------------------------------------------
+
+
+def _judge_with_row_scores(monkeypatch, row_values):
+    """judge_score where the evaluator's batch result carries these per-row weighted scores."""
+    from types import SimpleNamespace
+
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+    monkeypatch.setattr(
+        JudgeEvaluator, "evaluate_batch",
+        lambda self, items: SimpleNamespace(
+            overall_score=3.0,
+            scores=[SimpleNamespace(weighted_score=value) for value in row_values][: len(items)],
+        ),
+    )
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "5", True], ids=repr)
+def test_a_bad_per_row_judge_score_leaves_the_detail_out_and_the_verdict_alone(
+    monkeypatch, bad, capsys
+):
+    prompts = ["p0", "p1", "p2"]
+    monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
+                        lambda path: [_Task(prompt) for prompt in prompts])
+    _judge_with_row_scores(monkeypatch, [3.0, bad, 3.0])
+    win = ship_cmd._leg1_judge(
+        lambda prompt: GeneratedText("a", truncated=False),
+        lambda prompt: GeneratedText("b", truncated=False),
+        "t.jsonl", "ollama://j",
+    )
+    assert win.detail is None  # not a crash, and no half-built detail
+    assert win.base == win.tuned == pytest.approx((3.0 - 1) / 4)  # the number is the same
+    out = _plain(capsys.readouterr().out)
+    assert "Task detail (rows, truncation) could not be built and is left out: " in out
+
+
+def test_cli_a_bad_per_row_judge_score_does_not_change_the_exit_code(monkeypatch):
+    _judge_with_row_scores(monkeypatch, [3.0, float("nan")] + [3.0] * 6)
+    base = _scripted(_answers(correct=set()))
+    tuned = _scripted(_answers(correct={0}))
+    result, verdict, evidence = _ship(
+        monkeypatch, _tasks(), base, tuned,
+        "--task-mode", "judge_score", "--judge-model", "ollama://judge",
+    )
+    # base == tuned (the fake judge scores every answer 3.0): task did not improve -> exit 2,
+    # exactly as without the detail; before the detail it also never reached exit 1
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert verdict["failed_rule"] == "task_win"
+    assert verdict["task_win"]["rows"] is None and verdict["task_win"]["truncated"] is None
+    assert evidence["task"].get("rows") is None
+    assert "Task detail (rows, truncation) could not be built" in _plain(result.output)
+
+
+def test_a_failure_building_the_detail_is_display_only_in_the_metric_leg(monkeypatch, capsys):
+    def boom(*args, **kwargs):
+        raise ValueError("secret detail \x1b[31mfailure")
+
+    monkeypatch.setattr(ship_cmd, "build_task_detail", boom)
+    base = _scripted(_answers(correct=set()))
+    tuned = _scripted(_answers(correct={0}))
+    result, verdict, _ = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert verdict["decision"] == "SHIP"
+    assert verdict["task_win"]["rows"] is None
+    plain = _plain(result.output)
+    assert "Task detail (rows, truncation) could not be built and is left out: ValueError" in plain
+    assert "secret detail" not in plain  # only the type of the error is printed
+
+
+def test_the_detail_wrapper_does_not_swallow_the_dead_side_refusal(monkeypatch):
+    def boom(*args, **kwargs):
+        raise ValueError("a failing detail builder")
+
+    monkeypatch.setattr(ship_cmd, "build_task_detail", boom)
+    every_prompt = {f"q{i}" for i in range(8)}
+    dead = _scripted(_answers(correct=set()), fail=every_prompt)
+    good = _scripted(_answers(correct={0}))
+    result, verdict, _ = _ship(monkeypatch, _tasks(), dead, good)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert verdict is None
+    assert "every task generation failed on the base side (8 of 8)" in _plain(result.output)
