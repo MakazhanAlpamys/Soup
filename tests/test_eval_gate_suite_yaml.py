@@ -235,6 +235,12 @@ SCHEMA_FAILURES = [
         "missing-suite",
     ),
     (
+        "suite: demo\ntasks:\n  - type: custom\n    name: t\n    tasks: x.jsonl\n"
+        "    scorer: exact\n",
+        ": 'tasks[0].threshold' is required",
+        "missing-task-threshold",
+    ),
+    (
         "suite: demo\ntasks:\n  - type: custom\n    name: 1\n    threshold: 0.0\n",
         ": tasks[0].name: Input should be a valid string",
         "bad-task-field",

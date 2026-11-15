@@ -149,10 +149,6 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         names.add(task.name)
 
 
-# Pydantic prefixes a validator's ``ValueError`` with this before ``errors()``.
-_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
-
-
 def _suite_error_location(loc: tuple[object, ...]) -> str:
     """Render a pydantic error location as ``tasks[0].name``."""
     rendered: list[str] = []
@@ -183,17 +179,12 @@ def _suite_validation_message(path: str, exc: ValidationError, *, empty: bool) -
         if err["type"] == "missing":
             pieces.append(f"{(loc or 'value')!r} is required")
             continue
-        # A validator's own text comes from the original exception in ``ctx``,
-        # not from pydantic's recomposed ``msg`` (which prepends "Value error, "
-        # in whatever format this pydantic uses); fall back to the message with
-        # that known prefix removed for anything else.
+        # A validator's own text comes from the original exception in ``ctx``;
+        # anything else (a field-type refusal) already reads fine verbatim.
         ctx_error = err.get("ctx", {}).get("error")
-        if ctx_error is not None:
-            msg = str(ctx_error)
-        else:
-            msg = str(err["msg"]).removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+        msg = str(ctx_error) if ctx_error is not None else str(err["msg"])
         pieces.append(f"{loc}: {msg}" if loc else msg)
-    detail = "; ".join(pieces) if pieces else "invalid suite"
+    detail = "; ".join(pieces)
     return f"eval-gate suite '{path}': {detail}"
 
 
