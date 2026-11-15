@@ -1,6 +1,7 @@
 """`soup merge --low-memory` must produce exactly what the regular merge produces."""
 
 import json
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -606,26 +607,60 @@ class TestAdapterCoverage:
         """PiSSA / OLoRA (``lora.init_strategy``) subtract ``scaling * B0 @ A0`` from
         the base at init (#2722). Adding the trained ``B @ A`` to the original base wrote
         weights ~46% off the trained model with exit 0; refuse instead."""
+        from soup_cli.utils import stream_inference
         from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
 
         base = _tiny_base(tmp_path / "base")
         adapter = _tiny_adapter(base, tmp_path / "adapter", init_lora_weights=init)
-        output = tmp_path / "merged"
-        with pytest.raises(LowMemoryMergeError, match="init_lora_weights"):
-            merge_low_memory(base, adapter, output, "float32")
-        assert not output.exists()
+        before = sorted(path.name for path in tmp_path.iterdir())
+        with pytest.raises(LowMemoryMergeError, match=re.escape(f"init_lora_weights={init!r}")):
+            merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+        assert sorted(path.name for path in tmp_path.iterdir()) == before
+        assert stream_inference.is_plain_lora_init(init) is False
 
-    @pytest.mark.parametrize("init", ["corda", "loftq", "pissa_niter_4", "lora_ga"])
-    def test_other_weight_rewriting_inits_are_refused(self, checkpoints, init):
+    @pytest.mark.parametrize(
+        "init", ["pissa_niter_4", "corda", "loftq", "lora_ga", "EVA", 1, ["gaussian"]]
+    )
+    def test_every_other_init_is_refused_by_value(self, checkpoints, tmp_path, init):
+        """CorDA, LoftQ, LoRA-GA and PiSSA with fast SVD rewrite the base at init as well.
+        peft compares ``eva`` with ``==`` (``peft/tuners/lora/layer.py:303`` in v0.21.2), so
+        ``"EVA"`` is an error there, and a non-string is not an init at all. Each is refused
+        by value before anything is written (#2722)."""
+        from soup_cli.utils import stream_inference
         from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
 
         base, adapter, output = checkpoints
         _rewrite_adapter_config(adapter, init_lora_weights=init)
-        with pytest.raises(LowMemoryMergeError, match="init_lora_weights"):
+        before = sorted(path.name for path in tmp_path.iterdir())
+        with pytest.raises(LowMemoryMergeError, match=re.escape(f"init_lora_weights={init!r}")):
             merge_low_memory(base, adapter, output, "float16")
-        assert not output.exists()
+        assert sorted(path.name for path in tmp_path.iterdir()) == before
+        assert stream_inference.is_plain_lora_init(init) is False
 
-    @pytest.mark.parametrize("init", [False, "gaussian"])
+    @pytest.mark.parametrize(
+        "init",
+        [
+            None, True, False,
+            "gaussian", "Gaussian", "GAUSSIAN", "mica", "MICA",  # peft lower-cases these two
+            "eva", "orthogonal",  # and compares these two exactly
+        ],
+    )
+    def test_an_init_that_leaves_the_base_alone_is_accepted(self, checkpoints, init):
+        """peft lower-cases ``gaussian`` and ``mica`` (``peft/tuners/lora/layer.py:339`` and
+        ``:297`` in v0.21.2) and compares ``eva`` and ``orthogonal`` exactly; none of them
+        touches the base weight (``:297-299``, ``:303-307``, ``:464-470``), so an adapter saved
+        with one is valid on the original base and is not refused (#2722)."""
+        from soup_cli.utils import stream_inference
+        from soup_cli.utils.lowmem_merge import load_adapter
+
+        _, adapter, _ = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=init)
+        config, pairs = load_adapter(adapter)
+        assert config["init_lora_weights"] == init
+        assert pairs
+        assert stream_inference.is_plain_lora_init(init) is True
+
+    @pytest.mark.parametrize("init", [False, "gaussian", "Gaussian"])
     def test_a_default_init_still_matches_the_regular_merge(self, tmp_path, init):
         from soup_cli.utils.lowmem_merge import merge_low_memory
 
@@ -636,11 +671,47 @@ class TestAdapterCoverage:
         actual = _read_all(tmp_path / "merged")
         assert all(torch.equal(value, expected[key]) for key, value in actual.items())
 
-    def test_init_allowlist_is_shared_with_streamed_inference(self):
-        """One allowlist for both adapter loaders, so they cannot drift (#2722)."""
+    def test_a_real_orthogonal_adapter_matches_the_regular_merge(self, tmp_path):
+        """``orthogonal`` replaces ``lora_A`` and ``lora_B`` and leaves the base weight alone
+        (``peft/tuners/lora/layer.py:305-307``, ``orthogonal_init`` at ``:603-617`` in
+        v0.21.2), so the low-memory merge of one is the regular merge (#2722). peft needs an
+        even rank for it."""
+        from soup_cli.utils.lowmem_merge import merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", r=4, init_lora_weights="orthogonal")
+        saved = json.loads((adapter / "adapter_config.json").read_text(encoding="utf-8"))
+        assert saved["init_lora_weights"] == "orthogonal"
+
+        merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+
+        expected = _regular_merge(base, adapter, torch.float32)
+        actual = _read_all(tmp_path / "merged")
+        original = _read_all(base)
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(value, expected[key]) for key, value in actual.items())
+        assert any(not torch.equal(value, original[key]) for key, value in actual.items())
+
+    def test_both_adapter_loaders_call_the_same_function(self, checkpoints, monkeypatch):
+        """One rule for both adapter loaders, so they cannot drift (#2722): with
+        ``stream_inference.is_plain_lora_init`` swapped for one that refuses everything, the
+        low-memory merge and the streamed loader both refuse the default ``True``."""
         from soup_cli.utils import lowmem_merge, stream_inference
 
-        assert lowmem_merge._PLAIN_LORA_INITS is stream_inference._PLAIN_LORA_INITS
+        seen = []
+
+        def refuse_everything(value):
+            seen.append(value)
+            return False
+
+        monkeypatch.setattr(stream_inference, "is_plain_lora_init", refuse_everything)
+        _, adapter, _ = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=True)
+        with pytest.raises(lowmem_merge.LowMemoryMergeError, match="init_lora_weights=True"):
+            lowmem_merge.load_adapter(adapter)
+        with pytest.raises(ValueError, match="init_lora_weights=True"):
+            stream_inference._check_adapter_kind({"peft_type": "LORA", "init_lora_weights": True})
+        assert seen == [True, True]
 
     @pytest.mark.parametrize("changes", [{"peft_type": "IA3"}, {"bias": "all"}])
     def test_other_adapter_types_are_refused(self, checkpoints, changes):

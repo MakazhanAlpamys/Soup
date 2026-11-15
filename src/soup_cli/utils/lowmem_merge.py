@@ -10,11 +10,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from soup_cli.utils import stream_inference
 from soup_cli.utils.checkpoint_files import (
     HUB_FALLBACK_ALLOW_PATTERNS,
     HUB_FALLBACK_IGNORE_PATTERNS,
 )
-from soup_cli.utils.stream_inference import _PLAIN_LORA_INITS
 
 _ADAPTER_PREFIX = "base_model.model."
 _LORA_A = ".lora_A.weight"
@@ -107,12 +107,12 @@ def load_adapter(adapter_dir: Path) -> Tuple[Dict[str, Any], Dict[str, Tuple[Any
     # init (W_res = W - scaling * B0 @ A0). An adapter saved without converting it
     # back is only correct on that rewritten base: peft's regular merge re-runs the
     # init when it loads, but adding scaling * B @ A to the original W here would
-    # silently write neither the base nor the trained model. Only the default
-    # initializations are merged; everything else takes the regular merge (#2722).
-    # The allowlist is the one the streamed-inference adapter loader refuses on, so
-    # the two cannot drift apart.
+    # silently write neither the base nor the trained model. Only initializations
+    # that leave the base weight alone are merged; everything else takes the regular
+    # merge (#2722). The rule is the function the streamed-inference adapter loader
+    # refuses on, called through its module so both loaders reach the same one.
     init = config.get("init_lora_weights", True)
-    if init not in _PLAIN_LORA_INITS:
+    if not stream_inference.is_plain_lora_init(init):
         raise LowMemoryMergeError(
             f"adapter_config.json sets init_lora_weights={init!r}, which can rewrite the "
             "base weights at initialization; the low-memory merge does not support it"

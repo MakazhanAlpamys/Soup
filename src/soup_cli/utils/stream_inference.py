@@ -55,8 +55,30 @@ _BASE_COPY_SUFFIX = ".base_layer.weight"
 #: The adapter PEFT names its first adapter (and ``save_pretrained`` strips from the saved keys).
 _ADAPTER_NAME = "default"
 _ADAPTER_NAME_SEGMENT = re.compile(r"\.default(?=\.|$)")
-#: ``init_lora_weights`` values whose adapter is valid on an unrewritten base.
-_PLAIN_LORA_INITS = (None, True, False, "gaussian")
+
+
+def is_plain_lora_init(value: Any) -> bool:
+    """Whether an adapter saved with this ``init_lora_weights`` is valid on the original base.
+
+    PiSSA, CorDA, OLoRA, LoftQ and LoRA-GA rewrite the base weight at initialization
+    (``W - scaling * B0 @ A0``), so their adapter is only valid on that rewritten base. The values
+    accepted here leave the base weight alone (peft v0.21.2, ``peft/tuners/lora/layer.py``):
+    ``None``, ``True`` and ``False``; ``"gaussian"`` (``:339``); ``"mica"``, which sets ``lora_B``
+    and a zero ``lora_A`` and merges like plain LoRA (``:297-299``, ``:464-470``); ``"eva"``,
+    which zeroes ``lora_B`` only (``:303-304``); and ``"orthogonal"``, which replaces ``lora_A``
+    and ``lora_B`` (``:305-307``). peft lower-cases ``gaussian`` and ``mica`` and compares ``eva``
+    and ``orthogonal`` with ``==``, and so does this: ``"EVA"`` is an error in peft and is refused.
+    Anything else, a non-string included, is refused.
+
+    The low-memory merge (``utils/lowmem_merge.py``) and the adapter loader below both call this,
+    so the two cannot drift apart (#2722).
+    """
+    if value is None or isinstance(value, bool):
+        return True
+    if not isinstance(value, str):
+        return False
+    return value.lower() in ("gaussian", "mica") or value in ("eva", "orthogonal")
+
 
 #: ``adapter_config.json`` fields a streamed base cannot honour: ``(field, is_set, reason)``.
 #: Each reason says why, and every one contains "streamed" so the refusal names the runtime.
@@ -96,7 +118,7 @@ _UNSUPPORTED_ADAPTER_FIELDS = (
     ),
     (
         "init_lora_weights",
-        lambda value: value not in _PLAIN_LORA_INITS,
+        lambda value: not is_plain_lora_init(value),
         "an init that rewrites the base weights (PiSSA, OLoRA, LoftQ, ...) is only valid on "
         "that rewritten base, and a streamed base is the original checkpoint",
     ),

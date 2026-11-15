@@ -509,6 +509,8 @@ class TestAdapterConfig:
             ("init_lora_weights", "pissa", "init_lora_weights"),
             ("init_lora_weights", "olora", "init_lora_weights"),
             ("init_lora_weights", "loftq", "init_lora_weights"),
+            ("init_lora_weights", "EVA", "init_lora_weights"),
+            ("init_lora_weights", 1, "init_lora_weights"),
         ],
     )
     def test_what_the_streamed_base_cannot_hold_is_refused_by_name(
@@ -528,6 +530,9 @@ class TestAdapterConfig:
             ("bias", "none"),
             ("init_lora_weights", True),
             ("init_lora_weights", "gaussian"),
+            ("init_lora_weights", "Gaussian"),
+            ("init_lora_weights", "eva"),
+            ("init_lora_weights", "orthogonal"),
             ("exclude_modules", None),
             ("exclude_modules", []),
         ],
