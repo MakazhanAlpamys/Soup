@@ -142,13 +142,14 @@ class TestTrainerSourceWiring:
     @pytest.mark.parametrize("filename", _TRAINER_FILES)
     def test_trainer_keeps_mxfp4_out_of_kbit_prep(self, filename: str) -> None:
         # #1466: mxfp4 is dequantized on load (transformers Mxfp4Config), so
-        # the model is plain bf16 and prepare_model_for_kbit_training would
-        # cast it to fp32. Strict regex match on the literal tuple so a stray
+        # the model is plain bf16 and PEFT's prepare_model_for_kbit_training
+        # (called through prepare_kbit_model, #2609) would cast it to fp32.
+        # Strict regex match on the literal tuple so a stray
         # comment containing "mxfp4" cannot pass the guard.
         import re
 
         src = (_TRAINER_DIR / filename).read_text(encoding="utf-8")
-        if "prepare_model_for_kbit_training" not in src:
+        if "prepare_kbit_model(" not in src:
             pytest.skip(f"{filename} doesn't use kbit prep")
         # Match: ("4bit", "8bit")  with arbitrary whitespace.
         pattern = re.compile(r'\(\s*"4bit"\s*,\s*"8bit"\s*\)')
@@ -494,8 +495,15 @@ class TestRewardModelTaskQuantMenu:
         class _FakeTok:
             pad_token = "<pad>"
 
+        # prepare_kbit_model (#2609) checks its compute dtype with isinstance(.., torch.dtype)
+        class _FakeDtype:
+            pass
+
         fake_torch = _types.ModuleType("torch")
-        fake_torch.float32 = "float32"
+        fake_torch.dtype = _FakeDtype
+        fake_torch.float32 = _FakeDtype()
+        fake_torch.float16 = _FakeDtype()
+        fake_torch.bfloat16 = _FakeDtype()
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
         fake_tf = _types.ModuleType("transformers")
