@@ -22,6 +22,7 @@ the length the data really has, and these tests hold that number to what was mea
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -30,7 +31,11 @@ import yaml
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.utils import model_shape
-from soup_cli.utils.hardware_fit import decide_hardware_fit, hardware_fit_input_or_reason
+from soup_cli.utils.hardware_fit import (
+    decide_hardware_fit,
+    estimate_peak_vram_gb,
+    hardware_fit_input_or_reason,
+)
 from soup_cli.utils.profiler import profile_from_config
 from soup_cli.utils.vram_estimate import VRAM_SAFETY_MARGIN, fit_verdict
 
@@ -109,11 +114,26 @@ def _own_length(row: dict):
 
 
 def _priced(row: dict, seq_len="own") -> dict:
+    """The estimate for ``row`` at ``seq_len`` ("own": its longest row; None: ``max_length``).
+
+    Every 4-bit row was measured before #2683, when peft's fp32 embeddings and head were kept
+    on a bf16 card, so those are priced the way they ran (``kbit_fp32``) through
+    ``hardware_fit``; ``profile_from_config`` has no such argument and prices the bf16 default,
+    which is what a 4-bit run on a bf16 card does now (no such run is measured yet).
+    """
     seq = _own_length(row) if seq_len == "own" else seq_len
     cfg = load_config_from_string(_text(row, _base(row)))
-    result = profile_from_config(cfg, allow_network=False, seq_len=seq)
-    assert isinstance(result, dict), result
-    return result
+    if row["quantization"] == "none":
+        result = profile_from_config(cfg, allow_network=False, seq_len=seq)
+        assert isinstance(result, dict), result
+        return result
+    inp = hardware_fit_input_or_reason(
+        cfg, allow_network=False, profile_defaults=True, kbit_fp32=True
+    )
+    if seq is not None:
+        inp = dataclasses.replace(inp, seq_len=max(64, min(seq, inp.seq_len)))
+    estimate = estimate_peak_vram_gb(inp).estimate
+    return {"total_memory_bytes": estimate.total_bytes, "memory_terms_bytes": dict(estimate.terms)}
 
 
 def _allocated_terms(result: dict) -> int:
@@ -273,6 +293,20 @@ def test_the_peak_does_not_depend_on_max_length_for_short_data_and_the_estimate_
     # card ran both at the same 2462 MiB.
     assert fit_verdict(_priced(m1, seq_len=None)["total_memory_bytes"], card) == "does not fit"
     assert fit_verdict(_priced(m2, seq_len=None)["total_memory_bytes"], card) == "fits"
+
+
+def test_a_4_bit_run_on_a_bf16_card_is_priced_below_the_runs_measured_before_2609(models):
+    # The 4-bit rows ran with peft's fp32 embeddings and head. profile_from_config prices the
+    # bf16 default of #2683: 2 bytes less per embedding-and-head parameter (155,582,464 for a
+    # tied Qwen3-0.6B), and nothing else. No 4-bit run has been measured on that code.
+    row = next(row for row in _BENCH_ROWS if row["quantization"] == "4bit")
+    as_measured = _priced(row)
+    cfg = load_config_from_string(_text(row, _base(row)))
+    default = profile_from_config(cfg, allow_network=False, seq_len=_own_length(row))
+    assert as_measured["memory_terms_bytes"]["weights"] - default["memory_terms_bytes"][
+        "weights"
+    ] == pytest.approx(2 * 151936 * 1024, abs=2)
+    assert default["total_memory_bytes"] < as_measured["total_memory_bytes"]
 
 
 # --- 4. what a shorter length does to the estimate ----------------------------------------
