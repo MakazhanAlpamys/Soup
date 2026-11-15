@@ -1,0 +1,32 @@
+{
+  "source_base": "26ffea17461d0d14a0d3641b93435343b54c29e1",
+  "python": "3.12.3",
+  "packages": {
+    "torch": "2.14.1",
+    "transformers": "5.19.0",
+    "bitsandbytes": "0.50.2",
+    "accelerate": "1.15.0"
+  },
+  "code_sha256": {
+    "src/soup_cli/commands/eval.py": "bdb1472de0e253212e85a4dc744c4fa728711d2d389c8c5c2e772a8ad0e1d51e",
+    "src/soup_cli/eval/quant_check.py": "d77827e9eb5b2b52259d7e676b6697f9818528d63898c399b95b2955b7daba9d",
+    "src/soup_cli/eval/quant_performance.py": "20418db5f8a8fc5a484ce529a5a909ba6d0ecff63661adb416f8c56e6ae984a3",
+    "benchmarks/harness/issue2677_smoke.py": "8bf170fdcbb2d3ea94166630171e72b07eda00b7b73971e63a8ffbe9a785a42f",
+    "tests/test_issue2677_quant_performance.py": "80653fb7d825769594067d52d7f7e93d2c9d1afe8d4289605faedebb1909bd73"
+  },
+  "validation": {
+    "full_suite_passed": 52650,
+    "full_suite_skipped": 663,
+    "full_suite_seconds": 322.9,
+    "new_tests": 12,
+    "before_implementation_failures": 9,
+    "cli_smokes": 4
+  },
+  "data_sha256": {
+    "gpu-tasks.jsonl": "b3c2d228e9c66f09d2af7f8afd05ff8a8a3c7709b17c16a53b70c44cdb4ffc6d",
+    "cpu-tasks.jsonl": "bb3dd71852fd46ed5408464b8a98e95a786555cf68e5f458f23403d516756d1f"
+  },
+  "gpu": "NVIDIA H200 / physical 2 / <redacted>",
+  "shared_card": "unrelated idle process retained 49850 MiB; torch per-process allocated peaks reported",
+  "limitations": "functional toy-task validation only, not a quality or inference speedup benchmark"
+}

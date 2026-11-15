@@ -36,6 +36,8 @@ from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.classifier import (
     QUERY_ID_KEY,
     RANKING_TASKS,
+    classification_metrics,
+    classification_skip_reason,
     ranking_metrics,
     ranking_query_groups,
     ranking_relevance,
@@ -261,6 +263,50 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
                     )
 
 
+def _eval_logits(eval_pred: Any) -> Any:
+    """The logits of an ``EvalPrediction``, unwrapped when the model returns a tuple."""
+    logits = eval_pred.predictions
+    if isinstance(logits, (tuple, list)) and len(logits) and hasattr(logits[0], "shape"):
+        logits = logits[0]
+    return logits
+
+
+def build_classification_compute_metrics(
+    cfg: SoupConfig, dataset: dict
+) -> Optional[Callable[[Any], dict[str, float]]]:
+    """``compute_metrics`` reporting accuracy and F1 for ``task: classifier`` (#2638).
+
+    Returns None, so Hugging Face keeps logging ``eval_loss`` only, when the
+    task is not ``classifier`` or there are no validation rows; and, with one
+    line saying why, for a ``num_labels: 1`` single-label head. The metrics
+    reach the Hugging Face log and ``trainer_state.json`` as ``eval_accuracy``
+    and ``eval_f1_macro`` (single-label) or ``eval_subset_accuracy``,
+    ``eval_f1_micro`` and ``eval_f1_macro`` (multi-label); the recorded
+    validation number stays ``eval_loss``.
+    """
+    if cfg.task != "classifier":
+        return None
+    if not dataset.get("val"):
+        return None
+    tcfg = cfg.training
+    if tcfg.num_labels is None:
+        return None
+    num_labels = int(tcfg.num_labels)
+    multi_label = (tcfg.classifier_kind == "multi_label")
+
+    reason = classification_skip_reason(num_labels, multi_label)
+    if reason is not None:
+        console.print(f"[yellow]Classification metrics skipped:[/] {reason}.")
+        return None
+
+    def compute_metrics(eval_pred: Any) -> dict[str, float]:
+        return classification_metrics(
+            _eval_logits(eval_pred), eval_pred.label_ids, num_labels, multi_label
+        )
+
+    return compute_metrics
+
+
 def build_ranking_compute_metrics(
     cfg: SoupConfig, dataset: dict
 ) -> Optional[Callable[[Any], dict[str, float]]]:
@@ -318,10 +364,7 @@ def build_ranking_compute_metrics(
     queries_split = float(counts["queries_split"])
 
     def compute_metrics(eval_pred: Any) -> dict[str, float]:
-        logits = eval_pred.predictions
-        if isinstance(logits, (tuple, list)) and len(logits) and hasattr(logits[0], "shape"):
-            logits = logits[0]
-        scores = ranking_scores(logits, num_labels, multi_label)
+        scores = ranking_scores(_eval_logits(eval_pred), num_labels, multi_label)
         relevance = ranking_relevance(eval_pred.label_ids, num_labels, multi_label)
         if len(scores) != len(groups):
             raise RuntimeError(
@@ -540,9 +583,13 @@ class ClassifierTrainerWrapper:
         # #2618: ranking quality for reranker / cross_encoder. The query ids are
         # read from the raw rows here, because the map above drops every source
         # column; evaluation keeps row order, so predictions line up with them.
-        compute_metrics = (
-            build_ranking_compute_metrics(cfg, dataset) if eval_ds is not None else None
-        )
+        # #2638: accuracy and F1 for classifier.
+        compute_metrics = None
+        if eval_ds is not None:
+            if cfg.task in RANKING_TASKS:
+                compute_metrics = build_ranking_compute_metrics(cfg, dataset)
+            else:
+                compute_metrics = build_classification_compute_metrics(cfg, dataset)
 
         self.trainer = Trainer(
             model=self.model,
