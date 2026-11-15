@@ -50,10 +50,17 @@ def test_yaml_boolean_threshold_is_refused(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     suite = write_suite(tmp_path, spelling)
-    with pytest.raises(ValidationError) as exc:
+    # #2295: load_suite rewrites pydantic's report; the boolean refusal and its
+    # location survive the rewrite. Direct GateTask construction (above) keeps
+    # raising the raw ValidationError.
+    with pytest.raises(ValueError) as exc:
         load_suite(str(suite))
-    assert exc.value.errors()[0]["loc"] == ("tasks", 0, "threshold")
-    assert "must be a number, not a boolean" in str(exc.value)
+    assert type(exc.value) is ValueError
+    assert (
+        str(exc.value)
+        == f"eval-gate suite '{suite}': tasks[0].threshold: "
+        "threshold must be a number, not a boolean"
+    )
 
 
 @pytest.mark.parametrize("spelling", ["false", "true"])
@@ -83,7 +90,7 @@ def test_cli_refuses_boolean_before_model_or_baseline_write(
     assert result.exit_code == 3, result.output
     output = " ".join(strip_ansi(result.output).split())
     assert "Cannot load suite" in output
-    assert "tasks.0.threshold" in output
+    assert "tasks[0].threshold" in output
     assert "must be a number, not a boolean" in output
     assert calls == {"factory": 0, "generate": 0}
     assert baseline.read_bytes() == b"prior baseline bytes\n"
