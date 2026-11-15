@@ -109,6 +109,38 @@ def _assert_finite_training_state(
         )
 
 
+def curriculum_keeps_sorted_order(
+    *,
+    curriculum: bool,
+    pretokenized: bool,
+    is_raft: bool,
+    packing: bool,
+    multipack: bool,
+) -> bool:
+    """Whether a ``curriculum: true`` SFT run reads its length-sorted rows in order.
+
+    The sort reaches the model only through a sequential sampler, and only on the paths
+    that hand the sorted list to the Trainer's own sampler:
+
+    - plain text, vision and audio rows, and RAFT with or without ``raft_epoch_shuffle``
+      (the shuffle re-permutes the documents inside each row per epoch, not the rows;
+      RAFT's plain Trainer ignores ``packing`` and ``multipack``): the order holds;
+    - a pre-tokenised dataset (``soup data preprocess``) replaces the sorted list with
+      the cached rows in file order: left shuffled, as before;
+    - ``packing: true``: TRL's default ``bfd`` packing sorts the rows longest first into
+      bins, so reading the bins in order would run long to short: left shuffled;
+    - ``multipack: true``: its FFD batch sampler owns the dataloader and ignores the
+      sampling strategy: left as it is.
+
+    No combination is refused (#2863).
+    """
+    if not curriculum or pretokenized:
+        return False
+    if is_raft:
+        return True
+    return not (packing or multipack)
+
+
 def rewind_skip_reason(
     *,
     task: str,
@@ -897,9 +929,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # sampler keeps it. The Trainer's default sampler is random, which
         # dealt the sorted rows out in a seeded random order, so a
         # `curriculum: true` run saw no easier-to-harder progression at all.
-        # A pre-tokenised dataset is not the list that was sorted, so it keeps
-        # the default rather than being read in file order.
-        if tcfg.curriculum and pretok is None:
+        # Pre-tokenised data, packing and multipack keep the default; the
+        # helper says why for each (#2863).
+        if curriculum_keeps_sorted_order(
+            curriculum=bool(tcfg.curriculum),
+            pretokenized=pretok is not None,
+            is_raft=self._is_raft,
+            packing=bool(tcfg.packing),
+            multipack=bool(getattr(tcfg, "multipack", False)),
+        ):
             training_kwargs["train_sampling_strategy"] = "sequential"
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables

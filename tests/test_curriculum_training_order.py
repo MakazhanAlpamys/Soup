@@ -6,6 +6,11 @@ order and a curriculum run saw no easier-to-harder progression at all. Driven
 for real on CPU over a tiny checkpoint: the rewind flight recorder logs which
 rows each step consumed, so the order the model saw is read back from the run
 itself rather than inferred from the configuration.
+
+After the sort, some paths replace or reorder the list (#2863): RAFT, with or without
+``raft_epoch_shuffle``, keeps it; a pre-tokenised dataset, ``packing`` (TRL's ``bfd``
+re-bins the rows longest first) and ``multipack`` (its FFD sampler owns the dataloader)
+keep the default sampler, as before. Nothing is refused.
 """
 
 from __future__ import annotations
@@ -85,7 +90,19 @@ def _rows() -> list[dict]:
     ]
 
 
-def _build(tmp_path, monkeypatch, *, curriculum: bool):
+def _raft_rows() -> list[dict]:
+    return [
+        {
+            "query": "hi",
+            "golden_doc": "good answer",
+            "distractor_docs": ["bad", "world"],
+            "answer": " ".join(["hello"] * count),
+        }
+        for count in _WORD_COUNTS
+    ]
+
+
+def _build(tmp_path, monkeypatch, *, curriculum: bool, data=None, training=None, rows=None):
     import yaml
 
     from soup_cli.config.loader import load_config_from_string
@@ -104,6 +121,7 @@ def _build(tmp_path, monkeypatch, *, curriculum: bool):
                     "train": "train.jsonl",
                     "max_length": 64,
                     "chat_template": "chatml",
+                    **(data or {}),
                 },
                 "training": {
                     "batch_size": 1,
@@ -114,13 +132,14 @@ def _build(tmp_path, monkeypatch, *, curriculum: bool):
                     "save_steps": 1000,
                     "curriculum": curriculum,
                     "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+                    **(training or {}),
                 },
                 "output": str(tmp_path / "out"),
             }
         )
     )
     wrapper = SFTTrainerWrapper(cfg, device="cpu")
-    wrapper.setup({"train": _rows()})
+    wrapper.setup({"train": rows if rows is not None else _rows()})
     return wrapper
 
 
@@ -153,5 +172,62 @@ class TestCurriculumTrainingOrder:
     def test_without_curriculum_the_sampler_stays_random(self, tmp_path, monkeypatch):
         _requires_train_extra()
         wrapper = _build(tmp_path, monkeypatch, curriculum=False)
+
+        assert wrapper.trainer.args.train_sampling_strategy == "random"
+
+
+class TestWhichPathsKeepTheOrder:
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            ({}, True),
+            ({"is_raft": True}, True),
+            # RAFT's plain Trainer reads neither flag.
+            ({"is_raft": True, "packing": True}, True),
+            ({"is_raft": True, "multipack": True}, True),
+            ({"pretokenized": True}, False),
+            ({"pretokenized": True, "is_raft": True}, False),
+            ({"packing": True}, False),
+            ({"multipack": True}, False),
+            ({"curriculum": False}, False),
+        ],
+        ids=[
+            "text-vision-audio", "raft", "raft-packing", "raft-multipack", "pretokenised",
+            "pretokenised-raft", "packing", "multipack", "no-curriculum",
+        ],
+    )
+    def test_each_path(self, path, expected):
+        from soup_cli.trainer.sft import curriculum_keeps_sorted_order
+
+        flags = {
+            "curriculum": True, "pretokenized": False, "is_raft": False,
+            "packing": False, "multipack": False, **path,
+        }
+        assert curriculum_keeps_sorted_order(**flags) is expected
+
+    def test_raft_epoch_shuffle_reads_the_sorted_rows_in_order(self, tmp_path, monkeypatch):
+        """The shuffle re-permutes the documents inside each row per epoch; the rows
+        themselves come in the sorted order, shortest answer first."""
+        _requires_train_extra()
+        wrapper = _build(
+            tmp_path, monkeypatch, curriculum=True,
+            data={"format": "raft", "raft_epoch_shuffle": True, "max_length": 128},
+            rows=_raft_rows(),
+        )
+
+        assert wrapper.trainer.args.train_sampling_strategy == "sequential"
+        lengths = [
+            int(batch["input_ids"].shape[-1])
+            for batch in wrapper.trainer.get_train_dataloader()
+        ]
+        assert len(lengths) == len(_WORD_COUNTS)
+        assert lengths == sorted(lengths)
+        assert len(set(lengths)) == len(lengths)
+
+    def test_packing_keeps_the_random_sampler(self, tmp_path, monkeypatch):
+        """``bfd`` packs the longest rows first, so a sequential read would run long to
+        short: the sampler stays random, as before."""
+        _requires_train_extra()
+        wrapper = _build(tmp_path, monkeypatch, curriculum=True, training={"packing": True})
 
         assert wrapper.trainer.args.train_sampling_strategy == "random"
