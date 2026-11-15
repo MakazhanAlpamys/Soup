@@ -1,8 +1,9 @@
 """Training profile estimator — memory, speed, and recommendations."""
 
+import dataclasses
 import math
 import re
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
 if TYPE_CHECKING:
     from soup_cli.utils.hardware_fit import FitUnavailable
@@ -215,15 +216,89 @@ def profile_result(
     }
 
 
+#: What ``profile_from_config(shape=)`` must carry, all together: without the vocabulary the
+#: logits term, most of a small model's estimate, is not priced.
+SHAPE_REQUIRED_FIELDS = ("hidden_size", "num_layers", "intermediate_size", "vocab_size", "params")
+#: Optional, for a model whose attention is not hidden_size wide; the defaults are the ones a
+#: shape guessed from the name uses.
+SHAPE_OPTIONAL_FIELDS = ("num_attention_heads", "num_key_value_heads", "head_dim")
+_SHAPE_FIELDS = (*SHAPE_REQUIRED_FIELDS, *SHAPE_OPTIONAL_FIELDS, "tie_word_embeddings")
+
+
+def _checked_seq_len(value: Any) -> Optional[int]:
+    """``None`` or an int; a bool or anything else is refused by name, before any read."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"seq_len must be an int or None, got {type(value).__name__}")
+    return value
+
+
+def _shape_from_caller(shape: Any) -> Any:
+    """A ``ModelShape`` from ``profile_from_config(shape=)``; every refusal names its field."""
+    from soup_cli.utils.hardware_fit import _MAX_PARAMS_B
+    from soup_cli.utils.model_shape import _MAX_DIM, _MAX_LAYERS, ModelShape
+
+    if not isinstance(shape, Mapping):
+        raise TypeError(f"shape must be a mapping, got {type(shape).__name__}")
+    for key in shape:
+        if key not in _SHAPE_FIELDS:
+            raise ValueError(f"unknown shape field {key!r}; known: {', '.join(_SHAPE_FIELDS)}")
+    missing = [name for name in SHAPE_REQUIRED_FIELDS if name not in shape]
+    if missing:
+        raise ValueError(
+            f"shape is missing {', '.join(missing)}. A shape needs "
+            f"{', '.join(SHAPE_REQUIRED_FIELDS[:-1])} and params together: a parameter count "
+            "alone leaves the logits term, most of a small model's estimate, unpriced."
+        )
+    limits = {"params": int(_MAX_PARAMS_B * 1e9), "num_layers": _MAX_LAYERS}
+    values: dict[str, int] = {}
+    for name in (*SHAPE_REQUIRED_FIELDS, *SHAPE_OPTIONAL_FIELDS):
+        if name not in shape:
+            continue
+        value = shape[name]
+        if isinstance(value, bool):
+            raise TypeError(f"shape[{name!r}] must be an int, not bool")
+        if not isinstance(value, int):
+            raise TypeError(f"shape[{name!r}] must be an int, got {type(value).__name__}")
+        if value <= 0:
+            raise ValueError(f"shape[{name!r}] must be positive, got {value}")
+        if value > limits.get(name, _MAX_DIM):
+            raise ValueError(f"shape[{name!r}] is larger than {limits.get(name, _MAX_DIM):,}")
+        values[name] = value
+    tied = shape.get("tie_word_embeddings", False)
+    if not isinstance(tied, bool):
+        raise TypeError(f"shape['tie_word_embeddings'] must be a bool, got {type(tied).__name__}")
+    hidden = values["hidden_size"]
+    heads = values.get("num_attention_heads") or max(1, hidden // 128)
+    return ModelShape(
+        params=values["params"],
+        hidden_size=hidden,
+        intermediate_size=values["intermediate_size"],
+        num_layers=values["num_layers"],
+        num_attention_heads=heads,
+        num_kv_heads=values.get("num_key_value_heads") or heads,
+        head_dim=values.get("head_dim") or max(1, hidden // heads),
+        vocab_size=values["vocab_size"],
+        tie_word_embeddings=tied,
+        model_type="",
+        params_source="caller",
+        shape_source="caller",
+    )
+
+
 def profile_from_config(
     cfg: Any,
     *,
     allow_network: bool = True,
     gpu_memory_gb: Optional[float] = None,
     on_hub_request: Optional[Callable[[], None]] = None,
+    seq_len: Optional[int] = None,
+    shape: Optional[Mapping[str, Any]] = None,
 ) -> Union[dict, "FitUnavailable"]:
     """The memory profile of a ``SoupConfig``, from the model's own shape.
 
+    The entry point for a program that wants the estimate without running ``soup train``.
     Built from the same input as the train pre-flight
     (``hardware_fit.hardware_fit_input_from_config``), so the two report the same
     peak for the same config (#2049). When the run cannot be priced, the
@@ -231,13 +306,32 @@ def profile_from_config(
     it (#2306). ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto``
     resolves on. ``on_hub_request`` is called just before the first request to the
     Hub, if one is made.
+
+    The estimate prices rows that FILL the length it is given: ``data.max_length`` tokens
+    in every row of a micro-batch, as its calibration runs did. For data whose rows are
+    shorter, ``seq_len`` is the length to price instead: an int, clamped to
+    ``[64, data.max_length]`` (a bool or a non-int raises ``TypeError``). A micro-batch is
+    padded to its longest row, so the longest row of the data is the figure to pass. The
+    result then has ``seq_len_source: "caller"``, ``seq_len_requested`` and a note, and its
+    ``seq_len`` is the length priced. With ``seq_len=None`` the result is what it always was.
+
+    ``shape`` gives the model's shape when it cannot be read (not cached, no network, a
+    gated repo): a mapping with ``hidden_size``, ``num_layers``, ``intermediate_size``,
+    ``vocab_size`` and ``params``, all required together (a parameter count alone is
+    refused: it leaves the logits unpriced), and optionally ``num_attention_heads``,
+    ``num_key_value_heads``, ``head_dim`` and ``tie_word_embeddings``. It is used only when
+    the model's own ``config.json`` cannot be read, which otherwise wins (a note says so);
+    the result then has ``shape_source: "caller"``.
     """
     from soup_cli.utils.hardware_fit import (
+        _MIN_SEQ_LEN,
         FitUnavailable,
         estimate_peak_vram_gb,
         hardware_fit_input_or_reason,
     )
 
+    caller_seq = _checked_seq_len(seq_len)
+    caller_shape = None if shape is None else _shape_from_caller(shape)
     inp = hardware_fit_input_or_reason(
         cfg,
         allow_network=allow_network,
@@ -247,12 +341,44 @@ def profile_from_config(
     )
     if isinstance(inp, FitUnavailable):
         return inp
+    notes: list[str] = []
+    if caller_shape is not None:
+        if inp.shape is None or inp.shape.guessed:
+            inp = dataclasses.replace(inp, shape=caller_shape, params_b=caller_shape.params / 1e9)
+            notes.append(
+                "The model's shape was supplied by the caller (shape=): "
+                f"hidden_size {caller_shape.hidden_size}, {caller_shape.num_layers} layers, "
+                f"intermediate_size {caller_shape.intermediate_size}, vocab_size "
+                f"{caller_shape.vocab_size}, {caller_shape.params:,} parameters. The estimate "
+                "takes it as given."
+            )
+        else:
+            notes.append(
+                "The supplied shape was not used: the model's own config.json was readable."
+            )
+    if caller_seq is not None:
+        priced = max(_MIN_SEQ_LEN, min(caller_seq, inp.seq_len))
+        note = (
+            f"seq_len {caller_seq} was supplied by the caller (data.max_length is "
+            f"{inp.seq_len}); the estimate prices rows that fill {priced} tokens, so a longer "
+            "row in the data is not priced."
+        )
+        if caller_seq > inp.seq_len:
+            note += f" It was clamped to data.max_length ({inp.seq_len})."
+        elif caller_seq < priced:
+            note += f" It was clamped to {priced}, the smallest length the estimate prices."
+        notes.append(note)
+        inp = dataclasses.replace(inp, seq_len=priced)
     result = profile_result(
         estimate_peak_vram_gb(inp),
         model_name=cfg.base,
         gradient_checkpointing=cfg.training.gradient_checkpointing,
     )
     result["quantization"] = cfg.training.quantization
+    if caller_seq is not None:
+        result["seq_len_source"] = "caller"
+        result["seq_len_requested"] = caller_seq
+    result["notes"].extend(notes)
     return result
 
 
