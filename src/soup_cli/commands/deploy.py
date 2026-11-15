@@ -22,6 +22,22 @@ console = Console()
 
 _SPACE_HARDWARE_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
+
+def _is_streamlit_sdk_refusal(exc: Exception, sdk: str) -> bool:
+    """Match a Hub error whose server message names the SDK field and a value."""
+    from huggingface_hub.errors import HfHubHTTPError
+
+    if sdk != "streamlit" or not isinstance(exc, HfHubHTTPError):
+        return False
+
+    server_message = (getattr(exc, "server_message", None) or "").casefold()
+    names_sdk_field = "space_sdk" in server_message or re.search(r"\bsdk\b", server_message)
+    names_sdk_value = any(
+        re.search(rf"\b{value}\b", server_message)
+        for value in ("streamlit", "gradio", "docker", "static")
+    )
+    return bool(names_sdk_field and names_sdk_value)
+
 app = typer.Typer(no_args_is_help=True)
 
 
@@ -465,7 +481,11 @@ def hf_space(
         "gradio-chat",
         "--template",
         "-t",
-        help=f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}",
+        help=(
+            f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}. "
+            "Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer "
+            "creates new Streamlit Spaces. Use gradio-chat."
+        ),
     ),
     template_dir: Optional[str] = typer.Option(
         None,
@@ -491,7 +511,9 @@ def hf_space(
     """Create a HuggingFace Space wrapping a fine-tuned model.
 
     Uploads an app.py, requirements.txt, and README.md rendered from the
-    chosen template. Supports gradio-chat and streamlit-chat.
+    chosen template. Supports gradio-chat and streamlit-chat. Hugging Face no
+    longer creates new Streamlit Spaces; a deprecation warning is printed for
+    Streamlit templates in v0.78.0. Use gradio-chat for new deployments.
     """
     from rich.markup import escape
 
@@ -574,6 +596,14 @@ def hf_space(
         console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
+    if sdk == "streamlit":
+        console.print(
+            "[yellow]Deprecation warning (v0.78.0):[/] Hugging Face no longer creates "
+            "new Streamlit Spaces. Use the built-in [bold]gradio-chat[/] template or a "
+            "custom Gradio template.",
+            emoji=False,
+        )
+
     template_label = template_dir if template_dir is not None else template
     # The space and the model passed validate_repo_id; the template directory is
     # typed text.
@@ -624,7 +654,16 @@ def hf_space(
             commit_message="Soup CLI: deploy Space files",
         )
     except Exception as exc:
-        console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
+        if _is_streamlit_sdk_refusal(exc, sdk):
+            console.print(
+                "[red]Hugging Face no longer creates new Streamlit Spaces.[/] "
+                "Use [bold]--template gradio-chat[/] instead.",
+                emoji=False,
+            )
+            response = getattr(exc, "server_message", None) or exc
+            console.print(f"[dim]Hub response:[/] {for_terminal(response)}", emoji=False)
+        else:
+            console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(

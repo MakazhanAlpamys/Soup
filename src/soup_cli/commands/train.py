@@ -25,6 +25,11 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+from soup_cli.trainer.loss_summary import (
+    measured_run_losses,
+    stored_loss_summary_kind,
+    stored_run_losses,
+)
 from soup_cli.utils.gpu import (
     apply_quantization_guard,
     configure_cuda_alloc_hint,
@@ -131,7 +136,11 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
-    if summary_kind == "unavailable":
+    # Neither the kind-"unavailable" placeholder nor a result without numbers (a
+    # missing key, None) is a loss to print: say so instead of formatting None. A NaN
+    # tail is printed (a diverged run says so); only the stored row has no NaN.
+    measured_initial, measured_final = measured_run_losses(result)
+    if measured_initial is None or measured_final is None:
         return "Loss: [bold]unavailable[/]"
     loss_key = result.get("loss_key")
     label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
@@ -397,25 +406,27 @@ def _refuse_over_judge_budget(cfg, dataset) -> None:
         raise typer.Exit(1) from exc
 
 
-def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
+def _build_hardware_fit_input(cfg, gpu_memory_gb=None, kbit_fp32=False):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_or_reason``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
-    printed before the model's details are read from the Hub, without the offline
-    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. ``kbit_fp32`` is
+    True on a CUDA card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's
+    fp32 embeddings, norms and head (#2609). A line is printed before the model's
+    details are read from the Hub, without the offline hint used by ``soup plan`` and
+    ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import FitUnavailable
 
-    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb)
+    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb, kbit_fp32=kbit_fp32)
     return None if isinstance(result, FitUnavailable) else result
 
 
 def _hardware_fit_input_or_reason(
-    cfg: SoupConfig, gpu_memory_gb: float | None = None
+    cfg: SoupConfig, gpu_memory_gb: float | None = None, kbit_fp32: bool = False
 ) -> HardwareFitInput | FitUnavailable:
     """Build the train fit input or its reason, announcing any Hub lookup once."""
     from soup_cli.utils.hardware_fit import hardware_fit_input_or_reason
@@ -425,6 +436,7 @@ def _hardware_fit_input_or_reason(
         cfg,
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+        kbit_fp32=kbit_fp32,
     )
 
 
@@ -528,10 +540,16 @@ def _hardware_fit_preflight(
         return
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
+    from soup_cli.utils.gpu import bf16_fp16_flags
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
-    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
-    inp = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=total_bytes / 1024**3)
+    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
+    # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    inp = _hardware_fit_input_or_reason(
+        cfg,
+        gpu_memory_gb=total_bytes / 1024**3,
+        kbit_fp32=bf16_fp16_flags("cuda")[1],
+    )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
@@ -2333,14 +2351,17 @@ def train(
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker
+        # Save completion to tracker. A run that observed no loss stores NULL, not
+        # the trainer's 0.0 placeholder (stored_run_losses).
+        initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
-            initial_loss=result["initial_loss"],
-            final_loss=result["final_loss"],
+            initial_loss=initial_loss,
+            final_loss=final_loss,
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
 
         _run_auto_eval_after_training(

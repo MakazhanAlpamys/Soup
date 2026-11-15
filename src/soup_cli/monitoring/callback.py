@@ -11,13 +11,14 @@ from rich.console import Console
 if TYPE_CHECKING:
     from transformers import TrainerControl, TrainerState, TrainingArguments
 
+from soup_cli.experiment.row_kinds import ROW_KIND_SUMMARY, metric_row_kind
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.monitoring.reward_collapse import (
     ZERO_SPREAD_FRACTION_THRESHOLD,
     ZERO_SPREAD_REQUIRED_STEPS,
     RewardCollapseMonitor,
 )
-from soup_cli.monitoring.step_rate import StepRate
+from soup_cli.monitoring.step_rate import StepRate, is_finite_number
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -375,6 +376,21 @@ class _SoupTrainerCallback_body:  # noqa: N801
         rate = self._step_rate.update(step, time.monotonic())
         summary_speed = logs.get("train_steps_per_second")
         speed = summary_speed if summary_speed is not None else rate
+        # An event that measured none of the per-step metrics -- HF's final runtime
+        # summary (`train_runtime`, the `train_loss` MEAN, throughput), a bare
+        # `tool_calls` count -- is not a measurement of loss. The panel keeps showing
+        # the carried values, but the sinks get no training row and no event: the
+        # carried values would store a copy of the last real measurement under that
+        # step, an observation nothing made. A real 0.0 is a measurement
+        # (`is not None`). The summary's throughput is the exception, and is stored
+        # as its own `summary` row below (#2810), with no loss carried into it.
+        measured_any = any(
+            logs.get(key) is not None
+            for key in ("loss", "learning_rate", "grad_norm", val_key)
+        )
+        # What the row is (experiment/row_kinds.py): an event carrying the validation
+        # number is an evaluation, any other measured one a training log.
+        row_kind = metric_row_kind(**{val_field: measured_val_loss})
 
         reward_metrics = {}
         if (
@@ -411,29 +427,31 @@ class _SoupTrainerCallback_body:  # noqa: N801
             from soup_cli.utils.sse_train_stream import TrainEvent
             from soup_cli.utils.train_event_buffer import push_train_event
 
-            push_train_event(
-                TrainEvent(
-                    type="metric",
-                    step=int(step) if step is not None else None,
-                    epoch=float(epoch) if epoch is not None else None,
-                    # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
-                    # end of an LR schedule) must not be reported as None.
-                    loss=float(loss) if loss is not None else None,
-                    lr=float(lr) if lr is not None else None,
-                    grad_norm=(
-                        float(measured_grad_norm)
-                        if measured_grad_norm is not None
-                        else None
-                    ),
-                    **{
-                        val_field: (
-                            float(measured_val_loss)
-                            if measured_val_loss is not None
+            if measured_any:
+                push_train_event(
+                    TrainEvent(
+                        type="metric",
+                        step=int(step) if step is not None else None,
+                        epoch=float(epoch) if epoch is not None else None,
+                        # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
+                        # end of an LR schedule) must not be reported as None.
+                        loss=float(loss) if loss is not None else None,
+                        lr=float(lr) if lr is not None else None,
+                        grad_norm=(
+                            float(measured_grad_norm)
+                            if measured_grad_norm is not None
                             else None
-                        )
-                    },
+                        ),
+                        kind=row_kind,
+                        **{
+                            val_field: (
+                                float(measured_val_loss)
+                                if measured_val_loss is not None
+                                else None
+                            )
+                        },
+                    )
                 )
-            )
         except Exception:
             pass
 
@@ -502,8 +520,25 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
-        # Log to experiment tracker
-        if self.tracker and self.run_id:
+        # Log to experiment tracker. An event that measured no loss, lr, grad_norm or
+        # validation number writes no training row.
+        if self.tracker and self.run_id and not measured_any and is_finite_number(
+            summary_speed
+        ):
+            # HF's final runtime summary: its throughput is a measurement (#2810), so
+            # it is kept, as a row of its own. Nothing else in the event is a per-step
+            # value, so loss / lr / grad_norm / val stay NULL -- not the carried
+            # training values -- and `kind = "summary"` tells a reader (Soup Zero reads
+            # `loss`, `lr` per row) that this row is not a training step.
+            self.tracker.log_metrics(
+                run_id=self.run_id,
+                step=step,
+                epoch=epoch,
+                speed=summary_speed,
+                gpu_mem=gpu_mem,
+                kind=ROW_KIND_SUMMARY,
+            )
+        elif self.tracker and self.run_id and measured_any:
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,
@@ -513,6 +548,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
+                kind=row_kind,
                 **{val_field: measured_val_loss},
             )
 

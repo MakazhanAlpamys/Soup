@@ -5,7 +5,10 @@ train`` steps on an RTX 3060 Laptop (``benchmarks/gate-2049-resident-vram.md``).
 Each row's model shape is taken from the ``config.json`` and safetensors count
 recorded with it, so this runs offline. The estimate's allocated terms (everything
 but ``overhead``, which ``max_memory_allocated`` cannot see) must land within the
-stated band of the measured peak for the row's kind of run. The bands are as tight as
+stated band of the measured peak for the row's kind of run. Every row was measured
+before #2609, with peft's fp32 embeddings, norms and head, so the rows are priced with
+``kbit_fp32=True``; the bf16 default is checked against its own measured row in
+``tests/test_vram_estimate_kbit_bf16.py``. The bands are as tight as
 each kind fits: an under-prediction lets a run through that then runs out of memory,
 an over-prediction refuses a run that fits.
 """
@@ -71,6 +74,7 @@ def _predicted_allocated(row: dict) -> int:
         gradient_checkpointing=run["gradient_checkpointing"],
         lora_r=run["lora_r"],
         target_modules=run["target_modules"],
+        kbit_fp32=True,  # the rows predate #2609: peft's fp32 embeddings, norms and head
     )
     est = estimate_vram(shape, spec)
     return est.total_bytes - est.terms["overhead"]
@@ -125,6 +129,7 @@ def _step_term(row: dict) -> int:
         gradient_checkpointing=run["gradient_checkpointing"],
         lora_r=run["lora_r"],
         target_modules=run["target_modules"],
+        kbit_fp32=True,  # the rows predate #2609: peft's fp32 embeddings, norms and head
     )
     return estimate_vram(shape, spec).terms["optimizer_step"]
 
