@@ -16,15 +16,20 @@ hold that number to what was measured:
   #2146 added for filled rows is not undone;
 * priced at the data's own length, its allocated terms match ``max_memory_allocated`` on the
   bf16 runs, and the estimate with the pre-flight's 10% margin is above every clean
-  whole-card peak, by 0.2% on the tightest (a filled micro-batch). The estimate WITHOUT the
-  margin is not: it is below the device peak for three of those runs. Outside callers must
-  keep the margin.
+  whole-card peak measured before #2683, by 0.2% on the tightest (a filled micro-batch). The
+  estimate WITHOUT the margin is not: it is below the device peak for three of those runs.
+  Outside callers must keep the margin;
+* the same recipes re-run with torch's allocator capped (``capped_rows``): an uncapped peak
+  includes cache the allocator gives back, so what a run needs is the smallest cap that still
+  trains plus the CUDA context. The estimate is above that for the 4-bit run and the short-row
+  bf16 runs, and below it for the one micro-batch that fills 512 tokens.
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -142,6 +147,8 @@ _ADDED_ROWS = list(_DATA["downstream_added_rows"])
 _BENCH_ROWS = list(_DATA["bench_rows"])
 _POST_2683_ROWS = list(_DATA["post_2683_rows"])
 _DOWNSTREAM_ALLOCATED_ROWS = list(_DATA["downstream_allocated_rows"])
+_CAPPED_ROWS = list(_DATA["capped_rows"])
+_UNCAPPED_ROWS = {row["id"]: row for row in [*_BENCH_ROWS, *_POST_2683_ROWS]}
 _CLEAN_ROWS = [
     row
     for row in [*_TORCH_ROWS, *_ADDED_ROWS, *_BENCH_ROWS, *_DATA["device_only_rows"]]
@@ -340,13 +347,34 @@ def _post_2683(prefix: str) -> dict:
     return next(row for row in _POST_2683_ROWS if row["id"].startswith(prefix))
 
 
-def test_a_4_bit_run_on_current_main_has_no_margin_the_estimate_covers(models):
-    # M4 re-run on origin/main a6f5e7246, after #2683 kept the embeddings and head in bf16:
-    # the allocated peak fell 674 MiB (2081 -> 1407) but reserved / allocated rose to 1.60,
-    # and the whole-card peak rose 62 MiB (2348 -> 2410). The estimate, priced at the default
-    # that a bf16 card now gets, is about right for the allocated peak and below the whole-card
-    # peak even with the pre-flight's 10% margin. This is the truth the docs state; it is not
-    # a guarantee, so it is pinned as a shortfall, and the clean-row pins above stop at #2683.
+def _capped(prefix: str, outcome: str) -> list[dict]:
+    """The capped runs of one recipe (``M4``, ``M1``, ...) with this outcome, smallest cap first."""
+    return sorted(
+        (
+            row
+            for row in _CAPPED_ROWS
+            if row["id"].startswith(prefix + "-") and row["outcome"] == outcome
+        ),
+        key=lambda row: row["allocator_cap_mib"],
+    )
+
+
+def _context_mib() -> int:
+    """What the card holds outside torch's allocator: ``device - reserved`` in every bench run."""
+    return _evidence()["cuda_context"]["device_minus_reserved_mib_in_every_bench_row"]
+
+
+def test_the_4_bit_run_on_main_peaks_above_the_estimate_uncapped_and_trains_inside_it_capped(
+    models,
+):
+    # M4 re-run on origin/main a6f5e7246, after #2683 kept the embeddings and head in bf16.
+    # Uncapped, the allocated peak fell 674 MiB (2081 -> 1407) but reserved / allocated rose to
+    # 1.60 and the whole-card peak rose 62 MiB (2348 -> 2410): the estimate, priced at the
+    # default a bf16 card now gets, is 1.033 of the allocated peak, 0.83 of that whole-card peak
+    # and 0.91 with the pre-flight's 10% margin. That peak holds allocator cache the allocator
+    # gives back under pressure: with it capped at 1500 MiB the same run trains, the card shows
+    # 1646 MiB, and the estimate is 1.22 of that. These are the measured facts; neither number
+    # is a guarantee, and the clean-row pins above stop at #2683.
     row = _post_2683("M4")
     before = next(row for row in _BENCH_ROWS if row["quantization"] == "4bit")
     result = _priced(row)
@@ -356,11 +384,21 @@ def test_a_4_bit_run_on_current_main_has_no_margin_the_estimate_covers(models):
     reserved = row["max_memory_reserved_bytes"]
     assert 1.00 <= _allocated_terms(result) / allocated <= 1.07  # measured 1.033
     assert 0.80 <= total / device <= 0.86  # 0.831
-    assert 0.90 <= total * (1 + VRAM_SAFETY_MARGIN) / device < 1.0  # 0.914: below the peak
+    assert 0.90 <= total * (1 + VRAM_SAFETY_MARGIN) / device < 1.0  # 0.914
     assert 1.55 <= reserved / allocated <= 1.65  # 1.597, against 1.05 before #2683
     assert row["device_mib"] - round(reserved / MIB) == 162
     assert before["max_memory_allocated_bytes"] - allocated == pytest.approx(674 * MIB, abs=MIB)
     assert row["device_mib"] - before["device_mib"] == 62
+    trains = _capped("M4", "trains")
+    assert [capped["allocator_cap_mib"] for capped in trains] == [1500, 1700]
+    smallest = trains[0]
+    assert smallest["max_memory_allocated_bytes"] == allocated  # a cap changes no allocated peak
+    assert smallest["device_mib"] == 1646
+    assert row["device_mib"] - smallest["device_mib"] == 764  # MiB the allocator gave back
+    assert 1.15 <= total / (smallest["device_mib"] * MIB) <= 1.30  # 1.217
+    failed = _capped("M4", "oom")
+    assert [capped["allocator_cap_mib"] for capped in failed] == [1450]
+    assert "prepare_kbit_model" in failed[0]["failed_in"]  # before the first step
 
 
 def test_the_bf16_control_on_current_main_is_the_run_before_it(models):
@@ -369,6 +407,107 @@ def test_the_bf16_control_on_current_main_is_the_run_before_it(models):
     for key in ("max_memory_allocated_bytes", "max_memory_reserved_bytes", "device_mib"):
         assert control[key] == before[key], key
     assert _priced(control)["total_memory_bytes"] == _priced(before)["total_memory_bytes"]
+
+
+# --- 3b. the same runs with torch's allocator capped ---------------------------------------
+#
+# An uncapped peak includes blocks the allocator only caches and gives back when a request
+# would otherwise fail. Capping it (``torch.cuda.set_per_process_memory_fraction``) finds what a
+# run needs: the smallest cap that still trains, plus what the card holds outside torch.
+
+
+def test_the_capped_runs_are_recorded_as_measured():
+    assert {row["id"]: row["outcome"] for row in _CAPPED_ROWS} == {
+        "M4-cap-1700": "trains",
+        "M4-cap-1500": "trains",
+        "M4-cap-1450": "oom",
+        "M1-cap-2150": "trains",
+        "M1-cap-2200": "oom",  # a higher cap than the one that trained: one run per cap
+        "M3-cap-3300": "trains",
+        "M3-cap-3150": "trains",
+        "M6-cap-6000": "oom",
+        "M6-cap-5850": "oom",
+        "M6-cap-5700": "oom",
+    }
+    context = _context_mib()
+    for row in _CAPPED_ROWS:
+        uncapped = _UNCAPPED_ROWS[row["uncapped_row"]]
+        cap = row["allocator_cap_mib"] * MIB
+        assert row["tree"] == "origin/main a6f5e7246", row["id"]
+        assert row["device_clean"] and row["device_baseline_mib"] == 0, row["id"]
+        assert row["id"][:2] == uncapped["id"][:2], row["id"]
+        assert row["device_mib"] * MIB <= cap + context * MIB, row["id"]
+        if row["outcome"] == "trains":
+            reserved = row["max_memory_reserved_bytes"]
+            assert reserved <= cap, row["id"]
+            assert row["max_memory_allocated_bytes"] == pytest.approx(
+                uncapped["max_memory_allocated_bytes"], rel=0.002
+            ), row["id"]
+            if cap - reserved < 2 * MIB:  # the cap bound the run: the card shows cap + context
+                assert 146 <= row["device_mib"] - row["allocator_cap_mib"] <= context, row["id"]
+        else:
+            assert row["max_memory_allocated_bytes"] is None, row["id"]
+            assert row["max_memory_reserved_bytes"] is None, row["id"]
+            assert row["failed_in"], row["id"]
+    # The 594 MiB request of M6 is the contiguous copy of its shifted fp32 logits (2 rows x 511
+    # positions x the vocabulary x 4 bytes, in the allocator's 2 MiB blocks); the 4-bit
+    # preparation's is peft's fp32 upcast of the embedding table (the vocabulary x 1,024 x 4
+    # bytes), the same size by coincidence.
+    assert math.ceil(2 * 511 * 151936 * 4 / (2 * MIB)) * 2 == 594
+    assert math.ceil(151936 * 1024 * 4 / (2 * MIB)) * 2 == 594
+    blocks = {row["id"]: row["oom_block_mib"] for row in _CAPPED_ROWS if row["outcome"] == "oom"}
+    assert blocks == {
+        "M4-cap-1450": 594,
+        "M1-cap-2200": 76,
+        "M6-cap-6000": 594,
+        "M6-cap-5850": 594,
+        "M6-cap-5700": 594,
+    }
+
+
+def test_the_4_bit_preparation_leaves_no_cached_residue_to_give_back():
+    # allocated 514 / reserved 598 MiB when prepare_kbit_model returns, and empty_cache() there
+    # changes nothing, not even the run's peaks: the reserved memory above the allocated peak of
+    # the M4 run builds up during training, it is not left over from the cast.
+    probe = _DATA["kbit_probe"]
+    assert probe["after_prepare_kbit_model_mib"] == {"allocated": 514, "reserved": 598}
+    assert probe["after_empty_cache_mib"] == probe["after_prepare_kbit_model_mib"]
+    peaks = probe["peaks_with_and_without_empty_cache"]
+    row = _post_2683("M4")
+    assert peaks["identical_to_the_unprobed_run"] is True
+    assert peaks["max_memory_allocated_bytes"] == row["max_memory_allocated_bytes"]
+    assert peaks["max_memory_reserved_bytes"] == row["max_memory_reserved_bytes"]
+    assert peaks["device_mib"] == row["device_mib"]
+
+
+@pytest.mark.parametrize("prefix", ["M4", "M1", "M3"])
+def test_the_estimate_is_above_the_smallest_working_cap_plus_the_cuda_context(models, prefix):
+    # M4 (4-bit helpdesk): 2003 against 1500 + 162; M1 (bf16 helpdesk): 2728 against 2150 + 162;
+    # M3 (r64, 147-token rows): 3716 against 3150 + 162. Measured 1.205, 1.180 and 1.122.
+    smallest = _capped(prefix, "trains")[0]
+    need = (smallest["allocator_cap_mib"] + _context_mib()) * MIB
+    total = _priced(_UNCAPPED_ROWS[smallest["uncapped_row"]])["total_memory_bytes"]
+    assert 1.0 <= total / need <= 1.25, (prefix, total / need)
+    # The card never showed more than the cap and the context.
+    assert smallest["device_mib"] * MIB <= need
+
+
+def test_the_estimate_of_a_micro_batch_that_fills_512_tokens_is_below_caps_that_failed(models):
+    # M6, 1,024 tokens per micro-batch: fails at 5,700, 5,850 and 6,000 MiB (the logits copy),
+    # trains uncapped at 6,510 MiB on the card. Its need is between 6,162 and 6,510 MiB; the
+    # estimate is 5,930, below the highest cap that failed, so the 10% margin is what covers
+    # it: 6,523. This is the one measured case in which the estimate is below the need. A
+    # recalibrated estimate that covers it makes this test the one to rewrite.
+    failed = _capped("M6", "oom")
+    assert [row["allocator_cap_mib"] for row in failed] == [5700, 5850, 6000]
+    assert _capped("M6", "trains") == []
+    uncapped = _UNCAPPED_ROWS[failed[0]["uncapped_row"]]
+    total = _priced(uncapped)["total_memory_bytes"]
+    highest = failed[-1]["allocator_cap_mib"]
+    assert total < highest * MIB, total / MIB
+    assert total < (highest + _context_mib()) * MIB
+    assert (highest + _context_mib()) * MIB < uncapped["device_mib"] * MIB  # it trains at 6,510
+    assert total * (1 + VRAM_SAFETY_MARGIN) >= (highest + _context_mib()) * MIB
 
 
 @pytest.mark.parametrize(
