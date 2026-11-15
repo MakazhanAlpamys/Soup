@@ -47,11 +47,11 @@ def _deps():
     return torch, bnb
 
 
-def _nf4(torch, bnb, in_features, out_features):
+def _nf4(torch, bnb, in_features, out_features, *, bias=False):
     layer = bnb.nn.Linear4bit(
         in_features,
         out_features,
-        bias=False,
+        bias=bias,
         compute_dtype=torch.float16,
         quant_type="nf4",
     )
@@ -103,8 +103,11 @@ def _reference(torch, bnb, layer, x):
     functional = torch.nn.functional
     base = layer.get_base_layer()
     dense = bnb.functional.dequantize_4bit(base.weight, base.weight.quant_state)
+    # bitsandbytes' Linear4bit adds the bias in the compute dtype, so the
+    # bias follows the base matmul and not the input dtype.
+    bias = base.bias.to(base.compute_dtype) if base.bias is not None else None
     out = functional.linear(
-        x.to(base.compute_dtype), dense.to(base.compute_dtype)
+        x.to(base.compute_dtype), dense.to(base.compute_dtype), bias
     ).to(x.dtype)
     adapter = layer.active_adapters[0]
     lora_a = layer.lora_A[adapter].weight
@@ -306,6 +309,69 @@ def test_shared_x_qkv_keeps_pefts_dtype_boundary(dtype_name, aten_half_matmuls):
     hits, grad_fns = getattr(model.attn, "_soup_fast_lora_qkv_last_cache_hits")
     assert hits == 2
     assert grad_fns == ("_FastLoraQKVBackward",) * 3
+
+    for part, wanted in zip(got, want):
+        assert _rel(part, wanted) <= _REL
+    _assert_adapter_grads_match(model, reference)
+    _assert_input_grad_matches(x, x_ref)
+
+
+@pytest.mark.parametrize("dtype_name", ["float32", "bfloat16"])
+def test_shared_x_qkv_with_bias_keeps_the_bias_in_the_compute_dtype(
+    dtype_name, aten_half_matmuls
+):
+    """A 4-bit projection with a bias: the bias belongs to the base matmul.
+
+    The base runs in bitsandbytes' compute dtype, so an fp32 bias added to an
+    fp16 product is a dtype mismatch in ``F.linear``. The bias follows the
+    compute dtype, as bitsandbytes' ``Linear4bit`` does, and the reference
+    casts it the same way.
+    """
+    torch, bnb = _deps()
+    import torch.nn as nn
+
+    from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv
+
+    class Attention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.q_proj = _nf4(torch, bnb, 16, 16, bias=True)
+            self.k_proj = _nf4(torch, bnb, 16, 8, bias=True)
+            self.v_proj = _nf4(torch, bnb, 16, 8, bias=True)
+
+        def forward(self, x):
+            return self.q_proj(x), self.k_proj(x), self.v_proj(x)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = Attention()
+
+        def forward(self, x):
+            return self.attn(x)
+
+    torch.manual_seed(0)
+    model = _adapt(torch, bnb, Model(), ["q_proj", "k_proj", "v_proj"])
+    reference = copy.deepcopy(model)
+    dtype = getattr(torch, dtype_name)
+    x0 = (torch.randn(3, 5, 16) * _SCALE).to(dtype)
+    probes = [
+        torch.randn(3, 5, width, dtype=torch.float64) for width in (16, 8, 8)
+    ]
+
+    x_ref = x0.clone().requires_grad_(True)
+    attn = reference.attn
+    want = [
+        _reference(torch, bnb, getattr(attn, name), x_ref)
+        for name in ("q_proj", "k_proj", "v_proj")
+    ]
+    _probe_loss(want, probes).backward()
+
+    assert patch_fast_lora_qkv(model) == 1
+    x = x0.clone().requires_grad_(True)
+    got = model(x)
+    assert all(part.dtype == dtype for part in got)
+    _probe_loss(got, probes).backward()
 
     for part, wanted in zip(got, want):
         assert _rel(part, wanted) <= _REL
