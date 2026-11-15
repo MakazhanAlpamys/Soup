@@ -169,6 +169,65 @@ No default `top_k`, polynomial/residual compression, or â€œminimal quality lossâ
 be introduced until dense-vs-sparse reconstruction and downstream ablations cover the
 actual model pair, dtype, backend, and task mix.
 
+### 5.1 Proposed differentiable student objective
+
+The internal `soup_cli.autodistill.student_loss.captured_token_loss` prototype computes
+the v1 coarse-tail objective with Torch autograd. It is a numerical building block for
+a proposed student-consumer slice, not a cache reader, training controller, CLI command,
+or approved `SoupConfig` surface. Importing the module loads no ML runtime.
+
+Its inputs are validated teacher-expert `CaptureToken` rows and student logits of shape
+`[captured_tokens, vocabulary]`. Each logit row must predict the token after exactly the
+context recorded in the corresponding capture. Prompt-only, padding and unsupervised
+positions must already be excluded by the caller. Student-rollout rows are refused.
+
+The objective is:
+
+```text
+CE   = mean(token positions, -log softmax(student_logits)[target])
+KD   = mean(token positions, D_tail(P_temperature || Q_temperature))
+loss = ce_weight * CE + kd_weight * KD
+```
+
+Weights and the token chunk size are explicit; at least one loss weight must be positive.
+CE uses temperature 1. KD uses the temperature stored in each capture, with no implicit
+temperature-squared multiplier. The caller may choose that scaling in its explicit weight.
+The returned `ce`, `kd` and `total` are token means and `token_count` is their denominator.
+For unequal microbatches, backpropagate each mean multiplied by
+`microbatch_token_count / accumulation_window_token_count`. Averaging microbatch means
+without that factor changes the objective.
+
+The student tail is computed with logsumexp over omitted logits, rather than subtracting
+selected probability from one. This preserves finite results and gradients when a confident
+student's selected mass rounds to one. Full-vocabulary rows must have zero tail mass;
+their KD equals dense forward KL. Smaller selections retain the coarse-bucket meaning of
+section 5 and are not dense-KD equivalence claims. Half/bfloat16 logits use float32 objective
+arithmetic; float64 is retained for numerical oracles. Non-finite inputs or unrepresentable
+objectives are refused. Logits are centered before normalization so that a large
+common offset does not change probabilities or gradients.
+
+Optional non-reentrant checkpointing recomputes objective chunks in backward. The small
+CPU storage test measures autograd-retained objective tensors excluding the input logits;
+it is not a peak-RAM/VRAM or throughput measurement. The caller still materializes student
+logits and model activations. No dense teacher tensor is constructed by this objective.
+
+A later consumer must verify available-manifest chains, exact cache and model/tokenizer/data
+identities, completed teacher-process exit, and reservation/checkpoint/replay state before
+calling this function. This prototype does not establish those boundaries or qualify
+Apple Silicon, real pretrained-model quality, resumable training, or the adaptive loop.
+
+Five CUDA-marked numerical and tiny-student update cases skip on hosts without CUDA:
+
+```bash
+pytest -m gpu --no-cov tests/test_autodistill_student_loss.py -q
+```
+
+The [2026-11-02 CUDA record](../benchmarks/autodistill-student-cuda-2026-11-02.md)
+reports all five passing on an RTX 3090. The full file run passed all 52 cases
+present at the time, with zero skips. The GPU cases use float64 student logits/backbones;
+reduced-precision GPU training and the full cache-to-training workflow remain outside
+that qualification.
+
 ## 6. Teacher fidelity tiers
 
 BF16 teacher inference is preferred when it fits, but it cannot be required universally.

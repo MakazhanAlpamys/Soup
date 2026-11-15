@@ -27,7 +27,6 @@ training:
   optimizer: adamw_torch
   scheduler: cosine
   gradient_checkpointing: true
-  warmup_auto: true
   auto_mixed_precision: true
   lora:
     r: 8

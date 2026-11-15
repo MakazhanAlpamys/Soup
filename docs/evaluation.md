@@ -269,11 +269,21 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+`soup eval gate` refuses YAML booleans such as `false` and `true` before model
+construction; use numeric `0` when a zero cutoff is intended.
+
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
 handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
+
+`training.eval_gate.baseline: previous` is not implemented and is refused when the
+config loads; use a path to a baseline results file instead. A baseline set in
+`training.eval_gate` that cannot be resolved (a missing or invalid file, an unknown
+`registry://` reference) stops `soup train` when training starts, with an error naming
+`training.eval_gate.baseline`, instead of running the gate with no baseline (#2523).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
@@ -831,6 +841,92 @@ Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
 
+### Adapter update size, and what it does not tell you (#2762)
+
+A `soup ship --adapter ./out` run prints one more line beside the verdict: how much of
+the base the adapter's merged update actually changes.
+
+```text
+Adapter update: changes 8,534,916 of 1,310,195,712 elements of its 196 target modules
+in the base dtype (bfloat16), fraction 6.514e-03.
+Warning: the adapter changes fewer than 1% of the elements of its target modules
+(6.514e-03 < 1e-02). Adapters trained with a near-zero learning rate sit in this range,
+and so can an early checkpoint of a real run. This line does not change the verdict.
+```
+
+The number is the share of the elements of the adapter's **target modules** whose value
+differs from the base weight once the LoRA update is added in the **base's own dtype**,
+with the same arithmetic `soup merge --low-memory` writes. Values are compared, not bits:
+adding a zero contribution turns `-0.0` into `+0.0`, which is not a change, and a `NaN`
+that stays `NaN` is not one either. Only the base tensors the adapter targets are read,
+one at a time (memory-mapped); the model itself is not loaded, so the count adds roughly
+the time it takes to read those tensors and nothing else — **about 14 s** for the
+Qwen2.5-1.5B / 196-module case above, 0.1–17 s across the table below by module count.
+A 7B-class base and the peak memory are **not measured**: the count streams the base, reading
+one target tensor at a time and forming each update in float32 (the arithmetic
+`lowmem_merge.merged_tensor` uses), so the peak is one tensor's float32 copy on top of that
+tensor, not the model.
+
+The line is **display only**. It never changes the verdict, `failed_rule` or the exit
+code, and it is not part of the `--evidence` schema, so a verdict still replays as input
+exactly as before. An adapter the low-memory reader refuses to parse — DoRA, `bias`
+other than `none`, `modules_to_save`, embedding or `lm_head` targets, a non-LoRA PEFT
+type — prints `Adapter update: not measured (<reason>)` instead, so "no number" is never
+shown as "0 %". The warning line is added only when the fraction is **below `1e-2`**.
+
+**Why a warning and not a rule.** The instrument was calibrated by training seven runs
+with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
+checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
+fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
+interleave:
+
+| adapter | kind | changed fraction (base dtype) | fp16 merge |
+|---|---|---|---|
+| control r16 lr 1e-8, step 10 | control | 3.56e-05 … 6.52e-04 | 0 … 4.74e-03 |
+| control r16 lr 1e-7, step 10/50/190 | control | 4.66e-04 … **6.51e-03** | 3.13e-03 … 5.17e-02 |
+| lowlr r16 lr 2e-6, step 5 | real, lr/100 | **2.47e-03** … 1.03e-01 | 1.96e-02 … 5.37e-01 |
+| lowlr r16 lr 2e-5, step 5 … 190 | real, lr/10 | 2.46e-02 … 2.81e-01 | 1.85e-01 … 8.01e-01 |
+| real r16 lr 2e-4, step 2 … 190 | real | 2.66e-02 … 7.25e-01 | 1.99e-01 … 9.61e-01 |
+| low-rank r1 q / r2 v, lr 2e-4 | real, low rank | 8.45e-02 … 7.79e-01 | 4.84e-01 … 9.67e-01 |
+| 9 public LoRA adapters, 7 bases | public | 5.07e-01 … 9.88e-01 | 9.12e-01 … 9.85e-01 |
+
+The highest control (**6.51e-03**, lr 1e-7 at step 190) sits *above* the lowest real
+adapter (**2.47e-03**, lr 2e-6 at step 5) by less than a factor of three, and the real
+family spans 2.5e-3 → 0.99. **No fraction separates "changes nothing" from "changes
+something"**, so the number cannot be a pass/fail rule and the threshold is chosen as a
+round warning bound rather than calibrated. A short follow-up on the same rows found the
+same thing for behaviour: the NLL gain (and the fraction of greedy tokens whose argmax
+moves) stays near zero and its 95 % CI straddles 0 across the whole control band *and*
+the lowest real band, only becoming clearly positive past ~0.06 — which is itself inside
+the real family, not a boundary. The fp16 column is the fraction when the same update is
+merged in fp16 instead of the base dtype; it is much larger for the same adapter, which
+is why the printed number is always the base dtype's, and why a control that changes
+"0" weights in fp16 still changes weights in bf16.
+
+**Read it as a smell, not a verdict.** A fraction below `1e-2` says the adapter is an
+early checkpoint, or was trained with a near-zero learning rate, or targets very few
+modules — worth a second look before shipping. The existing `adapter_noop` rule (every
+`lora_B` zero, no other saved tensor non-zero) still runs first and still gives
+DON'T SHIP; this line only ever *adds* information beside whatever verdict those rules
+produced.
+
+**In the verdict JSON.** A live `--adapter` run adds one field to the `--output` object:
+
+```json
+"adapter_change": {
+  "measured": true, "fraction": 9e-3, "changed": 9, "elements": 1000, "modules": 1,
+  "base_dtypes": ["bfloat16"], "warn_below": 0.01, "warning": true, "reason": null
+}
+```
+
+`fraction` is `null` when the count cannot be made (`measured` is `false` and `reason`
+says why), and `warning` is `fraction < warn_below`. A live run **without** `--adapter`,
+and an offline `--evidence` run, emit `adapter_change: null`. The field is not read back by
+`verdict_to_evidence`, so a verdict still replays as input exactly as before.
+
+The table above is the calibration record; the raw per-adapter JSON is not shipped in this
+repository.
+
 
 ## Retention across versions: `soup eval retention`
 
@@ -1065,6 +1161,8 @@ print(report.delta_status, report.mean_kl)
 The kernel is pure-math, evaluates stable log-probabilities using log-softmax
 without artificial probability flooring, and is capped at 10 000 prompts to
 defend against accidental OOM. `CalibrationReport` is a frozen dataclass.
+SDK logits and mean-KL inputs that cannot be represented as finite floats,
+including oversized Python integers, raise a field-specific `ValueError`.
 
 
 ## Model Arena (Elo Tournament)
@@ -1140,6 +1238,13 @@ unusable reply rather than a transient outage: it is not retried. The error name
 the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
 with credentials removed from the judge URL. Existing row-failure policies apply.
 
+Rubric files supplied to `soup eval judge --rubric` and
+`training.grpo_judge_rubric` require unique criterion names after trimming
+surrounding whitespace and ignoring case. In v0.78.0, previously accepted
+duplicate names are refused when the file is loaded. Rename or remove the
+duplicate. The eval CLI exits `1` before sending a judge request, and GRPO
+ranking rejects the rubric at trainer setup.
+
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
 the saved banner reports the saved count. It exits `0` when at least one result was
@@ -1147,6 +1252,17 @@ saved, or `1` when nothing was measured or saved. A requested group needs its ow
 numeric entry in `results`; this command does not save its sub-task rows automatically.
 
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
+
+With `--rubric`, `soup eval judge` exits `1` before sending a request if a weight
+is non-finite or non-numeric. The error names the rubric, criterion and value.
+Weighted and aggregate means use an overflow-safe fallback when intermediate totals
+overflow; calculations whose totals stay finite retain their existing rounding.
+Zero or negative total weights keep the existing zero result. If a signed-weight
+mean is unrepresentable, the command skips that row with
+`Warning: judge failed for prompt: Weighted judge score must be finite`.
+It exits `1` if every row fails. In the SDK, `JudgeResults.compute()` raises
+`ValueError` for non-finite aggregate input. Ranking rubrics still ignore weights.
+Re-evaluate any previously saved scores affected by overflow before reusing them.
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
@@ -1243,6 +1359,53 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
+
+#### Compare generation performance in the same report
+
+Use `--performance` to add latency, generated tokens/s and CUDA allocated peak
+alongside the existing quality verdict, with before/after percentage changes:
+
+```bash
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --device cuda:0 --format json
+
+# Defaults: one unscored warm-up, three measured generations of every task prompt.
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --performance-warmup 1 \
+  --performance-repeats 5 --device cpu --format markdown
+```
+
+This path loads, warms, measures and releases the first model before loading
+the second. It pins one device: `auto` selects CUDA when available, otherwise
+CPU; explicit `cpu`, `cuda`, `cuda:<index>` and `mps` are supported. It uses the
+same inference dtype policy as `soup infer` (FP32 on CPU, FP16 on CUDA/MPS),
+and records the actual model dtype/device. The quality-only command keeps its
+existing loading behavior. Both sides use greedy decoding, at most 256 new
+tokens per call, and the same task prompts. Only the first measured answer per
+task contributes to quality; the other repeats measure performance. The first
+task prompt supplies the unscored warm-ups. `--allow-stub` is incompatible with
+`--performance` because stubs cannot supply model performance measurements.
+
+Latency includes tokenization, input transfer, generation and text decoding,
+with the selected accelerator synchronized at both boundaries. Loading is
+outside that timer. Generated token/s uses the actual new token IDs, including
+EOS, divided by total measured generation time; different answer lengths can
+therefore change both latency and throughput. CUDA memory is this process's
+allocated peak across measured generations after warm-up, including resident
+weights and generation buffers. It excludes loading/warm-up transients and
+allocator-reserved bytes. CPU/MPS memory is reported as `null` in JSON and
+`N/A` in tables, rather than a zero-byte footprint.
+
+The optional JSON `performance` object includes the raw per-task latency/token
+samples and the mean suite latency for each repeat. The report labels overlap
+between the two observed repeat ranges; small differences inside that spread
+may be noise. This is a descriptive within-model repeat check, not a confidence
+interval or a comparison of independent model-loading runs. With one repeat,
+noise cannot be estimated (`latency_ranges_overlap: null`). Use several
+representative prompts and additional independent runs for conclusions about
+speed. Performance remains informational: **quality alone determines exit 2**.
+The table, JSON and markdown all include this additional result only when
+`--performance` is enabled.
 
 ### Custom Eval Format
 
@@ -1365,7 +1528,11 @@ The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
 integers beyond float range) with a named `ValueError` after existing report
 errors; finite custom limits and equality boundaries are unchanged (#2467).
 
-The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
+The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent. A report claiming `calibrated=True` must have `num_pairs >= 1`; a zero-pair calibrated report is refused with a `ValueError` (#2496).
+
+Conformal scores, `alpha`, and the report's three floating fields also reject
+integers beyond float range with a named `ValueError`, including when a persisted
+report is loaded; representable values keep the existing range checks.
 
 Persist a calibration once and reuse it across runs (v0.71.1): `write_judge_calibration(report, "calib.json")` writes a cwd-contained JSON, and `load_judge_calibration("calib.json")` re-validates it on load (a corrupt or out-of-range field on disk is rejected, since it's the production-gate safety net). The artifact attaches to the registry under the new `judge_calibration` kind.
 
