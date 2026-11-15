@@ -65,6 +65,21 @@ def _as_dtype(tensor: Any, dtype: Any) -> Any:
     return tensor if tensor.dtype == dtype else tensor.to(dtype)
 
 
+def _projection_compute_dtype(
+    qmeta: dict[str, Any] | None, fallback: Any
+) -> Any:
+    """Return the bnb compute dtype for one projection, or ``fallback``.
+
+    Dense projections have no QuantState, so their base matmul stays in the
+    activation dtype. Quantized projections carry the dtype in their qmeta;
+    ``fallback`` covers old callers and a QuantState without one.
+    """
+    if qmeta is None:
+        return fallback
+    dtype = qmeta.get("_compute_dtype")
+    return fallback if dtype is None else dtype
+
+
 def _scaled_lora_add(out: Any, hidden: Any, lora_b: Any, scaling: float) -> Any:
     """Add a LoRA update with PEFT's promote, add, then cast semantics."""
     import torch
@@ -266,6 +281,9 @@ def _projection_state(
         qparts, qmeta = _quant_state_parts(qstate)
         qmeta = dict(qmeta)
         qmeta["_count"] = len(qparts)
+        # The fast kernels keep PEFT's dtype boundary; carry the bnb compute
+        # dtype with the quant metadata so they do not recast X wholesale.
+        qmeta["_compute_dtype"] = compute_dtype
 
     if adapter is None:
         lora_a = x.new_empty(0)
@@ -354,6 +372,11 @@ def _single_projection_function() -> Any:
         per-block tensors. The forward dequantises for the base matmul only;
         the backward rebuilds the ``QuantState`` from the saved tensors and
         dequantises again for ``dX``.
+
+        Dtype boundary: the base matmul runs in the QuantState compute dtype
+        and returns to the input dtype before the LoRA add. The backward
+        follows bitsandbytes: the base ``dX`` GEMM casts its gradient to the
+        compute dtype, then returns to the input dtype before the LoRA term.
         """
 
         @staticmethod
@@ -376,14 +399,22 @@ def _single_projection_function() -> Any:
             else:
                 from bitsandbytes.functional import dequantize_4bit
 
+                # The base matmul runs in bitsandbytes' compute dtype, but the
+                # residual add returns to the input dtype as PEFT's Linear4bit
+                # does; casting X wholesale first loses LoRA input precision.
+                base_dtype = getattr(quant_state, "compute_dtype", None) or x.dtype
+                base_x = x if x.dtype == base_dtype else x.to(base_dtype)
                 # Transient on purpose: under streaming this dense matrix would
                 # alias a pool slot, so it must not outlive the call.
-                dense = dequantize_4bit(weight, quant_state).to(x.dtype)
+                dense = dequantize_4bit(weight, quant_state).to(base_dtype)
                 out = functional.linear(
-                    x, dense, _as_dtype(bias, x.dtype) if bias is not None else None
-                )
-                del dense
+                    base_x, dense,
+                    _as_dtype(bias, base_dtype) if bias is not None else None,
+                ).to(x.dtype)
+                del base_x, dense
                 qs_tensors, qs_meta = _quant_state_parts(quant_state)
+                qs_meta = dict(qs_meta)
+                qs_meta["_compute_dtype"] = base_dtype
                 ctx.save_for_backward(
                     x,
                     weight,
@@ -428,28 +459,36 @@ def _single_projection_function() -> Any:
 
             grad_x = None
             if ctx.needs_input_grad[0]:
+                # Match bitsandbytes' MatMul4Bit backward: the base dX GEMM
+                # runs in the compute dtype because grad_out passes back
+                # through Linear4bit's `.to(inp_dtype)` before it. The LoRA
+                # contribution stays in the input dtype, then the two are
+                # added there as PEFT's result + output does.
+                base_dtype = _projection_compute_dtype(ctx.qmeta, grad_out.dtype)
                 if ctx.qmeta is None:
-                    dense = weight
+                    dense = _as_dtype(weight, base_dtype)
                 else:
                     from bitsandbytes.functional import dequantize_4bit
 
                     quant_state = _rebuild_quant_state(ctx.qmeta, list(saved[ctx.qstart :]))
-                    dense = dequantize_4bit(weight, quant_state).to(x.dtype)
+                    dense = dequantize_4bit(weight, quant_state).to(base_dtype)
 
                 # dX = dY @ W, plus the LoRA term accumulated into the same
                 # result: one add instead of separate dH @ A and sum
                 # allocations. Skipped entirely when X needs no grad, which
                 # recovers the 2x the unskipped dX GEMM costs on a layer-0
                 # projection.
-                grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
+                grad_base = torch.matmul(_as_dtype(grad_out, base_dtype), dense)
+                grad_base = _as_dtype(grad_base, grad_out.dtype)
                 grad_lora = torch.matmul(
-                    _as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)
+                    _as_dtype(grad_h, grad_base.dtype),
+                    _as_dtype(lora_a, grad_base.dtype),
                 )
                 # The LoRA branch read the dropped input, so its gradient takes
                 # the mask and the 1/(1-p) rescale on the way back to X.
                 if keep is not None:
                     grad_lora = grad_lora * keep / (1.0 - ctx.dropout_p)
-                grad_x = torch.add(grad_x, grad_lora)
+                grad_x = torch.add(grad_base, grad_lora)
             return grad_x, None, None, grad_a, grad_b, None, None, None, None
 
     _FUNCTION = _FastLoraSingleProjection
@@ -472,23 +511,24 @@ def _make_patched_forward(original_forward: Any, *, allow_dropout: bool = False)
         if state is None:
             return original_forward(x)
 
-        input_dtype = x.dtype
-        work_x = x
-        if state.compute_dtype is not None and work_x.dtype != state.compute_dtype:
-            work_x = work_x.to(state.compute_dtype)
+        quant_state = (
+            None if state.qmeta is None else _rebuild_quant_state(state.qmeta, state.qparts)
+        )
+        if quant_state is not None and state.compute_dtype is not None:
+            quant_state.compute_dtype = state.compute_dtype
 
         out = fast.apply(
-            work_x,
+            x,
             state.weight,
             state.bias,
             state.lora_a,
             state.lora_b,
             state.scaling,
-            None if state.qmeta is None else _rebuild_quant_state(state.qmeta, state.qparts),
+            quant_state,
             state.dropout_p,
             state.dropout_training,
         )
-        return out if work_x is x else out.to(input_dtype)
+        return out
 
     setattr(_fast_lora_single_forward, _FORWARD_OWNER_MARKER, _OWNER)
     return _fast_lora_single_forward

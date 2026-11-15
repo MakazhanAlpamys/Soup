@@ -124,6 +124,15 @@ The native decoder and LoRA path are checked with the public configuration on
 meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
 GPU memory use and reward quality need separate validation.
 
+`soup recipes use qwen3.5-9b-pretrain` selects `Qwen/Qwen3.5-9B-Base` for continued
+pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the shipped
+`qwen3.5-4b-pretrain` row's, inherited and not tuned for 9B: one epoch, `lr: 1e-4`,
+`batch_size: auto`, eight accumulation steps, LoRA rank 32 / alpha 64 on
+`target_modules: auto`, 4-bit quantization and a 4096-token limit. The config's native
+text architecture and LoRA attachment are checked on the meta device, with a tiny random
+decoder's forward/backward pass checked on CPU. Full-weight training, NF4 execution, a
+real pre-training run and memory fit are not checked.
+
 `soup recipes use qwen3.5-2b-pretrain` selects `Qwen/Qwen3.5-2B-Base` for continued
 pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the shipped
 `qwen3.5-4b-pretrain` row's, inherited and not tuned for 2B: one epoch, `lr: 1e-4`,
