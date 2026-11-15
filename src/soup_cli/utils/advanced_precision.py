@@ -16,8 +16,9 @@ v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 * :func:`apply_fp8_attention` converts the attention-projection linears to
   torchao ``Float8Linear`` training modules (the shared FP8 gate, SM >= 8.9; #835).
 * :func:`apply_nvfp4` routes the model through torchao's
-  ``NVFP4TrainingConfig`` (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
-  SM 12.0 consumer RTX 50-series).
+  ``NVFP4TrainingConfig`` (gate: SM 10.0 / 10.3, the datacenter Blackwell parts
+  B200/GB200 and B300/GB300; the SM 12.x cards are Blackwell too, but cannot
+  compile the recipe's backward pass, see ``_NVFP4_TRAINING_CAPABILITIES``).
 
 Both raise friendly ``RuntimeError`` on missing hardware / torchao instead
 of silently no-opping. ``utils/v028_features.apply_v028_speed_memory`` lets
@@ -46,6 +47,16 @@ _ATTENTION_PROJ_NAMES: frozenset[str] = frozenset({
 # datacenter) and SM 12.0 (RTX 50-series consumer). Anything >= 10 is
 # Blackwell-family; Hopper is SM 9.x.
 _BLACKWELL_MIN_CC_MAJOR = 10
+
+# The cards torchao's NVFP4 *training* recipe can run on, which is not every
+# Blackwell card (#2867). Its backward pass quantises the gradients with
+# stochastic rounding, the PTX instruction ``cvt.rs.satfinite.e2m1x4.f32``.
+# ptxas (CUDA 12.9, the one triton 3.6 ships) assembles it for sm_100a and
+# sm_103a and refuses it for sm_101a, sm_120a and sm_121a: "Feature '.rs' not
+# supported on .target 'sm_120a'". So on an RTX 50-series or RTX PRO Blackwell
+# card (SM 12.0) or a DGX Spark (SM 12.1) the model converts, the forward
+# runs, and the first backward fails to compile.
+_NVFP4_TRAINING_CAPABILITIES: frozenset[tuple[int, int]] = frozenset({(10, 0), (10, 3)})
 
 #: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).
 UNSLOTH_PRECISION_INCOMPATIBLE_REASON: str = "unsloth uses its own fused kernels"
@@ -76,6 +87,55 @@ def is_blackwell_gpu() -> bool:
         return major >= _BLACKWELL_MIN_CC_MAJOR
     except (ImportError, RuntimeError, AssertionError):
         return False
+
+
+def _cuda_capability() -> tuple[int, int] | None:
+    """GPU 0's compute capability, or None when it cannot be read."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        major, minor = torch.cuda.get_device_capability(0)
+        return int(major), int(minor)
+    except (ImportError, RuntimeError, AssertionError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def nvfp4_training_refusal() -> str | None:
+    """Why this machine cannot run torchao's NVFP4 training, or None when it can.
+
+    Not Blackwell (:func:`is_blackwell_gpu`): refused as before. A Blackwell
+    capability outside ``_NVFP4_TRAINING_CAPABILITIES``: refused, naming it. This
+    only narrows the family :func:`is_blackwell_gpu` answered for; a capability
+    that cannot be read here, or that is not a Blackwell one, does not re-decide
+    that answer, so only a Blackwell card that can be named is refused.
+    """
+    if not is_blackwell_gpu():
+        return (
+            "NVFP4 training requires a datacenter Blackwell GPU (B200/GB200 at "
+            "SM 10.0 or B300/GB300 at SM 10.3); no Blackwell device detected."
+        )
+    capability = _cuda_capability()
+    if (
+        capability is None
+        or capability[0] < _BLACKWELL_MIN_CC_MAJOR
+        or capability in _NVFP4_TRAINING_CAPABILITIES
+    ):
+        return None
+    major, minor = capability
+    return (
+        f"NVFP4 training does not run on this SM {major}.{minor} card: torchao's "
+        "NVFP4 backward rounds gradients stochastically (cvt.rs), which only "
+        "SM 10.0 (B200/GB200) and SM 10.3 (B300/GB300) have; on SM 12.x "
+        "(RTX 50-series, RTX PRO Blackwell, DGX Spark) its first backward fails "
+        "to compile."
+    )
+
+
+def is_nvfp4_training_gpu() -> bool:
+    """Return True when GPU 0 can run torchao's NVFP4 training kernels."""
+    return nvfp4_training_refusal() is None
 
 
 def _is_float8_linear(module: object) -> bool:
@@ -333,8 +393,9 @@ def apply_nvfp4(model: object) -> int:
     """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
 
     Live since v0.71.21 (#141). Routes through torchao's
-    ``NVFP4TrainingConfig``, gated on a Blackwell GPU (SM 10.0 datacenter /
-    SM 12.0 consumer). Deliberately NOT the config the v0.53.1
+    ``NVFP4TrainingConfig``, gated on the Blackwell cards that can compile its
+    backward pass, SM 10.0 and SM 10.3 (:func:`nvfp4_training_refusal`; an SM
+    12.x card is refused, #2867). Deliberately NOT the config the v0.53.1
     ``soup export --format torchao`` path uses: that one is post-training
     weight quantization, while this flag promises quantised training.
     ``soup_cli/utils/torchao_compat.py`` holds both, and where each lives.
@@ -345,16 +406,15 @@ def apply_nvfp4(model: object) -> int:
 
     Raises:
         TypeError: ``model`` is None.
-        RuntimeError: non-Blackwell GPU, torchao missing, or no candidate
-            module in ``torchao_compat`` defines ``NVFP4TrainingConfig``.
+        RuntimeError: non-Blackwell GPU, an SM 12.x Blackwell card, torchao
+            missing, or no candidate module in ``torchao_compat`` defines
+            ``NVFP4TrainingConfig``.
     """
     if model is None:
         raise TypeError("model must not be None")
-    if not is_blackwell_gpu():
-        raise RuntimeError(
-            "NVFP4 requires a Blackwell GPU (B100/B200/GB200 at SM 10.0 or "
-            "RTX 50-series at SM 12.0); no Blackwell device detected."
-        )
+    refusal = nvfp4_training_refusal()
+    if refusal is not None:
+        raise RuntimeError(refusal)
     # #826: torchao never exported NVFP4Config. The class that does what this
     # flag promises is NVFP4TrainingConfig, whose docstring says it "replaces
     # nn.Linear modules with NVFP4Linear, which quantizes all three GEMMs

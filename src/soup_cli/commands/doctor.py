@@ -602,8 +602,8 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     """Return hardware/software support for the reported precision features."""
     from soup_cli.utils.advanced_precision import (
         _torchao_available,
-        is_blackwell_gpu,
         is_nvfp4_software_supported,
+        is_nvfp4_training_gpu,
     )
     from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
@@ -620,7 +620,9 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     return {
         "BF16": (bf16_supported, None),
         "FP8": (bool(is_fp8_gpu_supported()), torchao_available),
-        "NVFP4": (bool(is_blackwell_gpu()), nvfp4_software),
+        # #2867: the cards torchao's NVFP4 training compiles for (SM 10.0 / 10.3),
+        # not every Blackwell card: SM 12.x cannot build its backward pass.
+        "NVFP4": (bool(is_nvfp4_training_gpu()), nvfp4_software),
     }
 
 
