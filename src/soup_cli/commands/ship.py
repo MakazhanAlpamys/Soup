@@ -32,6 +32,7 @@ non-bundled name routes through the existing lm-eval runner.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import replace
@@ -44,6 +45,7 @@ from typing import (
     NoReturn,
     Optional,
     Tuple,
+    TypeVar,
 )
 
 import typer
@@ -63,8 +65,19 @@ from soup_cli.utils.exit_codes import (
 from soup_cli.utils.exit_codes import (
     GateGroup,
 )
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    ensure_distinct_paths,
+)
 from soup_cli.utils.ship_progress import group, jsonl_command
+from soup_cli.utils.ship_task_rows import (
+    build_task_rows,
+    ensure_replaceable,
+    row_mean,
+    task_rows_path,
+    write_task_rows,
+)
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
@@ -104,6 +117,8 @@ from soup_cli.utils.ship_verdict import (
 
 console = Console()
 
+_T = TypeVar("_T")
+
 app = typer.Typer(cls=GateGroup, no_args_is_help=False)
 
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
@@ -125,6 +140,10 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # lm-eval override defaults (kept minimal; the override is for users who
 # already run lm-eval — they can tune via a future flag if needed).
 _LM_EVAL_BATCH_SIZE = 1
+
+# The judge scorer rebuilds a leg's number as the mean of its per-row scores only when that is the
+# number the evaluator reported to this tolerance (they differ by float noise, never by more).
+_ROW_MEAN_TOLERANCE = 1e-9
 
 # Bounds on the leg-2 general suite (DoS / input-hygiene guards).
 _MAX_SUITE_BENCHMARKS = 50
@@ -664,28 +683,51 @@ def _metric_leg_score(results: "EvalResults") -> LegScore:
         row_scores=tuple(1.0 if row.matched else 0.0 for row in rows),
         truncated=tuple(truncation_of(row.output) for row in rows),
         failures=sum(1 for row in rows if row.failed),
+        # what the per-row file keeps: the answer each row was scored on (``""`` for a failed
+        # generation), which rows failed, and the tasks behind them
+        answers=tuple(row.output for row in rows),
+        failed_rows=tuple(row.failed for row in rows),
+        tasks=tuple(row.task for row in rows),
     )
 
 
 def _task_detail_or_none(
-    build: Callable[[], Optional[TaskDetail]],
-) -> Optional[TaskDetail]:
-    """The task detail, or ``None`` and one dim line when it cannot be built.
+    build: Callable[[], Optional[_T]], label: str = "Task detail (rows, truncation)",
+) -> Optional[_T]:
+    """What ``build`` makes, or ``None`` and one dim line when it cannot be built.
 
     Display only (the pattern of #2762): the detail decides nothing, so a failure to build it (a
     per-row judge score that is None or not finite, a flag of the wrong type) must not end a run
     that has its verdict. Only the type of the error is printed, its text may carry model output.
     The refusal of a side whose every generation failed is NOT built in here: it is raised by
     ``_refuse_a_dead_side`` before the detail is built, so this wrapper cannot swallow it.
+    ``label`` names what was left out (the per-row records use it too).
     """
     try:
         return build()
     except Exception as exc:  # display only: no failure here may end the run
         console.print(
-            "[dim]Task detail (rows, truncation) could not be built and is left out: "
-            f"{type(exc).__name__}[/]"
+            f"[dim]{label} could not be built and is left out: {type(exc).__name__}[/]"
         )
         return None
+
+
+def _with_task_rows(
+    detail: Optional[TaskDetail], base_leg: object, tuned_leg: object, *, scoring_applies: bool,
+) -> Optional[TaskDetail]:
+    """The detail with the per-row records for the file next to ``--output``, when it can.
+
+    Display only like the detail itself: a leg whose rows do not add up to its reported number,
+    or whose records cannot be built, leaves the file out (and says so in one dim line); the
+    verdict, its counts and the exit code are the same.
+    """
+    if detail is None or detail.rows is None:
+        return detail
+    records = _task_detail_or_none(
+        lambda: build_task_rows(base_leg, tuned_leg, scoring_applies=scoring_applies),
+        label="Task rows file (per-row results)",
+    )
+    return detail if records is None else replace(detail, records=records)
 
 
 def _refuse_a_dead_side(side: str, leg: LegScore) -> None:
@@ -728,6 +770,7 @@ def _leg1_metric(
             base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
         )
     )
+    detail = _with_task_rows(detail, base_leg, tuned_leg, scoring_applies=True)
     return build_task_win("metric", base_leg, tuned_leg, detail=detail)
 
 
@@ -789,9 +832,25 @@ def _build_judge_scorer(
             if isinstance(scores, list) and len(scores) == len(tasks)
             else None
         )
+        if row_scores is not None and all(
+            isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
+            for raw in row_scores
+        ):
+            # The rows are scored on the number's own scale, [0, 1]: the same rescale as the
+            # mean above, so the reported number can BE the mean of the rows (``row_mean``, the
+            # one definition) and a per-row file can add up to it exactly. The number the
+            # evaluator reported is kept when it is not that mean to float noise (1e-9): then
+            # the rows cannot be audited against it and no file is written.
+            row_scores = tuple(
+                max(0.0, min(1.0, (raw - scale_min) / span)) for raw in row_scores
+            )
+            from_rows = row_mean(row_scores)
+            if abs(from_rows - value) <= _ROW_MEAN_TOLERANCE:
+                value = from_rows
         return LegScore(
             value, row_scores=row_scores,
             truncated=tuple(truncation_of(answer) for answer in answers),
+            answers=tuple(answers), failed_rows=(False,) * len(answers), tasks=tuple(tasks),
         )
 
     return _score
@@ -815,6 +874,7 @@ def _leg1_judge(
             base_score, tuned_score, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
         )
     )
+    detail = _with_task_rows(detail, base_score, tuned_score, scoring_applies=False)
     return build_task_win("judge_score", base_score, tuned_score, detail=detail)
 
 
@@ -1440,6 +1500,51 @@ def _push_pr_comment(verdict: ShipVerdict, target: str) -> None:
     )
 
 
+# The task modes that write a per-row file: a rule or a judge scores each row on its own.
+# ``pairwise`` keeps its verdicts in the judge rows, not here.
+_TASK_ROWS_MODES = ("metric", "judge_score")
+
+
+def _same_directory(first: str, second: str) -> bool:
+    def directory(path: str) -> str:
+        return os.path.normcase(os.path.dirname(os.path.realpath(path)))
+
+    return directory(first) == directory(second)
+
+
+def _check_task_rows_target(
+    *,
+    output: Optional[str],
+    emit_evidence: Optional[str],
+    task_eval: Optional[str],
+    config: Optional[str],
+    task_mode: str,
+) -> None:
+    """Refuse before any model loads a file name the per-row file cannot go under (exit 3).
+
+    The file sits next to ``--output`` (else ``--emit-evidence``): a name it cannot be written
+    under, a file of the user's own that it would replace (the task file, the config, the other
+    outputs), or a file at its path that soup ship did not write. A run that would write none
+    (``pairwise``) is not asked.
+    """
+    anchor = output or emit_evidence
+    if not anchor or task_mode not in _TASK_ROWS_MODES:
+        return
+    try:
+        path = task_rows_path(anchor)
+        named = (
+            ("--output", output), ("--emit-evidence", emit_evidence),
+            ("--task-eval", task_eval), ("--config", config),
+        )
+        ensure_distinct_paths(
+            [(field, value) for field, value in named if value],
+            [("task-rows file", path)],
+        )
+        ensure_replaceable(path)
+    except ValueError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
 def _emit_and_exit(
     verdict: ShipVerdict,
     output: Optional[str],
@@ -1449,10 +1554,28 @@ def _emit_and_exit(
     push: Optional[str] = None,
 ) -> None:
     console.print(render_ship_panel(verdict))
+    # The per-row file goes first so the verdict can name it only when it exists. A failure to
+    # write it is reported after the verdict, the evidence and the PR comment are out (exit 1):
+    # it is part of the evidence, and nothing here claims a file that was not written.
+    anchor = output or emit_evidence
+    records = verdict.task_win.detail.records if verdict.task_win.detail is not None else None
+    rows_pointer: Optional[str] = None
+    rows_error: Optional[Exception] = None
+    if anchor and records:
+        try:
+            rows_path = write_task_rows(records, anchor)
+            rows_pointer = os.path.basename(task_rows_path(anchor))
+            console.print(
+                f"[green]Wrote task rows[/] {escape(for_terminal(rows_path))} "
+                f"({len(records)} rows)"
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            rows_error = exc
     if output:
         try:
             atomic_write_text(
-                json.dumps(verdict_to_dict(verdict), indent=2), output, field="output"
+                json.dumps(verdict_to_dict(verdict, task_rows=rows_pointer), indent=2),
+                output, field="output",
             )
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
@@ -1462,7 +1585,17 @@ def _emit_and_exit(
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
     elif emit_evidence:
         try:
-            payload = verdict_to_evidence(verdict, provenance=provenance)
+            # The evidence names the file only when it sits in the evidence's own directory (the
+            # pointer is a bare name, resolved next to the file that holds it).
+            payload = verdict_to_evidence(
+                verdict,
+                provenance=provenance,
+                task_rows=(
+                    rows_pointer
+                    if rows_pointer is not None and _same_directory(emit_evidence, anchor)
+                    else None
+                ),
+            )
             atomic_write_text(
                 json.dumps(payload, indent=2), emit_evidence, field="emit-evidence"
             )
@@ -1476,6 +1609,13 @@ def _emit_and_exit(
     # announced on the PR (the gate then blocks with exit 2).
     if push:
         _push_pr_comment(verdict, push)
+    if rows_error is not None:
+        _fail(
+            "cannot write the task rows next to "
+            f"{'--output' if output else '--emit-evidence'}: "
+            f"{type(rows_error).__name__}: {rows_error}",
+            _EXIT_RUNTIME,
+        )
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 
@@ -1708,6 +1848,10 @@ def ship(
                 recorded_runs,
             )
     elif base or tuned or adapter or task_eval:
+        _check_task_rows_target(
+            output=output, emit_evidence=emit_evidence, task_eval=task_eval, config=config,
+            task_mode=task_mode,
+        )
         if emit_evidence:
             binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
         verdict = _verdict_live(

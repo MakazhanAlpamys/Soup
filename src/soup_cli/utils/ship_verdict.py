@@ -43,10 +43,10 @@ from __future__ import annotations
 import math
 import os
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from rich.console import Group
 from rich.markup import escape
@@ -60,6 +60,9 @@ from soup_cli import __version__
 from soup_cli.utils.config_bounds import MAX_NOISE_FLOOR_RUNS, MIN_NOISE_FLOOR_RUNS
 from soup_cli.utils.terminal import strip_control as for_terminal
 
+if TYPE_CHECKING:  # typing only: the row module imports this one
+    from soup_cli.utils.ship_task_rows import TaskRow
+
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
@@ -70,13 +73,15 @@ from soup_cli.utils.terminal import strip_control as for_terminal
 # ``provenance`` is intentionally opaque metadata, so its nested keys are not
 # part of the verdict schema.
 #
-# Schema version 2 (soup-cli 0.78) added ``schema_version`` and ``judged`` at the root and
+# Schema version 2 (soup-cli 0.78) added ``schema_version``, ``judged`` and ``task_rows`` (the
+# name of the per-row file, see ``utils/ship_task_rows.py``) at the root and
 # ``rows`` / ``truncated`` / ``generation_failures`` in the task; their own keys are the
 # ``rows`` ... ``judged`` sections. ``V2_ONLY_FIELDS`` lists the paths a reader of version 1 does
 # not know: the reader refuses them under version 1.
 EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
     "root": frozenset({
         "task", "benchmarks", "noise_floor", "provenance", "numerics", "schema_version", "judged",
+        "task_rows",
     }),
     "task": frozenset({"mode", "base", "tuned", "rows", "truncated", "generation_failures"}),
     "benchmark": frozenset({"base", "tuned"}),
@@ -97,6 +102,7 @@ SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (1, 2)
 #: Evidence paths introduced by version 2: (section, key).
 V2_ONLY_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("root", "judged"),
+    ("root", "task_rows"),
     ("task", "rows"),
     ("task", "truncated"),
     ("task", "generation_failures"),
@@ -145,11 +151,24 @@ TRUNCATION_GROWTH_MIN_SHARE = 0.10
 #: Two per-row scores closer than this are the same row (float noise is not a change).
 ROW_SCORE_EPS = 1e-9
 
+#: What a row is, tuned against base (``row_change``); the per-row file stores one per row.
+CHANGE_BETTER = "better"
+CHANGE_WORSE = "worse"
+CHANGE_SAME = "same"
+ROW_CHANGES: Tuple[str, ...] = (CHANGE_BETTER, CHANGE_WORSE, CHANGE_SAME)
+
+#: The file ``soup ship`` writes next to ``--output`` is ``<stem>`` + this suffix, and the verdict
+#: JSON and the evidence name it (``task_rows``) by that bare file name.
+TASK_ROWS_SUFFIX = ".task-rows.jsonl"
+_MAX_TASK_ROWS_NAME_CHARS = 255
+
 # Bounds on an evidence-supplied detail block (a task file holds at most 10 000 rows, so a count
 # or an ``n`` above that cannot describe a real run). ``_MAX_EVIDENCE_ROWS`` equals
 # ``eval.custom.MAX_EVAL_TASKS``; it is not imported (this module stays light) and a test pins
 # the equality.
 _MAX_EVIDENCE_ROWS = 10_000
+#: The most rows one task leg (and so one per-row file) can have: the task-file bound.
+MAX_TASK_ROWS = _MAX_EVIDENCE_ROWS
 _MAX_EVIDENCE_NEW_TOKENS = 1 << 20
 _MAX_JUDGED_CHARS = 4096  # a path
 _MAX_CHECKPOINT_STEP = 10**15
@@ -282,6 +301,11 @@ class TaskDetail:
     rows: Optional[TaskRows] = None
     truncated: Optional[Truncation] = None
     generation_failures: Optional[GenerationFailures] = None
+    #: One record per task (prompts, answers, scores) for the per-row file next to ``--output``.
+    #: User data, kept in memory only until that file is written: it is not compared, not shown
+    #: and not part of ``verdict_to_dict`` / ``verdict_to_evidence`` / the PR comment, and a
+    #: replay of evidence has none.
+    records: "Optional[Tuple[TaskRow, ...]]" = field(default=None, compare=False, repr=False)
 
     def is_empty(self) -> bool:
         return (
@@ -309,13 +333,19 @@ class LegScore(float):
     ``truncated`` is one flag per generated answer (``True`` / ``False`` / ``None`` for "the
     generator could not tell", see ``GeneratedText``); a pairwise leg generates for two sides,
     so ``truncated`` holds side A's flags and ``truncated_other`` side B's. ``failures`` counts
-    the generations that raised and were swallowed.
+    the generations that raised and were swallowed. For the per-row file a leg also keeps the
+    ``answers`` it was scored on, which of them ``failed_rows``, and the ``tasks`` behind them
+    (all in task order); ``value`` is then the ``row_mean`` of ``row_scores``, so the file's
+    mean is the reported number.
     """
 
     row_scores: Optional[Tuple[float, ...]]
     truncated: Optional[Tuple[Optional[bool], ...]]
     truncated_other: Optional[Tuple[Optional[bool], ...]]
     failures: Optional[int]
+    answers: Optional[Tuple[str, ...]]
+    failed_rows: Optional[Tuple[bool, ...]]
+    tasks: Optional[Tuple[object, ...]]
 
     def __new__(
         cls,
@@ -325,12 +355,18 @@ class LegScore(float):
         truncated: Optional[Sequence[Optional[bool]]] = None,
         truncated_other: Optional[Sequence[Optional[bool]]] = None,
         failures: Optional[int] = None,
+        answers: Optional[Sequence[str]] = None,
+        failed_rows: Optional[Sequence[bool]] = None,
+        tasks: Optional[Sequence[object]] = None,
     ) -> "LegScore":
         instance = super().__new__(cls, value)
         instance.row_scores = None if row_scores is None else tuple(row_scores)
         instance.truncated = None if truncated is None else tuple(truncated)
         instance.truncated_other = None if truncated_other is None else tuple(truncated_other)
         instance.failures = failures
+        instance.answers = None if answers is None else tuple(answers)
+        instance.failed_rows = None if failed_rows is None else tuple(failed_rows)
+        instance.tasks = None if tasks is None else tuple(tasks)
         return instance
 
 
@@ -618,24 +654,31 @@ def _flag_tuple(flags: Sequence[object], name: str) -> Tuple[Optional[bool], ...
     return tuple(out)
 
 
+def row_change(base_score: float, tuned_score: float) -> str:
+    """One row, tuned against base: better iff ``tuned > base + ROW_SCORE_EPS``, worse iff
+    ``tuned < base - ROW_SCORE_EPS``, the same otherwise. The one definition of the three
+    classes: ``compare_rows`` counts them and the per-row file stores them."""
+    if tuned_score > base_score + ROW_SCORE_EPS:
+        return CHANGE_BETTER
+    if tuned_score < base_score - ROW_SCORE_EPS:
+        return CHANGE_WORSE
+    return CHANGE_SAME
+
+
 def compare_rows(
     base_scores: Sequence[object], tuned_scores: Sequence[object]
 ) -> TaskRows:
     """How many rows the tuned model got better / worse / the same, from per-row scores.
 
-    A row is better iff ``tuned > base + ROW_SCORE_EPS``, worse iff ``tuned < base -
-    ROW_SCORE_EPS`` and the same otherwise, so ``better + worse + same`` is the row count.
+    The classes are those of ``row_change``, so ``better + worse + same`` is the row count.
     """
     base = _score_tuple(base_scores, "base row score")
     tuned = _score_tuple(tuned_scores, "tuned row score")
     if len(base) != len(tuned):
         raise ValueError("base and tuned need the same number of rows to be compared")
-    better = worse = 0
-    for base_score, tuned_score in zip(base, tuned):
-        if tuned_score > base_score + ROW_SCORE_EPS:
-            better += 1
-        elif tuned_score < base_score - ROW_SCORE_EPS:
-            worse += 1
+    changes = [row_change(base_score, tuned_score) for base_score, tuned_score in zip(base, tuned)]
+    better = changes.count(CHANGE_BETTER)
+    worse = changes.count(CHANGE_WORSE)
     return TaskRows(better=better, worse=worse, same=len(base) - better - worse)
 
 
@@ -720,6 +763,32 @@ def checkpoint_step_of(adapter: Optional[str]) -> Optional[int]:
     last = _PATH_SEPARATORS.split(adapter.rstrip("\\/"))[-1]
     match = _CHECKPOINT_RE.match(last)
     return int(match.group(1)) if match else None
+
+
+def task_rows_pointer_error(value: object) -> Optional[str]:
+    """Why ``value`` cannot be the ``task_rows`` pointer, or ``None`` when it can.
+
+    The pointer is a bare file name ending in ``TASK_ROWS_SUFFIX``: no directory part (either
+    separator), no drive, no control character, at most 255 characters. It is resolved next to
+    the file that holds it, so it can never name a place outside that directory. The writer
+    refuses any anchor whose derived name this would refuse, so a reader never meets a pointer
+    the command wrote and cannot take.
+    """
+    reason = (
+        f"must be a bare file name ending in {TASK_ROWS_SUFFIX} (no directory part, no "
+        f"control character, at most {_MAX_TASK_ROWS_NAME_CHARS} characters)"
+    )
+    if not isinstance(value, str):
+        return reason
+    if not value.endswith(TASK_ROWS_SUFFIX) or len(value) == len(TASK_ROWS_SUFFIX):
+        return reason
+    if len(value) > _MAX_TASK_ROWS_NAME_CHARS:
+        return reason
+    if _PATH_SEPARATORS.search(value) or _DRIVE_PREFIX.match(value):
+        return reason
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value):
+        return reason
+    return None
 
 
 def build_judged(
@@ -1317,6 +1386,7 @@ def verdict_to_evidence(
     verdict: ShipVerdict,
     *,
     provenance: Optional[Mapping[str, object]] = None,
+    task_rows: Optional[str] = None,
 ) -> Dict[str, object]:
     """Project a verdict into the ``--evidence`` INPUT schema (the inverse read).
 
@@ -1334,7 +1404,9 @@ def verdict_to_evidence(
     staleness gate uses ``provenance.config_sha`` to bind evidence to the exact
     config that produced it (v0.71.39). ``numerics`` (optional) is the actual
     live-eval load precision; the gate compares its family against ``--config``
-    (#367).
+    (#367). ``task_rows`` (optional) is the bare name of the per-row file next to this one
+    (``task_rows_pointer_error``); like ``provenance`` it is metadata of the file, not part of
+    the verdict, and the reader discards it after checking it.
     """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
@@ -1366,6 +1438,12 @@ def verdict_to_evidence(
             carries_v2 = True
     if verdict.judged is not None:
         evidence["judged"] = _judged_dict(verdict.judged)
+        carries_v2 = True
+    if task_rows is not None:
+        pointer_error = task_rows_pointer_error(task_rows)
+        if pointer_error is not None:
+            raise ValueError(f"task_rows {pointer_error}")
+        evidence["task_rows"] = task_rows
         carries_v2 = True
     if carries_v2:
         evidence["schema_version"] = SCHEMA_VERSION
@@ -1699,6 +1777,12 @@ def verdict_from_evidence(
         raise ValueError(f"invalid evidence.numerics: {exc}") from exc
     if "judged" in payload:
         verdict = replace(verdict, judged=_judged_from_evidence(payload["judged"]))
+    if "task_rows" in payload:
+        # Checked and then dropped: the pointer names a file next to the evidence, it is not part
+        # of the verdict (a replay writes no row file, so it has no pointer to give).
+        pointer_error = task_rows_pointer_error(payload["task_rows"])
+        if pointer_error is not None:
+            raise ValueError(f"evidence.task_rows {pointer_error}")
     if stored_numerics is not None:
         return replace(verdict, numerics=stored_numerics)
     return verdict
@@ -1722,10 +1806,20 @@ def floor_exceeds_threshold(
     )
 
 
-def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
-    """JSON-serializable dict for ``--output`` / programmatic consumers."""
+def verdict_to_dict(
+    verdict: ShipVerdict, *, task_rows: Optional[str] = None
+) -> Dict[str, object]:
+    """JSON-serializable dict for ``--output`` / programmatic consumers.
+
+    ``task_rows`` is the bare name of the per-row file next to the output, or ``None`` when
+    this run wrote none (the key is always present).
+    """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
+    if task_rows is not None:
+        pointer_error = task_rows_pointer_error(task_rows)
+        if pointer_error is not None:
+            raise ValueError(f"task_rows {pointer_error}")
     win = verdict.task_win
     detail = win.detail
     data: Dict[str, object] = {
@@ -1780,6 +1874,7 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
         "numerics": verdict.numerics,
         "adapter_change": _adapter_change_dict(verdict.adapter_change),
         "judged": None if verdict.judged is None else _judged_dict(verdict.judged),
+        "task_rows": task_rows,
     }
     return data
 

@@ -160,8 +160,8 @@ def test_on_posix_a_backslash_in_the_file_name_cannot_be_named_by_the_pointer():
     [
         ("verdict.task-rows.jsonl", True),
         ("out file[1].task-rows.jsonl", True),
-        ("x" * 241 + ".task-rows.jsonl", True),  # 255 characters
-        ("x" * 242 + ".task-rows.jsonl", False),  # 256
+        ("x" * 239 + ".task-rows.jsonl", True),  # 255 characters
+        ("x" * 240 + ".task-rows.jsonl", False),  # 256
         (".task-rows.jsonl", False),  # no stem
         ("verdict.jsonl", False),  # not the suffix
         ("../verdict.task-rows.jsonl", False),
@@ -242,7 +242,7 @@ def test_the_classes_of_the_rows_are_the_counts_of_the_verdict():
     assert (got.count("better"), got.count("worse"), got.count("same")) == (
         counts.better, counts.worse, counts.same,
     )
-    assert counts.same == 3  # includes the 1e-12 float noise
+    assert counts.same == 4  # includes the 1e-12 float noise
     assert row_change(0.5, 0.5 + 1e-8) == "better" and row_change(0.5, 0.5 - 1e-8) == "worse"
     assert row_change(0.5, 0.5 + 5e-10) == "same"
 
@@ -907,6 +907,85 @@ def test_a_pointer_is_stamped_as_version_2_even_when_nothing_else_is(tmp_path):
     verdict = decide_ship(TaskWin("metric", 0.5, 0.75, True), [])
     payload = verdict_to_evidence(verdict, task_rows="v.task-rows.jsonl")
     assert payload["schema_version"] == 2 and payload["task_rows"] == "v.task-rows.jsonl"
+
+
+# -- the records ride on the detail and reach no serialiser ---------------------------------------
+
+
+def _detail_with_records():
+    from soup_cli.utils.ship_verdict import TaskDetail, TaskRows
+
+    rows = (
+        _row(
+            prompt="SECRET-PROMPT-2208", base_answer="SECRET-ANSWER-4417",
+            expected="SECRET-EXPECTED-9031",
+        ),
+    )
+    return TaskDetail(rows=TaskRows(better=1, worse=0, same=0), records=rows), rows
+
+
+def test_records_survive_decide_ship_when_the_floor_flips_won():
+    from soup_cli.utils.ship_verdict import (
+        TASK_AXIS,
+        BenchmarkDelta,
+        NoiseFloor,
+        TaskWin,
+        decide_ship,
+    )
+
+    detail, rows = _detail_with_records()
+    floor = NoiseFloor(runs=2, floors=((TASK_AXIS, 0.5),))
+    win = TaskWin("metric", 0.2, 0.4, True, detail=detail)  # won without the floor, not with it
+    verdict = decide_ship(win, [BenchmarkDelta("b", 0.7, 0.7, 0.0, False)], noise_floor=floor)
+    assert verdict.task_win.won is False
+    assert verdict.task_win.detail.records == rows
+
+
+def test_the_records_are_not_compared_or_shown_with_the_detail():
+    from soup_cli.utils.ship_verdict import TaskDetail
+
+    detail, _rows = _detail_with_records()
+    assert detail == TaskDetail(rows=detail.rows)  # records are not part of equality
+    assert "SECRET" not in repr(detail)
+
+
+def test_no_serialiser_of_a_verdict_carries_a_row_text():
+    from soup_cli.utils.ship_verdict import (
+        BenchmarkDelta,
+        TaskWin,
+        decide_ship,
+        format_ship_rubric,
+        render_ship_pr_markdown,
+        verdict_to_dict,
+    )
+
+    detail, _rows = _detail_with_records()
+    verdict = decide_ship(
+        TaskWin("metric", 0.0, 1.0, True, detail=detail),
+        [BenchmarkDelta("b", 0.7, 0.7, 0.0, False)],
+    )
+    for text in (
+        json.dumps(verdict_to_dict(verdict, task_rows="v.task-rows.jsonl")),
+        json.dumps(verdict_to_evidence(verdict, task_rows="v.task-rows.jsonl")),
+        format_ship_rubric(verdict),
+        format_ship_rubric(verdict, public=True),
+        render_ship_pr_markdown(verdict),
+    ):
+        assert "SECRET" not in text
+
+
+def test_the_verdict_dict_always_has_the_key_and_refuses_a_pointer_that_is_not_a_name():
+    from soup_cli.utils.ship_verdict import TaskWin, decide_ship, verdict_to_dict
+
+    verdict = decide_ship(TaskWin("metric", 0.0, 1.0, True), [])
+    assert verdict_to_dict(verdict)["task_rows"] is None
+    assert verdict_to_dict(verdict, task_rows="v.task-rows.jsonl")["task_rows"] == (
+        "v.task-rows.jsonl"
+    )
+    with pytest.raises(ValueError, match="task_rows must be a bare file name"):
+        verdict_to_dict(verdict, task_rows="../v.task-rows.jsonl")
+    with pytest.raises(ValueError, match="task_rows must be a bare file name"):
+        verdict_to_evidence(verdict, task_rows="/abs/v.task-rows.jsonl")
 
 
 # -- the CLI, with scripted generators of both shapes ---------------------------------------------

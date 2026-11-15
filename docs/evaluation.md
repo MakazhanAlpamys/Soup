@@ -947,7 +947,7 @@ The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is r
 | key | meaning |
 |-----|---------|
 | `schema_version` | `2`. Absent in 0.77.x output, which is version 1. |
-| `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score. |
+| `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score rescaled to [0, 1] on its rubric scale. |
 | `task_win.truncated` | `{"base", "tuned", "n", "max_new_tokens", "warning"}`, or `null`. A count is the number of answers that hit the new-token cap and did not stop on their own, read from the generator's token ids, never from the length of the text. A count is `null`, never `0`, when it was not measured: the generator returned plain text with no token information, or a row's generation failed. `max_new_tokens` is the cap the built-in generator uses for the task leg (`BEHAVIOURAL_MAX_NEW_TOKENS`, 256). It is a constant written into the verdict, not read back from the generator, so a generator you supply yourself may use another cap. |
 | `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
 | `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is reserved and always `null` in this release. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
@@ -972,7 +972,8 @@ warning stays a warning and decides nothing until there is one.
 
 **Evidence schema version 2.** `--emit-evidence` writes `"schema_version": 2` whenever it has
 version-2 content to write: `task.rows`, `task.truncated` (the counts, without `warning`: it is
-recomputed on every read), `task.generation_failures` and `judged`. A replay prints the same lines
+recomputed on every read), `task.generation_failures` and `judged`, and `task_rows` (the name of the
+per-row file, see below) when one was written next to it. A replay prints the same lines
 and the same warning. A file with none of it (a replayed version-1 file) stays a version-1 file:
 the stamp says what the file carries, it is not a property of the command. This is a deliberate
 reading, confirmed by a downstream application that consumes the file; stamping version 2 on every
@@ -1003,6 +1004,73 @@ same == n`, every block of one file has the same `n`, and `judged.checkpoint_ste
 adapter path says. **soup-cli 0.77.x refuses a version-2 file** with `evidence has unsupported
 field(s): 'schema_version'` (exit 3): upgrade whatever reads the evidence, such as the CI gate or
 the MCP `ship_evidence` tool, to 0.78.0 or later before it meets a file written by 0.78.
+
+### The per-row file: `<stem>.task-rows.jsonl`
+
+The counts above say how many rows moved; the per-row file says which ones, and lets a reader
+re-derive the leg's number. A live `--task-mode metric` or `judge_score` run writes it next to
+`--output` (`--output verdict.json` writes `verdict.task-rows.jsonl`; with no `--output` it sits
+next to `--emit-evidence`). `--task-mode pairwise`, an adapter that changes nothing and a replay of
+evidence write none (`task_rows` is `null`). The verdict JSON gains `task_rows` (the file's bare
+name, or `null`); the evidence names it in a `task_rows` key when it sits in the same directory.
+A pointer is always a bare file name, resolved next to the file that holds it.
+
+One line per task, compact JSON, ASCII only, LF line ends on every platform, keys in this order:
+
+```json
+{"schema_version":1,"leg":"task","index":2,"prompt_hash":"61a3385003d9","prompt":"What is 2+2?","expected":"4","category":"default","scoring":"exact","base_answer":"3","tuned_answer":"4","base_score":0.0,"tuned_score":1.0,"change":"better","base_truncated":false,"tuned_truncated":null,"base_failed":false,"tuned_failed":false,"text_cut":false}
+```
+
+| key | meaning |
+|-----|---------|
+| `schema_version`, `leg` | `1` and `"task"`, on every line (the file has no header line). |
+| `index` | The row's 0-based place in the task file: its row id, unique in the file. |
+| `prompt_hash` | The first 12 hex digits of `sha256(prompt.strip().casefold())`, the key the loop's held-out split uses. Always of the whole prompt. |
+| `prompt`, `expected`, `category`, `scoring` | From the task file. `scoring` is `null` for `judge_score`. |
+| `base_answer`, `tuned_answer` | What each model answered (`""` when the generation failed). |
+| `base_score`, `tuned_score` | In [0, 1]. `metric`: `1.0` when the answer matched, else `0.0` (never the fractional similarity of `semantic`). `judge_score`: the judge's per-row score rescaled to [0, 1] on its rubric scale. |
+| `change` | `better`, `worse` or `same`: the same rule as the `rows` counts (`tuned > base + 1e-9` is better), so the counts of the file are `task_win.rows`. |
+| `base_truncated`, `tuned_truncated` | The answer stopped at the new-token cap, from the generator's token ids; `null` (never `false`) when not measured. |
+| `base_failed`, `tuned_failed` | The generation raised and the row was scored as wrong. Always `false` for `judge_score`, where a failed generation ends the run. |
+| `text_cut` | A text field was cut to 20,000 characters (a category to 256). The scores, flags and hash never are. |
+
+**The mean is exact.** The mean of `base_score` over the rows, added up left to right in `index`
+order and divided by the row count, is `task_win.base` of the verdict, bit for bit; the same for
+`tuned_score` and `task_win.tuned`. Scores are written with their shortest round-trip `repr`, so
+no digit is lost in the file. Add the column up with a plain loop (`total += score`), not with
+`sum()` (Python 3.12 made its float result compensated) and not with `math.fsum`; the library
+function is `soup_cli.utils.ship_task_rows.row_mean`. The reported number of a leg is built from
+its rows, never the other way round: for `judge_score` the number is the mean of the rescaled
+per-row scores (the rescaled mean of the judge's raw scores, to float rounding), and an evaluator
+whose overall score is not that mean to 1e-9 leaves the file out instead of writing rows that do
+not add up.
+
+**Privacy.** The file holds your prompts and both models' answers in full, so it is local data:
+it is never part of the verdict JSON, the evidence, the terminal output or the `--push` comment
+(none of them carries any text from a row), and it is created like a private temp file.
+
+**Writing it.** The file is written before the verdict, atomically (a temp file in the same
+directory, then a rename), under the working directory, never through a symlink. An existing file
+at that path is replaced only by this command's own next run: it must be empty or its first line
+must be one of ours, otherwise it is left alone. `soup ship` refuses, before any model loads
+(exit 3), an `--output` or `--emit-evidence` whose derived name is not a bare file name (a control
+character, over 255 characters), a network share or a device, a file of yours it would replace (the
+task file, the config, the other outputs) and a file that is not ours. If the write fails, the
+verdict, the evidence and the PR comment are written first and the run then exits 1 with `cannot
+write the task rows next to --output: ...`: the file is part of the evidence, and the verdict JSON
+never names a file that was not written. A failure to build the records (rows that do not add up
+to the reported number) is display only: one dim line, no file, `task_rows: null`, same verdict.
+
+**Reading it back, strictly.** `soup_cli.utils.ship_task_rows.load_task_rows(path, n=, base=,
+tuned=, counts=)` refuses, naming the defect and never echoing file text: a blank, over-long or
+malformed line (nested past the parser's depth included), a line that is not an object, a repeated
+or unknown or missing key, a `NaN` / `Infinity` token, a boolean or string where a number belongs,
+a score outside [0, 1], a `change` the scores contradict, a `prompt_hash` that is not the prompt's,
+a repeated or out-of-range `index`, more than 10,000 rows or a file over 256 MiB, and, given the
+numbers of the JSON that names the file, a row count that is not `n`, a column mean that is not
+`base` / `tuned` exactly, and class counts that are not the `rows` block.
+`load_task_rows_for(path)` does that for a verdict or an evidence file: it follows `task_rows`
+next to it and checks the file against the same JSON.
 
 ## Retention across versions: `soup eval retention`
 
