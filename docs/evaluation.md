@@ -952,9 +952,13 @@ The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is r
 | `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
 | `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. |
 
-**A side whose every generation failed is refused** (exit 1, `every task generation failed on the
-base side (8 of 8)`): that is a failed measurement, not a score of 0. Before this check a base that
-failed on every row read as 0.0 and any tuned model beat it, a SHIP no model earned. A side with
+**A side whose every generation failed is refused** (exit 1): that is a failed measurement, not a
+score of 0. The message is `Error: live ship verdict failed: RuntimeError: every task generation
+failed on the base side (8 of 8); a model that fails on every row is not a score of 0, so no
+verdict is given. Check that the model loads and generates`. The only variable parts are the side
+(`base` or `tuned`) and the two row counts, which are equal; a program can match the regular
+expression `every task generation failed on the (base|tuned) side \(([0-9]+) of \2\)`. Before
+this check a base that failed on every row read as 0.0 and any tuned model beat it, a SHIP no model earned. A side with
 some failed rows is still judged; the count is shown and printed in yellow.
 
 **The `truncation_growth` warning.** When both counts are measured and
@@ -969,7 +973,12 @@ warning stays a warning and decides nothing until there is one.
 **Evidence schema version 2.** `--emit-evidence` writes `"schema_version": 2` whenever it has
 version-2 content to write: `task.rows`, `task.truncated` (the counts, without `warning`: it is
 recomputed on every read), `task.generation_failures` and `judged`. A replay prints the same lines
-and the same warning. A file with none of it (a replayed version-1 file) stays a version-1 file.
+and the same warning. A file with none of it (a replayed version-1 file) stays a version-1 file:
+the stamp says what the file carries, it is not a property of the command. This is a deliberate
+reading, confirmed by a downstream application that consumes the file; stamping version 2 on every
+emitted file is a one-line change if a reader needs it. `schema_version` is always an integer at the
+top level of the `--output` JSON and of the evidence file (the evidence's `provenance.binding`
+block has a `schema_version` of its own: a different key).
 
 ```json
 {

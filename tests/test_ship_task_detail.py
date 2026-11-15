@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from io import StringIO
 from pathlib import Path
 from typing import Optional
@@ -717,6 +718,69 @@ def test_cli_a_side_whose_every_generation_failed_is_refused_not_scored_zero(
     plain = _plain(result.output)
     assert f"every task generation failed on the {side} side (8 of 8)" in plain
     assert "not a score of 0" in plain
+
+
+_DEAD_SIDE_MESSAGE = re.compile(
+    r"every task generation failed on the (?P<side>base|tuned) side "
+    r"\((?P<failed>[0-9]+) of (?P<n>[0-9]+)\); a model that fails on every row is not a score "
+    r"of 0, so no verdict is given\. Check that the model loads and generates"
+)
+
+
+@pytest.mark.parametrize("side", ["base", "tuned"])
+def test_cli_the_dead_side_message_has_one_stable_shape_a_program_can_match(monkeypatch, side):
+    # Variable parts: the side (base | tuned) and the two row counts, equal to each other.
+    # Everything else is fixed, and the line is printed after "Error: live ship verdict failed:
+    # RuntimeError: " (exit code 1).
+    every_prompt = {f"q{i}" for i in range(8)}
+    good = _scripted(_answers(correct={0, 1, 2}))
+    dead = _scripted(_answers(correct=set()), fail=every_prompt)
+    base, tuned = (dead, good) if side == "base" else (good, dead)
+    result, _verdict, _evidence = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    prefix = "Error: live ship verdict failed: RuntimeError: every task generation failed on the"
+    assert prefix in plain
+    match = _DEAD_SIDE_MESSAGE.search(plain)
+    assert match is not None, plain
+    assert (match["side"], match["failed"], match["n"]) == (side, "8", "8")
+
+
+def test_cli_the_key_paths_that_carry_the_counts(monkeypatch):
+    # the consumer maps these paths to its own UI: pin each one with a distinct value
+    base = _scripted(_answers(correct={0, 1, 2, 3, 4, 5, 6}, truncated={0}))
+    tuned = _scripted(
+        _answers(correct={0, 1, 2, 3, 4}, truncated={1, 2, 3}), fail={"q5", "q6"},
+    )
+    result, verdict, evidence = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code in (0, 2), (result.output, repr(result.exception))
+    task_win = verdict["task_win"]
+    assert task_win["rows"] == {"better": 0, "worse": 2, "same": 6, "n": 8}
+    assert task_win["rows"]["better"] == 0 and task_win["rows"]["worse"] == 2
+    assert task_win["rows"]["same"] == 6
+    assert task_win["generation_failures"]["base"] == 0
+    assert task_win["generation_failures"]["tuned"] == 2
+    assert task_win["truncated"]["base"] == 1  # row 0 hit the cap
+    assert task_win["truncated"]["tuned"] is None  # its two failed rows left it unmeasured
+    assert task_win["truncated"]["warning"] is None
+    # the same blocks, one level up, in the evidence file (the warning is not stored there)
+    assert evidence["task"]["rows"] == task_win["rows"]
+    assert evidence["task"]["generation_failures"] == task_win["generation_failures"]
+    assert "warning" not in evidence["task"]["truncated"]
+
+
+def test_cli_the_warning_and_truncated_counts_at_their_key_paths(monkeypatch):
+    base = _scripted(_answers(correct=set(), truncated={0}))
+    tuned = _scripted(_answers(correct={0}, truncated={1, 2, 3, 4}))
+    result, verdict, evidence = _ship(monkeypatch, _tasks(), base, tuned)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    truncated = verdict["task_win"]["truncated"]
+    assert truncated["base"] == 1 and truncated["tuned"] == 4  # task_win.truncated.base / .tuned
+    assert truncated["n"] == 8 and truncated["max_new_tokens"] == 256
+    assert truncated["warning"] == "truncation_growth"  # task_win.truncated.warning
+    assert evidence["task"]["truncated"] == {
+        "base": 1, "tuned": 4, "n": 8, "max_new_tokens": 256,
+    }
 
 
 def test_cli_a_dead_base_cannot_make_any_tuned_model_ship(monkeypatch):

@@ -463,6 +463,37 @@ def test_a_live_run_emits_v2_and_the_replay_is_identical(monkeypatch):
         assert line in _plain(replay.output)
 
 
+def _top_level_version(data: dict) -> object:
+    assert "schema_version" in data, sorted(data)  # a key of the top level, not nested
+    return data["schema_version"]
+
+
+def test_the_output_has_schema_version_as_a_top_level_integer(monkeypatch):
+    base = _scripted(_answers(correct={0, 1}))
+    tuned = _scripted(_answers(correct={0, 1, 2}))
+    live, replay, files = _live_then_replay(monkeypatch, base, tuned)
+    assert live.exit_code == 0 and replay.exit_code == 0, (live.output, replay.output)
+    for name in ("live.json", "replay.json"):  # a live run and the replay of its evidence
+        version = _top_level_version(files[name])
+        assert type(version) is int and version == 2, (name, version)  # not bool, not "2"
+    # an offline verdict from a version-1 file also writes the --output format version
+    result, verdict = _cli(V1_EVIDENCE)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert type(_top_level_version(verdict)) is int and verdict["schema_version"] == 2
+
+
+def test_the_emitted_evidence_has_schema_version_as_a_top_level_integer(monkeypatch):
+    base = _scripted(_answers(correct={0, 1}))
+    tuned = _scripted(_answers(correct={0, 1, 2}))
+    live, _replay, files = _live_then_replay(monkeypatch, base, tuned)
+    assert live.exit_code == 0, (live.output, repr(live.exception))
+    version = _top_level_version(files["ev.json"])
+    assert type(version) is int and version == 2, version  # not bool, not "2"
+    # the same value in the bytes: a JSON number, not a string
+    # (the provenance block carries its own, nested ``binding.schema_version``: a different key)
+    assert "schema_version" not in files["ev.json"]["task"]
+
+
 def test_a_replayed_v2_file_re_emits_the_same_v2_file():
     with runner.isolated_filesystem():
         Path("ev.json").write_text(json.dumps(V2_EVIDENCE), encoding="utf-8")
