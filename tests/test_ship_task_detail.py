@@ -1233,3 +1233,24 @@ def test_the_detail_wrapper_does_not_swallow_the_dead_side_refusal(monkeypatch):
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert verdict is None
     assert "every task generation failed on the base side (8 of 8)" in _plain(result.output)
+
+
+def test_a_failing_pairwise_detail_is_display_only_too(monkeypatch, capsys):
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
+                        lambda path: [_Task(f"p{i}") for i in range(4)])
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+    monkeypatch.setattr(JudgeEvaluator, "compare_pair", lambda *args, **kwargs: 1)
+
+    def boom(*args, **kwargs):
+        raise ValueError("no")
+
+    monkeypatch.setattr(ship_cmd, "build_truncation", boom)
+    win = ship_cmd._leg1_pairwise(
+        lambda prompt: GeneratedText("a", truncated=False),
+        lambda prompt: GeneratedText("b", truncated=False),
+        "t.jsonl", "ollama://j",
+    )
+    assert win.detail is None and win.mode == "pairwise"  # the verdict number is still built
+    assert "Task detail (rows, truncation) could not be built" in _plain(capsys.readouterr().out)
