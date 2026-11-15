@@ -68,16 +68,18 @@ def is_plain_lora_init(value: Any) -> bool:
     which zeroes ``lora_B`` only (``:303-304``); and ``"orthogonal"``, which replaces ``lora_A``
     and ``lora_B`` (``:305-307``). peft lower-cases ``gaussian`` and ``mica`` and compares ``eva``
     and ``orthogonal`` with ``==``, and so does this: ``"EVA"`` is an error in peft and is refused.
-    Anything else, a non-string included, is refused.
+    An integer or float zero is accepted too: peft reads a false value as no init (``:311``,
+    ``elif init_lora_weights:``), so ``0`` and ``0.0`` merge like ``False``. Anything else, any
+    other non-string included (``1``, a list), is refused.
 
     The low-memory merge (``utils/lowmem_merge.py``) and the adapter loader below both call this,
     so the two cannot drift apart (#2722).
     """
     if value is None or isinstance(value, bool):
         return True
-    if not isinstance(value, str):
-        return False
-    return value.lower() in ("gaussian", "mica") or value in ("eva", "orthogonal")
+    if isinstance(value, str):
+        return value.lower() in ("gaussian", "mica") or value in ("eva", "orthogonal")
+    return type(value) in (int, float) and value == 0
 
 
 #: ``adapter_config.json`` fields a streamed base cannot honour: ``(field, is_set, reason)``.

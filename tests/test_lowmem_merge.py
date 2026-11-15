@@ -641,6 +641,7 @@ class TestAdapterCoverage:
         "init",
         [
             None, True, False,
+            0, 0.0,  # peft reads a false value as no init (layer.py:311)
             "gaussian", "Gaussian", "GAUSSIAN", "mica", "MICA",  # peft lower-cases these two
             "eva", "orthogonal",  # and compares these two exactly
         ],

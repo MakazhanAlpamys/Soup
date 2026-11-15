@@ -531,6 +531,8 @@ class TestAdapterConfig:
             ("target_parameters", None),
             ("bias", "none"),
             ("init_lora_weights", True),
+            ("init_lora_weights", 0),
+            ("init_lora_weights", 0.0),
             ("init_lora_weights", "gaussian"),
             ("init_lora_weights", "Gaussian"),
             ("init_lora_weights", "eva"),

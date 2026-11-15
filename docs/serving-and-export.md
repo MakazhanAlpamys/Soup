@@ -60,10 +60,10 @@ shard layout instead of a single `model.safetensors`. It needs the default
 alpha patterns, adapters on embeddings or `lm_head`, an `init_lora_weights`
 outside the values below, and base weights stored in a quantized dtype are
 refused with a message to run the regular merge. `init_lora_weights` is accepted
-when it is `true`, `false`, `null` or left out, `"gaussian"` or `"mica"` in any
+when it is `true`, `false`, `0`, `null` or left out, `"gaussian"` or `"mica"` in any
 letter case, or `"eva"` or `"orthogonal"` in lower case, as peft spells them;
-none of these changes the base weights. Any other value is refused, a non-string
-included: `"pissa"` (and `"pissa_niter_<n>"`), `"olora"`, `"corda"`, `"loftq"`
+none of these changes the base weights. Any other value is refused, any other
+non-string included (`1`, a list): `"pissa"` (and `"pissa_niter_<n>"`), `"olora"`, `"corda"`, `"loftq"`
 and `"lora_ga"` rewrite the base weights at initialization (`lora.init_strategy`
 writes `"pissa"`, `"olora"` and `"loftq"`), and peft rejects other spellings
 such as `"EVA"`. The merge is
