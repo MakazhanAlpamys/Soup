@@ -127,14 +127,13 @@ def bench(
     if backend_lower == "auto":
         backend_resolved = detect_backend(model_target)
         console.print(
-            Text.assemble(("Backend auto-detected:", "dim"), " ",
-                          terminal_text(backend_resolved, "bold"))
+            f"[dim]Backend auto-detected:[/] [bold]{backend_resolved}[/]"
         )
     else:
         if backend_lower not in SUPPORTED_BACKENDS:
             console.print(
-                Text.assemble(("Unknown --backend:", "red"), " ", terminal_text(backend),
-                              f" (expected: auto | {' | '.join(sorted(SUPPORTED_BACKENDS))})")
+                f"[red]Unknown --backend:[/] {backend} "
+                f"(expected: auto | {' | '.join(sorted(SUPPORTED_BACKENDS))})"
             )
             raise typer.Exit(2)
         backend_resolved = backend_lower

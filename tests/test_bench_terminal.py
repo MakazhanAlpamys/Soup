@@ -4,6 +4,7 @@ import builtins
 import copy
 import io
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +37,12 @@ def _plain(text):
     return " ".join(text.split())
 
 
+def _assert_style(output: str, expected: str, code: str) -> None:
+    spans = re.findall(r"\x1b\[([\d;]+)m([^\x1b]*)", output)
+    assert any(code in codes.split(";") and text.strip() == expected
+               for codes, text in spans), (expected, output)
+
+
 @pytest.fixture
 def printed(tmp_path, monkeypatch):
     from soup_cli.commands import infer
@@ -55,7 +62,7 @@ def printed(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("value,shown", VALUES)
-@pytest.mark.parametrize("kind", ["resolve", "backend", "missing-prompts", "read", "load",
+@pytest.mark.parametrize("kind", ["resolve", "missing-prompts", "read", "load",
                                   "preflight", "postflight"])
 def test_bench_infer_refusals_keep_literal_outside_text(
     printed, monkeypatch, value, shown, kind
@@ -72,9 +79,6 @@ def test_bench_infer_refusals_keep_literal_outside_text(
 
     if kind == "resolve":
         monkeypatch.setattr(infer, "_resolve_model_source", fail)
-    elif kind == "backend":
-        args[args.index("--backend") + 1] = value
-        expected = f"Unknown --backend: {shown}"
     elif kind == "missing-prompts":
         args += ["--prompts-file", f"missing-{value}.txt"]
         expected = f"Prompts file not found: missing-{shown}.txt"
@@ -100,7 +104,7 @@ def test_bench_infer_refusals_keep_literal_outside_text(
         monkeypatch.setattr(cuda_graphs, "cuda_graph_generation_kwargs", fail)
         expected = " ".join(infer._with_omit_hint(f"Failure {shown}").split())
     result = CliRunner().invoke(app, args)
-    assert result.exit_code == (2 if kind == "backend" else 1), result.exception
+    assert result.exit_code == 1, result.exception
     assert expected in _plain(printed.getvalue())
     assert "\x1b[31m" in printed.getvalue()
     if kind == "resolve":
@@ -112,9 +116,11 @@ def test_bench_infer_plan_is_literal_and_preserves_hf_id_and_generation(
     printed, monkeypatch, value, shown
 ):
     from soup_cli.commands import infer
+    from soup_cli.utils import gpu
 
     loads, generations = [], []
     target = f"org/{value}"
+    monkeypatch.setattr(gpu, "detect_device", lambda **kwargs: (value, 0))
     monkeypatch.setattr(infer, "_resolve_model_source", lambda model: ("hf", model))
 
     def load(model, base, device, **kwargs):
@@ -137,8 +143,13 @@ def test_bench_infer_plan_is_literal_and_preserves_hf_id_and_generation(
     display_repr = repr(target).replace("\x9b", "").replace("\u202e", "")
     assert f"treating {display_repr} as a HF repo id." in text
     assert f"Model: org/{shown}" in text
+    assert f"Device: {shown}" in text
+    _assert_style(printed.getvalue(), f"org/{shown}", "1")
+    _assert_style(printed.getvalue(), shown, "1")
+    _assert_style(printed.getvalue(),
+                  f"Local path not found; treating {display_repr} as a HF repo id.", "2")
     assert "Inference Benchmark Results" in text and "Per-prompt latency" in text
-    assert loads == [(target, value, "cpu", {"is_local": False})]
+    assert loads == [(target, value, value, {"is_local": False})]
     assert len(generations) == 2
     assert generations[0] == generations[1]
     assert generations[0][1] == {"max_tokens": 8, "temperature": 0.0}
@@ -221,6 +232,7 @@ def test_bench_train_failure_receipt_keeps_original_json_report(printed, monkeyp
     ])
     assert result.exit_code == 1, (result.output, result.exception)
     assert f"FAILED {shown}: Failure {shown}" in _plain(printed.getvalue())
+    _assert_style(printed.getvalue(), f"FAILED {shown}:", "31")
     assert "NOT valid" in _plain(printed.getvalue())
     assert json.loads(Path("report.json").read_text()) == report
     assert calls == [{"steps": 3, "warmup": 1, "device": "cpu"}]
@@ -238,5 +250,6 @@ def test_bench_train_report_receipt_preserves_real_output_path(printed, monkeypa
     ])
     assert result.exit_code == 0, (result.output, result.exception)
     assert f"Report: {Path('report-' + shown + '.json')}" in _plain(printed.getvalue())
+    _assert_style(printed.getvalue(), "Report:", "2")
     assert json.loads(output.read_text()) == report
     assert calls == [{"steps": 3, "warmup": 1, "device": "cpu"}]
