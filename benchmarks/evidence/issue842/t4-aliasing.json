@@ -1,0 +1,224 @@
+{
+  "hardware": {
+    "card": "Tesla T4",
+    "sm": "75",
+    "vram_bytes": 15636037632,
+    "cuda_runtime": "13.0",
+    "driver": "580.178.04",
+    "packages": {
+      "torch": "2.11.0+cu130",
+      "bitsandbytes": "0.50.2",
+      "peft": "0.21.2",
+      "transformers": "5.20.2"
+    },
+    "dtype": "native fp16",
+    "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]"
+  },
+  "packed_bytes_per_layer": 179437568,
+  "layers": 4,
+  "slots": 2,
+  "tokens": 8,
+  "width": 18944,
+  "arms": {
+    "unsafe": {
+      "forward": {
+        "0": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "1": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "backward": {
+        "input_grad": {
+          "finite": true,
+          "exact": false,
+          "max_abs": 0.0700225830078125
+        },
+        "scale_grad_0": {
+          "finite": true,
+          "exact": false,
+          "max_abs": 0.1622314453125
+        },
+        "scale_grad_1": {
+          "finite": true,
+          "exact": false,
+          "max_abs": 0.16455078125
+        },
+        "scale_grad_2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "paths": {
+        "forward": {
+          "kernel": 4
+        },
+        "backward": {
+          "dequant": 4
+        },
+        "slot_refills": {
+          "0": 4,
+          "1": 4
+        }
+      },
+      "pass": true
+    },
+    "bypass": {
+      "forward": {
+        "0": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "1": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "backward": {
+        "input_grad": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_0": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_1": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "paths": {
+        "forward": {
+          "kernel": 4
+        },
+        "backward": {
+          "dequant": 4
+        },
+        "slot_refills": {}
+      },
+      "pass": true
+    },
+    "repair": {
+      "forward": {
+        "0": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "1": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "backward": {
+        "input_grad": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_0": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_1": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_2": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        },
+        "scale_grad_3": {
+          "finite": true,
+          "exact": true,
+          "max_abs": 0.0
+        }
+      },
+      "paths": {
+        "forward": {
+          "kernel": 4
+        },
+        "backward": {
+          "kernel": 4,
+          "dequant": 4
+        },
+        "slot_refills": {
+          "0": 4,
+          "1": 4
+        }
+      },
+      "pass": true
+    }
+  },
+  "resident_paths": {
+    "forward": {
+      "kernel": 4
+    },
+    "backward": {
+      "dequant": 4
+    },
+    "slot_refills": {}
+  },
+  "pass": true
+}

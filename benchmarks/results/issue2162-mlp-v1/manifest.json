@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "reference_file_sha256": "606ee2064e9423a05a5a0e02563a81736e07b8aa0e719aa3bb4301c92d89e4c8",
+  "restored_files": 281,
+  "distinct_objects": 249,
+  "note": "All retained original evidence files reconstruct byte-for-byte. The original A failure, its three reused normal gates, recovery and failed planning screen remain distinct from the separately declared B experiment. Frozen sources are bound to Git blobs; no source ZIP or model is checked in.",
+  "files_sha256": {
+    "frozen/6e11a3d09a8ed777e36a9fb4de2cbd990594a5cf5295c3d5aaa7358d7697f6ad.txt": "6e11a3d09a8ed777e36a9fb4de2cbd990594a5cf5295c3d5aaa7358d7697f6ad",
+    "frozen/6e4f5b256b8e60ca4cd99601efe52d1c2bf2cb1c2edef1484971e4b53bc44e65.txt": "6e4f5b256b8e60ca4cd99601efe52d1c2bf2cb1c2edef1484971e4b53bc44e65",
+    "frozen/73c6a3b7d64a02e20da94e0d5e4353e31413999d5384e06e99072664c1215a5b.txt": "73c6a3b7d64a02e20da94e0d5e4353e31413999d5384e06e99072664c1215a5b",
+    "frozen/c2c8c9a1b638867154a550cf65e227edd8359103b08eceb6059c42d80fec1688.txt": "c2c8c9a1b638867154a550cf65e227edd8359103b08eceb6059c42d80fec1688",
+    "frozen/e01d8f51ce78eab46cfb20c478f6cf170f6714022a85812a1e86318a3704b4c9.txt": "e01d8f51ce78eab46cfb20c478f6cf170f6714022a85812a1e86318a3704b4c9",
+    "mlp-budget-b-v1/files.json": "a4d2a1f4c6cdb0b136d4c615a1a6645a661d186f131b6985a31b1f2b8869fd45",
+    "mlp-budget-b-v1/freeze.json": "2482aadf88da49cbe7170cdfe1c59e228369e31bf226329465bf9be0aeaa17ea",
+    "mlp-budget-b-v1/original-audit.json": "136ba2c20dbb858cf4f3af9819dcd114b50f2921d584f04d534152d5ec7f5244",
+    "mlp-budget-b-v1/RULE.md": "73c6a3b7d64a02e20da94e0d5e4353e31413999d5384e06e99072664c1215a5b",
+    "mlp-diagnostic-v1/files.json": "5ec6de656efcad6efaee5125619f9093ade21f7d4c3bfc7f8d781bf1ec017513",
+    "mlp-diagnostic-v1/freeze.json": "0f54e9e4df6152fdd633c9f2270bed19d428b2784d269ad8e2d3eda2d06e6327",
+    "mlp-diagnostic-v1/RULE.md": "6e4f5b256b8e60ca4cd99601efe52d1c2bf2cb1c2edef1484971e4b53bc44e65",
+    "mlp-diagnostic-v1-recovery/files.json": "0bbb046ceefe7760c1a44790acee697968a0c8b4a773f8cea7f5b1d2d44f257b",
+    "mlp-diagnostic-v1-recovery/freeze.json": "2c5a04e3707cb3c7721a2b10d742599d9022a93d375aa37ec00b1531392ab148",
+    "mlp-diagnostic-v1-recovery/original-audit.json": "c0c0d727dac4d3df21a692d22912480a1135d3bde4741946acf98f1d06354127",
+    "mlp-diagnostic-v1-recovery/RULE.md": "6e4f5b256b8e60ca4cd99601efe52d1c2bf2cb1c2edef1484971e4b53bc44e65",
+    "objects.json": "983d31c9ec10455cd6b61c74147caff2f25210b25eb07bfa01cf13eda59a1469",
+    "source-blobs.json": "defdcacf1637d48342b25977aaee0df0ec62c98df6acb6219785a247e0c9a550",
+    "validation.json": "15b87ec481c46ad8cff1aa4565e0f3a514208434bacc6f17449a2b11a70370b9",
+    "numerical-inputs.json": "8d8f94b47a14ce194ca2bd47f5011430ad277dd22cb99025de76bdcbcdcedaee",
+    "frozen/git-38a8828a6dc47c72b1fb6a63a784714a1a7c2a9a.txt": "bf2aed7de5ddecf10486bb8044c5164829b860e45965949392d788e8a68ef71f",
+    "frozen/git-5cc72fca951c32faa8db51337404fa8acbd750f6.txt": "23f6c897c0befcacc6a333a898d546c4bfb38aa43828b7ffcfa9f9535a2bf0bf",
+    "frozen/git-9ac596d7d1839c66910d3f78d3dda1f783e026da.txt": "8588fcbb9258efdac74eba38c0bb0ffcd35add7fdd4af11f117075b5d0b2de96"
+  },
+  "bulk": {
+    "archive": "issue2162-bulk-af962369.zip",
+    "archive_sha256": "52a9a550fc620684698bbb4ea83fc5b4ad894057a0464f9c93f2d8af1eda04b5",
+    "url": "https://github.com/Shutaru/Soup-2162-evidence/releases/download/issue2162-bulk-v1/issue2162-bulk-af962369.zip",
+    "files_sha256": {
+      "objects.json": "983d31c9ec10455cd6b61c74147caff2f25210b25eb07bfa01cf13eda59a1469",
+      "source-blobs.json": "defdcacf1637d48342b25977aaee0df0ec62c98df6acb6219785a247e0c9a550"
+    },
+    "path_convention": "--bulk points to the extracted archive root containing both issue2162-* directories"
+  },
+  "frozen_git_sources": {
+    "frozen/git-38a8828a6dc47c72b1fb6a63a784714a1a7c2a9a.txt": {
+      "git_blob": "38a8828a6dc47c72b1fb6a63a784714a1a7c2a9a",
+      "original_path": "tests/test_stream_projection_evidence.py",
+      "reason": "frozen source version required by the MLP source bindings"
+    },
+    "frozen/git-5cc72fca951c32faa8db51337404fa8acbd750f6.txt": {
+      "git_blob": "5cc72fca951c32faa8db51337404fa8acbd750f6",
+      "original_path": "benchmarks/harness/issue2162_audit.py",
+      "reason": "frozen source version required by the MLP source bindings"
+    },
+    "frozen/git-9ac596d7d1839c66910d3f78d3dda1f783e026da.txt": {
+      "git_blob": "9ac596d7d1839c66910d3f78d3dda1f783e026da",
+      "original_path": "benchmarks/harness/issue2162_report.py",
+      "reason": "frozen source version required by the MLP source bindings"
+    }
+  }
+}

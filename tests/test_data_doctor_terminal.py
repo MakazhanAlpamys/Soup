@@ -1,7 +1,6 @@
 """Doctor and lint preserve literal diagnostics and report values."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +10,7 @@ from soup_cli.cli import app
 from soup_cli.commands import data_doctor as command
 from soup_cli.utils import data_doctor as doctor
 from soup_cli.utils import data_lint as lint
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 RAW = r"label:warning:[red]\[end" + "\x9b\u202e"
@@ -77,10 +77,11 @@ def test_report_cells_remain_literal(report_case, column):
     assert "\x9b" not in result.output and "\u202e" not in result.output
 
 
-@pytest.mark.parametrize("spelling", [r"result-\[draft].json", "result-:warning:.json"])
+@pytest.mark.parametrize(
+    "spelling",
+    [r"result-\[draft].json", pytest.param("result-:warning:.json", marks=skip_colon_on_windows)],
+)
 def test_report_receipt_keeps_name_and_json_values(report_case, spelling):
-    if sys.platform == "win32" and ":" in spelling:
-        pytest.skip("colon is not a Windows filename character")
     name, path, report = report_case
     output = Path(spelling)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +114,7 @@ def test_doctor_failures_keep_literal_message(report_case, monkeypatch, stage):
     assert result.exit_code == code, (result.output, result.exception)
     label = "cannot write --output: " if stage == "write" else ""
     assert f"\x1b[31mError:\x1b[0m {label}{SHOWN}" in result.output
+    assert "\x9b" not in result.output and "\u202e" not in result.output
     assert not Path("out.json").exists()
 
 

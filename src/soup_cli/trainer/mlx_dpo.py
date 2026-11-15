@@ -13,8 +13,8 @@ Three decisions shape it:
   frozen copy. A warm start (``--resume``) computes them before the
   checkpoint's weights are loaded, so the reference stays the base model.
 - **Tokenization mirrors TRL 0.29's DPO trainer** (text rows get EOS appended,
-  conversational rows go through the chat template, the prompt is capped at
-  ``max_length // 2`` and completions at what remains), so a ``soup.yaml``
+  conversational rows go through the chat template; only an overflowing pair
+  has its prompt capped at ``max_length // 2`` and completions at what remains), so a ``soup.yaml``
   trains on the same tokens on either backend. Where TRL only *warns* that a
   template is not prefix-stable and then slices at the wrong offset, this
   refuses: a wrong slice supervises the wrong tokens.
@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from rich.console import Console
 
+from soup_cli.experiment.row_kinds import metric_row_kind
 from soup_cli.trainer._trl_compat import _truncate_tokens
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.mlx_sft import (
@@ -119,6 +120,8 @@ def build_preference_example(
     constant loss, zero gradient), and a template that is not prefix-stable for
     the row raises :class:`PrefixUnstableError` where TRL warns and slices
     anyway. Per-row ``tools`` / ``chat_template_kwargs`` are not applied.
+    Soup preserves the whole prompt when both complete inputs fit ``max_length``;
+    otherwise it applies the prompt cap, then clips each answer to its room.
     """
     row = _normalise_row(row)
     prompt, chosen, rejected = row["prompt"], row["chosen"], row["rejected"]
@@ -157,7 +160,10 @@ def build_preference_example(
             "chat template is not prefix-stable for this row"
         )
 
-    prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
+    # Match the transformers path: the prompt cap is a recovery budget for an
+    # overflowing pair, not a limit on a prompt whose two model inputs fit.
+    if len(prompt_ids) + max(len(full_chosen) - n, len(full_rejected) - n) > max_length:
+        prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
     room = max(0, max_length - len(prompt_ids))
     return PreferenceExample(
         prompt_ids=prompt_ids,
@@ -873,6 +879,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 tracker.log_metrics(
                     run_id=run_id, step=step, epoch=epoch, loss=loss, lr=lr,
                     speed=speed, gpu_mem=gpu_mem, val_loss=val_loss,
+                    kind=metric_row_kind(val_loss=val_loss),
                 )
             except Exception:  # noqa: BLE001 — telemetry must not kill a run
                 pass

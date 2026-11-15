@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,22 +10,19 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, an emoji code, and a tag
 # with control characters, so the strip and the escape are pinned separately.
 _FILE_NAMES = [
     "x[red]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}.jsonl",
 ]
 # Values that are not file names can also carry a closing tag with nothing to close.

@@ -139,6 +139,8 @@ def build_orpo_example(
     TRL does. A pair whose two prompt renderings differ by more than one token
     raises :class:`PrefixUnstableError` (TRL raises a ``ValueError`` there) so
     the caller can skip it with a count.
+    Soup caps both prompts only when either complete input, including BOS/EOS,
+    exceeds ``max_length``, then clips each answer to the room its prompt leaves.
     """
     prompt, chosen, rejected = render_preference_text(_normalise_row(row), tokenizer)
     chosen_prompt, chosen_answer = _tokenized_answer(tokenizer, prompt, chosen)
@@ -152,7 +154,7 @@ def build_orpo_example(
 
     bos = getattr(tokenizer, "bos_token_id", None)
     eos = getattr(tokenizer, "eos_token_id", None)
-    sides = []
+    tokenized_sides = []
     pairs = ((chosen_prompt, chosen_answer), (rejected_prompt, rejected_answer))
     for prompt_ids, answer_ids in pairs:
         prompt_ids, answer_ids = list(prompt_ids), list(answer_ids)
@@ -160,10 +162,18 @@ def build_orpo_example(
             prompt_ids = [bos] + prompt_ids
         if eos is not None and (not answer_ids or answer_ids[-1] != eos):
             answer_ids = answer_ids + [eos]
-        # Soup's cap (enforce_preference_sequence_limit's ORPO branch).
-        prompt_ids, _ = _truncate_prompt(
-            prompt_ids, [1] * len(prompt_ids), max_prompt_length, truncation_mode, bos
-        )
+        tokenized_sides.append((prompt_ids, answer_ids))
+
+    # Decide on the pair after BOS/EOS insertion. If either input overflows,
+    # cap both prompts, as enforce_preference_sequence_limit's ORPO branch does.
+    # The two prompt spans can differ by one token after a boundary merge.
+    overflows = any(len(prompt) + len(answer) > max_length for prompt, answer in tokenized_sides)
+    sides = []
+    for prompt_ids, answer_ids in tokenized_sides:
+        if overflows:
+            prompt_ids, _ = _truncate_prompt(
+                prompt_ids, [1] * len(prompt_ids), max_prompt_length, truncation_mode, bos
+            )
         answer_ids = answer_ids[: max(0, max_length - len(prompt_ids))]
         if not answer_ids:
             raise PreferenceRowError(

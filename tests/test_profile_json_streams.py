@@ -138,7 +138,10 @@ def test_profile_unreadable_model_streams(tmp_path, monkeypatch, json_mode):
     assert "Nothing was estimated" in plain
 
 
-def test_profile_config_success_keeps_a_json_document_on_stdout(tmp_path):
+def test_profile_config_success_keeps_a_json_document_on_stdout(tmp_path, monkeypatch):
+    # Offline: nothing is printed before a Hub request (#2306); see
+    # tests/test_fit_reason_and_hub_line.py for the line on stderr.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     path = tmp_path / "soup.yaml"
     path.write_text(_VALID_CONFIG, encoding="utf-8")
 

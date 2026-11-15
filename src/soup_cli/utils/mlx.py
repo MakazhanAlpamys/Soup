@@ -162,15 +162,24 @@ def estimate_mlx_batch_size(
 
 
 def load_mlx_model(
-    model_path: str, quantization: str = "4bit",
-) -> tuple[Any, Any]:
+    model_path: str,
+    quantization: str = "4bit",
+    model_config: Optional[dict[str, Any]] = None,
+    return_config: bool = False,
+) -> tuple[Any, ...]:
     """Thin wrapper around ``mlx_lm.load`` (lazy import).
 
     ``quantization`` is informational: MLX models are typically already
     quantized at build time (e.g. ``mlx-community/...-4bit``), so this
     parameter is currently advisory and is not forwarded to ``mlx_lm.load``.
+    ``return_config`` also returns the effective loaded model config for standalone saves.
     """
     del quantization  # advisory only — MLX models are pre-quantized
     from mlx_lm import load
 
-    return load(model_path)
+    kwargs: dict[str, Any] = {}
+    if model_config is not None:
+        kwargs["model_config"] = model_config
+    if return_config:
+        kwargs["return_config"] = True
+    return load(model_path, **kwargs)

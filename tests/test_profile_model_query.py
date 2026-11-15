@@ -239,7 +239,9 @@ def test_model_query_hub_unreachable_stops_with_a_clear_message():
     text = _plain(result)
     assert "Cannot read Qwen/Qwen2.5-7B-Instruct" in text
     assert "could not be fetched from the Hub" in text
-    assert "HF_HUB_OFFLINE" not in text
+    # The refusal does not blame an offline setting; the line printed before the
+    # request names HF_HUB_OFFLINE=1 as the way to skip it (#2306).
+    assert "HF_HUB_OFFLINE" not in text.split("Cannot read", 1)[1]
     # The name says 7B; a guessed 7B estimate must not be printed instead.
     assert "GPU Memory Estimate" not in text
 

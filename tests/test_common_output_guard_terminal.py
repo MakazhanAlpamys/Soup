@@ -1,7 +1,6 @@
 """refuse_output_over_input names the refused path as typed, not as Rich markup."""
 
 import io
-import sys
 from pathlib import Path
 
 import pytest
@@ -12,16 +11,13 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.utils.paths import quote_path
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
@@ -29,7 +25,7 @@ _NO_COLON_ON_WINDOWS = pytest.mark.skipif(
 _NAMES = [
     "x[red]n.jsonl",
     "[/]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", id="emoji-code"),
     f"x[bold]n{_CONTROLS}.jsonl",
 ]
 
@@ -65,7 +61,7 @@ def test_the_refused_path_is_named_as_typed(name):
     assert _not_shown(text)
 
 
-@_NO_COLON_ON_WINDOWS
+@skip_colon_on_windows
 def test_a_command_names_the_refused_path_as_typed(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "500")

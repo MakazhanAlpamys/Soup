@@ -8,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -273,7 +274,7 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -312,13 +313,15 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         from soup_cli.utils.peft_wiring import (
@@ -429,7 +432,8 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:

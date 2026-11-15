@@ -1,0 +1,104 @@
+Stage35 full dense123B,512-token NF4 LoRA capacity checkpoint -- 2026-11-03
+
+Result: complete. The boundary-trim-v2 worker trained all88 original decoder
+layers for3 optimizer updates at batch1x512, saved352 FP32 q/v LoRA tensors,
+and a different guarded process reloaded the adapter with exact full heldout
+logits and losses. The frozen base represents122,610,069,504 logical parameters;
+only26,673,152 adapter parameters were trained. Source revision is
+unsloth/Mistral-Large-Instruct-2407-bnb-4bit,
+a76e109f4b66807d88fa92b5d7e0dead1a354494; Soup runtime is f215941b.
+
+This is a capacity/adapter-reload result on five authored texts repeated to512
+visible tokens. It is not120-step training, useful-task quality, optimizer-state
+resume, broad model quality, or optimized throughput evidence. The separate
+Colibri-inspired Stage37 leaf kernel was not integrated into this full model.
+
+Execution and exactness
+The prior original-weight module M128/M512 and three-layer/two-slot M512 gates
+passed native/candidate output,dX,adapter-gradient,two-update and Adam parity.
+The full model used616 owner-protected packed-state projections, two decoder
+slots, one GPU vocabulary slot, disk/read_ahead1 and no scale/KV cache. Original
+NF4 payloads and BF16 vocabulary/head/norm were retained. Both host vocabulary
+regions remain pageable: source backing2,324,713,472B; source pinned bytes0.
+
+Successful train PID39232 and reload PID44284 both exited0, with completed guards,
+stopped worker/monitor, no remaining children or cleanup errors. Train guard
+elapsed728.812s; reload478.359s. The original guards remained6.25GiB Torch,
+7600MiB device,8192MiB available-host preflight,256MiB emergency/768MiB sustained
+host5s and512MiB global-commit headroom, with1800s timeout and no working-set cap.
+
+results/FULL512_AUDIT_02.json passed:1056 gradient and1056 update rows checked;
+176 first-step A gradients/updates were correctly zero, B changed, and all352
+adapters had nonzero gradients/updates at steps2 and3. All138 source/store files
+matched before/after and across workers;1575 frozen runtime files were directly
+pinned. Both complete [1,512,32768] BF16 heldout logits hashes and losses matched
+fresh reload exactly. The adapter has106,692,608 payload bytes in a106,740,016B
+safetensors file, SHA256
+ef5940b8bdb81b27d4acbf73e17f8a2f71246150b294d70afc90046b428ae735.
+Its configuration,README and provenance hashes also match the reload receipt.
+
+The original failure and the isolated change
+full512-train-01 completed one update, then its guard stopped it for
+system_commit_floor. Its interrupted result still says running; the guard is
+the authoritative failure record. That run and its saved control receipts are
+preserved unchanged, including their prior archived checkpoint.
+The new variant calls the existing synchronized empty_cache only after heldout
+forwards and completed optimizer updates. It does not change kernels, tensors,
+precision, pooling or guard limits. Seven train trims and two reload trims
+preserved live allocation and peak counters. Initial heldout records and every
+recorded first-step numeric field except seconds matched the original control;
+full gradient byte hashes were not recorded, so that stronger claim is not made.
+
+At the first optimizer boundary, unused reserved bytes fell by2,569,011,200B and
+worker private commit by2,337,157,120B while live allocation stayed unchanged.
+This directly records cache/private-commit release at that boundary. Session
+global commit was already lower; neither all global-headroom improvement nor
+the difference in run completion can be attributed solely to trimming. The
+system-minus-worker residual does not identify a driver, other app or owner.
+TRAIN_COMPARISON35.txt/.json retain the detailed, pre-reload historical analysis.
+
+Measured resource and timing results
+                               successful train       fresh reload
+Torch peak allocated bytes     4,968,217,088            3,282,605,568
+Torch peak reserved bytes      5,691,670,528            3,772,776,448
+Sampled whole-device peak MiB   5602                     3764
+Min available host bytes       6,959,271,936            7,389,999,104
+Min global commit headroom B   2,470,391,808            4,791,881,728
+Whole-device/global counters include the wider system and are sampled maxima.
+Train's last regular device sample is0MiB; reload has an explicit final0MiB
+sample. Guard cleanup independently confirms both workers closed. The shorter
+failed arm peaked at5512MiB sampled device usage; no reduced device-peak claim.
+Checked step times58.8837/57.3891/55.2948s include diagnostics, durable phase
+records and synchronous trims. They are not a controlled throughput comparison.
+Heldout losses1.07907724/1.09838057 ->1.05054331/1.05818546 are capacity metrics.
+
+Final preservation and reproduction
+Root FINAL_INPUT_HASHES_02.json rehashed all1784 original reload-pin entries in
+122.1186843s, all_equal=true. Its normalized inventory/digests exactly match the
+original reload guard pins and current GPU_FULL_RELOAD_PINS_02.json; JSON byte
+formatting of the latter differs from the guard copy. No source/store bulk hash
+was repeated for this report. Root receipt SHA256:
+4132ba0cec60972c17a1f8356550a47f213f64e67a2bf27c25fae6ce9609d510.
+Final artifact audit SHA256:
+2e7362a338ce338301924e17a50f7424228683f0704dba1475c501b2c5c4858a.
+
+The snapshot includes all Stage35 code/tests/data/raw results and successful
+adapter, the complete frozen runtime+manifest, and required small experimental
+sources/receipts. Large original source/store assets and prior Stage34 adapter
+remain externally pinned; the old Stage34 and failed-Stage35 archives remain.
+Frozen Stage36 protocol/data/helpers are included as preparation only, excluding
+campaign code, mutable state/pins and new GPU results. No Stage36 outcome is
+part of this checkpoint. The external snapshot receipt records CRC/every-entry
+SHA verification and zip digest, byte count and entry count.
+
+For exact recorded commands and input identities, use both successful guard
+summary.json/input_pins.json files. FULL35.txt plus TRIM_DESIGN35.txt provide the
+new-output train/reload recipe and complete pin preparation. Reproduction needs
+the externally pinned model/store at the recorded paths and matching Python
+3.12.10/Torch2.14.0+cu130/Transformers5.17.0/PEFT0.20.0/BNB0.50.2 environment.
+Preserved code SHA256:
+full35.py 04b215a1b863ed721d0a1d57b7214b0d4b8bbb119bfe452598b9028d1fb57d1b
+full35_trim_v2.py 6d33b47aa517c719ccdb5fed75a51178ac46342ecdea2e3630ddb92cb5a55da4
+The readonly full_audit35.py CLI checks copied train/reload/guard/artifact
+receipts without model loading; --pins is GPU_FULL_PINS_02.json and --output
+must be a new file. A copied receipt never substitutes for a new guarded run.

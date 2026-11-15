@@ -13,6 +13,7 @@ from rich.console import Console
 from soup_cli.cli import app
 from soup_cli.commands import drift_alarm as drift_cmd
 from soup_cli.utils.drift_alarm import post_webhook, run_drift_check
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -91,12 +92,9 @@ def test_an_outside_input_is_named_as_typed(side, name):
 
 
 @pytest.mark.parametrize("side", ["reference", "live"])
+@skip_colon_on_windows
 def test_an_empty_input_keeps_its_emoji_code(side):
     # This case really creates the file, so ':' names cannot run on Windows.
-    import sys
-
-    if sys.platform == "win32":
-        pytest.skip("':' is not valid in a Windows filename")
     existing = _write("existing.jsonl", ["base"])
     empty = _write("xn:warning:.jsonl", ["ignored"], key="completion")
     paths = {"reference": existing, "live": existing}

@@ -1,7 +1,6 @@
 """soup quickstart prints the directory and files it creates as typed, not as Rich markup."""
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -23,7 +23,7 @@ def _wide_console(monkeypatch):
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
     "demo:warning:",
-    marks=pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name"),
+    marks=skip_colon_on_windows,
 )
 DIRECTORIES = ["[red]proj", "[/]proj", COLON_NAME]
 
@@ -129,12 +129,7 @@ def test_quickstart_refused_output_is_named_as_typed(tmp_path, monkeypatch, name
     assert f"got: {name}" in _plain(result)
 
 
-_COLON_DIR = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
-
-
-@_COLON_DIR
+@skip_colon_on_windows
 def test_quickstart_created_lines_show_an_emoji_code_in_the_path_as_typed(tmp_path, monkeypatch):
     workdir = tmp_path / "x:warning:proj"
     workdir.mkdir(parents=True)
@@ -148,7 +143,7 @@ def test_quickstart_created_lines_show_an_emoji_code_in_the_path_as_typed(tmp_pa
     assert re.search(r"Created: \S*x:warning:proj/quickstart_soup\.yaml(?! config)", text)
 
 
-@_COLON_DIR
+@skip_colon_on_windows
 def test_quickstart_existing_file_lines_show_an_emoji_code_in_the_path_as_typed(
     tmp_path, monkeypatch
 ):

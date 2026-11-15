@@ -18,6 +18,7 @@ stay resident.
 """
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
@@ -177,6 +178,68 @@ OPTIMIZER_BYTES_PER_PARAM = 16
 #: rounding, small per-run buffers). It came out at ~13.3 MB for a 135M model
 #: and a 0.5B model alike, so it is charged as a constant rather than scaled.
 STREAM_FIXED_SLACK_BYTES = 13_500_000
+
+# A streamed forward and its autograd backward use separate cuBLAS handles.
+# Each handle/stream pair retains its workspace in PyTorch's caching allocator.
+STREAM_CUBLAS_HANDLE_STREAM_PAIRS = 2
+STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES = 32 * 1024 * 1024
+
+
+def cublas_workspace_bytes(
+    *, compute_capability: Optional[tuple[int, int]], workspace_config: Optional[str] = None
+) -> int:
+    """Return PyTorch's allocator-visible cuBLAS workspace charge for a streamed step.
+
+    PyTorch's default is 8,320 KiB per handle below compute capability 9.0 and
+    32 MiB per handle on 9.0+. ``CUBLAS_WORKSPACE_CONFIG`` is a sequence of
+    ``SIZE:COUNT`` pairs in KiB; sum each pair and charge the two handle/stream
+    pairs used by a streamed forward and backward. ``None`` means the variable
+    is unset and selects the device default. ``:0:0`` explicitly disables it.
+    An unreadable capability uses the largest documented per-handle default.
+
+    This is the PyTorch caching-allocator workspace only. cuBLAS may also keep
+    a private handle-creation buffer outside the allocator; that memory is not
+    included in ``torch.cuda.max_memory_allocated()`` and is not estimated here.
+    """
+    if compute_capability is None:
+        # A failed capability query must not silently disable the safety charge.
+        # Use the largest currently documented per-handle default (Hopper/Blackwell).
+        workspace_kib = STREAM_CUBLAS_UNKNOWN_DEVICE_WORKSPACE_BYTES // 1024
+    else:
+        if (
+            not isinstance(compute_capability, tuple)
+            or len(compute_capability) != 2
+            or any(
+                isinstance(part, bool) or not isinstance(part, int) or part < 0
+                for part in compute_capability
+            )
+        ):
+            raise ValueError(f"invalid compute capability: {compute_capability!r}")
+
+        major, _minor = compute_capability
+        # Keep the known-safe newer-device size for future major versions too;
+        # PyTorch may grow this default before Soup updates its capability table.
+        workspace_kib = 32 * 1024 if major >= 9 else 8_320
+
+    if workspace_config is not None and workspace_config.strip():
+        return _configured_cublas_workspace_bytes(
+            workspace_config, default_workspace_kib=workspace_kib
+        )
+    return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
+
+
+def _configured_cublas_workspace_bytes(
+    workspace_config: str, *, default_workspace_kib: int
+) -> int:
+    # Match PyTorch's parseChosenWorkspaceSize: accept every SIZE:COUNT pair it
+    # can parse, including :4096:0 and :0:8 (both total zero). If there are no
+    # pairs, PyTorch warns and falls back to the device default rather than
+    # aborting training; keep the preflight's charge consistent with that.
+    pairs = re.findall(r":([0-9]+):([0-9]+)", workspace_config)
+    if not pairs:
+        return default_workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
+    workspace_kib = sum(int(size) * int(count) for size, count in pairs)
+    return workspace_kib * 1024 * STREAM_CUBLAS_HANDLE_STREAM_PAIRS
 
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed
 #: training actually reached on the dev box: 68% (Llama-3.1-8B NF4, 5.26 of
@@ -1341,7 +1404,9 @@ def estimate_recompute_bytes(
     end of that layer's checkpoint recompute, when the chunked loss buffers are
     already freed. ``dense_layer_elements`` is one layer's NF4 weights, which
     the dequantise + linear path rebuilds in the stream dtype and ``F.linear``
-    keeps until the layer's backward; 0 for a bf16 base. The per-token terms are
+    keeps until the layer's backward; 0 for a bf16 base. On the packed-state arm
+    it is the largest single matrix instead, since one is dequantised at a time
+    (:func:`dense_weight_charge_elements`). The per-token terms are
     those of the MLP backward, the larger of the layer's two peaks per token, so
     the sum bounds both at any length. They assume separate q/k/v/o and
     gate/up/down projections and LoRA on hidden-sized inputs (``lora_targets``
@@ -1369,6 +1434,82 @@ def estimate_recompute_bytes(
     return element * dense_layer_elements + seq_len * batch_size * per_token
 
 
+def dense_weight_charge_elements(
+    matrix_elements: Sequence[int], *, packed_backward: bool = False
+) -> int:
+    """Elements of dequantised NF4 weight one streamed layer holds dense in its backward.
+
+    The value to pass as ``estimate_recompute_bytes(dense_layer_elements=...)``.
+    ``matrix_elements`` is the element count of each NF4 matrix of ONE layer.
+
+    On the dequantise + ``F.linear`` arm, ``F.linear`` saves its dense weight and
+    the layer's checkpoint recompute rebuilds all of them together before the
+    backward uses any, so the layer holds the SUM. On the packed-state arm
+    (``packed_dequant_nf4_linear``, engaged by the pre-flight itself) each linear
+    saves only its packed bytes and dequantises one matrix at a time, so the layer
+    holds the LARGEST. Mistral Large 123B: 1,384,120,320 elements (2.77 GB in
+    bf16) against 352,321,536 (704,643,072 bytes). A base with no NF4 matrix
+    charges 0 either way.
+    """
+    sizes = list(matrix_elements)
+    if any(isinstance(size, bool) or not isinstance(size, int) or size < 0 for size in sizes):
+        raise ValueError(
+            f"matrix_elements must be non-negative ints; got {matrix_elements!r}"
+        )
+    if not sizes:
+        return 0
+    return max(sizes) if packed_backward else sum(sizes)
+
+
+@dataclass(frozen=True)
+class PackedBackwardDecision:
+    """Which NF4 backward arm a streamed run takes, and what the pre-flight then charges."""
+
+    packed: bool
+    #: The prediction of the chosen arm, the one the fit check should judge.
+    predicted_bytes: int
+    dense_predicted_bytes: int
+    packed_predicted_bytes: int
+    available_bytes: int
+
+    @property
+    def fits(self) -> bool:
+        return self.predicted_bytes <= self.available_bytes
+
+
+def decide_packed_backward(
+    *, dense_predicted_bytes: int, packed_predicted_bytes: int, available_bytes: int
+) -> PackedBackwardDecision:
+    """Route a checkpointed layer's NF4 linears to the packed-state backward, or not.
+
+    The dense-retaining arm is the shipped default and stays so whenever its
+    prediction fits the free VRAM (:func:`decide_stream_fit` accepts equality).
+    When it does not fit, the packed-state arm is taken if it is the smaller
+    prediction: it is the only arm that could fit, and when it does not either it
+    is the best case the refusal should be judged on. Equal
+    predictions mean there is nothing to save (no NF4 weight, or one matrix per
+    layer), and the shipped arm stays.
+    """
+    for value in (dense_predicted_bytes, packed_predicted_bytes, available_bytes):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                "byte counts must be non-negative ints; got "
+                f"dense={dense_predicted_bytes!r}, packed={packed_predicted_bytes!r}, "
+                f"available={available_bytes!r}"
+            )
+    packed = (
+        dense_predicted_bytes > available_bytes
+        and packed_predicted_bytes < dense_predicted_bytes
+    )
+    return PackedBackwardDecision(
+        packed=packed,
+        predicted_bytes=packed_predicted_bytes if packed else dense_predicted_bytes,
+        dense_predicted_bytes=dense_predicted_bytes,
+        packed_predicted_bytes=packed_predicted_bytes,
+        available_bytes=available_bytes,
+    )
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1385,15 +1526,18 @@ def estimate_stream_peak_vram(
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
     persistent_bytes: int = 0,
+    cublas_workspace_bytes: int = 0,
     loss_chunk: Optional[int] = None,
     recompute_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
-    Assembles the GATE 2 terms. Validated against 10 real runs across two models
-    (a 3.1x vocab contrast), batch 1..8 and two sequence lengths: **worst
-    absolute error 0.85%, and it never under-predicts** — the only safe direction
-    for a number that is allowed to refuse a run. An independent check against
+    Assembles the GATE 2 terms. The RTX 3050 grid covers 10 real runs across two
+    models (a 3.1x vocab contrast), batch 1..8 and sequence lengths 256 and 512.
+    Its previous 0.85% fit did not identify the two cuBLAS workspaces; with the
+    explicit workspace charge, predictions are 1.04–6.57% above those peaks.
+    This grid is not a general guarantee at other sequence lengths or devices.
+    An independent check against
     the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
     quantisation, different session, nothing fitted to it) brackets it at +7.5%.
 
@@ -1416,6 +1560,10 @@ def estimate_stream_peak_vram(
     ``persistent_bytes`` is device memory the runtime holds for the whole run on
     top of the pool, such as :func:`nf4_scale_cache_bytes`.
 
+    ``cublas_workspace_bytes`` is the workspace memory held by the forward and
+    autograd CUDA threads. CUDA callers must resolve it from the active device
+    and ``CUBLAS_WORKSPACE_CONFIG``; CPU callers leave it at zero.
+
     ``loss_chunk`` is ``training.stream_loss_chunk`` (#1693): the logits term is
     charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
     element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
@@ -1434,6 +1582,15 @@ def estimate_stream_peak_vram(
         logits_tokens = min(seq_len, loss_chunk)
         chunk_bytes = estimate_loss_chunk_bytes(
             hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
+        )
+    if (
+        isinstance(cublas_workspace_bytes, bool)
+        or not isinstance(cublas_workspace_bytes, int)
+        or cublas_workspace_bytes < 0
+    ):
+        raise ValueError(
+            "cublas_workspace_bytes must be a non-negative integer, "
+            f"got {cublas_workspace_bytes!r}"
         )
     activations = estimate_activation_bytes(
         hidden_size=hidden_size,
@@ -1459,6 +1616,7 @@ def estimate_stream_peak_vram(
         layer_bytes * buffers
         + large_layer_bytes
         + persistent_bytes
+        + cublas_workspace_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
@@ -1923,10 +2081,14 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         # The number the disk tier used to predict as zero. It is host memory,
         # so it does not belong in the VRAM line below, and it is held for the
         # whole run — an operator choosing a depth is choosing this.
+        # A plan that is not pinned (stream_pin: false, or the Windows commit
+        # pre-flight's fallback) stages pageable memory: "page-locked when the
+        # box allows" would contradict the note printed beneath it.
+        staged = "page-locked when the box allows" if plan.pinned else "pageable"
         lines.append(
             f"  host staging read_ahead {plan.read_ahead} -> "
             f"{plan.staging_bytes / 1e6:.0f} MB "
-            f"(page-locked when the box allows)"
+            f"({staged})"
         )
     lines += [
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "
