@@ -14,10 +14,19 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_runpod_cloud import _controller
+from tests.test_runpod_cloud import _controller as _plain_controller
 from tests.test_runpod_controller import _clock
 
 KEY = "test-provider-secret"
+
+
+def _controller():
+    """The rendered controller on a fast fake clock, so that a regression that makes a
+    poll loop run to its deadline fails in milliseconds instead of waiting 15 real
+    minutes. A test that checks sleeps or deadlines installs its own clock afterwards."""
+    ns = _plain_controller()
+    _clock(ns)
+    return ns
 
 # --- from the documentation of 2026-11-15 (Get a pod, 200 "pod" example) -------------
 DOC_POD_RUNNING = {
