@@ -110,6 +110,54 @@ def _nonempty_suite(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def test_load_suite_rejects_duplicate_task_key_with_line_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError) as caught:
+        gate.load_suite(str(path))
+
+    assert "duplicate key 'threshold'" in str(caught.value)
+    assert "line 6" in str(caught.value)
+
+
+def test_load_suite_keeps_explicit_zero_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: zero\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0\n",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.0
+
+
+def test_load_suite_allows_explicit_override_of_merged_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged\ndefaults: &defaults\n  threshold: 0.5\n"
+        "tasks:\n  - <<: *defaults\n    type: custom\n"
+        "    name: math\n    threshold: 0.8\n",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.8
+
+
 @pytest.mark.parametrize(
     "content, expected_fragment, _id",
     INVALID_SUITES,
