@@ -7,6 +7,11 @@ under fp16 autocast: every frozen weight was cast to an fp16 copy that the backw
 pass kept, and the residual stream was promoted to fp32. A card without bf16 already
 loads the base in fp16 for the same pick (#471), and now a card with bf16 does too.
 
+Both dtypes, and the dtype a 4-bit/8-bit base keeps its unquantized weights in (#2683's
+``_kbit_compute_dtype``), come from one answer asked once per run, so the "Auto
+mixed-precision picked" line prints once; it printed twice on a k-bit run. ``task: tts``
+trains through the same wrapper and gets the same load dtype.
+
 The decision is checked here on a faked card; ``test_real_card_loads_the_base_in_fp16``
 checks it on a real one.
 """
@@ -47,22 +52,58 @@ def card(monkeypatch):
     return apply
 
 
-def _training(**overrides):
+def _training(task: str = "sft", **overrides):
     from soup_cli.config.schema import SoupConfig
 
     training = {"quantization": "none", "auto_mixed_precision": True, **overrides}
+    top = {}
+    if task == "tts":
+        top = {"modality": "audio_out"}
+        training.setdefault("tts_family", "orpheus")
     return SoupConfig(
-        base=QWEN, task="sft", data={"train": "./data.jsonl"}, training=training
+        base=QWEN, task=task, data={"train": "./data.jsonl"}, training=training, **top
     ).training
 
 
-def _wrapper(base: str = QWEN, device: str = "cuda"):
+def _wrapper(base: str = QWEN, device: str = "cuda", cls=None):
     from soup_cli.trainer.sft import SFTTrainerWrapper
 
-    wrapper = object.__new__(SFTTrainerWrapper)
+    wrapper = object.__new__(cls or SFTTrainerWrapper)
     wrapper.device = device
     wrapper.config = SimpleNamespace(base=base)
     return wrapper
+
+
+@pytest.fixture()
+def picked_lines(monkeypatch):
+    """The "Auto mixed-precision picked" lines the SFT wrapper prints."""
+    from soup_cli.trainer import sft
+
+    lines: list[str] = []
+
+    def record(*args, **kwargs):
+        text = " ".join(str(a) for a in args)
+        if "Auto mixed-precision picked" in text:
+            lines.append(text)
+
+    monkeypatch.setattr(sft.console, "print", record)
+    return lines
+
+
+@pytest.fixture()
+def picks(monkeypatch):
+    """Every call to ``pick_mixed_precision``, the question the card is asked."""
+    from soup_cli.utils import mixed_precision
+
+    calls: list[tuple[str, float]] = []
+    real = mixed_precision.pick_mixed_precision
+
+    def counted(model_name, cc):
+        calls.append((model_name, cc))
+        return real(model_name, cc)
+
+    monkeypatch.setattr(mixed_precision, "pick_mixed_precision", counted)
+    return calls
 
 
 @pytest.mark.parametrize("cc", [(8, 0), (8, 6), (8, 9), (9, 0), (12, 0)])
@@ -110,6 +151,49 @@ def test_a_card_without_bf16_already_loaded_fp16(card):
 
     assert wrapper._resolve_mixed_precision(tcfg, QWEN) == (False, True)
     assert wrapper._resolve_load_dtype(tcfg) is torch.float16
+
+
+def test_tts_loads_the_base_in_fp16_as_sft_does(card):
+    """``task: tts`` is the other task that reads the field (``AMP_APPLYING_TASKS``) and
+    trains through this wrapper's ``_setup_transformers``."""
+    from soup_cli.trainer.tts import TTSTrainerWrapper
+
+    card((12, 0))
+    wrapper = _wrapper(cls=TTSTrainerWrapper)
+    tcfg = _training(task="tts")
+
+    assert wrapper._resolve_mixed_precision(tcfg, QWEN) == (False, True)
+    assert wrapper._resolve_load_dtype(tcfg) is torch.float16
+
+
+@pytest.mark.parametrize("quantization", ["4bit", "8bit"])
+def test_a_kbit_run_asks_once_and_keeps_its_compute_dtype(
+    card, picked_lines, picks, quantization
+):
+    """A 4-bit/8-bit run reaches the pick from the load, from ``_kbit_compute_dtype``
+    (#2683) and from ``TrainingArguments``, in that order. One question, one line, and
+    the k-bit branch keeps today's answer: fp16 compute, so PEFT's fp32 is kept."""
+    card((12, 0))
+    wrapper = _wrapper()
+    tcfg = _training(quantization=quantization)
+
+    assert wrapper._resolve_load_dtype(tcfg) == "auto"
+    assert wrapper._kbit_compute_dtype(tcfg, QWEN) is torch.float16
+    assert wrapper._resolve_mixed_precision(tcfg, QWEN) == (False, True)
+    assert len(picks) == 1
+    assert len(picked_lines) == 1
+    assert "fp16" in picked_lines[0]
+
+
+def test_a_lora_run_asks_once_for_both_dtypes(card, picked_lines, picks):
+    card((12, 0))
+    wrapper = _wrapper()
+    tcfg = _training()
+
+    assert wrapper._resolve_load_dtype(tcfg) is torch.float16
+    assert wrapper._resolve_mixed_precision(tcfg, QWEN) == (False, True)
+    assert len(picks) == 1
+    assert len(picked_lines) == 1
 
 
 def test_cpu_keeps_the_checkpoint_dtype(card):

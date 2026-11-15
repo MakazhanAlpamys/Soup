@@ -1433,22 +1433,33 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         picked = self._auto_mixed_precision_pick(base_model)
         if picked is None:
             return (self.device == "cuda", False)
-        mode, cc = picked
-
-        console.print(
-            f"[green]Auto mixed-precision picked:[/] {mode} "
-            f"(model={base_model}, cc={cc})"
-        )
+        mode, _cc = picked
         return (mode == "bf16", mode == "fp16")
 
-    @staticmethod
-    def _auto_mixed_precision_pick(base_model: str) -> Optional[tuple[str, float]]:
+    def _auto_mixed_precision_pick(self, base_model: str) -> Optional[tuple[str, float]]:
         """``(mode, compute capability)`` that ``pick_mixed_precision`` gives the CUDA card.
 
         ``None`` when the card or the model name cannot be read; the callers then keep
-        their defaults. Shared by ``_resolve_mixed_precision`` and ``_resolve_load_dtype``
-        so the compute dtype and the load dtype come from the same answer.
+        their defaults. The one answer for the run: ``_resolve_load_dtype`` (the dtype
+        the base is stored in), ``_kbit_compute_dtype`` (#2683, the dtype a 4-bit/8-bit
+        base's unquantized weights keep) and ``_resolve_mixed_precision`` (the dtype it
+        trains in) all read it, so it is asked once per base and the "Auto mixed-precision
+        picked" line prints once, however many of them a run reaches.
         """
+        picks = self.__dict__.setdefault("_auto_mixed_precision_picks", {})
+        if base_model not in picks:
+            picked = self._read_auto_mixed_precision_pick(base_model)
+            picks[base_model] = picked
+            if picked is not None:
+                console.print(
+                    f"[green]Auto mixed-precision picked:[/] {picked[0]} "
+                    f"(model={base_model}, cc={picked[1]})"
+                )
+        return picks[base_model]
+
+    @staticmethod
+    def _read_auto_mixed_precision_pick(base_model: str) -> Optional[tuple[str, float]]:
+        """Ask the card and ``pick_mixed_precision``; ``None`` when either cannot answer."""
         try:
             import torch
 
