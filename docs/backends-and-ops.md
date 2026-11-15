@@ -1633,6 +1633,46 @@ before they existed; nothing is backfilled. Their values are module constants in
   and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
   `ValueError` before anything is written.
 
+A reinforcement-style run records its per-step training reward in two more nullable columns of
+`metrics`: `metrics.reward`, the mean reward of the step's batch (higher is better), and
+`metrics.reward_std`, its spread where the trainer logs one. Both are appended after every
+existing column, added in place to an existing `~/.soup/experiments.db`, and NULL on every row
+written before they existed (nothing is backfilled). NULL means "not measured", never a zero:
+every run that is not reinforcement-style, a row whose log carried no reward, a value that is
+not a number (a `bool`, a string) and a value that is not finite (NaN, an infinity; the row is
+kept and the cell is NULL) all read NULL. The tracker, the callback and the live event share one
+allowlist of the trainer's log keys, exact names only, in `soup_cli.experiment.reward_columns`
+(the keys are those TRL 0.29.1 writes, read from its source; PPO and online DPO have not
+been run end to end against this mapping):
+
+| trainer | log key | column |
+|---|---|---|
+| `grpo` | `reward` | `reward` |
+| `grpo` | `reward_std` | `reward_std` (NaN for a batch of one, stored as NULL) |
+| `ppo`, and `online_dpo` scored by a reward model or function | `objective/scores` | `reward` |
+
+When a log carries both `reward` and `objective/scores`, `reward` wins. Nothing else is
+mapped: DPO's implicit `rewards/chosen` / `rewards/margins`, the KL-shaped
+`objective/rlhf_reward`, a per-function `rewards/<name>/mean` and `frac_reward_zero_std` are
+other numbers with "reward" in their name, and a pairwise judge ranks completions without
+scoring them, so an `online_dpo` run on a judge has no reward. A held-out evaluation's
+`eval_reward` is `val_reward`, not this column. MLX GRPO does not write the per-step
+reward: its rows carry `val_reward` only.
+
+What a program reads. A reward curve is `SELECT step, reward FROM metrics WHERE run_id = ? AND
+reward IS NOT NULL ORDER BY step, id`, or `ExperimentTracker.get_metric_series(run_id,
+"reward")`; `get_reward_summary(run_id)` gives `{"first", "last", "steps"}` or None.
+Only `kind = train` rows carry a reward: skip `eval` rows (their held-out number is
+`val_reward`) and `summary` rows (throughput only). A step that logs a reward and no loss is
+still a `train` row, with `loss` NULL (the previous step's loss is not carried into it), and
+a PPO step, which logs neither `loss` nor `learning_rate` under those names, has NULL `loss`
+and `lr`. `soup runs show` prints a `Reward: first -> last (N steps)` line under `Loss:` and
+`soup runs compare` adds `Initial Reward` / `Final Reward` rows, only for a run that has a
+reward, so the output for any other run is unchanged. `GET /api/runs/{run_id}/metrics` returns
+both columns on every row (null when unset), and the live `metric` event carries `reward` /
+`reward_std` only when set. They are training-time series, so `benchmark:reward` and
+`benchmark:reward_std` are refused by `soup eval against`, like `benchmark:val_reward`.
+
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
 rows — so you can plot a benchmark-score curve (e.g. `mmlu`, `gsm8k`) the same way

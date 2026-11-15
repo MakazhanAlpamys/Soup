@@ -641,6 +641,26 @@ def test_an_evaluation_event_records_val_reward_and_no_training_reward(tracker):
     reset_global_buffer()
 
 
+def test_an_evaluation_row_keeps_its_pinned_carried_loss_even_beside_a_reward(tracker):
+    """The NULL-loss rule is for training logs. An evaluation row carries the last measured
+    training loss / lr (tests/test_issue23_mlx_val_loss_producer.py, #2589); a log that is an
+    evaluation and also carries a reward (TRL does not write one) must not lose that."""
+    from soup_cli.utils.train_event_buffer import reset_global_buffer
+
+    reset_global_buffer()
+    run_id = _start(tracker)
+    callback = SoupTrainerCallback(
+        display=MagicMock(), tracker=tracker, run_id=run_id,
+        val_metric=validation_metric("grpo"),
+    )
+    _event(callback, 10, **_grpo_log(0.3, loss=0.5))
+    _event(callback, 10, eval_reward=15.25, reward=0.3)
+    _, evaluation = _rows(tracker, run_id)
+    assert evaluation["kind"] == "eval"
+    assert (evaluation["val_reward"], evaluation["loss"], evaluation["lr"]) == (15.25, 0.5, 5e-6)
+    reset_global_buffer()
+
+
 def test_the_final_runtime_summary_row_has_no_reward(session):
     callback, tracker, run_id, _ = session
     _event(callback, 22, **_grpo_log(0.3))

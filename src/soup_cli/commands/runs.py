@@ -202,6 +202,10 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+    # A reinforcement-style run's training reward, shown under its loss; no line for a run
+    # that logged none (every SFT-style run), so their output is what it always was.
+    reward = _fmt_reward(tracker.get_reward_summary(run["run_id"]))
+
     # Build info panel — config-derived fields go through for_terminal and the
     # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
     # codes and control characters in the text.
@@ -232,6 +236,7 @@ def show(
         f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
+        *([f"Reward:     {reward}"] if reward else []),
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
@@ -325,6 +330,16 @@ def compare(
         ("Duration", _fmt_duration(r1.get("duration_secs")),
          _fmt_duration(r2.get("duration_secs"))),
     ]
+    # The training reward of a reinforcement-style run, under the loss rows. Added only when
+    # one of the two runs has logged a reward (the other shows "-"): two SFT-style runs get
+    # the table they always got.
+    rewards = [tracker.get_reward_summary(run["run_id"]) for run in (r1, r2)]
+    if any(rewards):
+        at = next(i for i, row in enumerate(rows) if row[0] == "Final Loss") + 1
+        rows[at:at] = [
+            ("Initial Reward", *(_fmt_float(r["first"] if r else None) for r in rewards)),
+            ("Final Reward", *(_fmt_float(r["last"] if r else None) for r in rewards)),
+        ]
 
     # Keep the familiar summary, then compare the complete stored config below.
     c1, c2 = _stored_run_config(r1), _stored_run_config(r2)
@@ -655,6 +670,20 @@ def _fmt_loss(run: dict) -> str:
     if init is not None and final is not None:
         return f"{init:.4f} -> {final:.4f}"
     return "-"
+
+
+def _fmt_reward(summary: Optional[dict]) -> Optional[str]:
+    """The ``Reward:`` value of ``soup runs show``: ``first -> last (N steps)``.
+
+    None for a run with no logged reward, so the line is left out for every non-RL run.
+    """
+    if not summary:
+        return None
+    count = summary["steps"]
+    noun = "step" if count == 1 else "steps"
+    if count == 1:
+        return f"{summary['last']:.4f} ({count} {noun})"
+    return f"{summary['first']:.4f} -> {summary['last']:.4f} ({count} {noun})"
 
 
 def _fmt_float(val: Optional[float]) -> str:
