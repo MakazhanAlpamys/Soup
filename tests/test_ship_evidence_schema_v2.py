@@ -431,8 +431,12 @@ def test_a_live_run_emits_v2_and_the_replay_is_identical(monkeypatch):
     assert evidence["task"]["generation_failures"] == {"base": 0, "tuned": 0, "n": 8}
     assert evidence["judged"]["checkpoint_step"] == 12
     assert "warning" not in evidence["task"]["truncated"]
-    assert files["replay.json"] == files["live.json"]  # one verdict, written twice
-    assert files["live.json"]["task_win"]["truncated"]["warning"] == "truncation_growth"
+    # one verdict, written twice. adapter_change (#2762) is display only and not part of the
+    # evidence schema, so a live run has it and a replay does not.
+    live_verdict = {k: v for k, v in files["live.json"].items() if k != "adapter_change"}
+    replay_verdict = {k: v for k, v in files["replay.json"].items() if k != "adapter_change"}
+    assert replay_verdict == live_verdict
+    assert live_verdict["task_win"]["truncated"]["warning"] == "truncation_growth"
     for line in ("Rows (tuned vs base): better 3, worse 0, same 5 of 8",
                  "Truncated answers: base 0, tuned 3 of 8 (cap 256 new tokens)",
                  "Warning truncation_growth: truncated 0 -> 3 of 8 (rise 3, threshold 3)"):
