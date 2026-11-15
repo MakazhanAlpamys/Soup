@@ -163,6 +163,14 @@ without a native trainer are refused when the config is loaded, with an error
 naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
+Single-process native MLX `soup train` binds the actual Hugging Face base loader
+to one commit across its model, tokenizer and config, including the first RoPE
+config read. The original base ID, commit and source are retained in the run row
+and final `soup_run.json`; see [Recorded base identity](#recorded-base-identity).
+An imported non-HF provider keeps its existing loading behavior, records no Hub
+revision and prints an explanatory line. This does not bind MLX sweeps or
+independent inference, chat, serve, merge and export consumers.
+
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
@@ -1511,6 +1519,17 @@ The first pinned streamed run after upgrading re-shards and re-copies the base
 into the new `<slug>@<commit>` cache slots, costing disk space and time; old slots
 are left in place.
 
+Single-process native MLX `soup train` uses the same identity on the backend's
+supported text tasks and scalar preference aliases. Soup qualifies the provider
+already imported by mlx-lm before the first optional revision lookup; changing
+`MLXLM_USE_MODELSCOPE` after import does not change that provider. The first RoPE
+`config.json` read (both cache-first and download fallback) and mlx-lm's model,
+weights and tokenizer load receive the same resolved commit. A failed download
+at that commit does not retry the moving default branch. Model config overrides
+and dense SFT's effective-config return are preserved. Unqualified providers or
+distributed launcher environments record no bound Hub revision and print why,
+without initializing an Accelerate group or introducing a new load refusal.
+
 The new nullable `runs.base_revision`, `runs.base_revision_source` and
 `runs.training_data_sha256` columns upgrade existing databases in place. Historical
 rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
@@ -1560,8 +1579,10 @@ and Windows because env:// rendezvous can time out on loaded macOS runners. Rank
 failures include both child logs after cleanup. NCCL/FSDP hardware execution is
 not established by those tests.
 
-**Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
-are recorded as such; a cache-path hint on any backend is still unverified. Standalone
+**Remaining boundaries:** Non-HF hubs, Unsloth, distributed MLX and MLX sweep
+loads remain unbound and are recorded as such. Independent MLX inference, chat,
+serve, merge and export consumers are outside this training binding; a cache-path
+hint on any backend is still unverified. Standalone
 wrapper invocations and distributed sweep launches do not gain a binding guarantee.
 Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars

@@ -2239,10 +2239,15 @@ def train(
             synchronize_base_revision,
         )
 
-        base_identity = BaseRevision(
-            run_base,
-            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"),
-        )
+        binding_supported = cfg.backend == "transformers" and hub_name == "hf"
+        mlx_binding_reason = None
+        if cfg.backend == "mlx" and hub_name == "hf":
+            from soup_cli.utils.mlx import mlx_revision_binding_reason
+
+            # Qualify before setup's first RoPE config read or native download.
+            mlx_binding_reason = mlx_revision_binding_reason()
+            binding_supported = mlx_binding_reason is None
+        base_identity = BaseRevision(run_base, binding_supported=binding_supported)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
@@ -2257,6 +2262,11 @@ def train(
             console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
         elif base_identity.source == "cache_path":
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        elif mlx_binding_reason:
+            console.print(
+                f"[dim]Base revision: unknown ({mlx_binding_reason}; "
+                "existing loading behavior preserved)[/]"
+            )
         else:
             console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
