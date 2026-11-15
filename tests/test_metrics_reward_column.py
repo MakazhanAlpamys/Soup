@@ -247,7 +247,7 @@ def test_the_allowlist_has_one_reader_in_the_callback():
         (0.75, 0.75), (0.0, 0.0), (-3.5, -3.5), (2, 2.0), (1e300, 1e300),
         (_NAN, None), (_INF, None), (-_INF, None),
         (True, None), (False, None), ("0.5", None), (None, None), ([0.5], None), ({}, None),
-        (10 ** 400, None),   # an integer beyond float range is no finite number
+        pytest.param(10 ** 400, None, id="int-beyond-float-range"),   # no finite number
     ],
 )
 def test_finite_reward_keeps_numbers_and_refuses_everything_else(value, expected):
@@ -427,7 +427,11 @@ def test_a_measured_zero_and_a_negative_reward_stay_what_they_are(tracker):
     assert [(row["reward"], row["reward_std"]) for row in rows] == [(0.0, 0.0), (-2.5, None)]
 
 
-@pytest.mark.parametrize("bad", [True, False, "0.5", [0.5], _NAN, _INF, -_INF, 10 ** 400])
+@pytest.mark.parametrize(
+    "bad",
+    [True, False, "0.5", [0.5], _NAN, _INF, -_INF,
+     pytest.param(10 ** 400, id="int-beyond-float-range")],
+)
 @pytest.mark.parametrize("column", ["reward", "reward_std"])
 def test_the_tracker_stores_null_for_anything_that_is_not_a_finite_number(
     tracker, column, bad
