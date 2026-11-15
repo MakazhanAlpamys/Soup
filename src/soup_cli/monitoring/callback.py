@@ -394,10 +394,24 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # Its keys are the column names, which are also the keyword names of the tracker's
         # `log_metrics` and of the live event, so it is passed on as `**reward_columns`.
         reward_columns = reward_from_logs(logs)
-        measured_any = bool(reward_columns) or any(
+        # Only a finite reward is a measurement: a log whose one entry is a NaN reward
+        # (a PPO `objective/scores` that diverged) has nothing to store and writes no row
+        # and sends no event, as a log with no entry at all.
+        reward_measured = any(value is not None for value in reward_columns.values())
+        own_measured = any(
             logs.get(key) is not None
             for key in ("loss", "learning_rate", "grad_norm", val_key)
         )
+        measured_any = reward_measured or own_measured
+        # HF's final runtime summary is told apart FIRST, by what it did not measure: a
+        # finite throughput and none of loss / lr / grad norm / the validation number.
+        # TRL's `GRPOTrainer.log` merges what is left in its metric buffer into the next
+        # log and HF forces no log on the last step, so when the step count is not a
+        # multiple of `logging_steps` this log also carries the remainder's reward. It is
+        # still a runtime summary (one `summary` row, throughput only, #2810), and the
+        # reward is written beside it as its own `train` row, so the reward curve keeps
+        # its last point and the summary row stays what it always was.
+        is_runtime_summary = not own_measured and is_finite_number(summary_speed)
         # What the row is (experiment/row_kinds.py): an event carrying the validation
         # number is an evaluation, any other measured one a training log.
         row_kind = metric_row_kind(**{val_field: measured_val_loss})
@@ -542,14 +556,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
 
         # Log to experiment tracker. An event that measured no loss, lr, grad_norm or
         # validation number writes no training row.
-        if self.tracker and self.run_id and not measured_any and is_finite_number(
-            summary_speed
-        ):
+        if self.tracker and self.run_id and is_runtime_summary:
             # HF's final runtime summary: its throughput is a measurement (#2810), so
             # it is kept, as a row of its own. Nothing else in the event is a per-step
-            # value, so loss / lr / grad_norm / val stay NULL -- not the carried
-            # training values -- and `kind = "summary"` tells a reader (one that reads
-            # `loss`, `lr` per row) that this row is not a training step.
+            # value, so loss / lr / grad_norm / val -- and the reward -- stay NULL, not
+            # the carried training values, and `kind = "summary"` tells a reader (one
+            # that reads `loss`, `lr` per row) that this row is not a training step.
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,
@@ -558,7 +570,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 gpu_mem=gpu_mem,
                 kind=ROW_KIND_SUMMARY,
             )
-        elif self.tracker and self.run_id and measured_any:
+        if self.tracker and self.run_id and measured_any:
+            # A training row; for a runtime summary that carried a leftover reward it is
+            # the reward's own row, and the whole-run throughput is not its speed.
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,
@@ -566,7 +580,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 loss=row_loss,
                 lr=row_lr,
                 grad_norm=measured_grad_norm,
-                speed=speed,
+                speed=None if is_runtime_summary else speed,
                 gpu_mem=gpu_mem,
                 **reward_columns,
                 kind=row_kind,

@@ -3,7 +3,8 @@
 ``SoupTrainerCallback.on_log`` stored loss / lr / grad_norm / speed for every step and
 dropped the reward that GRPO, PPO and online-DPO log, so a program that wants a reward
 curve had to parse ``trainer_state.json``. Two nullable, add-only columns now carry it:
-``metrics.reward`` (the batch's mean reward) and ``metrics.reward_std`` (GRPO's spread).
+``metrics.reward`` (the mean reward over the logging window) and ``metrics.reward_std``
+(GRPO's window mean of the per-batch standard deviations).
 
 The contract, in the order of the sections below:
 
@@ -957,11 +958,11 @@ def _summary_log(**extra):
     return logs
 
 
-def test_a_runtime_summary_with_a_leftover_reward_writes_the_reward_row_then_the_summary(
+def test_a_runtime_summary_with_a_leftover_reward_writes_the_summary_then_the_reward_row(
     session,
 ):
     """Two rows from one log: the summary row exactly as it is without a reward (throughput
-    only, #2810), and, before it, a ``train`` row at that step that keeps the reward curve's
+    only, #2810), and, after it, a ``train`` row at that step that keeps the reward curve's
     last point (loss / lr / speed NULL: the log measured none of them)."""
     from soup_cli.utils.train_event_buffer import get_global_buffer
 
@@ -970,9 +971,9 @@ def test_a_runtime_summary_with_a_leftover_reward_writes_the_reward_row_then_the
     _event(callback, 23, **_summary_log(reward=0.7, reward_std=0.1))
     rows = _rows(tracker, run_id)
     assert [(row["step"], row["kind"]) for row in rows] == [
-        (20, "train"), (23, "train"), (23, "summary"),
+        (20, "train"), (23, "summary"), (23, "train"),
     ]
-    _, reward_row, summary = rows
+    _, summary, reward_row = rows
     assert (reward_row["reward"], reward_row["reward_std"]) == (0.7, 0.1)
     for column in ("loss", "lr", "grad_norm", "speed", "val_loss", "val_reward"):
         assert reward_row[column] is None, column
@@ -993,7 +994,7 @@ def test_a_runtime_summary_with_a_leftover_reward_writes_the_reward_row_then_the
 def test_a_runtime_summary_with_only_a_reward_std_leftover_still_keeps_the_summary_row(session):
     callback, tracker, run_id, _ = session
     _event(callback, 23, **_summary_log(reward_std=0.1))
-    reward_row, summary = _rows(tracker, run_id)
+    summary, reward_row = _rows(tracker, run_id)
     assert (reward_row["kind"], reward_row["reward"], reward_row["reward_std"]) == (
         "train", None, 0.1,
     )

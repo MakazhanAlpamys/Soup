@@ -770,7 +770,11 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     losses = [m["loss"] for m in valid]
 
     if not steps:
-        console.print("[dim]No loss data to plot.[/]")
+        if any(m.get("reward") is not None for m in metrics):
+            # PPO rows hold a reward and no loss: say so rather than imply nothing was logged.
+            console.print("[dim]No loss data to plot: this run recorded a reward and no loss.[/]")
+        else:
+            console.print("[dim]No loss data to plot.[/]")
         return
 
     from soup_cli.utils.plotext_compat import render_line

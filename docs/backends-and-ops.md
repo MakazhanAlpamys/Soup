@@ -1605,9 +1605,15 @@ omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; 
 `train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
 no training row and pushes no live event, while the terminal panel keeps showing the last
 real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
-stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm` and
-`val_loss` NULL and `speed` set (#2810), so a reader that wants the training curve skips
-rows whose `kind` is `summary`. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm`, `val_loss`
+and the reward columns NULL and `speed` set (#2810), so a reader that wants the training
+curve skips rows whose `kind` is `summary`. A GRPO log that is also this summary can carry
+a leftover reward (TRL merges what is still buffered into the next log, and Hugging Face
+forces no log on the last step, so a run whose step count is not a multiple of
+`logging_steps` has one): that log is written as two rows, the `summary` row as above and
+then a `train` row at the same step that carries the leftover reward (`loss`, `lr`, `speed`
+NULL), so the reward curve keeps its last point. A log whose only reward entries are not
+finite numbers writes nothing beyond the summary row. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
 returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
 row written, so a later measurement at the same or a lower step is a new row with a larger
 `id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
@@ -1638,8 +1644,10 @@ before they existed; nothing is backfilled. Their values are module constants in
   `ValueError` before anything is written.
 
 A reinforcement-style run records its per-step training reward in two more nullable columns of
-`metrics`: `metrics.reward`, the mean reward of the step's batch (higher is better), and
-`metrics.reward_std`, its spread where the trainer logs one. Both are appended after every
+`metrics`: `metrics.reward`, the mean reward over the logging window that ends at the step
+(higher is better; TRL averages what it collected since the previous log), and
+`metrics.reward_std`, where the trainer logs one (GRPO: the window mean of the per-batch
+standard deviations). Both are appended after every
 existing column, added in place to an existing `~/.soup/experiments.db`, and NULL on every row
 written before they existed (nothing is backfilled). NULL means "not measured", never a zero:
 every run that is not reinforcement-style, a row whose log carried no reward, a value that is
@@ -1669,8 +1677,11 @@ reward IS NOT NULL ORDER BY step, id`, or `ExperimentTracker.get_metric_series(r
 Only `kind = train` rows carry a reward: skip `eval` rows (their held-out number is
 `val_reward`) and `summary` rows (throughput only). A step that logs a reward and no loss is
 still a `train` row, with `loss` NULL (the previous step's loss is not carried into it), and
-a PPO step, which logs neither `loss` nor `learning_rate` under those names, has NULL `loss`
-and `lr`. `soup runs show` prints a `Reward: first -> last (N steps)` line under `Loss:` and
+a PPO row has NULL `loss`, `lr` and `grad_norm`: TRL logs PPO's learning rate as `lr` and
+its loss as `loss/policy_avg`, neither of which is read, so a PPO run records its reward
+and nothing else per step (`soup why` says that, and `soup runs show` says it recorded a
+reward and no loss instead of that there is no loss data). `soup runs show` prints a `Reward: first -> last (N steps)` line under `Loss:` (N counts the
+logged rows, one per logging window) and
 `soup runs compare` adds `Initial Reward` / `Final Reward` rows, only for a run that has a
 reward, so the output for any other run is unchanged. `GET /api/runs/{run_id}/metrics` returns
 both columns on every row (null when unset), and the live `metric` event carries `reward` /

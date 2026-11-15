@@ -1,8 +1,9 @@
 """Which trainer log keys are a run's training reward, and what the tracker stores for them.
 
 Two nullable, add-only columns of the ``metrics`` table hold the per-step reward of a
-reinforcement-style run (``experiment/tracker.py``): ``metrics.reward``, the mean reward of
-the step's batch, and ``metrics.reward_std``, its spread where the trainer logs one. NULL
+reinforcement-style run (``experiment/tracker.py``): ``metrics.reward``, the mean reward over
+the logging window that ends at the step, and ``metrics.reward_std``, where the trainer
+logs one (GRPO: the window mean of the per-batch standard deviations). NULL
 means "not measured": every non-RL run, a row whose log carried no reward, a value that is
 not a number (a ``bool``, a string) and a value that is not finite.
 
