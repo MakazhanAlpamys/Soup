@@ -1583,8 +1583,8 @@ class TrainingConfig(BaseModel):
         ),
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
-    save_steps: int = Field(default=100, description="Save checkpoint every N steps")
-    logging_steps: int = Field(default=10, description="Log metrics every N steps")
+    save_steps: int = Field(default=100, ge=1, description="Save checkpoint every N steps")
+    logging_steps: int = Field(default=10, ge=1, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
     # "evaluate each epoch" and "evaluate every N steps" stay distinguishable,

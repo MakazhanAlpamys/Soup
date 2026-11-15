@@ -133,8 +133,8 @@ Sections:
 | `training.load_in_8bit` | `bool \| null` | `null` |  | Friendly alias for quantization='8bit' / 'none'. When True, rewrites quantization to '8bit' if currently 'none'/'4bit'. Conflicts with load_in_16bit. On a task whose trainer never quantises the base (see quantization), true is refused at load (#795). (v0.41.0) |
 | `training.load_in_16bit` | `bool \| null` | `null` |  | Friendly alias: when True, sets quantization='none' (full bf16/fp16 LoRA). Conflicts with load_in_8bit. (v0.41.0) |
 | `training.scheduler` | `str` | `"cosine"` |  | LR scheduler type |
-| `training.save_steps` | `int` | `100` |  | Save checkpoint every N steps |
-| `training.logging_steps` | `int` | `10` |  | Log metrics every N steps |
+| `training.save_steps` | `int` | `100` | `>= 1` | Save checkpoint every N steps |
+| `training.logging_steps` | `int` | `10` | `>= 1` | Log metrics every N steps |
 | `training.eval_steps` | `int \| null` | `null` | `>= 1` | Evaluate the validation split every N optimizer steps (counted after gradient accumulation, like save_steps). Unset = evaluate at the end of every epoch. grpo evaluates only when this is set, because an evaluation there generates completions. (#1223) |
 | `training.dpo_beta` | `float` | `0.1` | `> 0` | DPO beta — KL penalty coefficient |
 | `training.kto_beta` | `float` | `0.1` | `> 0` | KTO beta — KL penalty coefficient |
