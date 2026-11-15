@@ -31,7 +31,7 @@ from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
 
-CONTROLS = "\x9b‮"
+CONTROLS = "\x9b\u202e"
 VALUES = ["plain", "x[red]n", "[/]n", "n:rocket:", "x\\[n", "x" + CONTROLS + "n", "x\x1b\x07n"]
 #: Values that can also be part of a file name on every CI platform.
 FILE_VALUES = [
@@ -46,7 +46,7 @@ FILE_VALUES = [
 ]
 
 #: What the display drops: C0 controls, a C1 CSI and a bidi override.
-DROPPED = ("\x1b", "\x07", "\x9b", "‮")
+DROPPED = ("\x1b", "\x07", "\x9b", "\u202e")
 
 
 def shown(value: str) -> str:
