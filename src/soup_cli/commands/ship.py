@@ -78,6 +78,7 @@ from soup_cli.utils.ship_verdict import (
     NUMERICS_FAMILY_FULL,
     TASK_AXIS,
     TASK_MODES,
+    AdapterChange,
     NoiseFloor,
     ShipVerdict,
     TaskWin,
@@ -501,14 +502,14 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
 
 # live_eval only builds a BitsAndBytesConfig for these two (#367); the other
 # quant_menu formats (gptq/awq/hqq/...) need a full TrainingConfig, so those
-# still fall back to bf16 here, same as no --config at all.
+# still fall back to the device's full-precision dtype, as with no --config.
 _LIVE_EVAL_QUANTIZATION_FORMATS = frozenset({"4bit", "8bit"})
 
 
 def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> Optional[str]:
     """Reuse the training run's own quantization for the live eval load.
 
-    Returns ``None`` (unchanged bf16 default) when no ``--config`` was given,
+    Returns ``None`` (device-selected full precision) when no ``--config`` was given,
     or the run used a format live_eval cannot build directly.
     """
     if soup_config is None:
@@ -530,9 +531,13 @@ def _live_eval_numerics(
     if quantization == "4bit" or quantization == "8bit":
         return quantization
     from soup_cli.utils import live_eval
+    from soup_cli.utils.gpu import bf16_fp16_flags
 
     resolved = live_eval.resolve_device(device)
-    return "bfloat16" if resolved.startswith("cuda") else "float32"
+    bf16, fp16 = bf16_fp16_flags(resolved)
+    if bf16:
+        return "bfloat16"
+    return "float16" if fp16 else "float32"
 
 
 def _expected_numerics_family(soup_config: "SoupConfig") -> str:
@@ -601,7 +606,7 @@ def _resolve_generators(
         )
         dtype = None
     else:
-        # dtype is the stamp: bf16 on CUDA (including cuda:0), fp32 elsewhere.
+        # Both loaders receive the same device-selected dtype as the stamp.
         dtype = numerics
         console.print(
             f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
@@ -1085,6 +1090,43 @@ def _adapter_is_noop(adapter: str) -> bool:
     )
 
 
+def _local_base_dir(base: str, adapter: str) -> str:
+    """The base's weights on disk: a local directory, or the cached Hub snapshot.
+
+    Never downloads. The live evaluation has already loaded the base, so a Hub
+    base is in the cache at the revision it was loaded from.
+    """
+    if os.path.isdir(base):
+        return base
+    from huggingface_hub import snapshot_download
+
+    from soup_cli.utils.run_provenance import base_revision_kwargs, recorded_base_kwargs
+
+    revision = base_revision_kwargs(base) or recorded_base_kwargs(adapter, base)
+    return snapshot_download(base, local_files_only=True, **revision)
+
+
+def _measure_adapter_change(adapter: str, base: str) -> AdapterChange:
+    """The adapter's changed fraction for the verdict, or why it is not measured.
+
+    Display only (#2762): no failure here changes the verdict or the exit code.
+    """
+    if not os.path.isdir(adapter):
+        return AdapterChange.not_measured("the adapter is not a local directory")
+    try:
+        base_dir = _local_base_dir(base, adapter)
+    except Exception:  # display only: no failure here may end the run (#2762)
+        return AdapterChange.not_measured(
+            "the base weights are not in a local directory or the local Hugging Face cache"
+        )
+    try:
+        from soup_cli.utils.adapter_change import measure_adapter_change
+
+        return measure_adapter_change(adapter, base_dir)
+    except Exception as exc:  # display only: no failure here may end the run (#2762)
+        return AdapterChange.not_measured(f"{type(exc).__name__}: {exc}")
+
+
 def _verdict_live(
     *,
     base: Optional[str],
@@ -1227,8 +1269,13 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
+        adapter_change = (
+            _measure_adapter_change(adapter, base) if adapter else None
+        )
         return replace(
-            verdict, numerics=_live_eval_numerics(quantization, device)
+            verdict,
+            numerics=_live_eval_numerics(quantization, device),
+            adapter_change=adapter_change,
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage

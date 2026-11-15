@@ -12,6 +12,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from soup_cli.experiment.row_kinds import check_metric_row_kind
+from soup_cli.utils.finite_json import finite_json
+
 # Closed allowlist — drop any payload key not in this set.
 _ALLOWED_KEYS = frozenset(
     {
@@ -30,6 +33,7 @@ _ALLOWED_KEYS = frozenset(
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     }
 )
 
@@ -64,8 +68,13 @@ class TrainEvent:
     p99_step_ms: Optional[float] = None
     eta_seconds: Optional[float] = None
     message: Optional[str] = None
+    #: What the ``metric`` event mirrors: ``train`` / ``eval`` / ``summary``, the
+    #: ``metrics.kind`` of the row written beside it (experiment/row_kinds.py).
+    #: None is omitted from the payload.
+    kind: Optional[str] = None
 
     def __post_init__(self) -> None:
+        check_metric_row_kind(self.kind)
         if self.type not in _VALID_TYPES:
             raise ValueError(
                 f"type must be one of {sorted(_VALID_TYPES)}; got {self.type!r}"
@@ -105,6 +114,7 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     ):
         value = getattr(event, key)
         if value is not None:
@@ -116,8 +126,11 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
 def format_sse_frame(event: TrainEvent) -> str:
     """Serialise the event as a single Server-Sent-Events frame.
 
-    `data: {json}\\n\\n` — the standard W3C SSE wire format.
+    `data: {json}\\n\\n` — the standard W3C SSE wire format. A non-finite
+    float (an overflowed ``loss`` or ``grad_norm``) is sent as ``null``:
+    ``json.dumps`` would write a bare ``Infinity`` / ``NaN`` token, which the
+    browser's ``JSON.parse`` refuses (#2750).
     """
-    payload = to_payload(event)
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    payload = finite_json(to_payload(event))
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return f"data: {body}\n\n"
