@@ -132,7 +132,19 @@ class TestTheOtherPathsThatDropThem:
     def test_mlx_sft(self):
         message = _refusal(_yaml("sft", backend="mlx", data={"format": "chatml"}))
 
-        assert "data.add_new_tokens is not applied on backend='mlx'" in message, message
+        assert (
+            "data.add_new_tokens is not applied on backend='mlx' with "
+            "training.quantization='4bit'"
+        ) in message
+        assert "native MLX vocabulary expansion requires unquantized embeddings" in message
+
+    @pytest.mark.parametrize("field", _FIELDS)
+    def test_mlx_sft_unquantized_loads(self, field):
+        cfg = load_config_from_string(
+            _yaml("sft", backend="mlx", field=field, data={"format": "chatml"},
+                  training={"quantization": "none"})
+        )
+        assert getattr(cfg.data, field) == ["<x>"]
 
     @pytest.mark.parametrize("field", _FIELDS)
     @pytest.mark.parametrize("task, fmt", [

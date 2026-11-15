@@ -81,6 +81,23 @@ def export(
         "--onnx-task",
         help="ONNX export task: text-generation (causal LM) or feature-extraction (embedding)",
     ),
+    validate_onnx: bool = typer.Option(
+        False, "--validate-onnx",
+        help=(
+            "ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, "
+            "3=unusable validation. Other export option conflicts also use 2; "
+            "inspect the diagnostic."
+        ),
+    ),
+    prompts: Optional[str] = typer.Option(
+        None, "--prompts", help="Explicit text/JSONL prompts for --validate-onnx (at most 32).",
+    ),
+    atol: Optional[float] = typer.Option(
+        None, "--atol", help=(
+            "Absolute logits tolerance for --validate-onnx. Default 1e-4 "
+            "(FP32 smoke check, not a quality threshold)."
+        ),
+    ),
     deploy: Optional[str] = typer.Option(
         None,
         "--deploy",
@@ -186,6 +203,31 @@ def export(
         console.print(f"[red]{' and '.join(flags)} require --format gguf.[/]")
         raise typer.Exit(2)
 
+    validation_prompts = None
+    validation_atol = None
+    if validate_onnx or prompts is not None or atol is not None:
+        from soup_cli.eval.onnx_check import (
+            DEFAULT_ATOL,
+            OnnxValidationError,
+            load_validation_prompts,
+            validate_atol,
+        )
+
+        try:
+            if not validate_onnx or fmt != "onnx" or onnx_task != "text-generation":
+                raise OnnxValidationError(
+                    "--validate-onnx, --prompts and --atol require --format onnx "
+                    "--onnx-task text-generation and --validate-onnx."
+                )
+            if prompts is None:
+                raise OnnxValidationError("--validate-onnx requires an explicit --prompts file.")
+            validation_atol = DEFAULT_ATOL if atol is None else atol
+            validate_atol(validation_atol)
+            validation_prompts = load_validation_prompts(Path(prompts))
+        except OnnxValidationError as exc:
+            console.print(Text(f"ONNX validation input error: {strip_control(exc)}", style="red"))
+            raise typer.Exit(3) from exc
+
     model_name = Path(model).name
 
     # --- Deploy target validation ---
@@ -207,7 +249,13 @@ def export(
 
     # --- ONNX export path ---
     if fmt == "onnx":
-        output_path = _export_onnx(model_path, output, base, onnx_task, trust_remote_code)
+        validation_kwargs = {}
+        if validation_prompts is not None:
+            validation_kwargs = {"validation_prompts": validation_prompts,
+                                 "validation_atol": validation_atol}
+        output_path = _export_onnx(
+            model_path, output, base, onnx_task, trust_remote_code, **validation_kwargs,
+        )
         if output_path is not None:
             _maybe_attach_export(
                 artifact_path=str(output_path), kind="onnx",
@@ -844,6 +892,7 @@ def _export_onnx(
     model_path: Path, output: Optional[str], base: Optional[str],
     task: str = "text-generation",
     trust_remote_code: bool = False,
+    *, validation_prompts: Optional[list[str]] = None, validation_atol: float = 1e-4,
 ) -> Optional[Path]:
     """Export model to ONNX format via optimum."""
     try:
@@ -905,6 +954,33 @@ def _export_onnx(
         except Exception as exc:
             console.print(f"[red]ONNX export failed:[/] {exc}")
             raise typer.Exit(1)
+
+        if validation_prompts is not None:
+            from soup_cli.eval.onnx_check import validate_onnx_export
+
+            try:
+                result = validate_onnx_export(
+                    source_path, output_path, validation_prompts,
+                    atol=validation_atol, trust_remote_code=trust_remote_code,
+                )
+            except Exception as exc:
+                console.print(Text(
+                    f"ONNX validation could not run: {strip_control(exc)}\n"
+                    'Check the graph, inputs and dependencies: pip install "soup-cli[onnx]".',
+                    style="red",
+                ))
+                raise typer.Exit(3) from exc
+            status = "PASS" if result.passed else "FAIL"
+            console.print(Panel(
+                f"{status}\nMax absolute error: {result.max_abs_error:.6g}\n"
+                f"Mean absolute error: {result.mean_abs_error:.6g}\n"
+                f"Absolute tolerance: {result.atol:.6g}\n"
+                f"Checked: {result.prompts} prompts, {result.elements} logits elements\n"
+                "CPU float32; explicit prompts only; no cached generation or quality claim.",
+                title="ONNX Logits Validation",
+            ))
+            if not result.passed:
+                raise typer.Exit(2)
     finally:
         _remove_merge_dir(merge_dir, merge_dir_created)
 
@@ -1142,16 +1218,28 @@ def _maybe_attach_export(
 
     Resolution order:
       1. ``--registry-id`` (explicit override)
-      2. Auto-match by source model output dir
-    Silent no-op if no match is found and no explicit id was given. Failures
-    are surfaced as warnings, never as a hard CLI exit (the export itself
-    succeeded).
+      2. Auto-match: the newest entry whose tracked run wrote ``source_model``
+         (see ``lookup_entry_by_output_dir``)
+    Silent no-op if no match is found and no explicit id was given. Failures,
+    including a registry or tracker database that cannot be read during the
+    auto-match, are surfaced as warnings, never as a hard CLI exit (the export
+    itself succeeded).
     """
+    import sqlite3
+
     from soup_cli.registry.attach import attach_artifact, lookup_entry_by_output_dir
 
     entry_id = explicit_id
     if entry_id is None:
-        entry_id = lookup_entry_by_output_dir(source_model)
+        try:
+            entry_id = lookup_entry_by_output_dir(source_model)
+        except (sqlite3.Error, OSError) as exc:
+            console.print(
+                "[yellow]Could not look up a registry entry for this export:[/] "
+                f"{for_terminal(exc)}. Pass --registry-id to attach it.",
+                emoji=False,
+            )
+            return
     if entry_id is None:
         return
 

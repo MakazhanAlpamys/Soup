@@ -736,7 +736,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             result = []
             for rid in run_ids:
                 run_info = tracker.get_run(rid)
-                metrics = tracker.get_metrics(rid)
+                resolved_id = run_info["run_id"] if run_info else rid
+                metrics = tracker.get_metrics(resolved_id)
                 config = {}
                 if run_info and run_info.get("config_json"):
                     try:
@@ -744,7 +745,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     except (ValueError, TypeError):
                         pass
                 result.append({
-                    "run_id": rid,
+                    "run_id": resolved_id,
                     "config": config,
                     "metrics": metrics,
                 })
@@ -784,8 +785,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         tracker, run_id, markup=False, name_missing_id=False
                     ),
                 )
-            metrics = tracker.get_metrics(run_id)
-            return {"run_id": run_id, "metrics": metrics}
+            resolved_id = run["run_id"]
+            metrics = tracker.get_metrics(resolved_id)
+            return {"run_id": resolved_id, "metrics": metrics}
         finally:
             tracker.close()
 
