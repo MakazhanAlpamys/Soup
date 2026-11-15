@@ -1,0 +1,30 @@
+........................................................................ [ 13%]
+........................................................................ [ 26%]
+........................................................................ [ 40%]
+........................................................................ [ 53%]
+..................................................ss.................... [ 66%]
+........................................................................ [ 80%]
+..........................s............................................. [ 93%]
+...............s..................                                       [100%]  0%|          | 0/4 [00:00<?, ?it/s]
+
+=============================== warnings summary ===============================
+tests/test_trl_preference_config_contract.py::TestEveryPreferenceTrainerReachesALiveTrlTrainer::test_setup_builds_a_trainer[bco]
+  /opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py:90: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+tests/test_trl_preference_config_contract.py: 21 warnings
+  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:175: FutureWarning: The `KTOConfig` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOConfig`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOConfig`) will remain, but API changes may occur.
+    kto_config = KTOConfig(
+
+tests/test_trl_preference_config_contract.py: 21 warnings
+  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:219: FutureWarning: The `KTOTrainer` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOTrainer`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOTrainer`) will remain, but API changes may occur.
+    self.trainer = KTOTrainer(
+
+tests/test_trl_preference_config_contract.py: 6 warnings
+tests/test_v07200.py: 1 warning
+tests/test_issue1768_resume_reloads_the_trained_adapter.py: 6 warnings
+  /private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/utils/data/dataloader.py:759: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    super().__init__(loader)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+534 passed, 4 skipped, 56 warnings in 27.98s

@@ -1,0 +1,181 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_untied_streamed_loss_and_gradients_match_resident ____________
+
+checkpoint = PosixPath('/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/pytest-544/test_untied_streamed_loss_and_0/model')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1103c53d0>
+
+    def test_untied_streamed_loss_and_gradients_match_resident(checkpoint, monkeypatch):
+        from soup_cli.utils import layer_stream_runtime
+    
+        sources = []
+    
+        class CountedSource(layer_stream_runtime.RamSource):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                sources.append(self)
+    
+        monkeypatch.setattr(layer_stream_runtime, "RamSource", CountedSource)
+        _, streamed = _build(checkpoint, "stream")
+        try:
+            _, resident = _build(checkpoint, "resident", stream=False)
+            assert len(sources) == 1 and streamed.trainer.ref_model is None
+            assert set(streamed.model.peft_config) == {"default"}
+            _randomise_lora_b(streamed.model)
+            assert _sync_adapters(resident.model, streamed.model) > 0
+            batch = next(iter(streamed.trainer.get_train_dataloader()))
+            assert next(iter(resident.trainer.get_train_dataloader())).keys() == batch.keys()
+            assert set(batch["label"]) == {True, False}
+            seen = []
+            lora = next(module for module in streamed.model.modules() if hasattr(module, "lora_A"))
+            hook = streamed.model.register_forward_pre_hook(
+                lambda *_: seen.append(lora.disable_adapters)
+            )
+    
+            def run(wrapper):
+                model = wrapper.model
+                model.train()
+                value = wrapper.trainer.compute_loss(model, batch)
+                value.backward()
+                grads = {name.replace(".inner.", "."): param.grad for name, param in
+                         model.named_parameters() if param.grad is not None and "lora_" in name}
+                return value.detach(), grads
+    
+            try:
+>               actual, actual_grads = run(streamed)
+                                       ^^^^^^^^^^^^^
+
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:137: in run
+    value.backward()
+/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/_tensor.py:623: in backward
+    torch.autograd.backward(
+/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/autograd/__init__.py:395: in backward
+    _engine_run_backward(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+t_outputs = (tensor(0.6951, grad_fn=<DivBackward0>),)
+args = ((tensor(1.),), False, False, ())
+kwargs = {'allow_unreachable': True, 'accumulate_grad': True}
+
+    def _engine_run_backward(
+        t_outputs: Sequence[torch.Tensor | GradientEdge],
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, ...]:
+        attach_logging_hooks = log.getEffectiveLevel() <= logging.DEBUG
+        if attach_logging_hooks:
+            unregister_hooks = _register_logging_hooks_on_whole_graph(t_outputs)
+    
+        # Need to save the context so compiler config will be visible in device threads
+        torch._C._stash_obj_in_tls("context", contextvars.copy_context())
+    
+        try:
+>           return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+                t_outputs, *args, **kwargs
+            )  # Calls into the C++ engine to run the backward pass
+E           RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [64, 64]] is at version 4; expected version 2 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True, check_nan=False).
+
+/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/autograd/graph.py:1072: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+Loading tokenizer: 
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+test-544/test_untied_streamed_loss_and_0/model
+╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
+│ HF/local source: 0.00 GB                                                     │
+│ Soup materialized copy: 0.00 GB (no write required)                          │
+│ Layer-shard cache: 0.00 GB (write required)                                  │
+│ Projected total on disk: 0.00 GB                                             │
+│ Additional writes before training: 0.00 GB                                   │
+│ Free on target volume (layer-shard cache): 26.05 GB                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> 
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+test-544/test_untied_streamed_loss_and_0/cache/private__var__folders___l__f2y24x
+9s6rzbqr4s0bbws1vh0000gn__T__pytest-of-pernavjain__pytest-544__test_untied_strea
+med_loss_and_0_
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────── training.stream_layers ───────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                  │
+│   base store   0.00 GB across 2 layers (pinned)                              │
+│   VRAM buffers 2 x 0 MB + 1 x 0 MB large-layer slot = 0 MB                   │
+│   resident     0 MB extras + adapters                                        │
+│   peak VRAM    ~0.01 GB at batch 2 x seq 64 (logits 0.00 GB)                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not 
+run resident on this card at all.
+Layer streaming ready: 2 layers, 0.00 GB pageable RAM store, 2 x 0 MB decoder 
+buffers + 1 x 0 MB large-layer slot
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 82,240 total (2.18%)
+Loading tokenizer: 
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+test-544/test_untied_streamed_loss_and_0/model
+Loading model: 
+/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+test-544/test_untied_streamed_loss_and_0/model
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 84,032 total (2.13%)
+----------------------------- Captured stderr call -----------------------------
+
+Extracting prompt from train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Extracting prompt from train dataset: 100%|██████████| 8/8 [00:00<00:00, 1943.61 examples/s]
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 9650.40 examples/s]
+
+Tokenizing train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Tokenizing train dataset: 100%|██████████| 8/8 [00:00<00:00, 2951.92 examples/s]
+
+Processing tokenized train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Processing tokenized train dataset: 100%|██████████| 8/8 [00:00<00:00, 4301.30 examples/s]
+
+Filtering desirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering desirable examples: 100%|██████████| 8/8 [00:00<00:00, 7729.65 examples/s]
+
+Filtering undesirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering undesirable examples: 100%|██████████| 8/8 [00:00<00:00, 10140.35 examples/s]
+[transformers] The model is already on multiple devices. Skipping the move to device specified in `args`.
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 3877.33 examples/s]
+
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 21/21 [00:00<00:00, 34205.97it/s]
+
+Extracting prompt from train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Extracting prompt from train dataset: 100%|██████████| 8/8 [00:00<00:00, 11428.62 examples/s]
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 12291.00 examples/s]
+
+Tokenizing train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Tokenizing train dataset: 100%|██████████| 8/8 [00:00<00:00, 5249.44 examples/s]
+
+Processing tokenized train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Processing tokenized train dataset: 100%|██████████| 8/8 [00:00<00:00, 4426.71 examples/s]
+
+Filtering desirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering desirable examples: 100%|██████████| 8/8 [00:00<00:00, 10152.63 examples/s]
+
+Filtering undesirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering undesirable examples: 100%|██████████| 8/8 [00:00<00:00, 10558.35 examples/s]
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 4359.42 examples/s]
+------------------------------ Captured log call -------------------------------
+WARNING  transformers.trainer:trainer.py:4708 The model is already on multiple devices. Skipping the move to device specified in `args`.
+=============================== warnings summary ===============================
+tests/test_bco_streaming.py::test_untied_streamed_loss_and_gradients_match_resident
+  /opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py:90: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_bco_streaming.py::test_untied_streamed_loss_and_gradients_match_resident
+1 failed, 1 warning in 4.32s

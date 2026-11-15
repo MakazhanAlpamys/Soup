@@ -1,0 +1,26 @@
+......ssss.............................................................. [ 63%]
+.........................................                                [100%]
+=============================== warnings summary ===============================
+tests/test_bco_streaming.py::test_streamed_budget_counts_the_loss_batch_shape
+  /opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py:90: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[sft]
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[dpo]
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[orpo]
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[simpo]
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[bco]
+  /private/tmp/soup-2766-floor/lib/python3.12/site-packages/torch/utils/data/dataloader.py:759: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    super().__init__(loader)
+
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
+  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:175: FutureWarning: The `KTOConfig` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOConfig`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOConfig`) will remain, but API changes may occur.
+    kto_config = KTOConfig(
+
+tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
+  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:219: FutureWarning: The `KTOTrainer` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOTrainer`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOTrainer`) will remain, but API changes may occur.
+    self.trainer = KTOTrainer(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+109 passed, 4 skipped, 9 warnings in 8.03s
