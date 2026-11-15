@@ -290,6 +290,11 @@ def fold_lora_scaling(
 
     Inputs whose scaling already matches the template are passed through
     unchanged, as is any module whose scaling cannot be read from either config.
+    An input whose own scaling is 0 gets a zero ``lora_B``: it decoded to no delta and
+    still adds none. A template whose scaling is 0 (``lora_alpha: 0``) decodes every
+    module at 0 whatever the tensors hold, so the ratio is undefined and every input is
+    passed through as it is. DoRA's ``lora_magnitude_vector`` is not multiplied by the
+    scaling in PEFT's forward, so it is never rescaled; every ``lora_A`` is left alone.
     """
     import numpy as np
 

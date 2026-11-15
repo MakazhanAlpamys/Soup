@@ -184,6 +184,114 @@ class TestMerge:
         assert np.array_equal(got[_B], expected_b)
 
 
+class TestEveryStrategy:
+    """The fold runs before the strategy, so linear, ties, dare and svd all see it.
+
+    ``a`` and ``b`` hold the SAME effective delta, ``4 e1 e1^T``, under two scalings:
+    ``a`` as ``B = 4`` at scaling 1, ``b`` as ``B = 1`` at scaling 4. Any of the four
+    strategies merging two equal deltas must give that delta back. Without the fold the
+    raw ``B`` tensors average to 2.5, decoded at ``a``'s scaling 1.
+    """
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--strategy", "linear"],
+            ["--strategy", "ties"],
+            # density 1.0 keeps every element, so the random drop cannot move the result.
+            ["--strategy", "dare", "--density", "1.0"],
+            ["--strategy", "svd", "--rank", "1"],
+        ],
+        ids=["linear", "ties", "dare", "svd"],
+    )
+    def test_equal_deltas_under_two_scalings_merge_to_that_delta(self, tmp_path, extra):
+        _make_adapter(tmp_path / "a", r=2, alpha=2, slot=1, value=4.0)
+        _make_adapter(tmp_path / "b", r=2, alpha=8, slot=1, value=1.0)
+        res = _run(["merge", "a", "b", "-o", "out", "--allow-unscanned", *extra], tmp_path)
+        assert res.exit_code == 0, res.output
+        out = tmp_path / "out"
+        got = _effective_delta(out, _written_scaling(out))
+        np.testing.assert_allclose(got, _diag(0.0, 4.0), atol=1e-5)
+
+
+class TestZeroScaling:
+    def test_a_template_with_zero_scaling_passes_every_input_through(self, tmp_path):
+        """``lora_alpha: 0`` on the template: the merged adapter decodes every module at
+        scaling 0, whatever its tensors hold, so there is no ratio to fold to. The inputs
+        are merged as they are, as before, and the output keeps the template's 0."""
+        _make_adapter(tmp_path / "a", r=2, alpha=0, slot=0, value=1.0)
+        _make_adapter(tmp_path / "b", r=2, alpha=8, slot=1, value=3.0)
+        res = _run(
+            ["merge", "a", "b", "-o", "out", "--weights", "0,1", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, res.output
+        from safetensors.numpy import load_file
+
+        got = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
+        expected_b = np.zeros((_DIM, 2), dtype=np.float32)
+        expected_b[1, 1] = 3.0
+        assert np.array_equal(got[_B], expected_b)
+        cfg = json.loads((tmp_path / "out" / "adapter_config.json").read_text(encoding="utf-8"))
+        assert cfg["lora_alpha"] == 0
+
+    def test_an_input_with_zero_scaling_contributes_nothing(self, tmp_path):
+        """An input whose own scaling is 0 decoded to no delta, and keeps contributing none
+        under the template's scaling: its ``lora_B`` is multiplied by 0 / template."""
+        _make_adapter(tmp_path / "a", r=2, alpha=2, slot=0, value=1.0)
+        _make_adapter(tmp_path / "z", r=2, alpha=0, slot=1, value=5.0)
+        res = _run(
+            ["merge", "a", "z", "-o", "out", "--weights", "0,1", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, res.output
+        out = tmp_path / "out"
+        got = _effective_delta(out, _written_scaling(out))
+        np.testing.assert_allclose(got, np.zeros((_DIM, _DIM)), atol=1e-12)
+
+
+class TestOtherLoraTensors:
+    def _configs(self, tmp_path, **extra):
+        a, b = tmp_path / "a", tmp_path / "b"
+        for path, alpha in ((a, 2), (b, 8)):
+            path.mkdir()
+            (path / "adapter_config.json").write_text(
+                json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": alpha, **extra}),
+                encoding="utf-8",
+            )
+        return [str(a), str(b)]
+
+    def test_lora_embedding_b_is_rescaled_like_lora_b(self, tmp_path):
+        """PEFT's LoRA embedding adds ``(x @ A^T) @ B^T * scaling``, the same scaling as a
+        linear layer, so ``lora_embedding_B`` is folded and ``lora_embedding_A`` is not."""
+        from soup_cli.utils.adapter_merge import fold_lora_scaling
+
+        stem = "base_model.model.model.embed_tokens"
+        emb_a = np.ones((2, 10), dtype=np.float32)
+        emb_b = np.ones((_DIM, 2), dtype=np.float32)
+        weights = {f"{stem}.lora_embedding_A": emb_a, f"{stem}.lora_embedding_B": emb_b}
+        folded = fold_lora_scaling([weights, weights], self._configs(tmp_path))
+
+        assert folded[0] is weights
+        np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_B"], emb_b * 4.0)
+        np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_A"], emb_a)
+
+    def test_dora_magnitude_vector_is_left_as_it_is(self, tmp_path):
+        """DoRA's ``lora_magnitude_vector`` is not multiplied by the LoRA scaling in PEFT's
+        forward: it rescales ``W + scaling * B @ A`` column by column. Folding ``lora_B``
+        keeps each input's ``scaling * B @ A``, so the magnitude stays as it was and goes
+        through the strategy as before (an average for ``linear``)."""
+        from soup_cli.utils.adapter_merge import fold_lora_scaling
+
+        magnitude = np.full((_DIM,), 7.0, dtype=np.float32)
+        b = np.ones((_DIM, 2), dtype=np.float32)
+        weights = {_B: b, f"{_STEM}.lora_magnitude_vector": magnitude}
+        folded = fold_lora_scaling([weights, weights], self._configs(tmp_path, use_dora=True))
+
+        np.testing.assert_array_equal(folded[1][_B], b * 4.0)
+        assert folded[1][f"{_STEM}.lora_magnitude_vector"] is magnitude
+
+
 class TestCmaesCandidates:
     def test_candidate_is_scored_with_the_rescaled_merge(self, pair):
         from soup_cli.utils.cmaes_merge import build_cmaes_eval_fn, build_cmaes_plan
