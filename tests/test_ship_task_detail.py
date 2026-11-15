@@ -160,7 +160,7 @@ def test_build_truncation_refuses_two_sides_of_different_length():
 @pytest.mark.parametrize(
     ("n", "base", "tuned", "fires"),
     [
-        # the competitor's run: 5 -> 14 of 64, threshold ceil(6.4) = 7
+        # the reported run: 5 -> 14 of 64, threshold ceil(6.4) = 7
         (64, 5, 11, False),  # rise 6, one below
         (64, 5, 12, True),  # rise 7, exactly at
         (64, 5, 14, True),

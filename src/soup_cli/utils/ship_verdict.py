@@ -136,7 +136,7 @@ WARNING_TRUNCATION_GROWTH = "truncation_growth"
 #: least ``max(TRUNCATION_GROWTH_MIN_ROWS, ceil(TRUNCATION_GROWTH_MIN_SHARE * n))`` rows. One or
 #: two rows never fire (greedy decoding on a GPU is not bit-stable, #376); a fall never fires.
 #: A display constant like the changed-fraction bound, NOT calibrated: no table of real runs
-#: exists yet, and it stays a warning until one does. Competitor run 5 -> 14 of 64: threshold 7,
+#: exists yet, and it stays a warning until one does. A reported run 5 -> 14 of 64: threshold 7,
 #: rise 9, fires.
 TRUNCATION_GROWTH_MIN_ROWS = 3
 TRUNCATION_GROWTH_MIN_SHARE = 0.10
