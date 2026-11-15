@@ -226,12 +226,65 @@ _SHAPE_FIELDS = (*SHAPE_REQUIRED_FIELDS, *SHAPE_OPTIONAL_FIELDS, "tie_word_embed
 
 
 def _checked_seq_len(value: Any) -> Optional[int]:
-    """``None`` or an int; a bool or anything else is refused by name, before any read."""
+    """``None`` or an int of at least 1; anything else is refused by name, before any read."""
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"seq_len must be an int or None, got {type(value).__name__}")
+    if value < 1:
+        # An empty dataset has no longest row; do not turn it into a 64-token estimate.
+        raise ValueError(f"seq_len must be at least 1, got {value}")
     return value
+
+
+def _not_padded_to_the_longest_row(cfg: Any) -> Optional[str]:
+    """Why ``cfg``'s micro-batches are not padded to their longest row; ``None`` when they are.
+
+    Only text SFT on the transformers backend, with no packing, no multipack, no streamed data
+    and no layer streaming, builds a micro-batch of ``batch_size`` rows padded to the longest of
+    them (measured: the same peak at ``max_length`` 1024 and 256 on rows of 79 tokens). A caller's
+    ``seq_len`` would under-price every other run, so it is not honoured for them:
+
+    - packing and multipack fill every sequence to ``data.max_length``;
+    - grpo, ppo and online_dpo generate tokens on top of the prompt; dpo, kto, orpo, simpo, ipo,
+      bco, preference and reward_model run a chosen and a rejected sequence per row; distill and
+      unlearn run a second model or a second set; pretrain's rows are long documents cut to
+      ``max_length``; tts, asr, vision and audio carry media tokens; the classifier family,
+      embedding, prm and moe_lora_routing have their own collators. None of them is measured, so
+      sft is the only task listed here;
+    - the longest row of a streamed dataset is not known before the run, and layer streaming has
+      its own planner (the pre-flight skips it).
+    """
+    training, data = getattr(cfg, "training", None), getattr(cfg, "data", None)
+    filled = "every sequence of a micro-batch is filled to data.max_length"
+    if getattr(training, "packing", False):
+        return f"training.packing is on: {filled}"
+    if getattr(training, "multipack", False):
+        return f"training.multipack is on: {filled}"
+    task = getattr(cfg, "task", "sft")
+    if task != "sft":
+        return (
+            f"task {task!r} is not priced at a shorter length: only task sft pads each "
+            "micro-batch to its longest row (the others pack, pair rows, generate on top of the "
+            "prompt, or are not measured)"
+        )
+    modality = getattr(cfg, "modality", "text")
+    if modality != "text":
+        return f"modality {modality!r} carries image or audio tokens on top of the text"
+    backend = getattr(cfg, "backend", "transformers")
+    if backend != "transformers":
+        return f"backend {backend!r} is not measured (only transformers is)"
+    if getattr(data, "streaming", False):
+        return (
+            "data.streaming is on: the longest row of a streamed dataset is not known before "
+            "the run"
+        )
+    if getattr(training, "stream_layers", False):
+        return (
+            "training.stream_layers is on: layer streaming has its own planner and the "
+            "resident estimate does not apply"
+        )
+    return None
 
 
 def _shape_from_caller(shape: Any) -> Any:
@@ -266,6 +319,12 @@ def _shape_from_caller(shape: Any) -> Any:
         if value > limits.get(name, _MAX_DIM):
             raise ValueError(f"shape[{name!r}] is larger than {limits.get(name, _MAX_DIM):,}")
         values[name] = value
+    floor = values["vocab_size"] * values["hidden_size"]
+    if values["params"] < floor:
+        raise ValueError(
+            f"shape['params'] ({values['params']:,}) is below vocab_size x hidden_size "
+            f"({floor:,}), the embedding table alone: params is a raw parameter count"
+        )
     tied = shape.get("tie_word_embeddings", False)
     if not isinstance(tied, bool):
         raise TypeError(f"shape['tie_word_embeddings'] must be a bool, got {type(tied).__name__}")
@@ -299,29 +358,38 @@ def profile_from_config(
     """The memory profile of a ``SoupConfig``, from the model's own shape.
 
     The entry point for a program that wants the estimate without running ``soup train``.
-    Built from the same input as the train pre-flight
-    (``hardware_fit.hardware_fit_input_from_config``), so the two report the same
-    peak for the same config (#2049). When the run cannot be priced, the
-    :class:`~soup_cli.utils.hardware_fit.FitUnavailable` naming the field that stops
+    It builds the same input as the train pre-flight
+    (``hardware_fit.hardware_fit_input_from_config``, #2049), with one exception: the
+    pre-flight passes ``kbit_fp32`` on a CUDA card without bf16 hardware
+    (``commands/train.py``), which this function cannot take. When the run cannot be priced,
+    the :class:`~soup_cli.utils.hardware_fit.FitUnavailable` naming the field that stops
     it (#2306). ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto``
     resolves on. ``on_hub_request`` is called just before the first request to the
     Hub, if one is made.
 
     The estimate prices rows that FILL the length it is given: ``data.max_length`` tokens
     in every row of a micro-batch, as its calibration runs did. For data whose rows are
-    shorter, ``seq_len`` is the length to price instead: an int, clamped to
-    ``[64, data.max_length]`` (a bool or a non-int raises ``TypeError``). A micro-batch is
-    padded to its longest row, so the longest row of the data is the figure to pass. The
-    result then has ``seq_len_source: "caller"``, ``seq_len_requested`` and a note, and its
-    ``seq_len`` is the length priced. With ``seq_len=None`` the result is what it always was.
+    shorter, ``seq_len`` is the length to price instead: an int of at least 1 (a bool or a
+    non-int raises ``TypeError``, a value below 1 ``ValueError``), clamped to
+    ``[64, data.max_length]``. It is honoured only for a run that pads each micro-batch to its
+    longest row (text SFT without packing; ``_not_padded_to_the_longest_row`` lists what is
+    not), where the longest row of the data is the figure to pass. Any other run is priced at
+    ``data.max_length``. The result then has ``seq_len_requested``, a note, and
+    ``seq_len_source``: ``"caller"`` when the caller's length was priced, ``"max_length"``
+    when ``data.max_length`` was (the run does not pad to its longest row, or the caller's
+    value was above it); ``seq_len`` is the length priced. With ``seq_len=None`` the result is
+    what it always was.
 
     ``shape`` gives the model's shape when it cannot be read (not cached, no network, a
     gated repo): a mapping with ``hidden_size``, ``num_layers``, ``intermediate_size``,
     ``vocab_size`` and ``params``, all required together (a parameter count alone is
     refused: it leaves the logits unpriced), and optionally ``num_attention_heads``,
-    ``num_key_value_heads``, ``head_dim`` and ``tie_word_embeddings``. It is used only when
-    the model's own ``config.json`` cannot be read, which otherwise wins (a note says so);
-    the result then has ``shape_source: "caller"``.
+    ``num_key_value_heads``, ``head_dim`` and ``tie_word_embeddings``. ``params`` is a raw
+    parameter count of at least ``vocab_size * hidden_size``; pass the count the checkpoint
+    stores, which for a tied model that stores ``lm_head.weight`` includes the head twice.
+    The shape is used only when the model's own ``config.json`` cannot be read, which
+    otherwise wins (a note says so); the result then has ``shape_source: "caller"``. Weights
+    on disk without a ``config.json`` keep their measured parameter count over the caller's.
     """
     from soup_cli.utils.hardware_fit import (
         _MIN_SEQ_LEN,
@@ -343,31 +411,50 @@ def profile_from_config(
         return inp
     notes: list[str] = []
     if caller_shape is not None:
-        if inp.shape is None or inp.shape.guessed:
-            inp = dataclasses.replace(inp, shape=caller_shape, params_b=caller_shape.params / 1e9)
-            notes.append(
-                "The model's shape was supplied by the caller (shape=): "
-                f"hidden_size {caller_shape.hidden_size}, {caller_shape.num_layers} layers, "
-                f"intermediate_size {caller_shape.intermediate_size}, vocab_size "
-                f"{caller_shape.vocab_size}, {caller_shape.params:,} parameters. The estimate "
-                "takes it as given."
-            )
-        else:
+        if not inp.shape.guessed:
             notes.append(
                 "The supplied shape was not used: the model's own config.json was readable."
             )
+        else:
+            note = (
+                "The model's shape was supplied by the caller (shape=): "
+                f"hidden_size {caller_shape.hidden_size}, {caller_shape.num_layers} layers, "
+                f"intermediate_size {caller_shape.intermediate_size}, vocab_size "
+                f"{caller_shape.vocab_size}, {caller_shape.params:,} parameters."
+            )
+            if inp.shape.params_source == "safetensors":
+                note += (
+                    f" The weights are on disk without a config.json: their "
+                    f"{inp.shape.params:,} parameters, read from the safetensors headers, are "
+                    "used instead of the supplied count."
+                )
+                caller_shape = dataclasses.replace(
+                    caller_shape, params=inp.shape.params, params_source="safetensors"
+                )
+            else:
+                note += " The estimate takes it as given."
+            notes.append(note)
+            inp = dataclasses.replace(inp, shape=caller_shape)
+    seq_source = None
     if caller_seq is not None:
-        priced = max(_MIN_SEQ_LEN, min(caller_seq, inp.seq_len))
-        note = (
-            f"seq_len {caller_seq} was supplied by the caller (data.max_length is "
-            f"{inp.seq_len}); the estimate prices rows that fill {priced} tokens, so a longer "
-            "row in the data is not priced."
-        )
-        if caller_seq > inp.seq_len:
-            note += f" It was clamped to data.max_length ({inp.seq_len})."
-        elif caller_seq < priced:
-            note += f" It was clamped to {priced}, the smallest length the estimate prices."
-        notes.append(note)
+        max_length = inp.seq_len
+        not_padded = _not_padded_to_the_longest_row(cfg)
+        lead = f"seq_len {caller_seq} was supplied by the caller (data.max_length is {max_length})"
+        if not_padded is not None:
+            priced, seq_source = max_length, "max_length"
+            notes.append(f"{lead} but {not_padded}; priced at data.max_length ({max_length}).")
+        else:
+            priced = max(_MIN_SEQ_LEN, min(caller_seq, max_length))
+            seq_source = "max_length" if caller_seq > max_length else "caller"
+            note = (
+                f"{lead}; the estimate prices rows that fill {priced} tokens, so a longer row "
+                "in the data is not priced."
+            )
+            if caller_seq > max_length:
+                note += f" It was clamped to data.max_length ({max_length})."
+            elif caller_seq < priced:
+                note += f" It was clamped to {priced}, the smallest length the estimate prices."
+            notes.append(note)
         inp = dataclasses.replace(inp, seq_len=priced)
     result = profile_result(
         estimate_peak_vram_gb(inp),
@@ -375,8 +462,8 @@ def profile_from_config(
         gradient_checkpointing=cfg.training.gradient_checkpointing,
     )
     result["quantization"] = cfg.training.quantization
-    if caller_seq is not None:
-        result["seq_len_source"] = "caller"
+    if seq_source is not None:
+        result["seq_len_source"] = seq_source
         result["seq_len_requested"] = caller_seq
     result["notes"].extend(notes)
     return result
