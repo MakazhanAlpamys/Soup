@@ -528,8 +528,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
             # HF's final runtime summary: its throughput is a measurement (#2810), so
             # it is kept, as a row of its own. Nothing else in the event is a per-step
             # value, so loss / lr / grad_norm / val stay NULL -- not the carried
-            # training values -- and `kind = "summary"` tells a reader (a consuming
-            # application reads `loss`, `lr` per row) that this row is not a training step.
+            # training values -- and `kind = "summary"` tells a reader (one that reads
+            # `loss`, `lr` per row) that this row is not a training step.
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,

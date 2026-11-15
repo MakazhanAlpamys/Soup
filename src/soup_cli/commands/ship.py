@@ -87,6 +87,7 @@ from soup_cli.utils.ship_progress import group, jsonl_command
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
+    from soup_cli.eval.custom import EvalResults
 from soup_cli.utils.ship_verdict import (
     DECISION_DONT_SHIP,
     DECISION_SHIP,
@@ -98,11 +99,16 @@ from soup_cli.utils.ship_verdict import (
     TASK_AXIS,
     TASK_MODES,
     AdapterChange,
+    LegScore,
     NoiseFloor,
     ShipVerdict,
+    TaskDetail,
     TaskWin,
     apply_loop_gate,
+    build_judged,
+    build_task_detail,
     build_task_win,
+    build_truncation,
     compute_benchmark_deltas,
     compute_noise_floor,
     decide_ship,
@@ -837,6 +843,62 @@ def _resolve_generators(
     return base_gen, tuned_gen
 
 
+def _metric_leg_score(results: "EvalResults") -> LegScore:
+    """One side of the metric leg: its accuracy, with the per-row scores and flags behind it.
+
+    Rows are scored 1.0 / 0.0 by ``matched`` (what the accuracy counts), never by
+    ``EvalResult.score``: a semantic row carries a fractional similarity that is not what the
+    accuracy reports. A row whose generation failed has no answer, so its truncation flag is
+    unknown (``None``) and the count of that side is not measured.
+    """
+    from soup_cli.utils.live_eval import truncation_of
+
+    rows = results.results
+    return LegScore(
+        results.accuracy,
+        row_scores=tuple(1.0 if row.matched else 0.0 for row in rows),
+        truncated=tuple(truncation_of(row.output) for row in rows),
+        failures=sum(1 for row in rows if row.failed),
+    )
+
+
+def _task_detail_or_none(
+    build: Callable[[], Optional[TaskDetail]],
+) -> Optional[TaskDetail]:
+    """The task detail, or ``None`` and one dim line when it cannot be built.
+
+    Display only (the pattern of #2762): the detail decides nothing, so a failure to build it (a
+    per-row judge score that is None or not finite, a flag of the wrong type) must not end a run
+    that has its verdict. Only the type of the error is printed, its text may carry model output.
+    The refusal of a side whose every generation failed is NOT built in here: it is raised by
+    ``_refuse_a_dead_side`` before the detail is built, so this wrapper cannot swallow it.
+    """
+    try:
+        return build()
+    except Exception as exc:  # display only: no failure here may end the run
+        console.print(
+            "[dim]Task detail (rows, truncation) could not be built and is left out: "
+            f"{type(exc).__name__}[/]"
+        )
+        return None
+
+
+def _refuse_a_dead_side(side: str, leg: LegScore) -> None:
+    """A side whose every generation failed is a failed measurement, not a score of 0.
+
+    ``run_eval`` scores a generation that raised as a wrong answer, so a model that could not
+    generate at all read as one that scored 0.0: a dead base made ANY tuned model beat it (a
+    false SHIP), and a dead tuned model read as "got worse". Refused as a runtime error (exit 1).
+    """
+    total = len(leg.row_scores or ())
+    if total and leg.failures == total:
+        raise RuntimeError(
+            f"every task generation failed on the {side} side ({total} of {total}); a model "
+            "that fails on every row is not a score of 0, so no verdict is given. Check that "
+            "the model loads and generates"
+        )
+
+
 def _leg1_metric(
     base_gen: Callable[[str], str],
     tuned_gen: Callable[[str], str],
@@ -845,15 +907,23 @@ def _leg1_metric(
     task_eval: str,
 ) -> TaskWin:
     from soup_cli.eval.custom import load_eval_tasks, run_eval
+    from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
 
     tasks = load_eval_tasks(task_eval)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
     with group("task_eval", side="base", countable=True):
-        base_acc = run_eval(base_id, tasks, generate_fn=base_gen).accuracy
+        base_leg = _metric_leg_score(run_eval(base_id, tasks, generate_fn=base_gen))
+    _refuse_a_dead_side("base", base_leg)
     with group("task_eval", side="tuned", countable=True):
-        tuned_acc = run_eval(tuned_id, tasks, generate_fn=tuned_gen).accuracy
-    return build_task_win("metric", base_acc, tuned_acc)
+        tuned_leg = _metric_leg_score(run_eval(tuned_id, tasks, generate_fn=tuned_gen))
+    _refuse_a_dead_side("tuned", tuned_leg)
+    detail = _task_detail_or_none(
+        lambda: build_task_detail(
+            base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        )
+    )
+    return build_task_win("metric", base_leg, tuned_leg, detail=detail)
 
 
 def _build_judge_scorer(
@@ -893,14 +963,31 @@ def _build_judge_scorer(
     span = (scale_max - scale_min) or 1.0
 
     def _score(gen: Callable[[str], str]) -> float:
+        from soup_cli.utils.live_eval import truncation_of
+
+        answers = [gen(t.prompt) for t in tasks]
         items = [
-            {"prompt": t.prompt, "response": gen(t.prompt), "category": t.category}
-            for t in tasks
+            {"prompt": t.prompt, "response": answer, "category": t.category}
+            for t, answer in zip(tasks, answers)
         ]
-        overall = float(
-            getattr(evaluator.evaluate_batch(items), "overall_score", scale_min)
+        judged = evaluator.evaluate_batch(items)
+        overall = float(getattr(judged, "overall_score", scale_min))
+        value = max(0.0, min(1.0, (overall - scale_min) / span))
+        # The per-row judge scores (raw weighted scores: the rescale is monotonic, so row
+        # comparisons are the same) and the truncation flags travel with the number. The values
+        # are carried as they came and checked where the detail is built, which cannot end the
+        # run (``_task_detail_or_none``): a score that is None or not a number leaves the detail
+        # out and never decides the verdict.
+        scores = getattr(judged, "scores", None)
+        row_scores = (
+            tuple(getattr(score, "weighted_score", None) for score in scores)
+            if isinstance(scores, list) and len(scores) == len(tasks)
+            else None
         )
-        return max(0.0, min(1.0, (overall - scale_min) / span))
+        return LegScore(
+            value, row_scores=row_scores,
+            truncated=tuple(truncation_of(answer) for answer in answers),
+        )
 
     return _score
 
@@ -911,12 +998,19 @@ def _leg1_judge(
     task_eval: str,
     judge_model: str,
 ) -> TaskWin:
+    from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
+
     score = _build_judge_scorer(task_eval, judge_model)
     with group("task_eval", side="base", countable=True):
         base_score = score(base_gen)
     with group("task_eval", side="tuned", countable=True):
         tuned_score = score(tuned_gen)
-    return build_task_win("judge_score", base_score, tuned_score)
+    detail = _task_detail_or_none(
+        lambda: build_task_detail(
+            base_score, tuned_score, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        )
+    )
+    return build_task_win("judge_score", base_score, tuned_score, detail=detail)
 
 
 def _build_pairwise_scorer(
@@ -943,8 +1037,16 @@ def _build_pairwise_scorer(
     def _winrate(
         gen_a: Callable[[str], str], gen_b: Callable[[str], str]
     ) -> float:
+        from soup_cli.utils.live_eval import truncation_of
+
         pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
-        return pairwise_winrate(pairs, evaluator)
+        # No per-row scores: a pairwise judgment is one verdict per pair, recorded by the judge
+        # rows, not here. The answers are in hand, so their truncation is counted.
+        return LegScore(
+            pairwise_winrate(pairs, evaluator),
+            truncated=tuple(truncation_of(pair[1]) for pair in pairs),
+            truncated_other=tuple(truncation_of(pair[2]) for pair in pairs),
+        )
 
     return _winrate
 
@@ -961,9 +1063,26 @@ def _leg1_pairwise(
     which is better (swap-debiased). The tuned win-rate becomes leg 1, framed as
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
     """
+    from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
+
     winrate = _build_pairwise_scorer(task_eval, judge_model)
     with group("task_eval", side="tuned", countable=True):
-        return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
+        rate = winrate(base_gen, tuned_gen)
+    def pairwise_detail() -> Optional[TaskDetail]:
+        if (
+            isinstance(rate, LegScore)
+            and rate.truncated is not None
+            and rate.truncated_other is not None
+        ):
+            return TaskDetail(
+                truncated=build_truncation(
+                    rate.truncated, rate.truncated_other,
+                    max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                )
+            )
+        return None
+
+    return build_task_win("pairwise", 0.5, rate, detail=_task_detail_or_none(pairwise_detail))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -1488,6 +1607,9 @@ def _verdict_live(
 
     # Read the adapter before either model loads: an all-zero lora_B adds
     # nothing, and the live eval would only reach "task did not improve" (#2410).
+    # An empty --adapter / --tuned is absent (the checks above treat "" as not given), so it is
+    # recorded as null: an empty string would make the evidence unreadable.
+    judged = build_judged(base=base, adapter=adapter or None, tuned=tuned or None)
     # Not with --base-adapter: "tuned == base" no longer holds there (the before side
     # is base + base_adapter), so a zero adapter is a real comparison.
     if adapter and base_adapter is None and _adapter_is_noop(adapter):
@@ -1498,6 +1620,7 @@ def _verdict_live(
             failed_rule=FAILED_ADAPTER_NOOP,
             forgetting_threshold=forgetting_threshold,
             soup_version=__version__,
+            judged=judged,
             loop_gate=unmeasured_loop_gate(gate_inputs) if gate_inputs is not None else None,
         )
 
@@ -1571,6 +1694,7 @@ def _verdict_live(
             verdict,
             numerics=_live_eval_numerics(quantization, device),
             adapter_change=adapter_change,
+            judged=judged,
             base_adapter=base_adapter,
         )
     except typer.Exit:
