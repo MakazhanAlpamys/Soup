@@ -101,6 +101,12 @@ end-to-end CLI speedups. All arms use the same realized tokens and labels.
 | 4096 | on | 0.959x | 1.213x | 1.149x | 43.226 / 23.812 |
 | 8192 | on | 0.929x | 1.197x | 1.096x | 70.962 / 32.132 |
 
+The checkpoint-off OOM rows describe the original card state. The
+[November 14 supplement](../benchmarks/flash-liger-h200-2026-11-10.md#2026-11-14-supplement-shared-h200-gpu1)
+measures the S4096 Liger and FA2+Liger cells on a second shared H200 with more
+headroom; the other six cells still OOM there. Those are a separate source/card
+series, with no same-shape SDPA ratio because its probe still OOMs.
+
 Read exact peaks, run ranges, SM clocks and the full recipe in the record.
 The native SDPA baseline already executed cuDNN flash attention. On this stack
 (torch 2.14.1/CUDA 13.0, FA2 2.8.3.post2, Liger 0.8.5), standalone FA2 was slower;
@@ -111,9 +117,10 @@ held-out quality equivalence or a universal preference for either library.
 The H200 was shared with an idle process holding 49850 MiB, leaving about
 90 GiB headroom. Checkpoint-off long-sequence probes exhausted that headroom;
 those cells have no timing ratio. This is not a dedicated-card capacity limit.
-The record retains all eight probe OOMs and their 40 unrun timing slots, all
+The original record retains all eight probe OOMs and their 40 unrun timing slots, all
 120 successful timings and every activation probe. No model/config defaults
-were changed to obtain the curve.
+were changed to obtain the curve. The later supplement retains its own probes
+and all 40 planned timing slots, including ten successful timing processes.
 
 ---
 
