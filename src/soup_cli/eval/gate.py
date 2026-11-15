@@ -23,6 +23,7 @@ from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 from soup_cli.utils.yaml_limits import (
     MAX_CONFIG_BYTES,
+    duplicate_keys_in_sequence_mappings,
     load_yaml_limited,
     read_text_limited,
 )
@@ -139,44 +140,6 @@ class MalformedSuiteError(ValueError):
     """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
-def _reject_duplicate_task_keys(source: str, *, path: str) -> None:
-    """Reject repeated explicit keys in task mappings, preserving YAML merge overrides."""
-    root = yaml.compose(source, Loader=yaml.SafeLoader)
-    if not isinstance(root, yaml.MappingNode):
-        return
-
-    tasks_node: yaml.Node | None = None
-    for key_node, value_node in root.value:
-        if (
-            isinstance(key_node, yaml.ScalarNode)
-            and key_node.tag == "tag:yaml.org,2002:str"
-            and key_node.value == "tasks"
-        ):
-            tasks_node = value_node
-            break
-    if not isinstance(tasks_node, yaml.SequenceNode):
-        return
-
-    for task_node in tasks_node.value:
-        if not isinstance(task_node, yaml.MappingNode):
-            continue
-        seen: set[tuple[str, str]] = set()
-        for key_node, _ in task_node.value:
-            # A YAML merge supplies defaults; a direct key may intentionally override it.
-            if key_node.tag == "tag:yaml.org,2002:merge":
-                continue
-            identity = (key_node.tag, key_node.value) if isinstance(
-                key_node, yaml.ScalarNode
-            ) else (key_node.tag, repr(key_node))
-            if identity in seen:
-                key = key_node.value if isinstance(key_node, yaml.ScalarNode) else "?"
-                raise MalformedSuiteError(
-                    f"eval-gate suite '{path}' has duplicate key {key!r} "
-                    f"in a task mapping on line {key_node.start_mark.line + 1}"
-                )
-            seen.add(identity)
-
-
 def _require_gate_tasks(suite: EvalSuite) -> None:
     if not suite.tasks:
         raise ValueError(
@@ -204,7 +167,18 @@ def load_suite(path: str) -> EvalSuite:
         what = f"eval-gate suite '{path}'"
         source = read_text_limited(suite_path, what, max_bytes=MAX_CONFIG_BYTES)
         raw = load_yaml_limited(source, what, max_bytes=MAX_CONFIG_BYTES)
-        _reject_duplicate_task_keys(source, path=path)
+        duplicates = duplicate_keys_in_sequence_mappings(
+            source,
+            what,
+            sequence_key="tasks",
+            max_bytes=MAX_CONFIG_BYTES,
+        )
+        if duplicates:
+            key, line = duplicates[0]
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has duplicate key {key!r} "
+                f"in a task mapping on line {line}"
+            )
     except yaml.YAMLError as exc:
         raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"

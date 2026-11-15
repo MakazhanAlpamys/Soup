@@ -86,6 +86,37 @@ class TestEvalSuiteLoading:
         assert suite.tasks[0].name == "math_acc"
         assert suite.tasks[0].threshold == 0.8
 
+    def test_load_rejects_duplicate_task_keys_with_line_number(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import MalformedSuiteError, load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+            "    threshold: 0.5\n    threshold: 0.8\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(MalformedSuiteError, match="duplicate key 'threshold'.*line 6"):
+            load_suite(str(suite_path))
+
+    def test_load_allows_explicit_override_of_merged_task_defaults(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            "suite: merged\ndefaults: &defaults\n  threshold: 0.5\n"
+            "tasks:\n  - <<: *defaults\n    type: custom\n"
+            "    name: math\n    threshold: 0.8\n",
+            encoding="utf-8",
+        )
+
+        suite = load_suite(str(suite_path))
+        assert suite.tasks[0].threshold == 0.8
+
     def test_load_rejects_unknown_task_type(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.eval.gate import load_suite
