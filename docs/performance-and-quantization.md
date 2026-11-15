@@ -973,7 +973,7 @@ AdamW update are bit-equal to the dense arm in the CPU tests); the panel says wh
 A run whose dense-retaining arm fits keeps it, unchanged, and so does one with `stream_vram_probe`
 on: the measurement stays the authority there and the dense arm is left to it (a probe refusal
 then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
-DPO, KTO, ORPO and SimPO), not by SFT alone; only `stream_vram_probe` is SFT-only.
+DPO, KTO, ORPO, SimPO and BCO); only `stream_vram_probe` is SFT-only.
 
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside

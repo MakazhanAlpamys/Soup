@@ -35,7 +35,7 @@ class TestPreferenceStreaming:
             },
         )
 
-    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo"])
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco"])
     @pytest.mark.parametrize(
         "training",
         [{}, {"quantization": "4bit"}, {"batch_size": 2, "gradient_accumulation_steps": 2}],
@@ -46,7 +46,7 @@ class TestPreferenceStreaming:
         assert cfg.training.preference_loss == loss
         assert cfg.training.stream_layers is True
 
-    @pytest.mark.parametrize("loss", ["ipo", "bco"])
+    @pytest.mark.parametrize("loss", ["ipo"])
     def test_unported_loss_is_refused_by_name(self, loss):
         with pytest.raises(ValidationError) as caught:
             self.config(loss)
@@ -56,14 +56,14 @@ class TestPreferenceStreaming:
             "Use dpo, orpo or simpo, or set stream_layers=false."
         )
 
-    @pytest.mark.parametrize("task", ["ipo", "bco"])
+    @pytest.mark.parametrize("task", ["ipo"])
     def test_legacy_unported_tasks_keep_the_generic_streaming_refusal(self, task):
         with pytest.raises(ValidationError) as caught:
             self.config(task=task)
         message = caught.value.errors()[0]["msg"]
         assert message == (
             "Value error, training.stream_layers supports task in "
-            f"['dpo', 'kto', 'orpo', 'sft', 'simpo']; got task={task!r}."
+            f"['bco', 'dpo', 'kto', 'orpo', 'sft', 'simpo']; got task={task!r}."
         )
         assert "preference_loss" not in message
 
@@ -77,7 +77,7 @@ class TestPreferenceStreaming:
             "simpo, or set stream_layers=false."
         )
 
-    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo"])
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco"])
     @pytest.mark.parametrize(
         "training,refusal",
         [
@@ -100,7 +100,7 @@ class TestPreferenceStreaming:
         assert refusal in legacy_message
         assert dispatched.value.errors()[0]["msg"] == legacy_message
 
-    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo"])
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco"])
     def test_real_dispatcher_trains_a_streamed_cpu_model(self, tmp_path, monkeypatch, loss):
         import math
         import socket
@@ -128,7 +128,7 @@ class TestPreferenceStreaming:
         monkeypatch.chdir(tmp_path)
         cfg = _stream_cfg(
             weights, tmp_path / "out", task="preference", preference_loss=loss,
-            warmup_ratio=0.0,
+            warmup_ratio=0.0, batch_size=2 if loss == "bco" else 1,
         )
         original = cfg.model_dump()
         wrapper = PreferenceTrainerWrapper(cfg, device="cpu", fsdp_config={"use_cpu": True})

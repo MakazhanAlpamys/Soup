@@ -20,7 +20,7 @@ import pytest
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
-STREAMABLE_TRAINERS = ("sft", "dpo", "orpo", "simpo", "kto")
+STREAMABLE_TRAINERS = ("sft", "dpo", "orpo", "simpo", "kto", "bco")
 
 
 def _requires_train_extra():

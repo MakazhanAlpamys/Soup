@@ -3918,10 +3918,10 @@ class TrainingConfig(BaseModel):
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
             "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
-            "simpo and kto, including task='preference' with a single "
-            "preference_loss of dpo, orpo or simpo. Requires transformers + "
+            "simpo, kto and bco, including task='preference' with a single "
+            "preference_loss of dpo, orpo, simpo or bco. Requires transformers + "
             "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
-            "IPO, BCO and preference_loss_weights do not stream yet."
+            "IPO and preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -7743,7 +7743,7 @@ class SoupConfig(BaseModel):
                 "simpo, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
-        if self.task == "preference" and stream_task in ("ipo", "bco"):
+        if self.task == "preference" and stream_task == "ipo":
             raise ValueError(
                 f"training.stream_layers cannot use "
                 f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
