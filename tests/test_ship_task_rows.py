@@ -1813,6 +1813,14 @@ def test_a_metric_leg_still_has_to_equal_its_row_mean_exactly():
                         scoring_applies=True)
 
 
+@pytest.mark.parametrize("scoring_applies", [True, False], ids=["metric", "judge"])
+def test_a_nan_reported_number_is_never_within_a_tolerance(scoring_applies):
+    scores = [0.25, 0.75]
+    with pytest.raises(ValueError, match="the base row scores average"):
+        build_task_rows(_leg(scores, value=float("nan")), _leg(scores, prefix="t"),
+                        scoring_applies=scoring_applies)
+
+
 def test_the_loader_takes_the_judge_tolerance_only_when_asked_to(tmp_path):
     entries = _good_lines(3)
     for entry, score in zip(entries, (0.1, 0.2, 0.3)):
