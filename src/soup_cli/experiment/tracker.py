@@ -19,7 +19,7 @@ from typing import Optional
 
 from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
-from soup_cli.utils.crash import redact_secrets
+from soup_cli.utils.crash import REDACTION_FAILED, redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -571,7 +571,11 @@ class ExperimentTracker:
         """
         conn = self._get_conn()
         if error is not None:
-            error = redact_secrets(error)
+            try:
+                error = redact_secrets(error)
+            except Exception:
+                # a fault in redaction must not skip the failure record or mask the error
+                error = REDACTION_FAILED
             if len(error) > _MAX_ERROR_MESSAGE_CHARS:
                 error = error[:_MAX_ERROR_MESSAGE_CHARS] + "...(truncated)"
         conn.execute(

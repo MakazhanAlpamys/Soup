@@ -2,8 +2,9 @@
 
 When training fails with OOM / NaN / CUDA error, package a self-contained
 ``.crash`` JSON file that captures: the run config, last 50 metric rows, GPU
-state at crash time, environment summary, and the error trace. The file is
-ready to attach to a GitHub issue without leaking secrets.
+state at crash time, environment summary, and the error trace. Credentials are
+redacted before anything is written (``utils/redaction.py``); that is pattern-based and
+best-effort, so a bundle should still be read before it is attached to a public issue.
 """
 
 from __future__ import annotations
@@ -86,12 +87,35 @@ def classify_crash(message: str) -> str:
     return "other"
 
 
+#: Longest text, in characters, that is passed through the redaction patterns. Redaction costs
+#: up to about 4.3 s per MiB, and a crash handler must not stall on a huge message: a longer
+#: string is cut (the tail is dropped, never kept) and ends in a marker.
+MAX_REDACT_CHARS = 256 * 1024
+#: How far back a cut may move to end at whitespace, so a credential is not kept in half.
+_CUT_BACKOFF_CHARS = 256
+#: Stored in place of a text that could not be redacted (never the raw text).
+REDACTION_FAILED = "<redaction failed: text withheld>"
+
+
+def _cap_text(value: str) -> str:
+    """``value`` cut to ``MAX_REDACT_CHARS``, ending at whitespace when there is one near."""
+    if len(value) <= MAX_REDACT_CHARS:
+        return value
+    cut = MAX_REDACT_CHARS
+    floor = cut - _CUT_BACKOFF_CHARS
+    while cut > floor and not value[cut - 1].isspace():
+        cut -= 1
+    return f"{value[:cut]}<{len(value) - cut} characters dropped>"
+
+
 def redact_secrets(value: str) -> str:
     """Replace credentials in ``value`` with '<redacted>'.
 
     Covers URL userinfo and sensitive query parameters, the common token shapes,
     ``Authorization`` headers, JWTs, PEM private keys and ``key=value`` pairs whose key
-    name says it is a credential (see ``utils/redaction.py``).
+    name says it is a credential (see ``utils/redaction.py``). A text longer than
+    ``MAX_REDACT_CHARS`` is cut first; one that cannot be redacted is replaced by
+    ``REDACTION_FAILED``. It never raises.
     """
     return _redact_string(value)
 
@@ -100,11 +124,20 @@ def _redact_string(value: str, report: Optional[RedactionReport] = None) -> str:
     """The shared redaction, then the legacy token shapes; counts go to ``report``."""
     if not isinstance(value, str) or not value:
         return value
-    value = redact_text(value, report)
-    for pattern in _SECRET_PATTERNS:
-        value, count = pattern.subn(REDACTED, value)
+    try:
+        capped = _cap_text(value)
+        if capped is not value and report is not None:
+            report.count += 1  # a dropped tail is a change: the walk keeps a string only if none
+        value = redact_text(capped, report)
+        for pattern in _SECRET_PATTERNS:
+            value, count = pattern.subn(REDACTED, value)
+            if report is not None:
+                report.count += count
+    except Exception:
+        # a fault in a pattern must neither stop the crash report nor let the raw text out
         if report is not None:
-            report.count += count
+            report.count += 1
+        return REDACTION_FAILED
     return value
 
 
@@ -150,9 +183,14 @@ def _safe_call(func: Callable[..., Any], *args: Any) -> Optional[Any]:
 
 
 def _safe_output_dir(value: Optional[str]) -> Optional[str]:
-    """Strip leading path components so a shared `.crash` doesn't leak $HOME."""
+    """Strip leading path components so a shared `.crash` doesn't leak $HOME.
+
+    The value is redacted first: the last component of ``s3://key:secret@bucket`` is
+    ``key:secret@bucket``.
+    """
     if not value or not isinstance(value, str):
         return value
+    value = _redact_string(value)
     return os.path.basename(value.rstrip("/\\")) or value
 
 
@@ -197,12 +235,57 @@ def build_crash_bundle(
 
     The error message, the traceback, the metrics and the config are redacted before
     they are stored; ``bundle["redaction"]`` says how many values were replaced
-    (counts only, never the values).
+    (counts only, never the values). A string is cut at ``MAX_REDACT_CHARS`` first. A text
+    that cannot be read or redacted is stored as ``REDACTION_FAILED``, a config or a
+    metrics list that cannot be serialised or redacted as a marker dict: the raw text is
+    never stored. If building fails in any other way, a minimal bundle is returned.
     """
+    try:
+        return _build_bundle(
+            error=error, config=config, metrics=metrics, run_id=run_id, output_dir=output_dir,
+        )
+    except Exception:
+        return _minimal_bundle(error, run_id)
+
+
+def _minimal_bundle(error: BaseException, run_id: Optional[str]) -> Dict[str, Any]:
+    return {
+        "format_version": CRASH_FORMAT_VERSION,
+        "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "run_id": run_id if isinstance(run_id, str) else None,
+        "error": {
+            "type": type(error).__name__, "message": REDACTION_FAILED, "kind": "other",
+            "traceback": [],
+        },
+        "redaction": {"values_redacted": 1},
+    }
+
+
+def _error_text(error: BaseException, report: RedactionReport) -> str:
+    try:
+        text = str(error)
+    except Exception:
+        report.count += 1
+        return REDACTION_FAILED
+    return _redact_string(text, report)
+
+
+def _build_bundle(
+    *,
+    error: BaseException,
+    config: Optional[dict],
+    metrics: Optional[List[dict]],
+    run_id: Optional[str],
+    output_dir: Optional[str],
+) -> Dict[str, Any]:
     message_report = RedactionReport()
     trace_report = RedactionReport()
     env_report = RedactionReport()
-    error_message = _redact_string(str(error), message_report)
+    error_message = _error_text(error, message_report)
+    try:
+        trace_lines = traceback.format_exception(type(error), error, error.__traceback__)
+    except Exception:
+        trace_lines = []
     bundle: Dict[str, Any] = {
         "format_version": CRASH_FORMAT_VERSION,
         "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -212,10 +295,7 @@ def build_crash_bundle(
             "type": type(error).__name__,
             "message": error_message,
             "kind": classify_crash(error_message),
-            "traceback": [
-                _redact_string(line, trace_report)
-                for line in traceback.format_exception(type(error), error, error.__traceback__)
-            ],
+            "traceback": [_redact_string(line, trace_report) for line in trace_lines],
         },
         "gpu_state": _capture_gpu_state(),
         "environment": _capture_env(env_report),
@@ -226,21 +306,34 @@ def build_crash_bundle(
         "environment": env_report.count,
     }
     if metrics:
-        tail = list(metrics[-TAIL_METRICS:])
-        bundle["metrics_tail"], metrics_report = redact_config(tail, _redact_string)
-        counts["metrics_tail"] = metrics_report.count
+        bundle["metrics_tail"], counts["metrics_tail"] = _redact_serialised(
+            list(metrics[-TAIL_METRICS:]), [{"_unserialisable": True}],
+            [{"_redaction_failed": True}],
+        )
     if config is not None:
-        # Re-serialise to drop non-JSON-able values cleanly, then redact: strings as
-        # text, and anything under a key whose name says it is a credential, so the
-        # .crash is shareable.
-        try:
-            text = json.dumps(config, default=str)
-            bundle["config"], config_report = redact_config(json.loads(text), _redact_string)
-            counts["config"] = config_report.count
-        except Exception:
-            bundle["config"] = {"_unserialisable": True}
+        bundle["config"], counts["config"] = _redact_serialised(
+            config, {"_unserialisable": True}, {"_redaction_failed": True},
+        )
     bundle["redaction"] = {"values_redacted": sum(counts.values()), **counts}
     return bundle
+
+
+def _redact_serialised(value: Any, unserialisable: Any, failed: Any) -> tuple:
+    """``value`` re-serialised to plain JSON types, then redacted; plus the count.
+
+    The round trip comes first: bytes, sets and objects become text (as they would when
+    the bundle is written), so what is redacted is what is stored. A value that cannot be
+    serialised gives ``unserialisable``, one whose redaction fails gives ``failed``.
+    """
+    try:
+        plain = json.loads(json.dumps(value, default=str))
+    except Exception:
+        return unserialisable, 0
+    try:
+        redacted, report = redact_config(plain, _redact_string)
+    except Exception:
+        return failed, 1
+    return redacted, report.count
 
 
 def write_crash_bundle(

@@ -128,6 +128,13 @@ _BARE_USERINFO_RE = re.compile(
 )
 
 
+# A query string with no scheme in front: urllib3 / requests put ``url: /path?x=1&sig=...`` into
+# the message of a failed request. The ``?`` has to follow a path or name character and be
+# followed by ``name=``, so prose such as "what?" is left alone; the run ends at whitespace, a
+# quote, a bracket or a fragment, and is consumed once.
+_QUERY_RE = re.compile(r"(?<=[A-Za-z0-9_\-./~%])\?(?=[A-Za-z0-9_.\-%]{1,64}=)[^\s\"'`\\<>#]*")
+
+
 def _mask_url_text(raw: str) -> str:
     """Lenient masking of the query of URL-shaped text that ``urlsplit`` refuses.
 
@@ -154,8 +161,19 @@ def _redact_urls(text: str, report: RedactionReport) -> str:
         report.count += 1
         return f"{match.groupdict().get('lead') or ''}{REDACTED}@"
 
+    def _sub_query(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        core = raw.rstrip(_URL_TRAILING)
+        tail = raw[len(core):]
+        new = "?" + _mask_params(core[1:])
+        if new != core:
+            report.count += max(1, new.count(REDACTED) - core.count(REDACTED))
+        return new + tail
+
     if "://" in text:
         text = _URL_RE.sub(_sub, text)
+    if "?" in text:
+        text = _QUERY_RE.sub(_sub_query, text)
     if "@" in text:
         text = _BARE_USERINFO_RE.sub(_sub_userinfo, _REL_USERINFO_RE.sub(_sub_userinfo, text))
     return text
@@ -333,7 +351,7 @@ def is_secret_key(name: str) -> bool:
 # auth scheme word, a reference to an environment variable.
 _HARMLESS_LITERALS = frozenset({
     "", "true", "false", "none", "null", "nil", "yes", "no", "on", "off",
-    "bearer", "basic", "digest", "negotiate", REDACTED,
+    "bearer", "basic", "digest", "negotiate", "[]", "{}", REDACTED,
 })
 _ENV_REF_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
 # ``Bearer <redacted>``: an auth header the shape pass has already handled.
@@ -368,11 +386,22 @@ _ASSIGN_RE = re.compile(
 # A value has no length cap (a cap would leave the tail of a long token in the text). Every
 # repeat is possessive over characters that cannot also start the closing delimiter, so a
 # value is read once and never backtracked into.
-_VALUE_RE = re.compile(
+_QUOTED_RE = re.compile(
     r"\"(?:[^\"\\\n]|\\.)*+\"|'(?:[^'\\\n]|\\.)*+'"
     r"|\\\"(?:[^\"\\\n]|\\(?!\"))*+\\\""
-    r"|(?:[^\s\"',;&}\])\\]|\\(?![\"']))++"
 )
+# An unquoted value ends at whitespace, a quote or ``&``. ``, ; ) } ]`` end it only when the
+# next character cannot continue a value: ``password=ab,cd`` is one value, ``token=ab, x=1`` is
+# two. An ordinary call or list is not swallowed and a password that holds one is not cut.
+_BARE_VALUE_RE = re.compile(
+    r"(?:[^\s\"',;&)}\]\\]|\\(?![\"'])|[,;)}\]](?=[^\s\"',;&)}\]]))++"
+)
+# A quote that never closes (a text that was cut): the rest of the line is the value.
+_UNCLOSED_RE = re.compile(r"\\?[\"'][^\n]*+")
+_BLOCK_MARK_RE = re.compile(r"[|>][+\-0-9]*")
+# ``/token=3/``: a partition directory, not a credential.
+_PATH_NUMBER_RE = re.compile(r"[0-9]+(?:/|$)")
+_BRACKET_SCAN_LIMIT = 65536
 _ASSIGN_HINT_RE = re.compile(_SECRET_WORDS.replace("{s}", "[^a-z0-9]?"), re.IGNORECASE)
 
 
@@ -390,6 +419,100 @@ def _mask_assigned_value(value: str) -> str:
     return f"{quote}{REDACTED}{quote}"
 
 
+def _bracket_end(text: str, start: int) -> int:
+    """End of the ``[...]`` / ``{...}`` value that opens at ``start``.
+
+    Quotes are honoured. The scan is bounded; a value that never closes ends at the end of
+    its line (or at the bound) instead of being left in the text.
+    """
+    limit = min(len(text), start + _BRACKET_SCAN_LIMIT)
+    depth = 0
+    quote = ""
+    index = start
+    while index < limit:
+        char = text[index]
+        if quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    newline = text.find("\n", start, limit)
+    return limit if newline == -1 else newline
+
+
+def _key_column(text: str, name_start: int) -> int:
+    """Indentation a block scalar of the key at ``name_start`` has to exceed.
+
+    A key that opens its line (``key:`` or ``- key:``) is measured at its own column. A key
+    that follows other text (``RuntimeError: key: |`` in a message) is measured at the
+    indentation of its line, since the lines of the block do not move with the prefix.
+    """
+    line_start = text.rfind("\n", 0, name_start) + 1
+    prefix = text[line_start:name_start]
+    if not prefix.strip(" \t-"):
+        return len(prefix)
+    return len(prefix) - len(prefix.lstrip(" \t"))
+
+
+def _block_end(text: str, end: int, column: int) -> int:
+    """End of the YAML block scalar whose indicator line ends at ``end``.
+
+    The block is every following line that is indented deeper than the key (``column``);
+    blank lines inside it belong to it, trailing ones do not.
+    """
+    last = end
+    pos = end
+    size = len(text)
+    while pos < size and text[pos] in "\r\n":
+        line_start = pos + (2 if text.startswith("\r\n", pos) else 1)
+        line_end = text.find("\n", line_start)
+        if line_end == -1:
+            line_end = size
+        line = text[line_start:line_end]
+        if line.strip():
+            if len(line) - len(line.lstrip(" \t")) <= column:
+                break
+            last = line_end
+        pos = line_end
+    return last
+
+
+def _value_end(text: str, pos: int) -> int:
+    """End of the value that starts at ``pos`` (``-1`` when nothing there is a value)."""
+    if text.startswith(REDACTED, pos):
+        return pos + len(REDACTED)  # already redacted: what follows it is not part of it
+    first = text[pos]
+    if first in "[{":
+        return _bracket_end(text, pos)
+    found = _QUOTED_RE.match(text, pos)
+    if found is None:
+        if first in "\"'\\":
+            unclosed = _UNCLOSED_RE.match(text, pos)
+            if unclosed is not None:
+                return unclosed.end()
+        found = _BARE_VALUE_RE.match(text, pos)
+        if found is None:
+            return -1
+    end = found.end()
+    # ``b'..'``, ``u"..."``, ``SecretStr('..')``: an unquoted run that stops at a quote opens
+    # a quoted part, and ``'it''s'`` is one YAML string: take every quoted part that follows.
+    while end < len(text) and text[end] in "\"'":
+        more = _QUOTED_RE.match(text, end)
+        if more is None:
+            break
+        end = more.end()
+    return end
+
+
 def _redact_assignments(text: str, report: RedactionReport) -> str:
     if not _ASSIGN_HINT_RE.search(text):
         return text
@@ -398,16 +521,22 @@ def _redact_assignments(text: str, report: RedactionReport) -> str:
     for match in _ASSIGN_RE.finditer(text):
         if match.start() < pos or not is_secret_key(match.group("name")):
             continue
-        found = _VALUE_RE.match(text, match.end())
-        if found is None:
+        start = match.end()
+        end = _value_end(text, start)
+        if end < 0:
             continue
-        value = found.group(0)
+        value = text[start:end]
+        if match.start() and text[match.start() - 1] == "/" and _PATH_NUMBER_RE.match(value):
+            continue
+        if _BLOCK_MARK_RE.fullmatch(value) and text[end:end + 1] in ("", "\n", "\r"):
+            end = _block_end(text, end, _key_column(text, match.start()))
+            value = text[start:end]
         masked = _mask_assigned_value(value)
         if masked == value:
             continue
-        pieces.append(text[pos:found.start()])
+        pieces.append(text[pos:start])
         pieces.append(masked)
-        pos = found.end()
+        pos = end
         report.count += 1
     if not pieces:
         return text
@@ -420,15 +549,21 @@ def _redact_assignments(text: str, report: RedactionReport) -> str:
 # ---------------------------------------------------------------------------
 
 
-def redact_text(text: str, report: Optional[RedactionReport] = None) -> str:
-    """``text`` with credentials replaced by ``<redacted>``; not a string: returned as is."""
+def redact_text(
+    text: str, report: Optional[RedactionReport] = None, *, assignments: bool = True,
+) -> str:
+    """``text`` with credentials replaced by ``<redacted>``; not a string: returned as is.
+
+    ``assignments=False`` skips the ``KEY=value`` pass (used for template source, where
+    ``{% set auth = messages[0] %}`` is code, not a credential).
+    """
     if not isinstance(text, str) or not text:
         return text
     counter = report if report is not None else RedactionReport()
     text = _redact_pem(text, counter)
     text = _redact_urls(text, counter)
     text = redact_token_shapes(text, counter)
-    return _redact_assignments(text, counter)
+    return _redact_assignments(text, counter) if assignments else text
 
 
 def redact_config(
@@ -444,6 +579,41 @@ def redact_config(
     """
     report = RedactionReport()
     return _walk(value, "", report, False, text_pass), report
+
+
+# Config keys that hold a template instead of a setting (``data.chat_template``): a Jinja chat
+# template is source code, so only the credential shapes are looked for in it.
+_TEMPLATE_KEYS = frozenset({"chat_template"})
+
+
+def _walk_template(value: str, path: str, report: RedactionReport) -> str:
+    before = report.count
+    new = redact_text(value, report, assignments=False)
+    if report.count == before:
+        return value
+    report.add_path(path)
+    return new
+
+
+def find_redacted_paths(value: Any, limit: int = 50) -> list[str]:
+    """Key paths of the strings in ``value`` that hold the ``<redacted>`` marker."""
+    found: list[str] = []
+
+    def visit(item: Any, path: str) -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(item, str):
+            if REDACTED in item:
+                found.append(path or "<root>")
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                visit(child, f"{path}.{key}" if path else str(key))
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, f"{path}[{index}]")
+
+    visit(value, "")
+    return found
 
 
 def _walk(
@@ -467,7 +637,11 @@ def _walk(
         out = {}
         for key, item in value.items():
             child = f"{path}.{key}" if path else str(key)
-            flagged = secret or (isinstance(key, str) and is_secret_key(key))
+            if (not secret and isinstance(key, str) and isinstance(item, str)
+                    and key.strip().lower() in _TEMPLATE_KEYS):
+                out[key] = _walk_template(item, child, report)
+                continue
+            flagged = secret or is_secret_key(key)
             out[key] = _walk(item, child, report, flagged, text_pass)
         return out
     if isinstance(value, (list, tuple)):

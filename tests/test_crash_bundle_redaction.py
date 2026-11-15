@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from soup_cli.utils import redaction
+from soup_cli.utils import crash, redaction
 from soup_cli.utils.crash import build_crash_bundle, redact_secrets, write_crash_bundle
 from soup_cli.utils.redaction import (
     REDACTED,
@@ -86,11 +86,12 @@ SLACK_NEGATIVE = "xoxz-" + SLACK_TAIL + " xox-" + SLACK_TAIL + " xoxb-short"
 NOT_KEYS = (
     "max_new_tokens=512 tokenizer=Qwen/Qwen2.5-0.5B auth_mode=none author: alice "
     "token_count=12 learning_rate: 2e-5 num_tokens: 7 tokens: 4096 authentication: required "
-    "authenticated: yes"
+    "authenticated: yes api_key: [] credentials: {} password: ''"
 )
 URL_NEGATIVE = (
     "mail me@example.com or git@github.com:org/repo.git; note:me@example.com, key:v@x.org. "
-    "see https://huggingface.co/api/models?revision=main and ssh://example.org/a/b"
+    "see https://huggingface.co/api/models?revision=main and ssh://example.org/a/b "
+    "is it ready?page=2 or /v1/models?revision=main&limit=5 or what?x=y"
 )
 # A secret longer than any fixed cap on the length of a value: only the tail is checked, so
 # a pass that replaces just the first part of the value cannot hide behind the whole string.
@@ -135,7 +136,7 @@ ROWS: list[Row] = [
         f"aws_secret_access_key = {AWS_SECRET}", AWS_SECRET,
         f"checksum {AWS_SECRET} aws_region = us-east-1", keeps="aws_secret_access_key"),
     Row("google_api_key", "AIza", f"maps key {GOOGLE} was refused", GOOGLE,
-        "AIza" + _alnum(10) + " AIzb" + _alnum(35)),
+        "AIza" + _alnum(10) + " AIzb" + _alnum(35) + " AIza" + _alnum(36)),
     *_slack_rows(),
     Row("assignment", "WANDB_API_KEY", f"WANDB_API_KEY={WANDB}", WANDB,
         "commit " + WANDB + " WANDB_PROJECT=soup", keeps="WANDB_API_KEY"),
@@ -205,6 +206,60 @@ ROWS: list[Row] = [
         "cd-77plain", NOT_KEYS, keeps="password='"),
     Row("assignment", "unquoted value with a backslash", "password=ab\\cd-77plain next",
         "cd-77plain", NOT_KEYS, keeps="password="),
+    Row("assignment", "bytes literal", "{'hf_token': b'plainvalue-77', 'n': 1}", "plainvalue-77",
+        NOT_KEYS, keeps="'n': 1}"),
+    Row("assignment", "unicode literal", "{'hf_token': u'plainvalue-77', 'n': 1}", "plainvalue-77",
+        NOT_KEYS, keeps="'n': 1}"),
+    Row("assignment", "raw string literal", 'token = r"plainvalue-77" next', "plainvalue-77",
+        NOT_KEYS, keeps=" next"),
+    Row("assignment", "SecretStr repr", "Config(api_key=SecretStr('plainvalue-77'), n=1)",
+        "plainvalue-77", NOT_KEYS, keeps=", n=1)"),
+    Row("assignment", "list of strings (first)",
+        "{'api_key': ['plainvalue-77', 'plainvalue-88'], 'n': 1}", "plainvalue-77", NOT_KEYS,
+        keeps="'n': 1}"),
+    Row("assignment", "list of strings (last)",
+        "{'api_key': ['plainvalue-77', 'plainvalue-88'], 'n': 1}", "plainvalue-88", NOT_KEYS,
+        keeps="'n': 1}"),
+    Row("assignment", "closing bracket inside a quoted element",
+        "{'api_key': ['plain]value-77', 'x'], 'n': 1}", "value-77", NOT_KEYS, keeps="'n': 1}"),
+    Row("assignment", "escaped quote inside a list element",
+        '{"api_key": ["plain\\"value-77", "x"], "n": 1}', "value-77", NOT_KEYS, keeps='"n": 1}'),
+    Row("assignment", "list that never closes", "token: [plainvalue-77, plainvalue-88\nnext: 1",
+        "plainvalue-88", NOT_KEYS, keeps="\nnext: 1"),
+    Row("assignment", "unquoted flow list", "token: [plainvalue-77, plainvalue-88] next",
+        "plainvalue-88", NOT_KEYS, keeps=" next"),
+    Row("assignment", "nested mapping",
+        "{'credentials': {'user': 'plainvalue-77', 'pw': 'plainvalue-88'}, 'n': 1}",
+        "plainvalue-88", NOT_KEYS, keeps="'n': 1}"),
+    Row("assignment", "yaml block scalar",
+        "api_key: |\n  plainvalue-77\n  plainvalue-88\nmodel: x", "plainvalue-88", NOT_KEYS,
+        keeps="\nmodel: x"),
+    Row("assignment", "yaml block scalar of a list item",
+        "- api_key: |\n    plainvalue-77\n    plainvalue-88\n  model: x", "plainvalue-88",
+        NOT_KEYS, keeps="\n  model: x"),
+    Row("assignment", "yaml folded scalar with an indicator",
+        "  client_secret: >-\n    plainvalue-77\n    plainvalue-88\n  other: 1",
+        "plainvalue-88", NOT_KEYS, keeps="\n  other: 1"),
+    Row("assignment", "value with a comma", "password=plainv,alue-77 next", "alue-77", NOT_KEYS,
+        keeps=" next"),
+    Row("assignment", "value with a semicolon", "DB_PASSWORD=pa$$;word-77 next", "word-77",
+        NOT_KEYS, keeps=" next"),
+    Row("assignment", "value with a parenthesis", "password=pl)ain-77 next", "ain-77", NOT_KEYS,
+        keeps=" next"),
+    Row("assignment", "yaml doubled quote", "api_key: 'it''s-plain-77' next", "plain-77", NOT_KEYS,
+        keeps=" next"),
+    Row("assignment", "call keyword ends at a comma", "Client(token=plainvalue-77, timeout=3) ok",
+        "plainvalue-77", NOT_KEYS, keeps=", timeout=3) ok"),
+    Row("assignment", "call keyword ends at a parenthesis", "login(token=plainvalue-77)",
+        "plainvalue-77", NOT_KEYS, keeps="login(token="),
+    Row("assignment", "unclosed quote (cut text)", "{'api_key': 'plainvalue-77", "plainvalue-77",
+        NOT_KEYS, keeps="{'api_key': "),
+    Row("url", "query string without a scheme (hub CDN)",
+        "Max retries exceeded with url: /repos/f4/ab/h?Expires=1731&Signature=eWbAbcdefGhi"
+        "&Key-Pair-Id=K3RXYZ (Caused by X)", "eWbAbcdefGhi", URL_NEGATIVE,
+        keeps="&Key-Pair-Id=K3RXYZ (Caused by X)"),
+    Row("url", "query string without a scheme (key)", "url: /v1/x?key=abcdef123456 retry",
+        "abcdef123456", URL_NEGATIVE, keeps="url: /v1/x?key="),
     Row("url", "long scheme (SQLAlchemy driver)",
         "engine postgresql+psycopg2://admin:plainvalue-77@db.internal:5432/soup failed",
         "plainvalue-77", URL_NEGATIVE, keeps="@db.internal:5432/soup failed"),
@@ -327,6 +382,46 @@ def test_sensitive_query_parameter_value_is_replaced(name):
     assert f"{name}={REDACTED}" in out
     assert "https://hub.example/v1/models?revision=main&" in out
     assert out.endswith("&page=2 failed")
+
+
+@pytest.mark.parametrize("name", SENSITIVE_PARAMS)
+def test_sensitive_parameter_in_a_query_without_a_scheme_is_replaced(name):
+    # urllib3 / requests put ``url: /path?query`` into the message of a failed request
+    out = redact_text(
+        f"Max retries exceeded with url: /v1/models?revision=main&{name}={URL_SECRET}"
+        "&page=2 (Caused by x)"
+    )
+    assert URL_SECRET not in out
+    assert f"/v1/models?revision=main&{name}={REDACTED}&page=2 (Caused by x)" in out
+
+
+@pytest.mark.parametrize("name", HARMLESS_PARAMS)
+def test_harmless_parameter_in_a_query_without_a_scheme_is_kept(name):
+    text = f"Max retries exceeded with url: /v1/models?{name}=value123&page=2 (Caused by x)"
+    report = RedactionReport()
+    assert redact_text(text, report) == text
+    assert report.count == 0
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("url: /v1/x?sig=abcdef&n=1.", f"url: /v1/x?sig={REDACTED}&n=1."),
+    ("see (/v1/x?token=abcdef).", f"see (/v1/x?token={REDACTED})."),
+    ("GET /a/b?%73ig=abcdef", f"GET /a/b?%73ig={REDACTED}"),
+    ("/a?x=1&sig=abc&sig=def", f"/a?x=1&sig={REDACTED}&sig={REDACTED}"),
+])
+def test_query_without_a_scheme_spellings(text, expected):
+    report = RedactionReport()
+    out = redact_text(text, report)
+    assert out == expected, out
+    assert redact_text(out) == out
+
+
+@pytest.mark.parametrize("text", [
+    "what?x=y", "is it ready?page=2", "?key=abcdef", "a ?key=abcdef", "who? sig=abc",
+    "ratio=0.5?token_count=3", "/v1/x?revision=main",
+])
+def test_question_marks_that_do_not_open_a_query_are_left_alone(text):
+    assert redact_text(text) == text
 
 
 @pytest.mark.parametrize("name", HARMLESS_PARAMS)
@@ -494,7 +589,8 @@ SECRET_KEYS = [
     "token", "hf_token", "HF_TOKEN", "api_key", "apiKey", "API_KEY", "apikey", "openai_api_key",
     "wandb_api_key", "x-api-key", "--api-key", "access_token", "accessToken", "auth_token",
     "use_auth_token", "client_secret", "secret_key", "password", "db_passwd", "passphrase",
-    "private_key", "privateKey", "aws_secret_access_key", "aws_access_key_id", "credentials",
+    "enable_auth_token", "requires_auth_token", "private_key", "privateKey",
+    "aws_secret_access_key", "aws_access_key_id", "credentials",
     "Authorization", "authorization_header", "bearer", "cookie", "Set-Cookie", "session_id",
     "sessionToken", "id_token", "admin_tokens", "oauth", "GOOGLE_APPLICATION_CREDENTIALS",
 ]
@@ -505,6 +601,15 @@ HARMLESS_KEYS = [
     "add_new_tokens", "online_dpo_max_new_tokens", "grpo_judge_max_tokens", "maxNewTokens",
     "numTokens", "tokens_per_second", "pad_token_id", "author", "authors", "auth_required",
     "tokens", "authentication", "authenticated", "authenticator", "authority",
+    "token_id", "token_ids", "token_counts", "token_len", "token_length", "token_limit",
+    "token_budget", "token_ratio", "token_type_ids", "tokens_seen", "tokens_used",
+    "tokens_total_count", "total_tokens", "prompt_tokens", "completion_tokens", "input_tokens",
+    "output_tokens", "reasoning_tokens", "draft_tokens", "speculative_tokens", "ignore_tokens",
+    "suppress_tokens", "stop_tokens", "reserved_tokens", "added_tokens", "extra_tokens",
+    "generated_tokens", "assistant_tokens", "think_tokens", "response_tokens", "judge_tokens",
+    "sep_token", "cls_token", "mask_token", "special_token", "stop_token", "think_token",
+    "auth_disabled", "auth_type", "auth_method", "auth_scheme", "requires_auth", "use_auth",
+    "enable_auth", "disable_auth",
     "auth_enabled", "auth_mode", "require_auth", "learning_rate", "output_dir", "base",
     "max_seq_length", "keyboard", "monkey", "compass", "pass_rate",
 ]
@@ -628,6 +733,55 @@ def test_many_redacted_values_in_one_config_are_recorded_in_linear_time():
     assert not _leaked(json.dumps(redacted), "value-0", f"value-{count - 1}")
 
 
+def test_a_chat_template_is_not_rewritten_by_the_assignment_pass():
+    template = "{% set auth = messages[0] %}{{ auth['content'] }}{% set token = 1 %}"
+    config = {"data": {"chat_template": template, "note": "kept"}}
+    redacted, report = redact_config(config)
+    assert redacted == config
+    assert report.count == 0 and report.paths == []
+
+
+def test_a_credential_shape_inside_a_chat_template_is_still_replaced():
+    config = {"data": {"chat_template": "{# " + HF + " #}{{ messages }}"}}
+    redacted, report = redact_config(config)
+    assert not _leaked(json.dumps(redacted), HF)
+    assert report.paths == ["data.chat_template"]
+
+
+@pytest.mark.parametrize("text", [
+    "./data/split=train/token=3/train.jsonl",
+    "s3://bucket/dt=2026-01-01/session=2026/part-0.parquet",
+    "/data/token=3",
+    "cache/token=007/",
+])
+def test_a_path_segment_that_holds_a_number_is_not_a_credential(text):
+    report = RedactionReport()
+    assert redact_text(text, report) == text
+    assert report.count == 0
+
+
+def test_a_path_segment_that_holds_a_word_is_still_a_credential():
+    out = redact_text("./data/token=abcdef/train.jsonl")
+    assert "abcdef" not in out
+
+
+def test_non_string_keys_are_walked_and_named_by_their_text():
+    config = {1: HF, "api_key": "plain-1", ("t",): {"x": 1}, 2: {"y": [HF]}}
+    redacted, report = redact_config(config)
+    assert redacted[1] == REDACTED and redacted["api_key"] == REDACTED
+    assert redacted[("t",)] == {"x": 1}
+    assert redacted[2] == {"y": [REDACTED]}
+    assert report.paths == ["1", "api_key", "2.y[0]"]
+
+
+def test_a_header_that_was_redacted_before_is_left_alone():
+    config = {"headers": {
+        "Authorization": f"Bearer {REDACTED}", "Proxy-Authorization": f"Basic {REDACTED}",
+    }}
+    redacted, report = redact_config(config)
+    assert redacted == config and report.count == 0
+
+
 def test_non_string_values_are_never_touched():
     config = {
         "api_key": 12345, "token": None, "password": False, "secret": 1.5, "auth_required": True,
@@ -748,6 +902,163 @@ def test_config_and_metrics_are_redacted_with_counts():
     assert all(isinstance(value, int) for value in counts.values())
 
 
+def test_metrics_that_are_not_json_are_redacted_after_they_become_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    metrics = [{"step": 1, "raw": HF.encode(), "seen": {HF}, "obj": object(), "note": "x"}]
+    bundle = build_crash_bundle(error=RuntimeError("x"), metrics=metrics)
+    text = write_crash_bundle(bundle).read_text(encoding="utf-8")
+    assert not _leaked(text, HF)
+    assert bundle["metrics_tail"][0]["step"] == 1
+    assert bundle["redaction"]["metrics_tail"] >= 2
+
+
+def test_output_dir_is_redacted_before_its_last_component_is_taken():
+    secret_url = f"s3://AKIDEXAMPLE:{URL_SECRET}@bucket"
+    bundle = build_crash_bundle(error=RuntimeError("x"), output_dir=secret_url)
+    assert URL_SECRET not in json.dumps(bundle)
+    assert bundle["output_dir"] == f"{REDACTED}@bucket"
+    plain = build_crash_bundle(error=RuntimeError("x"), output_dir="C:/Users/me/work/run1/")
+    assert plain["output_dir"] == "run1"
+
+
+def test_a_long_string_is_cut_and_the_tail_is_never_kept():
+    cap = crash.MAX_REDACT_CHARS
+    message = ("x " * (cap // 2 + 4000)) + HF
+    bundle = build_crash_bundle(error=RuntimeError(message))
+    shown = bundle["error"]["message"]
+    assert len(shown) < cap + 200
+    assert "characters dropped>" in shown
+    assert not _leaked(json.dumps(bundle), HF)
+
+
+def test_a_credential_cut_in_half_by_the_cap_leaves_no_fragment():
+    cap = crash.MAX_REDACT_CHARS
+    message = "y" * (cap - 20) + " " + HF
+    shown = build_crash_bundle(error=RuntimeError(message))["error"]["message"]
+    assert not _leaked(shown, HF[:12], HF[:6])
+    word = "z" * (cap - 5) + HF
+    shown = build_crash_bundle(error=RuntimeError(word))["error"]["message"]
+    assert not _leaked(shown, HF[:8])
+
+
+def test_every_string_of_the_config_and_the_metrics_is_cut_too():
+    cap = crash.MAX_REDACT_CHARS
+    big = "w " * (cap // 2 + 4000) + HF
+    bundle = build_crash_bundle(
+        error=RuntimeError("x"), config={"note": big}, metrics=[{"msg": big}],
+    )
+    assert len(bundle["config"]["note"]) < cap + 200
+    assert len(bundle["metrics_tail"][0]["msg"]) < cap + 200
+    assert not _leaked(json.dumps(bundle), HF)
+
+
+def test_a_failure_inside_redaction_withholds_the_text_instead_of_raising(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("redaction bug")
+
+    monkeypatch.setattr(crash, "redact_text", boom)
+    try:
+        raise RuntimeError(f"failed with {HF}")
+    except RuntimeError as exc:
+        bundle = build_crash_bundle(
+            error=exc, config={"note": HF}, metrics=[{"msg": HF}],
+        )
+    blob = json.dumps(bundle)
+    assert not _leaked(blob, HF)
+    assert bundle["error"]["message"] == crash.REDACTION_FAILED
+    assert bundle["config"]["note"] == crash.REDACTION_FAILED
+    assert bundle["metrics_tail"][0]["msg"] == crash.REDACTION_FAILED
+    assert bundle["redaction"]["values_redacted"] >= 3
+
+
+def test_a_failure_in_the_config_walk_replaces_the_config_with_a_marker(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("walk bug")
+
+    monkeypatch.setattr(crash, "redact_config", boom)
+    bundle = build_crash_bundle(
+        error=RuntimeError("x"), config={"note": HF}, metrics=[{"msg": HF}],
+    )
+    assert bundle["config"] == {"_redaction_failed": True}
+    assert bundle["metrics_tail"] == [{"_redaction_failed": True}]
+    assert not _leaked(json.dumps(bundle), HF)
+
+
+def test_any_other_failure_while_building_gives_a_minimal_bundle(monkeypatch):
+    def boom():
+        raise RuntimeError("gpu probe bug")
+
+    monkeypatch.setattr(crash, "_capture_gpu_state", boom)
+    bundle = build_crash_bundle(error=RuntimeError(f"x {HF}"), run_id="run_1")
+    assert bundle["error"] == {
+        "type": "RuntimeError", "message": crash.REDACTION_FAILED, "kind": "other",
+        "traceback": [],
+    }
+    assert bundle["run_id"] == "run_1" and not _leaked(json.dumps(bundle), HF)
+
+
+def test_a_traceback_that_cannot_be_formatted_leaves_an_empty_list(monkeypatch):
+    import types
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("format bug")
+
+    monkeypatch.setattr(crash, "traceback", types.SimpleNamespace(format_exception=boom))
+    bundle = build_crash_bundle(error=RuntimeError(f"x {HF}"))
+    assert bundle["error"]["traceback"] == []
+    assert bundle["error"]["message"] == f"x {REDACTED}"
+
+
+def test_recording_a_failure_never_replaces_the_original_error(capsys):
+    from soup_cli.commands import train as train_command
+
+    class BrokenTracker:
+        def fail_run(self, run_id, error=None):
+            raise RuntimeError("database is locked")
+
+    train_command._record_run_failure(BrokenTracker(), "run_1", ValueError(f"bad {HF}"))
+    shown = capsys.readouterr().out
+    assert "Could not record the failure of run_1" in shown and "RuntimeError" in shown
+    assert not _leaked(shown, HF)
+
+
+def test_the_train_command_records_failures_through_the_guarded_helper():
+    import inspect
+
+    from soup_cli.commands import train as train_command
+
+    source = inspect.getsource(train_command)
+    assert source.count("tracker.fail_run(") == 1  # the one inside _record_run_failure
+    assert source.count("_record_run_failure(tracker, run_id, exc)") == 2
+
+
+def test_an_error_whose_text_cannot_be_read_still_gives_a_bundle():
+    class UnprintableError(Exception):
+        def __str__(self):
+            raise ValueError("no text")
+
+    bundle = build_crash_bundle(error=UnprintableError())
+    assert bundle["error"]["type"] == "UnprintableError"
+    assert bundle["error"]["message"] == crash.REDACTION_FAILED
+
+
+def test_the_tracker_records_a_marker_when_redaction_fails(tmp_path, monkeypatch):
+    from soup_cli.experiment import tracker as tracker_module
+
+    def boom(value):
+        raise RuntimeError("redaction bug")
+
+    monkeypatch.setattr(tracker_module, "redact_secrets", boom)
+    tracker = tracker_module.ExperimentTracker(db_path=tmp_path / "exp.db")
+    run_id = tracker.start_run(
+        config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+    )
+    tracker.fail_run(run_id, error=f"failed with {HF}")
+    recorded = tracker.get_run(run_id)["error_message"]
+    assert recorded == crash.REDACTION_FAILED
+    assert not _leaked(recorded, HF)
+
+
 LEGACY_BARE_API_KEY = "api_key " + _alnum(24)
 
 
@@ -855,8 +1166,12 @@ def perf_watchdog():
 
 
 def _time_bound(size: int) -> float:
-    """The #1367 test allows 0.5 s for 50 000 characters; the same rate, never tighter."""
-    return 0.5 * size / 50_000
+    """Four times the worst rate measured for ``redact_text`` (4.3 s per MiB, 2026-11-15).
+
+    The #1367 test allowed 0.5 s per 50 000 characters (10.5 s per MiB), which is under 2.5x
+    the worst measured case: a slow runner would fail a correct build. This is 17.2 s per MiB.
+    """
+    return 17.2 * size / (1 << 20)
 
 
 def _leaked(text: str, *secrets: str) -> list[str]:
@@ -922,7 +1237,9 @@ def test_a_one_mib_error_message_goes_through_the_bundle_in_time():
     start = time.perf_counter()
     bundle = build_crash_bundle(error=RuntimeError(message))
     elapsed = time.perf_counter() - start
-    assert elapsed < _time_bound(len(message) * 2), elapsed
+    # the message is cut at MAX_REDACT_CHARS before redaction (and again in the traceback)
+    assert elapsed < _time_bound(crash.MAX_REDACT_CHARS * 4), elapsed
+    assert len(bundle["error"]["message"]) < crash.MAX_REDACT_CHARS + 200
     assert not _leaked(json.dumps(bundle), HF)
 
 

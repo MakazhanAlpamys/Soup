@@ -760,6 +760,23 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
+    """``tracker.fail_run`` that can never replace the original error with its own.
+
+    The failure is already being raised (and, on the training path, written to a crash
+    bundle); a fault while recording it is reported and swallowed.
+    """
+    try:
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+    except Exception as record_error:
+        from soup_cli.utils.terminal import for_terminal
+
+        console.print(
+            f"[dim]Could not record the failure of {for_terminal(run_id)}: "
+            f"{for_terminal(type(record_error).__name__)}[/]"
+        )
+
+
 def _describe_exception_for_tracker(exc: BaseException) -> str:
     """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
 
@@ -2352,7 +2369,7 @@ def train(
                 energy_ctx = contextlib.nullcontext()
 
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         raise
 
     try:
@@ -2406,7 +2423,7 @@ def train(
             trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
