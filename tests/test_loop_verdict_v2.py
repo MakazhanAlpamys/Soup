@@ -1093,6 +1093,13 @@ class TestKeepAsideThenGraduation:
 
         assert failed.run_id is None and world.ledger() == []
         world.trainer.returncode = 0
+        # the same inputs wait before the next attempt (tests/test_loop_failed_train_hold.py);
+        # the wait is over here
+        assert world.state.failed_train is not None
+        world.state = replace(
+            world.state,
+            failed_train={**world.state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+        )
         retry = world.cycle()
         assert retry.run_id
         assert world.ship.held_out and world.ship.held_out[0]["edit_id"] == uid(6)
@@ -1365,9 +1372,13 @@ class TestLineageCursor:
 
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
-    # appended after them by the review fixes (2026-11-14): at the very end, so a reader of
-    # an older loop.yaml is unaffected; they come last in this order
-    LATER = ["pending_deploy", "last_failure", "canary_on_timeout_explicit"]
+    # appended after them by the review fixes (2026-11-14) and review 5 (2026-11-16, the last two:
+    # failed_train, canary_override): at the very end, so a reader of an older loop.yaml is
+    # unaffected; they come last in this order
+    LATER = [
+        "pending_deploy", "last_failure", "canary_on_timeout_explicit", "failed_train",
+        "canary_override",
+    ]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):
         names = list(LoopState.__dataclass_fields__)

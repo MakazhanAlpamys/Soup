@@ -1286,6 +1286,13 @@ class TestTheLoopOverFeedback:
         assert failed.run_id is None
         assert state.attempt_cursor_ts is None
         trainer.returncode = 0
+        # the same inputs wait before the next attempt (tests/test_loop_failed_train_hold.py);
+        # the wait is over here
+        assert state.failed_train is not None
+        state = replace(
+            state,
+            failed_train={**state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+        )
         state, retry, _ = run_once(state, self._config())
         # (+30 is the thumb down, which gives no sft row but was seen by the run.)
         assert retry.run_id and state.attempt_cursor_ts == T0 + 30

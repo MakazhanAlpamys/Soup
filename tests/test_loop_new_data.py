@@ -815,6 +815,13 @@ class TestTheLoop:
         assert loop.state.attempt_cursor_ts is None
 
         loop.trainer.returncode = 0
+        # the same inputs wait before the next attempt (tests/test_loop_failed_train_hold.py);
+        # the wait is over here
+        assert loop.state.failed_train is not None
+        loop.state = replace(
+            loop.state,
+            failed_train={**loop.state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+        )
         retry = loop.cycle()
         assert retry.run_id
         assert loop.trainer.calls == 2

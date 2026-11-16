@@ -222,12 +222,13 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
             "net_guard.refuse_private_ip_literal)"
         ),
     ),
-    ("utils/http_response.py", "post_capped"): DeclaredSink(
+    ("utils/http_response.py", "request_capped"): DeclaredSink(
         calls=("httpx.stream",),
         gate=None,
         reason=(
-            "operator environment: bounded POST transport; callers retain their existing "
-            "endpoint validators, fixed provider hosts and credential policies"
+            "operator environment: bounded POST and GET transport (post_capped, get_capped); "
+            "callers retain their existing endpoint validators, fixed provider hosts and "
+            "credential policies"
         ),
     ),
     ("data/providers/ollama.py", "detect_ollama"): DeclaredSink(
@@ -286,6 +287,14 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
         reason=(
             "operator environment: deploy_to_canary validates endpoint via "
             "validate_webhook_url and restricts target to local/LAN; reply capped"
+        ),
+    ),
+    ("utils/loop_stages.py", "_get_health"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.get_capped",),
+        gate=("server_adapter_note", "_checked_endpoint"),
+        reason=(
+            "operator environment: soup loop status takes the endpoint from _checked_endpoint "
+            "(validate_webhook_url + local/LAN only); GET /health needs no token; reply capped"
         ),
     ),
     ("utils/loop_stages.py", "_post_deactivate"): DeclaredSink(

@@ -23,6 +23,11 @@ from urllib.parse import urlparse
 
 import pytest
 
+from soup_cli.utils import loop_max_length
+
+#: The real tokenizer child, taken before the suite's autouse stub replaces it for a test.
+REAL_MEASURE_IN_CHILD = loop_max_length._measure_in_child
+
 # ``gpu``: the repo's one CUDA convention (tests/conftest.py skips every ``gpu`` test without a
 # device, ``pytest -m gpu`` selects them: #833); no private probe here.
 pytestmark = [pytest.mark.smoke, pytest.mark.gpu]
@@ -55,6 +60,9 @@ def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
     hooks = ("_DEPLOY_POSTER", "_LOAD_POSTER", "_TRAIN_RUNNER", "_SHIP_RUNNER", "_HEALTH_GETTER")
     for name in hooks:
         monkeypatch.setattr(ls, name, None)
+    # The autouse stub keeps the tokenizer child off every other test; here the recipe's
+    # data.max_length comes from the real rows and the real tokenizer (review 5, F1).
+    monkeypatch.setattr(loop_max_length, "_measure_in_child", REAL_MEASURE_IN_CHILD)
     (tmp_path / "tasks.jsonl").write_text(
         "".join(
             json.dumps({"prompt": f"What is {a} + {b}? Answer with the number.",

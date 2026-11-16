@@ -40,6 +40,13 @@ from soup_cli.utils import loop_formats
 from soup_cli.utils.loop_feedback import EditedAnswer
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
+#: What the train stage notes when the suite's stub tokenizer child "cannot measure"
+#: (tests/conftest.py ``_no_loop_tokenizer_child``): the schema default stays.
+UNMEASURED = (
+    "max_length: 2048 kept, the longest row could not be measured "
+    "(no tokenizer is loaded in a test)"
+)
+
 jsonschema = pytest.importorskip("jsonschema")
 
 NOW = "2026-11-06T09:00:00+00:00"
@@ -1290,7 +1297,9 @@ class TestTrainStage:
         out, _ = train(_state(train_method="sft", min_new_edits=1), monkeypatch,
                        transport=Transport(replies))
 
-        assert out["notes"] == "paraphrases: 4 new for 2 edits, 1 dropped (same_as_prompt 1)"
+        assert out["notes"] == (
+            f"{UNMEASURED}; paraphrases: 4 new for 2 edits, 1 dropped (same_as_prompt 1)"
+        )
 
     def test_the_call_goes_to_the_loops_own_serve_endpoint_the_internal_way(
         self, serving, monkeypatch
@@ -1354,7 +1363,7 @@ class TestTrainStage:
         assert len(again.calls) == 1
         assert "Where is the capital" in again.calls[0]["body"]["messages"][0]["content"]
         assert [line["response_id"] for line in read_lines()] == [uid(1), uid(2)]
-        assert out["notes"] == "paraphrases: 2 new for 1 edit"
+        assert out["notes"] == f"{UNMEASURED}; paraphrases: 2 new for 1 edit"
 
     @pytest.mark.parametrize("method", ["dpo", "kto", "sft"])
     def test_paraphrases_never_enter_any_dataset(self, serving, monkeypatch, method):
@@ -1418,7 +1427,7 @@ class TestTrainStage:
 
         assert out["skipped"] is False and trainer.calls == 1  # training goes on
         assert not os.path.exists(PARAPHRASES_FILE)
-        assert out["notes"].startswith("paraphrases: none written for 2 edits: ")
+        assert "paraphrases: none written for 2 edits: " in out["notes"]
         assert "--paraphraser-endpoint" in out["notes"] and "--paraphraser-model" in out["notes"]
         assert "SOUP_LOOP_SERVE_ENDPOINT" in out["notes"] and ls.TOOL_AUTH_TOKEN_ENV in out["notes"]
 
@@ -1507,7 +1516,7 @@ class TestTrainStage:
                        transport=Transport())
 
         assert out["notes"] == (
-            "sft quantization auto: 4bit (stub); paraphrases: 2 new for 1 edit"
+            f"sft quantization auto: 4bit (stub); {UNMEASURED}; paraphrases: 2 new for 1 edit"
         )
 
 
