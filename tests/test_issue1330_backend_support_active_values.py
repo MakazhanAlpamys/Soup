@@ -60,6 +60,10 @@ def _config(task: str, backend: str, modality: str) -> dict:
     }
     if modality != "text":
         cfg["modality"] = modality
+    if task == "unlearn":
+        # #2005: MLX runs SimNPO only, and unlearning reads its own row sets.
+        cfg["data"]["forget_set"] = "./data/forget.jsonl"
+        cfg["training"] = {"unlearn_method": "simnpo", "quantization": "none"}
     return cfg
 
 

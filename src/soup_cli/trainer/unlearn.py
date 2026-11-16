@@ -26,7 +26,7 @@ import math
 import os
 import stat
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
 
@@ -65,6 +65,19 @@ def _load_unlearn_rows(path: str) -> List[Tuple[str, str]]:
     completion}``, ``{prompt, target}``, or ``{text}`` (whole text as target
     with an empty prompt). Skips malformed / empty rows. Cwd-contained.
     """
+    return _load_unlearn_rows_counted(path)[0]
+
+
+#: Why :func:`_load_unlearn_rows_counted` skipped a line, in report order.
+UNLEARN_SKIP_REASONS = ("blank", "bad_json", "over_size", "no_pair")
+
+
+def _load_unlearn_rows_counted(path: str) -> Tuple[List[Tuple[str, str]], Dict[str, int]]:
+    """:func:`_load_unlearn_rows`, and how many lines it skipped for each reason.
+
+    The counts are keyed by :data:`UNLEARN_SKIP_REASONS`, plus ``past_row_limit``:
+    1 when the file has lines after the first ``_MAX_ROWS``, which are not read.
+    """
     from soup_cli.utils.paths import is_under_cwd
 
     if not isinstance(path, str) or not path:
@@ -84,23 +97,31 @@ def _load_unlearn_rows(path: str) -> List[Tuple[str, str]]:
     if st.st_size > _MAX_FILE_BYTES:
         raise ValueError(f"dataset file exceeds {_MAX_FILE_BYTES} bytes")
     pairs: List[Tuple[str, str]] = []
+    skipped = dict.fromkeys(UNLEARN_SKIP_REASONS, 0)
+    skipped["past_row_limit"] = 0
     with open(path, "r", encoding="utf-8-sig") as fh:
         for i, line in enumerate(fh):
             if i >= _MAX_ROWS:
+                skipped["past_row_limit"] = 1
                 break
             if len(line) > _MAX_ROW_BYTES:
+                skipped["over_size"] += 1
                 continue  # skip a pathologically large single row
             line = line.strip()
             if not line:
+                skipped["blank"] += 1
                 continue
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
+                skipped["bad_json"] += 1
                 continue
             pair = _extract_pair(row)
             if pair is not None:
                 pairs.append(pair)
-    return pairs
+            else:
+                skipped["no_pair"] += 1
+    return pairs, skipped
 
 
 def _extract_pair(row: object) -> Optional[Tuple[str, str]]:

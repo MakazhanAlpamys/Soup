@@ -1676,7 +1676,9 @@ output: ./output
         assert {"soup_cli/trainer/_trl_compat.py", "soup_cli/trainer/loss_summary.py"} <= imported
         users = {key: set(mods) for key, mods in TRAINER_MODULES.items()
                  if "soup_cli/trainer/mlx_dpo.py" in mods}
-        assert {task for task, _, _ in users} == {"dpo", "simpo", "orpo", "kto", "grpo"}
+        assert {task for task, _, _ in users} == {
+            "dpo", "simpo", "orpo", "kto", "grpo", "unlearn",
+        }
         missing = {key: sorted(imported - mods) for key, mods in users.items()
                    if imported - mods}
         assert missing == {}
