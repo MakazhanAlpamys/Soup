@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.commands._common import refuse_output_over_input
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -97,6 +97,7 @@ def validate(
         "--min-valid-fraction",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
 ):
