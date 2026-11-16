@@ -136,10 +136,10 @@ def _arms_enabled(arms, trace: list[str] | None = None):
     try:
         if "base_matmul_in_activation_dtype" in arms:
             for module in modules:
-                saved.append((module, "_projection_compute_dtype", module._projection_compute_dtype))
-                monkey = module._projection_compute_dtype
+                original = module._projection_compute_dtype
+                saved.append((module, "_projection_compute_dtype", original))
 
-                def in_activation_dtype(meta, fallback, _original=monkey):
+                def in_activation_dtype(meta, fallback):
                     """The base matmul in the activation dtype, not the compute one."""
                     return fallback
 
