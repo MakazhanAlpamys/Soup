@@ -275,6 +275,12 @@ class LoopState:
     # request errors alone, even with nothing to judge by". A loop.yaml from before it loads
     # as False. Last, so adding it shifted no existing positional field.
     canary_on_timeout_explicit: bool = False
+    # The latest training failure that is not repeated on the same inputs (review 5, F3): a dict
+    # with "inputs" (the SHA-256 fingerprint of the dataset, method, base and recipe), "attempts"
+    # (failures on those inputs), "last_at", "retry_after" (None once held), "held" and "reason".
+    # ``utils/loop_retry.py`` decides; ``soup loop resume`` clears it. None = nothing remembered.
+    # Last, so adding it shifted no existing positional field; loads as None from before.
+    failed_train: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -460,6 +466,8 @@ class LoopState:
             _check_canary_iteration(self.canary_iteration)
         if self.pending_deploy is not None:
             _check_pending_deploy(self.pending_deploy)
+        if self.failed_train is not None:
+            _check_failed_train(self.failed_train)
         if self.last_failure is not None:
             _require_str("last_failure", self.last_failure, allow_empty=False)
 
@@ -573,6 +581,37 @@ def _check_pending_deploy(pending: object) -> None:
     attempts = pending.get("attempts")
     if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
         raise ValueError("pending_deploy attempts must be an int from 1 to 100")
+
+
+_FAILED_TRAIN_KEYS = ("inputs", "attempts", "last_at", "retry_after", "held", "reason")
+_FAILED_TRAIN_FINGERPRINT = re.compile(r"[0-9a-f]{64}", re.ASCII)
+
+
+def _check_failed_train(record: object) -> None:
+    """``failed_train`` is the small record ``utils/loop_retry.py`` writes; nothing else."""
+    if not isinstance(record, dict):
+        raise ValueError("failed_train must be a dict or None")
+    if sorted(record) != sorted(_FAILED_TRAIN_KEYS):
+        raise ValueError(f"failed_train must hold exactly {', '.join(_FAILED_TRAIN_KEYS)}")
+    inputs = record["inputs"]
+    if not isinstance(inputs, str) or _FAILED_TRAIN_FINGERPRINT.fullmatch(inputs) is None:
+        raise ValueError("failed_train inputs must be a 64-character lowercase hex digest")
+    attempts = record["attempts"]
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
+        raise ValueError("failed_train attempts must be an int from 1 to 100")
+    if not isinstance(record["held"], bool):
+        raise ValueError("failed_train held must be bool")
+    for name in ("last_at", "retry_after"):
+        value = record[name]
+        if value is None and name == "retry_after":
+            continue
+        _require_str(f"failed_train {name}", value, allow_empty=False)
+        if len(value) > 64 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError(f"failed_train {name} must be a short ISO 8601 time")
+    reason = record["reason"]
+    _require_str("failed_train reason", reason, allow_empty=False)
+    if len(reason) > 300 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in reason):
+        raise ValueError("failed_train reason must be one short line without control characters")
 
 
 def _brief(value: object) -> str:

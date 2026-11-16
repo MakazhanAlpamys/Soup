@@ -25,6 +25,7 @@ and offline smokes inject behaviour without a GPU or a network:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ import sqlite3
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
@@ -64,6 +66,7 @@ from soup_cli.utils.loop_holdout import (
     waiting_note,
 )
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
+from soup_cli.utils.loop_retry import hold_reason, train_inputs_fingerprint
 from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
@@ -575,8 +578,11 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         pairs_dir = Path(_PAIRS_DIR)
         pairs_dir.mkdir(parents=True, exist_ok=True)
         prefix = _DATASET_PREFIX[state.train_method]
-        pairs_path = str(pairs_dir / f"{prefix}-{uuid.uuid4().hex[:12]}.jsonl")
         lines = "\n".join(json.dumps(row) for row, _ in rows) + "\n"
+        # Named by what it holds: the same rows are the same file, so a poll that harvests what
+        # the last one did leaves one dataset behind, not one more (review 5, F3).
+        digest = hashlib.sha256(lines.encode("utf-8")).hexdigest()[:12]
+        pairs_path = str(pairs_dir / f"{prefix}-{digest}.jsonl")
         # Atomic + cwd-contained + symlink-rejected (mirrors the rest of the
         # changeset's write policy).
         atomic_write_text(lines, pairs_path, field="pairs_path")
@@ -853,7 +859,7 @@ def _train_failure(note: str, decided: Mapping[str, object]) -> "dict[str, objec
     notes = f"{previous}; {note}" if previous else note
     return {
         **decided, "run_id": None, "skipped": False, "adapter_path": None, "failed": True,
-        "notes": notes,
+        "notes": notes, "failure": note,
     }
 
 
@@ -921,6 +927,14 @@ def train_dpo_from_pairs(
         note = f"pairs_file_missing: {quote_path(str(pairs_path))} not found, training skipped"
         return {**skip, "notes": note}
 
+    # A run that failed on these very inputs is not started again on every poll (review 5, F3):
+    # it waits, then holds, until the data, the recipe or the base model changes.
+    fingerprint = train_inputs_fingerprint(state, str(pairs_path), method)
+    waiting = hold_reason(state.failed_train, fingerprint, datetime.now(timezone.utc))
+    if waiting is not None:
+        return {**skip, "notes": waiting, "train_held": True, "train_inputs": fingerprint}
+    inputs = {"train_inputs": fingerprint} if fingerprint is not None else {}
+
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)
     train_notes: list = []
@@ -956,7 +970,7 @@ def train_dpo_from_pairs(
         _LOG.warning("train subprocess failed: %s", type(exc).__name__)
         return {
             **_train_failure(f"train failed: {type(exc).__name__}", decided),
-            "train_log": log_path,
+            "train_log": log_path, **inputs,
         }
 
     rc = getattr(result, "returncode", 1)
@@ -966,11 +980,11 @@ def train_dpo_from_pairs(
         ended = describe_exit(rc)
         return {
             **_train_failure(f"train failed ({ended})" + (f": {tail}" if tail else ""), decided),
-            "train_log": log_path,
+            "train_log": log_path, **inputs,
         }
     trained = {
         "run_id": run_id, "skipped": False, "adapter_path": output_dir,
-        "train_log": log_path, **decided,
+        "train_log": log_path, **decided, **inputs,
     }
     if plan is not None:
         # What the verdict checks: the corrections this run trained on, and the ones it kept out.

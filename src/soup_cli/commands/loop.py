@@ -67,6 +67,7 @@ from soup_cli.utils.loop_log import (
     version_line,
     withdrawn_line,
 )
+from soup_cli.utils.loop_retry import describe as describe_failed_train
 from soup_cli.utils.loop_state import (
     ALL_LINEAR,
     CANARY_ON_TIMEOUT,
@@ -737,6 +738,11 @@ def status_cmd() -> None:
             "pending_deploy",
             f"attempt {state.pending_deploy.get('attempts', 0)} refused; retried next cycle",
         )
+    retry_text = describe_failed_train(state.failed_train)
+    if retry_text:
+        # A training run that failed is not repeated on the same inputs (review 5, F3): it waits,
+        # then holds until the data, the recipe or the base model changes, or `resume` clears it.
+        table.add_row("train_retry", for_terminal(retry_text))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("min_new_edits", str(state.min_new_edits))
     table.add_row("min_new_rated", str(state.min_new_rated))
@@ -778,15 +784,30 @@ def pause_cmd() -> None:
 
 @app.command("resume")
 def resume_cmd() -> None:
-    """Resume a paused loop (next watch iteration picks up automatically)."""
+    """Resume a paused loop (next watch iteration picks up automatically).
+
+    Also clears a failed-train hold (``soup loop status`` shows it as ``train_retry``): the next
+    cycle trains again on the same inputs, whether the loop was paused or running.
+    """
     state = _safe_read()
-    if state.status != "paused":
+    held = state.failed_train is not None
+    if state.status == "paused":
+        _update(
+            lambda fresh: replace(
+                fresh.with_status("running") if fresh.status == "paused" else fresh,
+                failed_train=None,
+            )
+        )
+        console.print("[green]loop resumed[/]")
+    elif held:
+        _update(lambda fresh: replace(fresh, failed_train=None))
+    else:
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
-    _update(
-        lambda fresh: fresh.with_status("running") if fresh.status == "paused" else fresh
-    )
-    console.print("[green]loop resumed[/]")
+    if held:
+        console.print(
+            "[green]failed-train hold cleared:[/] the next cycle trains again on the same inputs"
+        )
 
 
 #: The settings ``soup loop set`` changes (what ``soup loop init`` needed ``--force`` for).

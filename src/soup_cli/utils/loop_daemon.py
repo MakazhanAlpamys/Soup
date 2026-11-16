@@ -69,6 +69,7 @@ from soup_cli.utils.loop_log import (
     version_line,
     withdrawn_line,
 )
+from soup_cli.utils.loop_retry import after_failure
 from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
@@ -415,7 +416,9 @@ def run_once(
         else:
             failure_note = f"deploy failed after {attempts_used} attempts: {reason}"
     elif train_out.get("failed") and train_out.get("notes"):
-        failure_note = str(train_out["notes"])
+        # The failure itself (exit code or signal name, log tail), not the notes that came before
+        # it (quantization, max_length, paraphrases): last_failure keeps its first 500 characters.
+        failure_note = str(train_out.get("failure") or train_out["notes"])
     deploy_out = {**deploy_out, **({"notes": failure_note} if deploy_refused else {})}
     ledger_notes = (
         record_plan(plan, iteration_id=iteration_id, until=read_up_to)
@@ -489,6 +492,7 @@ def run_once(
             else None
         ),
         last_failure=(failure_note or "")[:500] or None,
+        failed_train=_failed_train_after(state, train_out, pending is None),
     )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
@@ -727,6 +731,27 @@ def _plain_json(stage_out: Mapping[str, object]) -> "dict[str, object]":
         except (TypeError, ValueError):
             continue
     return kept
+
+
+def _failed_train_after(
+    state: LoopState, train_out: Mapping[str, object], ran_train_stage: bool
+) -> Optional[dict]:
+    """``state.failed_train`` after this cycle's train stage (review 5, F3).
+
+    A failure on a known fingerprint counts one more attempt (``loop_retry.after_failure``); a
+    run that trained clears the record; a cycle that waited, or skipped for want of data, or only
+    retried a deploy leaves it as it is. A custom train stage that reports no fingerprint
+    (``train_inputs``) is never held.
+    """
+    if not ran_train_stage or train_out.get("train_held"):
+        return state.failed_train
+    fingerprint = train_out.get("train_inputs")
+    if train_out.get("failed") and isinstance(fingerprint, str):
+        reason = str(train_out.get("failure") or train_out.get("notes") or "train failed")
+        return after_failure(state.failed_train, fingerprint, datetime.now(timezone.utc), reason)
+    if _training_ran(train_out):
+        return None
+    return state.failed_train
 
 
 def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:
