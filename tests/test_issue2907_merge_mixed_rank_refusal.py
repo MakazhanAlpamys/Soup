@@ -155,12 +155,27 @@ def test_a_same_rank_shape_mismatch_names_the_tensor_and_the_shapes() -> None:
     assert "arithmetic" not in msg  # another rank is not what is wrong here
 
 
-def test_a_non_lora_tensor_that_differs_in_shape_is_refused() -> None:
-    shared = _factors(Q_PROJ, 2, 0)
+def test_a_non_lora_tensor_that_differs_in_shape_is_still_skipped(adapters) -> None:
+    # A modules_to_save head of another size: the LoRA factors merge and the
+    # head is listed as skipped, as before the check.
     extra = "base_model.model.lm_head.weight"
-    first = {**shared, extra: np.zeros((4, 8), dtype=np.float32)}
-    second = {**shared, extra: np.zeros((6, 8), dtype=np.float32)}
-    with pytest.raises(ValueError, match="lm_head"):
+    first = {**adapters["r2"], extra: np.zeros((4, 8), dtype=np.float32)}
+    second = {**adapters["r2_other"], extra: np.zeros((6, 8), dtype=np.float32)}
+    check_mergeable([first, second])
+    _write("head_a", first, rank=2)
+    _write("head_b", second, rank=2)
+    result = _merge("head_a", "head_b")
+    out = _plain(result.output)
+    assert result.exit_code == 0, out
+    assert "Merged layers: 2" in out
+    assert "Skipped layers: 1" in out
+
+
+def test_only_non_lora_tensors_that_all_differ_in_shape_are_refused() -> None:
+    extra = "base_model.model.lm_head.weight"
+    first = {extra: np.zeros((4, 8), dtype=np.float32)}
+    second = {extra: np.zeros((6, 8), dtype=np.float32)}
+    with pytest.raises(ValueError, match="would hold no weights"):
         check_mergeable([first, second])
 
 
@@ -187,12 +202,19 @@ def test_lora_embedding_factors_report_their_rank() -> None:
 
 
 def _plan(first: str, second: str) -> CmaesPlan:
-    return CmaesPlan(adapters=(first, second), eval_suite="suite.jsonl", budget_seconds=600,
-                     population_size=4, max_generations=2, seed=0)
+    return CmaesPlan(
+        adapters=(first, second),
+        eval_suite="suite.jsonl",
+        budget_seconds=600,
+        population_size=4,
+        max_generations=2,
+        seed=0,
+    )
 
 
-@pytest.mark.parametrize("second,needle", [("r4", "rank 4 in adapter 2"),
-                                           ("v_only", "share no tensor name")])
+@pytest.mark.parametrize(
+    "second,needle", [("r4", "rank 4 in adapter 2"), ("v_only", "share no tensor name")]
+)
 def test_cmaes_refuses_before_a_candidate_is_scored(adapters, second, needle) -> None:
     scored: list[str] = []
 
@@ -216,8 +238,20 @@ def test_cmaes_from_the_command_exits_2_and_writes_nothing(adapters, monkeypatch
 
     monkeypatch.setattr(cm, "_CMAES_SCORER_OVERRIDE", scorer)
     Path("suite.jsonl").write_text('{"prompt": "hi", "expected": "hi"}\n', encoding="utf-8")
-    result = _merge("r2", "r4", "--strategy", "cmaes", "--eval", "suite.jsonl",
-                    "--budget", "60s", "--population", "2", "--max-generations", "1")
+    result = _merge(
+        "r2",
+        "r4",
+        "--strategy",
+        "cmaes",
+        "--eval",
+        "suite.jsonl",
+        "--budget",
+        "60s",
+        "--population",
+        "2",
+        "--max-generations",
+        "1",
+    )
     out = _plain(result.output)
     assert result.exit_code == 2, out
     assert "rank 2 in adapter 1, rank 4 in adapter 2" in out
