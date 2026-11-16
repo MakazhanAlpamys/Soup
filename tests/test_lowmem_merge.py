@@ -5,6 +5,7 @@ import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -203,25 +204,48 @@ def _add_support_files(base: Path) -> None:
     shutil.copyfile(first_shard, base / "consolidated.safetensors")
 
 
-def _fake_hub_download(repo: Path, snapshot: Path):
-    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does."""
+def _copy_matching(repo: Path, snapshot: Path, kwargs: dict) -> None:
     from fnmatch import fnmatch
 
+    allow = kwargs.get("allow_patterns") or ["*"]
+    ignore = kwargs.get("ignore_patterns") or []
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(repo.iterdir()):
+        if not entry.is_file():
+            continue
+        if not any(fnmatch(entry.name, pattern) for pattern in allow):
+            continue
+        if any(fnmatch(entry.name, pattern) for pattern in ignore):
+            continue
+        shutil.copyfile(entry, snapshot / entry.name)
+
+
+def _fake_hub_download(repo: Path, snapshot: Path, calls: Optional[list] = None):
+    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does.
+
+    Calls add to one snapshot, as calls for one commit do in the Hub cache.
+    """
+
     def download(repo_id, **kwargs):
-        allow = kwargs.get("allow_patterns") or ["*"]
-        ignore = kwargs.get("ignore_patterns") or []
-        snapshot.mkdir()
-        for entry in sorted(repo.iterdir()):
-            if not entry.is_file():
-                continue
-            if not any(fnmatch(entry.name, pattern) for pattern in allow):
-                continue
-            if any(fnmatch(entry.name, pattern) for pattern in ignore):
-                continue
-            shutil.copyfile(entry, snapshot / entry.name)
+        if calls is not None:
+            calls.append(kwargs)
+        _copy_matching(repo, snapshot, kwargs)
         return str(snapshot)
 
     return download
+
+
+def _with_renamed_shards(base: Path, repo: Path, prefix: str) -> None:
+    """``repo``: ``base`` with its shards renamed ``<prefix>-part<N>`` in files and index."""
+    repo.mkdir()
+    shutil.copyfile(base / "config.json", repo / "config.json")
+    index = json.loads((base / "model.safetensors.index.json").read_text())
+    renamed = {}
+    for number, name in enumerate(sorted(set(index["weight_map"].values())), start=1):
+        renamed[name] = f"{prefix}-part{number}.safetensors"
+        shutil.copyfile(base / name, repo / renamed[name])
+    index["weight_map"] = {key: renamed[name] for key, name in index["weight_map"].items()}
+    (repo / "model.safetensors.index.json").write_text(json.dumps(index))
 
 
 def _support_names(output: Path) -> set:
@@ -237,14 +261,14 @@ def test_download_patterns_cover_every_copied_suffix(trust):
     """Adding a suffix to _COPIED_SUFFIXES cannot leave the Hub download behind."""
     from fnmatch import fnmatch
 
-    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_download_patterns
+    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_support_patterns
 
-    allow, ignore = hub_download_patterns(trust)
+    allow = hub_support_patterns(trust)
     for suffix in _COPIED_SUFFIXES:
         assert any(fnmatch(f"file{suffix}", pattern) for pattern in allow), suffix
-    assert any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
+    assert any(fnmatch("model.safetensors.index.json", pattern) for pattern in allow)
     assert any(fnmatch("modeling_my.py", pattern) for pattern in allow) is trust
-    assert not any(fnmatch("model.safetensors", pattern) for pattern in ignore)
+    assert not any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
 
 
 @pytest.mark.parametrize(
@@ -257,15 +281,20 @@ def test_download_patterns_cover_every_copied_suffix(trust):
         "mistral/consolidated-00002-of-00003.safetensors",
     ],
 )
-def test_consolidated_copies_are_ignored_at_any_depth(name):
+def test_consolidated_copies_are_ignored_at_any_depth(name, tmp_path):
     """A single top-level pattern is anchored: the shared Hub patterns also cover a
     nested or sharded consolidated copy, which the Hub download would otherwise fetch."""
     from fnmatch import fnmatch
 
-    from soup_cli.utils.checkpoint_files import HUB_FALLBACK_IGNORE_PATTERNS
-    from soup_cli.utils.lowmem_merge import hub_download_patterns
+    from soup_cli.utils.checkpoint_files import (
+        HUB_FALLBACK_ALLOW_PATTERNS,
+        HUB_FALLBACK_IGNORE_PATTERNS,
+    )
+    from soup_cli.utils.lowmem_merge import hub_weight_patterns
 
-    _, ignore = hub_download_patterns(False)
+    (tmp_path / "config.json").write_text("{}")
+    allow, ignore = hub_weight_patterns(tmp_path)  # no index: the fallback rule
+    assert allow == list(HUB_FALLBACK_ALLOW_PATTERNS)
     assert ignore == list(HUB_FALLBACK_IGNORE_PATTERNS)
     assert any(fnmatch(name, pattern) for pattern in ignore), name
     assert not any(fnmatch("model-00001-of-00003.safetensors", pattern) for pattern in ignore)
@@ -273,7 +302,7 @@ def test_consolidated_copies_are_ignored_at_any_depth(name):
 
 
 def test_the_trust_rule_is_written_once():
-    """``hub_download_patterns`` and ``_support_files`` take ``.py`` from the same helper."""
+    """``hub_support_patterns`` and ``_support_files`` take ``.py`` from the same helper."""
     from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, _copied_suffixes
 
     assert _copied_suffixes(False) == _COPIED_SUFFIXES
@@ -338,16 +367,15 @@ class TestCli:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
-        from soup_cli.utils.lowmem_merge import hub_download_patterns
+        from soup_cli.utils.lowmem_merge import hub_support_patterns
 
         base, adapter, _ = checkpoints
         monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
         monkeypatch.chdir(base.parent)
-        fetched = {}
+        calls = []
 
         def fake_download(repo_id, **kwargs):
-            fetched["repo_id"] = repo_id
-            fetched.update(kwargs)
+            calls.append(dict(kwargs, repo_id=repo_id))
             return str(base)
 
         monkeypatch.setattr("soup_cli.utils.hubs.snapshot_download", fake_download)
@@ -361,12 +389,13 @@ class TestCli:
         )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert fetched["repo_id"] == "org/tiny-llama"
-        allow_patterns, ignore_patterns = hub_download_patterns(False)
-        assert fetched["allow_patterns"] == allow_patterns
-        assert fetched["ignore_patterns"] == ignore_patterns
-        assert "*.safetensors" in allow_patterns and "*.json" in allow_patterns
-        assert "*.py" not in allow_patterns
+        # The snapshot already holds every shard the index names: no second call.
+        assert len(calls) == 1, calls
+        assert calls[0]["repo_id"] == "org/tiny-llama"
+        allow_patterns = hub_support_patterns(False)
+        assert calls[0]["allow_patterns"] == allow_patterns
+        assert "*.json" in allow_patterns and "*.py" not in allow_patterns
+        assert not any(pattern.endswith(".safetensors") for pattern in allow_patterns)
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
@@ -411,6 +440,7 @@ class TestCli:
         assert ("modeling_my.py" in {p.name for p in snapshot.iterdir()}) is trust
 
     def test_consolidated_weights_are_not_downloaded(self, checkpoints, monkeypatch):
+        """The control for #2856: an index next to an unindexed consolidated copy."""
         import transformers
         from typer.testing import CliRunner
 
@@ -421,8 +451,9 @@ class TestCli:
         monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
         monkeypatch.chdir(base.parent)
         snapshot = base.parent / "snapshot"
+        calls = []
         monkeypatch.setattr(
-            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot, calls)
         )
 
         result = CliRunner().invoke(
@@ -434,7 +465,10 @@ class TestCli:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         downloaded = {p.name for p in snapshot.iterdir()}
         assert "consolidated.safetensors" not in downloaded
-        assert any(name.endswith(".safetensors") for name in downloaded)
+        shards = sorted(p.name for p in base.glob("model-*-of-*.safetensors"))
+        assert shards and set(shards) <= downloaded
+        weight_patterns = [p for p in calls[-1]["allow_patterns"] if p.endswith(".safetensors")]
+        assert sorted(weight_patterns) == shards  # by name, not by a glob
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
@@ -472,6 +506,123 @@ class TestCli:
         assert "not downloaded from the Hub" in output
         assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
         assert not (base.parent / "merged_out").exists()
+
+    def test_a_hub_base_gets_the_consolidated_shards_its_index_names(
+        self, checkpoints, monkeypatch
+    ):
+        """#2856: the index decides, through the Hub route as through the local one."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        repo = base.parent / "repo"
+        _with_renamed_shards(base, repo, "consolidated")
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download",
+            _fake_hub_download(repo, base.parent / "snapshot"),
+        )
+
+        from_hub = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/indexed-consolidated",
+             "--output", "from_hub", "--low-memory"],
+        )
+        from_local = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", str(repo),
+             "--output", "from_local", "--low-memory"],
+        )
+
+        assert from_hub.exit_code == 0, (from_hub.output, repr(from_hub.exception))
+        assert from_local.exit_code == 0, (from_local.output, repr(from_local.exception))
+        expected = _regular_merge(base, adapter, torch.float16)
+        for output in ("from_hub", "from_local"):
+            actual = _read_all(base.parent / output)
+            assert actual.keys() == expected.keys()
+            assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    @pytest.mark.parametrize(
+        "listed", ["consolidated*.safetensors", "original/consolidated.safetensors"]
+    )
+    def test_index_names_are_checked_before_they_are_downloaded(
+        self, checkpoints, monkeypatch, listed
+    ):
+        """A glob or a path in the index is refused, never used as a download pattern."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        repo = base.parent / "repo"
+        repo.mkdir()
+        shutil.copyfile(base / "config.json", repo / "config.json")
+        shutil.copyfile(sorted(base.glob("*.safetensors"))[0], repo / "consolidated.safetensors")
+        index = {"weight_map": {"model.embed_tokens.weight": listed}}
+        (repo / "model.safetensors.index.json").write_text(json.dumps(index))
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(repo, snapshot)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/odd-index",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        output = " ".join(strip_ansi(result.output).split())
+        assert "not a plain .safetensors file name" in output
+        assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
+
+    def test_a_legacy_adapter_keeps_both_calls_on_one_commit(self, checkpoints, monkeypatch):
+        """#2856: with no recorded revision, the weights come from the first call's commit,
+        even when the default branch moves between the two calls."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        first, moved = "a" * 40, "b" * 40
+        commits = {first: base.parent / "commit-first", moved: base.parent / "commit-moved"}
+        _with_renamed_shards(base, commits[first], "weights")
+        # The new head of the branch has the same index but no shards yet.
+        commits[moved].mkdir()
+        for name in ("config.json", "model.safetensors.index.json"):
+            shutil.copyfile(commits[first] / name, commits[moved] / name)
+        snapshots = base.parent / "hub" / "models--org--moving" / "snapshots"
+        calls = []
+
+        def download(repo_id, **kwargs):
+            calls.append(kwargs)
+            commit = kwargs.get("revision") or (first if len(calls) == 1 else moved)
+            _copy_matching(commits[commit], snapshots / commit, kwargs)
+            return str(snapshots / commit)
+
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr("soup_cli.utils.hubs.snapshot_download", download)
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/moving",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert [call.get("revision") for call in calls] == [None, first]
+        expected = _regular_merge(base, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
 
     def test_tokenizer_failure_leaves_no_output(self, run, checkpoints, monkeypatch):
         import transformers
