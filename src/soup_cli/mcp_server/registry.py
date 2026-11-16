@@ -696,6 +696,9 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
     "eval.ship.general_suite": "read by soup ship, not soup train",
     "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
     "eval.ship.baseline": "read by soup ship, not soup train",
+    "eval.ship.reward_fn": (
+        "a reward name or a .py path read (and executed) by soup ship, not soup train"
+    ),
 }
 
 # ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each

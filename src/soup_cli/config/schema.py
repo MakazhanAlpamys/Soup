@@ -5052,9 +5052,21 @@ class ShipConfig(BaseModel):
         description="JSONL of leg-1 task-win eval tasks",
     )
     # Keep these values in sync with soup_cli.utils.ship_verdict.TASK_MODES.
-    task_mode: Literal["metric", "judge_score", "pairwise"] = Field(
+    task_mode: Literal["metric", "judge_score", "pairwise", "reward"] = Field(
         default="metric",
-        description="Leg-1 mode: metric | judge_score | pairwise (judge win-rate)",
+        description=(
+            "Leg-1 mode: metric | judge_score | pairwise (judge win-rate) | reward (a reward "
+            "function scores each answer; needs reward_fn or --reward-fn)"
+        ),
+    )
+    reward_fn: Optional[str] = Field(
+        default=None,
+        description=(
+            "Reward function for task_mode reward: accuracy | format | verifiable:math | "
+            "verifiable:json_schema | the path of a .py file, which soup ship EXECUTES as Python "
+            "code (under the working directory, never a symlink): only name a file you trust. "
+            "Only meaningful with task_mode reward; it is read by soup ship, never by soup train."
+        ),
     )
     general_suite: Optional[str] = Field(
         default=None,
@@ -5101,6 +5113,33 @@ class ShipConfig(BaseModel):
             raise ValueError("eval.ship.noise_floor must be an int, not bool")
         return v
 
+    @field_validator("reward_fn", mode="before")
+    @classmethod
+    def _validate_ship_reward_fn(cls, v: Any) -> Any:
+        """Shape only (containment and the hash are checked when ``soup ship`` runs): one plain
+        non-blank string, no control character, at most 512 characters."""
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, str):
+            raise ValueError(f"eval.ship.reward_fn must be a string, got {type(v).__name__}")
+        if not v.strip():
+            raise ValueError("eval.ship.reward_fn must not be blank")
+        if len(v) > 512:
+            raise ValueError("eval.ship.reward_fn must be <= 512 chars")
+        if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in v):
+            raise ValueError("eval.ship.reward_fn must not contain a control character")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_ship_reward_fn_needs_reward_mode(self) -> "ShipConfig":
+        """A reward function beside another mode would never run: a footgun, refused."""
+        if self.reward_fn is not None and self.task_mode != "reward":
+            raise ValueError(
+                f"eval.ship.reward_fn is set but eval.ship.task_mode is {self.task_mode!r}; "
+                "reward_fn applies only to task_mode: reward (set the mode or remove the key)"
+            )
+        return self
+
 
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
@@ -5123,7 +5162,7 @@ class EvalConfig(BaseModel):
     )
     ship: Optional[ShipConfig] = Field(
         default=None,
-        description="soup ship verdict defaults (task_eval / task_mode / "
+        description="soup ship verdict defaults (task_eval / task_mode / reward_fn / "
         "general_suite / forgetting_threshold / judge_model / baseline / "
         "noise_floor)",
     )
