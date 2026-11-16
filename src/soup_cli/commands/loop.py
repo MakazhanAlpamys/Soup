@@ -723,6 +723,12 @@ def status_cmd() -> None:
             f"({state.production_adapter or 'no adapter'})"
         ),
     )
+    from soup_cli.utils.loop_stages import server_adapter_note
+
+    server_note = server_adapter_note(state)
+    if server_note:
+        # loop.yaml remembers production across a restart of soup serve; the server does not.
+        table.add_row("server", for_terminal(server_note))
     table.add_row("canary_traffic", f"{state.deploy_traffic_pct:g}% per new canary")
     table.add_row("canary_max_wait", format_wait_duration(state.canary_max_wait_sec))
     table.add_row("canary_on_timeout", for_terminal(state.canary_on_timeout))

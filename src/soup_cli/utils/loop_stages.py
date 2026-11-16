@@ -20,6 +20,7 @@ and offline smokes inject behaviour without a GPU or a network:
 - ``_DEPLOY_POSTER(endpoint, name) -> bool``
 - ``_SHIP_RUNNER(argv, ...)``                (a ``subprocess.run`` stand-in)
 - ``_LOAD_POSTER(endpoint, name, path) -> (status, detail)``
+- ``_HEALTH_GETTER(endpoint) -> Optional[dict]``   (``soup loop status``'s ``GET /health``)
 """
 
 from __future__ import annotations
@@ -97,6 +98,7 @@ _GATE_GENERATE_FACTORY: Optional[Callable[[str], Callable[[str], str]]] = None
 _DEPLOY_POSTER: Optional[Callable[[str, str], bool]] = None
 _SHIP_RUNNER: Optional[Callable[..., object]] = None
 _LOAD_POSTER: Optional[Callable[[str, str, str], Tuple[int, str]]] = None
+_HEALTH_GETTER: Optional[Callable[[str], Optional[dict]]] = None
 #: Bytes of a /v1/adapters/load or /deactivate reply read (post_capped): the
 #: answer is a short status object, and a larger one counts as no answer.
 _SERVE_REPLY_LIMIT_BYTES = 64 * 1024
@@ -1536,6 +1538,69 @@ def _load_refused_note(status: int, detail: str) -> str:
     if status == 0:
         return f"adapter load failed: no response from the serve endpoint ({detail or 'error'})"
     return f"adapter load failed (HTTP {status}{': ' + detail if detail else ''})"
+
+
+def _get_health(endpoint: str) -> Optional[dict]:
+    """``GET <endpoint>/health`` as a dict, or ``None`` when the server did not answer it.
+
+    ``/health`` needs no token. The reply is read through ``get_capped`` (at most
+    ``_SERVE_REPLY_LIMIT_BYTES``) with a short timeout; a plain-http endpoint ignores the
+    environment's proxy. ``_HEALTH_GETTER`` replaces the call in tests.
+    """
+    if _HEALTH_GETTER is not None:
+        return _HEALTH_GETTER(endpoint)
+    url = endpoint.rstrip("/") + "/health"
+    try:
+        from soup_cli.utils.http_response import get_capped
+
+        resp = get_capped(
+            url,
+            max_bytes=_SERVE_REPLY_LIMIT_BYTES,
+            endpoint_label="SOUP_LOOP_SERVE_ENDPOINT /health",
+            timeout=2.0,
+            trust_env=not url.lower().startswith("http://"),
+        )
+        body = resp.json() if resp.status_code == 200 else None
+    except Exception:  # noqa: BLE001 — a status line never fails because the server is down
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def server_adapter_note(state: LoopState) -> Optional[str]:
+    """What ``soup loop status`` says about the server and the adapter ``loop.yaml`` names.
+
+    ``loop.yaml`` keeps production (``production_name``) across a restart of ``soup serve``, but
+    the server does not: a restarted server answers with the base model, and nothing told the
+    operator (review 5, F11). This asks ``<SOUP_LOOP_SERVE_ENDPOINT>/health`` which adapter is
+    active. ``None`` when production is the served model itself (nothing to compare). Otherwise one
+    line: serving it, NOT serving it (with the way back), serving another, not reachable, or not
+    checked (no usable endpoint in this environment).
+    """
+    name = state.production_name
+    if name is None:
+        return None
+    endpoint, why = _checked_endpoint()
+    if endpoint is None:
+        if why.startswith("no SOUP_LOOP_SERVE_ENDPOINT"):
+            return (
+                f"not checked: SOUP_LOOP_SERVE_ENDPOINT is not set here, so it is not known "
+                f"whether the server still serves production {name}"
+            )
+        return f"not checked: {why}"
+    health = _get_health(endpoint)
+    if health is None:
+        return f"not reachable at {endpoint}: cannot tell whether it serves production {name}"
+    active = health.get("active_adapter")
+    if active == name:
+        return f"serving production {name}"
+    if active is None or active == "":
+        return (
+            f"NOT serving production {name}: the server has no active adapter and answers with "
+            "the base model (it was restarted, or the adapter was unloaded). Load and activate "
+            f"it again (POST /v1/adapters/load, then /v1/adapters/activate/{name}) or run "
+            "soup loop rollback"
+        )
+    return f"serving {_printable(str(active), 100)}, not production {name}"
 
 
 def _checked_endpoint() -> Tuple[Optional[str], str]:
