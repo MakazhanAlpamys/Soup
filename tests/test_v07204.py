@@ -272,6 +272,7 @@ _TASK_ROWS = {
     "simpo": _pref_rows,
     "kto": _kto_rows,
     "bco": _pref_rows,
+    "ipo": _pref_rows,
 }
 
 #: KTO refuses a per-device batch size of 1 outright ("the KL term will be
@@ -323,6 +324,7 @@ def _stream_cfg(weights, out_dir, task="dpo", **training):
 def _wrapper_for(task):
     from soup_cli.trainer.bco import BCOTrainerWrapper
     from soup_cli.trainer.dpo import DPOTrainerWrapper
+    from soup_cli.trainer.ipo import IPOTrainerWrapper
     from soup_cli.trainer.kto import KTOTrainerWrapper
     from soup_cli.trainer.orpo import ORPOTrainerWrapper
     from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -335,6 +337,7 @@ def _wrapper_for(task):
         "simpo": SimPOTrainerWrapper,
         "kto": KTOTrainerWrapper,
         "bco": BCOTrainerWrapper,
+        "ipo": IPOTrainerWrapper,
     }[task]
 
 
@@ -401,7 +404,7 @@ class TestStreamingTaskGate:
     def _cfg(self, tmp_path, task):
         return _stream_cfg(str(tmp_path / "m"), tmp_path / "out", task=task)
 
-    @pytest.mark.parametrize("task", ("sft",) + _ALL_PREFERENCE)
+    @pytest.mark.parametrize("task", ("sft", "bco", "ipo") + _ALL_PREFERENCE)
     def test_supported_tasks_are_accepted(self, tmp_path, task):
         cfg = self._cfg(tmp_path, task)
         assert cfg.task == task

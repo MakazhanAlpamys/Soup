@@ -3922,10 +3922,10 @@ class TrainingConfig(BaseModel):
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
             "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
-            "simpo, kto and bco, including task='preference' with a single "
-            "preference_loss of dpo, orpo, simpo or bco. Requires transformers + "
+            "simpo, kto, bco and ipo, including task='preference' with a single "
+            "preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + "
             "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
-            "IPO and preference_loss_weights do not stream yet."
+            "Weighted preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -7727,10 +7727,8 @@ class SoupConfig(BaseModel):
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
             )
-        # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
-        # reference from the SAME streamed base with adapters disabled (TRL's
-        # `null_ref_context`), so the reference costs no extra weights: measured
-        # 0.914x SFT peak VRAM where a second instance was 9.92x.
+        # DPO/IPO use a frozen reference adapter on the streamed base.
+        # KTO/BCO use the same base with adapters disabled for the reference pass.
         if self.task in _STREAM_ROLLOUT_TASKS:
             raise ValueError(
                 f"training.stream_layers cannot be used with task={self.task!r}: "
@@ -7744,15 +7742,9 @@ class SoupConfig(BaseModel):
                 "training.stream_layers cannot be combined with "
                 "training.preference_loss_weights: weighted preference losses do not "
                 "stream yet. Use a single training.preference_loss of dpo, orpo, "
-                "simpo or bco, or set stream_layers=false."
+                "simpo, bco or ipo, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
-        if self.task == "preference" and stream_task == "ipo":
-            raise ValueError(
-                f"training.stream_layers cannot use "
-                f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
-                "Use dpo, orpo, simpo or bco, or set stream_layers=false."
-            )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
