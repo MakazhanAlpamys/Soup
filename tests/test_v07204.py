@@ -271,12 +271,14 @@ _TASK_ROWS = {
     "orpo": _pref_rows,
     "simpo": _pref_rows,
     "kto": _kto_rows,
+    "bco": _pref_rows,
 }
 
 #: KTO refuses a per-device batch size of 1 outright ("the KL term will be
 #: equivalent to the implied reward"), so it is only streamable at all because
-#: v0.72.3 lifted layer streaming's batch-1 restriction.
-_MIN_BATCH = {"kto": 2}
+#: v0.72.3 lifted layer streaming's batch-1 restriction. BCO fixtures use two
+#: rows so the batch includes both labels.
+_MIN_BATCH = {"kto": 2, "bco": 2}
 
 
 def _stream_cfg(weights, out_dir, task="dpo", **training):
@@ -319,6 +321,7 @@ def _stream_cfg(weights, out_dir, task="dpo", **training):
 
 
 def _wrapper_for(task):
+    from soup_cli.trainer.bco import BCOTrainerWrapper
     from soup_cli.trainer.dpo import DPOTrainerWrapper
     from soup_cli.trainer.kto import KTOTrainerWrapper
     from soup_cli.trainer.orpo import ORPOTrainerWrapper
@@ -331,6 +334,7 @@ def _wrapper_for(task):
         "orpo": ORPOTrainerWrapper,
         "simpo": SimPOTrainerWrapper,
         "kto": KTOTrainerWrapper,
+        "bco": BCOTrainerWrapper,
     }[task]
 
 

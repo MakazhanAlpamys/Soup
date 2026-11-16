@@ -58,6 +58,7 @@ from soup_cli.utils.config_bounds import (
 # The longrope refusal (#1239) lives with the runtime so config load and
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
+from soup_cli.utils.numeric import float_with_overflow_check
 from soup_cli.utils.preference import resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
@@ -1676,11 +1677,14 @@ class TrainingConfig(BaseModel):
     preference_loss_weights: Optional[dict[str, float]] = Field(
         default=None,
         description=(
-            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. "
+            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'simpo': 0.3}. "
             "Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys "
             "must be members of {dpo, simpo, orpo, ipo, bco}. Requires "
             "task='preference'; mutually exclusive with preference_loss (the "
-            "scalar form). Capped at 5 components (the supported set)."
+            "scalar form). Capped at 5 components (the supported set). "
+            "A blend that contains bco is refused when the trainer is set up, "
+            "because the bco trainer splits each row into unpaired completion "
+            "and label rows."
         ),
     )
     # GRPO-specific
@@ -1701,7 +1705,7 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             raise ValueError("grpo_beta must not be a boolean")
         if isinstance(v, (int, float)):
-            fval = float(v)
+            fval = float_with_overflow_check(v, "grpo_beta")
             if math.isnan(fval) or math.isinf(fval):
                 raise ValueError("grpo_beta must be finite")
         return v
@@ -3248,7 +3252,7 @@ class TrainingConfig(BaseModel):
             raise ValueError("mole_temperature must be numeric")
         import math as _math
 
-        fv = float(v)
+        fv = float_with_overflow_check(v, "mole_temperature")
         if not _math.isfinite(fv):
             raise ValueError("mole_temperature must be finite")
         # Boundary matches MoleGatingConfig._check_finite_positive
@@ -3918,10 +3922,10 @@ class TrainingConfig(BaseModel):
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
             "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
-            "simpo and kto, including task='preference' with a single "
-            "preference_loss of dpo, orpo or simpo. Requires transformers + "
+            "simpo, kto and bco, including task='preference' with a single "
+            "preference_loss of dpo, orpo, simpo or bco. Requires transformers + "
             "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
-            "IPO, BCO and preference_loss_weights do not stream yet."
+            "IPO and preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -7739,15 +7743,15 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "training.stream_layers cannot be combined with "
                 "training.preference_loss_weights: weighted preference losses do not "
-                "stream yet. Use a single training.preference_loss of dpo, orpo or "
-                "simpo, or set stream_layers=false."
+                "stream yet. Use a single training.preference_loss of dpo, orpo, "
+                "simpo or bco, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
-        if self.task == "preference" and stream_task in ("ipo", "bco"):
+        if self.task == "preference" and stream_task == "ipo":
             raise ValueError(
                 f"training.stream_layers cannot use "
                 f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
-                "Use dpo, orpo or simpo, or set stream_layers=false."
+                "Use dpo, orpo, simpo or bco, or set stream_layers=false."
             )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
@@ -8819,7 +8823,7 @@ class SoupConfig(BaseModel):
         if not isinstance(weights, dict):
             raise ValueError(
                 "preference_loss_weights must be a dict, e.g. "
-                "{'dpo': 0.7, 'bco': 0.3}."
+                "{'dpo': 0.7, 'simpo': 0.3}."
             )
         if self.task != "preference":
             raise ValueError(
