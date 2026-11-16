@@ -1336,14 +1336,13 @@ def _export_torchao_cli(
 
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
-    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
             console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
-        merge_dir, merge_dir_created = _merge_dir_for(model_path)
+        merge_dir = _merge_dir_for(model_path)
 
     # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     # An export error is reported after the cleanup: while the exception is live, its
@@ -1379,7 +1378,7 @@ def _export_torchao_cli(
         except (TypeError, ValueError, FileNotFoundError) as exc:
             failure = (2, str(exc))
     finally:
-        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
+        _remove_merge_dir(merge_dir, announce=False)
 
     if failure is not None:
         code, message = failure
