@@ -191,3 +191,15 @@ def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
     assert "apply failed: cannot build this value: day is out of range for month" in text
     assert line.replace(bidi, "") in text
     assert _not_shown(text)
+
+
+def test_apply_reports_recipe_yaml_syntax_error():
+    Path("r.yaml").write_text("data: [unfinished\n", encoding="utf-8")
+
+    result = _mix("--apply", "r.yaml")
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "apply failed: while parsing a flow sequence" in text
+    assert "data: [unfinished" in text
+    assert "Loaded recipe:" not in text
