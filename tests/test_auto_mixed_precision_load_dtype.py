@@ -12,8 +12,9 @@ Both dtypes, and the dtype a 4-bit/8-bit base keeps its unquantized weights in (
 mixed-precision picked" line prints once; it printed twice on a k-bit run. ``task: tts``
 trains through the same wrapper and gets the same load dtype.
 
-The decision is checked here on a faked card; ``test_real_card_loads_the_base_in_fp16``
-checks it on a real one.
+The decision, and the ``dtype`` the SFT and TTS loads hand ``from_pretrained``, are
+checked here on a faked card; ``test_real_card_loads_the_base_in_fp16`` checks both
+wrappers on a real one.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ def card(monkeypatch):
     return apply
 
 
-def _training(task: str = "sft", **overrides):
+def _config(task: str = "sft", base: str = QWEN, **overrides):
     from soup_cli.config.schema import SoupConfig
 
     training = {"quantization": "none", "auto_mixed_precision": True, **overrides}
@@ -61,8 +62,42 @@ def _training(task: str = "sft", **overrides):
         top = {"modality": "audio_out"}
         training.setdefault("tts_family", "orpheus")
     return SoupConfig(
-        base=QWEN, task=task, data={"train": "./data.jsonl"}, training=training, **top
-    ).training
+        base=base, task=task, data={"train": "./data.jsonl"}, training=training, **top
+    )
+
+
+def _training(task: str = "sft", **overrides):
+    return _config(task, **overrides).training
+
+
+def _wrapper_class(task: str):
+    if task == "tts":
+        from soup_cli.trainer.tts import TTSTrainerWrapper
+
+        return TTSTrainerWrapper
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    return SFTTrainerWrapper
+
+
+def _tiny_qwen2(path, dtype=None):
+    """A tiny Qwen2 named like the ``qwen2.5`` quirk, saved with its tokenizer. Without
+    ``dtype`` only the config is written, enough to reach the loader."""
+    from transformers import Qwen2Config, Qwen2ForCausalLM
+
+    from tests._tiny_hf_models import build_tokenizer
+
+    tok = build_tokenizer()
+    config = Qwen2Config(
+        vocab_size=len(tok), hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+        num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=128,
+    )
+    if dtype is None:
+        config.save_pretrained(path)
+    else:
+        Qwen2ForCausalLM(config).to(dtype).save_pretrained(path)
+    tok.save_pretrained(path)
+    return str(path)
 
 
 def _wrapper(base: str = QWEN, device: str = "cuda", cls=None):
@@ -166,6 +201,36 @@ def test_tts_loads_the_base_in_fp16_as_sft_does(card):
     assert wrapper._resolve_load_dtype(tcfg) is torch.float16
 
 
+@pytest.mark.parametrize("task", ["sft", "tts"])
+def test_the_model_load_is_handed_fp16(card, picked_lines, monkeypatch, tmp_path, task):
+    """Through ``_setup_transformers`` up to ``from_pretrained``: ``TTSTrainerWrapper``
+    overrides it and loads through the SFT text path, so ``task: tts`` gets the same
+    ``dtype`` as ``task: sft``. Stopped at the loader, so nothing touches the card."""
+    from soup_cli.utils import kimi_k2
+
+    class _Loaded(Exception):
+        pass
+
+    seen: dict = {}
+
+    def load(base, *, model_kwargs, console=None):
+        seen.update(model_kwargs)
+        raise _Loaded
+
+    monkeypatch.setattr(kimi_k2, "load_resident_model", load)
+    monkeypatch.chdir(tmp_path)
+    # Imported before the fake card: peft imports bitsandbytes, which reads the real one.
+    pytest.importorskip("peft")
+    cfg = _config(task, base=_tiny_qwen2(tmp_path / "tiny-qwen2.5"))
+    wrapper = _wrapper_class(task)(cfg, device="cuda")
+    card((12, 0))
+
+    with pytest.raises(_Loaded):
+        wrapper._setup_transformers(cfg, cfg.training)
+    assert seen["dtype"] is torch.float16
+    assert len(picked_lines) == 1
+
+
 @pytest.mark.parametrize("quantization", ["4bit", "8bit"])
 def test_a_kbit_run_asks_once_and_keeps_its_compute_dtype(
     card, picked_lines, picks, quantization
@@ -212,33 +277,20 @@ def test_an_unreadable_card_keeps_the_checkpoint_dtype(monkeypatch, card):
 
 
 @pytest.mark.gpu
-def test_real_card_loads_the_base_in_fp16(tmp_path, monkeypatch):
-    """A bf16-saved Qwen2 whose name matches the ``qwen2.5`` quirk, loaded by the SFT
-    wrapper on the real card: its frozen weights are fp16, the precision it trains in."""
+@pytest.mark.parametrize("task", ["sft", "tts"])
+def test_real_card_loads_the_base_in_fp16(tmp_path, monkeypatch, task):
+    """A bf16-saved Qwen2 whose name matches the ``qwen2.5`` quirk, loaded by the SFT or
+    TTS wrapper on the real card: its frozen weights are fp16, the precision it trains in."""
     if not torch.cuda.is_bf16_supported(including_emulation=False):
         pytest.skip("the card has no bf16, where the base already loaded fp16 before")
-    from transformers import Qwen2Config, Qwen2ForCausalLM
 
-    from soup_cli.config.schema import SoupConfig
-    from soup_cli.trainer.sft import SFTTrainerWrapper
-    from tests._tiny_hf_models import build_tokenizer
-
-    base = tmp_path / "tiny-qwen2.5"
-    tok = build_tokenizer()
-    config = Qwen2Config(
-        vocab_size=len(tok), hidden_size=64, intermediate_size=128, num_hidden_layers=2,
-        num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=128,
-    )
-    Qwen2ForCausalLM(config).to(torch.bfloat16).save_pretrained(base)
-    tok.save_pretrained(base)
-
+    base = _tiny_qwen2(tmp_path / "tiny-qwen2.5", dtype=torch.bfloat16)
     monkeypatch.chdir(tmp_path)
-    cfg = SoupConfig(
-        base=str(base), task="sft", data={"train": "./data.jsonl"},
-        training={"quantization": "none", "auto_mixed_precision": True,
-                  "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]}},
+    cfg = _config(
+        task, base=base,
+        lora={"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
     )
-    wrapper = SFTTrainerWrapper(cfg, device="cuda")
+    wrapper = _wrapper_class(task)(cfg, device="cuda")
     wrapper._setup_transformers(cfg, cfg.training)
 
     frozen = {p.dtype for p in wrapper.model.parameters() if not p.requires_grad}
