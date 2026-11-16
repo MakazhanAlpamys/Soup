@@ -3,7 +3,19 @@
 import functools
 import math
 import re
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
+from types import UnionType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import (
     BaseModel,
@@ -46,6 +58,7 @@ from soup_cli.utils.config_bounds import (
 # The longrope refusal (#1239) lives with the runtime so config load and
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
+from soup_cli.utils.preference import resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
@@ -105,7 +118,136 @@ _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
 _LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
+def _is_scalar_numeric_annotation(annotation: Any) -> bool:
+    """Whether an annotation represents a scalar int/float, including unions."""
+    if annotation in (int, float):
+        return True
+    if get_origin(annotation) in (Union, UnionType):
+        return any(
+            _is_scalar_numeric_annotation(member)
+            for member in get_args(annotation)
+        )
+    return False
+
+
+def _scalar_numeric_types(annotation: Any) -> set[type]:
+    """Return scalar numeric types accepted by an annotation."""
+    if annotation in (int, float):
+        return {annotation}
+    if get_origin(annotation) in (Union, UnionType):
+        result: set[type] = set()
+        for member in get_args(annotation):
+            result.update(_scalar_numeric_types(member))
+        return result
+    return set()
+
+
+def _annotation_accepts_bool(annotation: Any) -> bool:
+    """Whether an annotation explicitly permits bool, including bool literals."""
+    if annotation is bool:
+        return True
+
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return any(type(value) is bool for value in get_args(annotation))
+
+    if origin in (Union, UnionType):
+        return any(
+            _annotation_accepts_bool(member)
+            for member in get_args(annotation)
+        )
+
+    return False
+
+
+def _reject_boolean_numeric_field(
+    model: type[BaseModel],
+    field_name: str,
+    value: Any,
+    *,
+    exempt_fields: frozenset[str] = frozenset(),
+) -> Any:
+    """Reject bools in scalar numeric fields before Pydantic coercion."""
+    if not isinstance(value, bool) or field_name in exempt_fields:
+        return value
+
+    field = model.model_fields.get(field_name)
+    if field is None:
+        return value
+
+    annotation = field.annotation
+    if (
+        _is_scalar_numeric_annotation(annotation)
+        and not _annotation_accepts_bool(annotation)
+    ):
+        if _scalar_numeric_types(annotation) == {int}:
+            raise ValueError(f"{field_name} must be an int, not a bool")
+        raise ValueError(f"{field_name} must be a number, not a bool")
+
+    return value
+
+
+_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "seed",
+    "data_seed",
+    "expand_layers",
+    "freeze_trainable_layers",
+    "eval_steps",
+    "grpo_beta",
+    "grpo_judge_max_tokens",
+    "grpo_judge_max_calls",
+    "grpo_judge_max_failure_rate",
+    "reward_hack_dwell_steps",
+    "reward_hack_release_patience",
+    "reward_hack_rollback_patience",
+    "reward_hack_max_recovery_attempts",
+    "reward_hack_smoothing_window",
+    "reward_hack_beta_floor",
+    "reward_hack_beta_ceil",
+    "reward_hack_trip_band",
+    "reward_hack_release_band",
+    "reward_hack_kl_gain",
+    "reward_hack_pid_kp",
+    "reward_hack_pid_ki",
+    "reward_hack_pid_kd",
+    "reward_hack_signal_target",
+    "reward_hack_integral_clamp",
+    "reward_hack_shaping_strength",
+    "minillm_rollout_length",
+    "mole_top_k",
+    "mole_temperature",
+    "distill_chunk_size",
+    "distill_temperature",
+    "mod_capacity_factor",
+    "ebft_temperature",
+    "num_labels",
+    "lisa_num_layers",
+    "lisa_interval_steps",
+    "stream_buffers",
+    "stream_read_ahead",
+    "stream_vram_override",
+    "stream_loss_chunk",
+    "unlearn_alpha",
+    "ref_model_ema_alpha",
+    "tis_threshold",
+    "off_policy_mask_threshold",
+    "replay_buffer_size",
+    "grpo_delta",
+    "yarn_factor",
+    "yarn_attn_factor",
+    "yarn_beta_fast",
+    "yarn_beta_slow",
+    "citation_recall_threshold",
+    "grace_codebook_size",
+    "grace_codebook_dim",
+})
+
 class LoraConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
     # adapter is applied and the base weights train directly. It is the
     # spelling `trainer/classifier.py` has read as "no adapter" since
@@ -1173,6 +1315,16 @@ class EvalGateConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
+
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
     batch_size: Union[int, Literal["auto"]] = Field(
@@ -3630,7 +3782,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3640,7 +3792,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -3765,10 +3917,11 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
-            "model larger than VRAM can be fine-tuned. sft + transformers + "
-            "text + quantization=none only; batch_size 1, no gradient "
-            "accumulation. Slower than resident training, but these models did "
-            "not run on the card at all."
+            "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
+            "simpo and kto, including task='preference' with a single "
+            "preference_loss of dpo, orpo or simpo. Requires transformers + "
+            "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
+            "IPO, BCO and preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -6989,7 +7142,7 @@ class SoupConfig(BaseModel):
                 f"training.neftune_alpha={tcfg.neftune_alpha!r} is set, but "
                 f"task={self.task!r} never applies it (any value, including 0.0, "
                 f"is refused). Only tasks in {sorted(NEFTUNE_APPLYING_TASKS)} forward "
-                f"it to ``TrainingArguments.neftune_noise_alpha``. Remove "
+                f"it to TrainingArguments.neftune_noise_alpha. Remove "
                 f"training.neftune_alpha, or use one of those tasks."
             )
         return self
@@ -7292,7 +7445,8 @@ class SoupConfig(BaseModel):
         """#340 — ``lora.r: 0`` = full fine-tuning (no adapter).
 
         The third member of the "LoRA off" family, sharing Spectrum's and
-        LISA's gate: sft + transformers + text + ``quantization='none'``,
+        LISA's gate: sft + transformers + text + ``quantization='none'``.
+        Native MLX text SFT also qualifies dense Llama models (#1992). Both are
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
@@ -7336,7 +7490,8 @@ class SoupConfig(BaseModel):
             # on the meta device, so there is nothing to full fine-tune).
             # Let it speak rather than reporting a quantization mismatch.
             return self
-        if self.backend != "transformers":
+        mlx_full = self.backend == "mlx" and self.task == "sft"
+        if self.backend != "transformers" and not mlx_full:
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
@@ -7370,6 +7525,17 @@ class SoupConfig(BaseModel):
             )
         lcfg = tcfg.lora
         lora_conflicts = []
+        if mlx_full:
+            defaults = LoraConfig()
+            for field in ("alpha", "dropout", "target_modules"):
+                if getattr(lcfg, field) != getattr(defaults, field):
+                    lora_conflicts.append(f"lora.{field}")
+            for field in ("add_new_tokens", "new_special_tokens"):
+                if getattr(self.data, field):
+                    raise ValueError(
+                        f"MLX full fine-tuning does not support data.{field}; "
+                        "vocabulary expansion currently requires LoRA."
+                    )
         if lcfg.use_dora:
             lora_conflicts.append("lora.use_dora")
         if lcfg.use_vera:
@@ -7569,12 +7735,26 @@ class SoupConfig(BaseModel):
                 f"depends on (one weight read per step, not per token), so this "
                 f"is a permanent exclusion rather than an unimplemented one."
             )
-        if self.task not in _STREAM_SUPPORTED_TASKS:
+        if self.task == "preference" and tcfg.preference_loss_weights is not None:
+            raise ValueError(
+                "training.stream_layers cannot be combined with "
+                "training.preference_loss_weights: weighted preference losses do not "
+                "stream yet. Use a single training.preference_loss of dpo, orpo or "
+                "simpo, or set stream_layers=false."
+            )
+        stream_task = resolve_preference_loss(self) or self.task
+        if self.task == "preference" and stream_task in ("ipo", "bco"):
+            raise ValueError(
+                f"training.stream_layers cannot use "
+                f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
+                "Use dpo, orpo or simpo, or set stream_layers=false."
+            )
+        if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
                 f"{sorted(_STREAM_SUPPORTED_TASKS)}; got task={self.task!r}."
             )
-        if tcfg.stream_vram_probe and self.task != "sft":
+        if tcfg.stream_vram_probe and stream_task != "sft":
             # v0.73.1 #349 — the probe runs a plain causal-LM forward+backward,
             # which IS the SFT step. A preference loss concatenates chosen and
             # rejected and reduces logits to per-token log-probs, so the probe is
@@ -7587,30 +7767,30 @@ class SoupConfig(BaseModel):
             # worse than no probe. Restricted until it is measured across shapes.
             raise ValueError(
                 f"training.stream_vram_probe supports task='sft' only; got "
-                f"task={self.task!r}. The probe measures a causal-LM step, which "
+                f"task={stream_task!r}. The probe measures a causal-LM step, which "
                 f"is the SFT step but not a preference loss — its agreement with "
                 f"DPO/ORPO/SimPO/KTO is measured at one shape only, so it is not "
                 f"offered for them yet. Use the predicted budget, or "
                 f"training.stream_vram_override if you have measured this "
                 f"configuration yourself."
             )
-        if tcfg.stream_loss_chunk is not None and self.task != "sft":
+        if tcfg.stream_loss_chunk is not None and stream_task != "sft":
             # #1693 — the chunked step rebuilds `ForCausalLMLoss`, the sft loss.
             raise ValueError(
                 f"training.stream_loss_chunk supports task='sft' only; got "
-                f"task={self.task!r}. It computes the causal-LM cross-entropy "
+                f"task={stream_task!r}. It computes the causal-LM cross-entropy "
                 f"chunk by chunk; a preference loss reduces the logits to "
                 f"per-token log-probs of chosen and rejected instead, and that "
                 f"reduction is not chunked. Remove training.stream_loss_chunk."
             )
-        if tcfg.stream_recompute != "on" and self.task != "sft":
+        if tcfg.stream_recompute != "on" and stream_task != "sft":
             # Only the SFT step is measured. A loss with two grad-enabled
             # forwards before one backward would unpack a layer's saved pool
             # tensors after its slot was refilled, which the owner check
             # refuses mid-step rather than training on stale weights.
             raise ValueError(
                 f"training.stream_recompute={tcfg.stream_recompute!r} supports "
-                f"task='sft' only; got task={self.task!r}. Keeping activations "
+                f"task='sft' only; got task={stream_task!r}. Keeping activations "
                 f"instead of the checkpoint recompute is measured on the SFT step "
                 f"only; a loss that runs more than one grad-enabled forward per "
                 f"backward is not supported yet. Remove training.stream_recompute "
@@ -9416,8 +9596,16 @@ class SoupConfig(BaseModel):
         """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
         SoupTrainerCallback. MLX text SFT implements its own watchdog (#1989),
         but other native tasks do not; MLX has no checkpoint-recovery path or
-        VRAM budget for grad_accum_auto_tune.
+        VRAM budget for grad_accum_auto_tune. Enabled eval gates require the
+        shared callback too (#1811).
         """
+        gate = self.training.eval_gate
+        if gate is not None and gate.enabled:
+            from soup_cli.config.eval_gate_support import eval_gate_refusal
+
+            refusal = eval_gate_refusal(task=self.task, backend=self.backend)
+            if refusal is not None:
+                raise ValueError(refusal)
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
             tcfg = self.training
@@ -9519,6 +9707,11 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, name) is not None
         ]
         if not fields:
+            return self
+        if (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and tcfg.lora.r == 0 and not tcfg.stream_layers
+        ):
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
@@ -9731,14 +9924,27 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _reject_resident_kimi_k2(self) -> "SoupConfig":
-        """K2 remote code cannot import or train on the supported 5.x stack."""
-        from soup_cli.utils.kimi import resident_kimi_k2_refusal
+        """Resident K2 remote code cannot import or train on the supported 5.x stack.
+
+        #2104 task 2: Kimi-K2-Base / -Instruct are admitted on sft/grpo (the resident
+        route); every other task, and Thinking / 0905 for all tasks, stays refused.
+        Review round 2: the admission holds only at ``training.quantization: none``
+        (the resident route loads bf16 only); any other quantization is refused here,
+        at config validation, instead of failing inside the model loader.
+        """
+        from soup_cli.utils.kimi import (
+            _ResidentKimiK2QuantizationRefusal,
+            resident_kimi_k2_refusal,
+        )
 
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
-            stream_layers=self.training.stream_layers,
+            stream_layers=self.training.stream_layers, task=self.task,
+            modality=self.modality, quantization=self.training.quantization,
         )
         if reason is not None:
+            if isinstance(reason, _ResidentKimiK2QuantizationRefusal):
+                raise ValueError(str(reason))
             raise ValueError(
                 f"{reason} base={self.base}. Its remote code uses removed APIs "
                 "and an inference-only MoE training path. Choose a compatible base."

@@ -122,9 +122,10 @@ def list_runs(
             # no longer running.
             status_str = f"[yellow]{status}[/]"
 
-        # Format loss
+        # Format loss. `is not None`, not truthiness: a measured 0.0 is a loss and must
+        # show, while NULL (a run that observed none) shows nothing.
         loss_str = ""
-        if run.get("initial_loss") and run.get("final_loss"):
+        if run.get("initial_loss") is not None and run.get("final_loss") is not None:
             loss_str = f"{run['initial_loss']:.3f} -> {run['final_loss']:.3f}"
 
         # Format duration
@@ -201,6 +202,10 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+    # A reinforcement-style run's training reward, shown under its loss; no line for a run
+    # that logged none (every SFT-style run), so their output is what it always was.
+    reward = _fmt_reward(tracker.get_reward_summary(run["run_id"]))
+
     # Build info panel — config-derived fields go through for_terminal and the
     # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
     # codes and control characters in the text.
@@ -231,6 +236,7 @@ def show(
         f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
+        *([f"Reward:     {reward}"] if reward else []),
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
@@ -324,6 +330,16 @@ def compare(
         ("Duration", _fmt_duration(r1.get("duration_secs")),
          _fmt_duration(r2.get("duration_secs"))),
     ]
+    # The training reward of a reinforcement-style run, under the loss rows. Added only when
+    # one of the two runs has logged a reward (the other shows "-"): two SFT-style runs get
+    # the table they always got.
+    rewards = [tracker.get_reward_summary(run["run_id"]) for run in (r1, r2)]
+    if any(rewards):
+        at = next(i for i, row in enumerate(rows) if row[0] == "Final Loss") + 1
+        rows[at:at] = [
+            ("Initial Reward", *(_fmt_float(r["first"] if r else None) for r in rewards)),
+            ("Final Reward", *(_fmt_float(r["last"] if r else None) for r in rewards)),
+        ]
 
     # Keep the familiar summary, then compare the complete stored config below.
     c1, c2 = _stored_run_config(r1), _stored_run_config(r2)
@@ -479,6 +495,17 @@ def _checkpoint_to_keep(
     return None, False
 
 
+def _resolved_output_dir(run: dict) -> Optional[Path]:
+    """A run's recorded output directory as ``runs clean`` compares it, or None."""
+    out_dir_str = run.get("output_dir")
+    if not out_dir_str:
+        return None
+    try:
+        return Path(os.path.realpath(out_dir_str))
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -528,41 +555,52 @@ def clean(
         console.print("[yellow]No runs to clean.[/]")
         raise typer.Exit()
 
+    # Cross-platform containment: project convention requires
+    # os.path.realpath + commonpath because Path.resolve() + relative_to()
+    # silently mismatches on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
     total_bytes_to_reclaim = 0
     files_to_delete = []
     dirs_to_delete = []
 
+    # Several runs can share one output directory (#2724). Each directory is
+    # pruned once, so no path is listed, counted or deleted twice.
+    runs_by_dir: dict[Path, list[dict]] = {}
     for run in runs_to_clean:
-        out_dir_str = run.get("output_dir")
-        if not out_dir_str:
+        output_dir = _resolved_output_dir(run)
+        if output_dir is None or not is_under_cwd(output_dir) or not output_dir.exists():
             continue
-        # Cross-platform containment: project convention requires
-        # os.path.realpath + commonpath because Path.resolve() + relative_to()
-        # silently mismatches on Windows 8.3 short names.
-        from soup_cli.utils.paths import is_under_cwd
+        runs_by_dir.setdefault(output_dir, []).append(run)
 
-        try:
-            output_dir = Path(os.path.realpath(out_dir_str))
-        except (OSError, ValueError):
-            continue
-        if not is_under_cwd(output_dir):
-            continue
-        if not output_dir.exists():
-            continue
+    # Every run recorded at a directory keeps its best checkpoint, including
+    # runs that are not being cleaned: `runs clean B` must not prune A's best.
+    # Each directory's list starts from the runs being cleaned, so they are
+    # protected even when `list_runs` does not return them.
+    cleaned_ids = {run["run_id"] for runs in runs_by_dir.values() for run in runs}
+    runs_at_dir = {output_dir: list(runs) for output_dir, runs in runs_by_dir.items()}
+    recorded_runs = runs_to_clean if all_runs else tracker.list_runs(limit=100000)
+    for run in recorded_runs:
+        output_dir = _resolved_output_dir(run)
+        if output_dir in runs_at_dir and run["run_id"] not in cleaned_ids:
+            runs_at_dir[output_dir].append(run)
 
-        metrics = tracker.get_metrics(run["run_id"])
-
+    for output_dir, runs_here in runs_at_dir.items():
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
         steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
-        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
-        if fallback:
-            console.print(
-                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
-                emoji=False,
-            )
+        keep_steps = set()
+        for run in runs_here:
+            keep_step, fallback = _checkpoint_to_keep(tracker.get_metrics(run["run_id"]), steps)
+            if keep_step is not None:
+                keep_steps.add(keep_step)
+            if fallback and run["run_id"] in cleaned_ids:
+                console.print(
+                    f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                    f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                    emoji=False,
+                )
         for ckpt in checkpoints:
-            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
+            if _checkpoint_step(ckpt) in keep_steps:
                 continue
 
             if keep_weights:
@@ -632,6 +670,20 @@ def _fmt_loss(run: dict) -> str:
     if init is not None and final is not None:
         return f"{init:.4f} -> {final:.4f}"
     return "-"
+
+
+def _fmt_reward(summary: Optional[dict]) -> Optional[str]:
+    """The ``Reward:`` value of ``soup runs show``: ``first -> last (N steps)``.
+
+    None for a run with no logged reward, so the line is left out for every non-RL run.
+    """
+    if not summary:
+        return None
+    count = summary["steps"]
+    noun = "step" if count == 1 else "steps"
+    if count == 1:
+        return f"{summary['last']:.4f} ({count} {noun})"
+    return f"{summary['first']:.4f} -> {summary['last']:.4f} ({count} {noun})"
 
 
 def _fmt_float(val: Optional[float]) -> str:
@@ -718,7 +770,11 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     losses = [m["loss"] for m in valid]
 
     if not steps:
-        console.print("[dim]No loss data to plot.[/]")
+        if any(m.get("reward") is not None for m in metrics):
+            # PPO rows hold a reward and no loss: say so rather than imply nothing was logged.
+            console.print("[dim]No loss data to plot: this run recorded a reward and no loss.[/]")
+        else:
+            console.print("[dim]No loss data to plot.[/]")
         return
 
     from soup_cli.utils.plotext_compat import render_line
@@ -806,21 +862,28 @@ def curriculum_curve(
     rows = []
     max_lines = 100_000
     with open(real, "r", encoding="utf-8") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]history malformed: line {lineno} is not valid JSON[/]"
+                )
+                raise typer.Exit(2) from exc
             if len(rows) > max_lines:
                 console.print("[red]history exceeds 100k-row cap[/]")
                 raise typer.Exit(2)
     if not rows:
         console.print("[yellow](no curriculum history rows)[/]")
         return
-    nb = len(rows[0].get("weights", []))
     try:
         normalised = parse_history_jsonl(rows)
+        nb = len(normalised[0]["weights"])
+        curve = render_curve(normalised, num_buckets=nb, width=width)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]history malformed: {markup_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    console.print(render_curve(normalised, num_buckets=nb, width=width))
+    console.print(curve)

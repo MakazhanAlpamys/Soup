@@ -555,6 +555,16 @@ def serve(
                 f"--backend vllm only; ignored for the {backend} backend."
             )
 
+    # #2730 — every backend uses --max-tokens for a request that omits
+    # max_tokens, and 0 or a negative value let the server start and then fail
+    # each such request with a 500. Refused here, before any backend branch or
+    # model load, so the message reads the same on every backend. Checked in
+    # the body rather than with ``min=``, for the --help width reason given at
+    # --max-model-len. Exit 2, as for the other bad option values here.
+    if max_tokens_default < 1:
+        console.print(f"[red]--max-tokens:[/] must be at least 1 (got {max_tokens_default}).")
+        raise typer.Exit(2)
+
     # DeepSpeed-MII v0.27.0: dependency check only — live pipeline wiring
     # ships in v0.27.1 once we stabilize the OpenAI-compat shim. We exit
     # with code 1 (not 0) so scripts / CI fail loudly rather than silently

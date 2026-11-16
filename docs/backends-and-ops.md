@@ -127,6 +127,14 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+For unquantized Llama text SFT, `training.lora.r: 0` selects
+[dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
+freezing and standalone model checkpoints. Trainable weights and AdamW moments use
+float32; frozen weights retain their checkpoint dtype. Complete artifacts load with
+`mlx_lm.load(output)` without the original base or an adapter. Dense runs write
+`training_config.json`; this is also where their evaluation cadence and watchdog
+outcome are recorded. Exact training-state resume remains refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -827,7 +835,17 @@ Only ed25519 and RSA public keys are accepted:
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 ```
 
-The local controller creates one Secure Cloud GPU Pod with TCP SSH access, creates
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access (RunPod's
+REST API v2: `POST /v2/pods` with a nested `gpu: {id, count}`, `disk` for the 80 GB
+container disk, an explicit `22/tcp` port, and the boot command as `entrypoint` and
+`cmd`; v2 attaches no volume unless asked, so `/workspace` is part of that container
+disk). `/workspace` now shares the 80 GB container disk with the venv and the model
+cache, and RunPod's v2 reference calls that disk ephemeral (wiped on restart); the size
+is unchanged, and the controller prints one line naming it before it creates the Pod.
+It waits for the Pod's `status` to reach `STARTING` or `RUNNING` and reads the
+SSH address from `ssh.direct`, or from the `runtime.ports` entry for `22/tcp`; only an
+IPv4 literal that is a public address is ever connected to. A Pod in `ERROR`, `EXITED`
+or `TERMINATED` ends the wait at once. The controller then creates
 `/workspace/venv` with `python3 -m venv --system-site-packages`, and installs the
 running Soup version with `/workspace/venv/bin/python -m pip`. This keeps the
 image's preinstalled torch visible and avoids installing Soup into its system
@@ -866,17 +884,41 @@ only the public key enters the Pod environment. Models and datasets must be publ
 accessible remotely: local input files and local credentials are not uploaded.
 
 Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
-until the API returns 404. The parent waits through interrupts so it does not kill
+until it has evidence that the Pod is gone: RunPod reports it as `TERMINATED`; or a
+DELETE was accepted (HTTP 2xx) and the Pod is then no longer found; or, when RunPod
+answered the DELETE itself with 404 (which v2 uses for "absent or not accessible"),
+the Pod is absent from the paginated Pod list. A 404 alone is never taken as proof, and
+the notice "RunPod termination evidence: ..." names the evidence used before
+"RunPod termination verified." A 429 waits for an integer `Retry-After` (at most 60
+seconds; the HTTP-date form is ignored and 5 seconds is used) and goes on inside the
+same deadlines: 15 minutes for the SSH wait, five for cleanup, 60 seconds for
+reconciling a lost create. The parent waits through interrupts so it does not kill
 the cleanup controller. Transient transport failures, including truncated HTTP
 responses during DELETE or confirmation GET, are retried within the five-minute
 cleanup window. A lost or ambiguous create response (including HTTP 5xx and 408)
 is reconciled by the unique run name, without repeating the create request or
-deleting unrelated Pods. A definite HTTP 4xx rejection other than 408 reports the
-status without claiming that cleanup of an allocated Pod failed. Fixed controller
-failure reasons are shown; arbitrary transport/subprocess exception text is hidden.
+deleting unrelated Pods: v2 pages the Pod list by cursor (newest first), so the
+controller reads it 100 Pods at a time, follows `pagination.nextCursor` for at most
+20 pages, and refuses any page that is not the documented `{"pods": [...],
+"pagination": {...}}` shape, a cursor longer than 512 characters, or one that cannot
+be encoded. A list read that fails (a transport error, 429, 5xx or 404) is read again
+until the 60-second deadline. A definite HTTP 4xx rejection other than 408 reports the
+status without claiming that cleanup of an allocated Pod failed, followed by the
+title, detail and first three `errors` of RunPod's `application/problem+json` body
+(RFC 9457) when it sends one. Fixed controller failure reasons are shown; arbitrary
+transport/subprocess exception text is hidden, and the only RunPod text ever shown is
+that problem body: it is stripped of terminal controls and credential patterns like the
+remote stderr tail below, the API key is removed from it (after the controls are
+stripped, in its plain, percent-encoded, base64 and lower-case spellings), and it is
+capped at 400 characters. Any other error body is never shown. The key travels only
+in an unredirected `Authorization: Bearer` header, and each request carries
+`User-Agent: soup-cli/<version>`, which names the client and its version and nothing
+about the user or the machine.
 Keep the controller running; force-killing it or losing API access can leave cleanup
-unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
-the RunPod console. A single interrupted SSH training session is failed rather
+unconfirmed. An unconfirmed cleanup exits nonzero and prints a CRITICAL line that
+names the Pod id or ids known, says the Pod "may still be running and billed", and
+asks you to look for the Pod named `soup-<run>` in your RunPod console (no address is
+built from anything RunPod sent). A single interrupted SSH training session is failed rather
 than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
 with six missed probes allowed (roughly three minutes); the training command has
 a 25-hour timeout. Artifacts are copied only after a successful training command,
@@ -898,13 +940,35 @@ diagnostics; when training itself fails, the remote script also sends the bounde
 remote training command (25 hours). The diagnostic tail does not preserve the Pod
 or claim successful artifact retrieval.
 
-**Not yet live-validated.** Tests use local mocked API/SSH transports. The code
+**RunPod retired its REST API v1 on 2026-11-15.** Earlier releases of soup-cli call it,
+so `--cloud runpod --cloud-submit` cannot create a Pod with them; upgrade with
+`pip install -U soup-cli`. This controller uses REST API v2
+(`https://api.runpod.io/v2`). If RunPod answers the Pod create with a redirect (which
+the controller never follows), or with HTTP 404 or 410 whose body is not RunPod's own
+`application/problem+json`, the controller stops at once with one message that says
+RunPod has probably retired or moved the API, names
+`soup train --cloud runpod --cloud-submit`, and points at
+`pip install -U soup-cli` or a Pod you start yourself in the RunPod console. No Pod is
+created and none is cleaned up, so the exit code is 1 and the notice "RunPod create
+request rejected; no Pod to clean up." follows. The named message is given only when the
+create itself is answered that way: an ordinary v2 not-found (an unknown GPU type, say)
+carries a problem body and is shown with its text instead, still as a rejected create.
+The Pod list is read only to reconcile a lost create and to confirm a deletion, so a
+404 there is retried like any failed read and, if it persists, ends in the CRITICAL
+line above, not in a clean exit.
+
+**Not yet live-validated.** Tests use local mocked API/SSH transports. The v2 client is
+implemented against the published v2 reference; not exercised against the live service
+(its request and response fixtures are copied from RunPod's documented examples of
+2026-11-15, not from a live call). The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
 That first live run (#2098) should also record the image's externally-managed
 Python marker and SSH `PATH`, to establish whether the image needed the venv
-workaround tracked in #2192.
-API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
+workaround tracked in #2192, and show whether `ssh.direct.host` is ever a host name
+(the controller connects only to an IP literal and refuses anything else).
+API contract: [RunPod REST v2 OpenAPI](https://docs.runpod.io/api-reference-v2/openapi.json),
+[migration from v1](https://docs.runpod.io/api-reference-v2/migrate-from-v1),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
 ### Lambda Cloud
@@ -1035,6 +1099,10 @@ it does not create a public repository on its own. Pass `--push-public` to creat
 one, or create the repository yourself first and run again. `--hf-resume` only reads the
 repository; a repository it finds missing is created by the same rule when training starts.
 
+**Hugging Face Space hardware:** pass `--hardware <slug>` to `soup deploy hf-space` when creating a Space (for example, `--hardware zero-a10g`). The value must be a lowercase hardware slug; available tiers and account access are determined by Hugging Face. Some accounts cannot create a new Gradio or Docker Space on the default `cpu-basic` hardware and receive HTTP 402; choose a tier your account can use with `--hardware`. For an existing Space, `create_repo(..., exist_ok=True)` returns without changing its hardware, so this option applies only when the Space is created. For `zero-*` hardware, the built-in `gradio-chat` template uses `@spaces.GPU` and includes `spaces` in its generated requirements. The built-in `streamlit-chat` template is refused with ZeroGPU. A custom `--template-dir` is uploaded unchanged; `--hardware` selects only the Space tier.
+
+Hugging Face no longer creates new Spaces with the Streamlit SDK. Soup keeps `streamlit-chat` available for existing deployments and prints a deprecation warning for it and for custom template directories detected as Streamlit in v0.78.0. Use `--template gradio-chat` (or a custom Gradio template) for new Spaces. If the Hub response names the `sdk` field and an SDK value, Soup identifies the Streamlit refusal, suggests `gradio-chat`, and includes the Hub response; unrelated Hub errors keep their usual message.
+
 **Auto-resume workflow:** if training crashes, the next `soup train ... --push-as
 ... --hf-resume` call picks up the latest `checkpoint-<N>` branch from your HF
 repo and downloads it back to `output_dir`, then resumes — no manual copy /
@@ -1098,7 +1166,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so. When several runs share an output directory, `clean` keeps that checkpoint whole for every run recorded there, including runs you are not cleaning, and deletes each file once.
 
 `soup runs compare` keeps the side-by-side run summary and lists all differences
 in the stored config, including nested settings such as `training.lora.dropout`
@@ -1344,6 +1412,10 @@ soup --verbose eval benchmark --model ./output --benchmarks mmlu
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
 
 
+Config-loader diagnostics display paths, keys and values literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; loaded config values and API/UI exception messages retain their original text.
+
 ## Unknown config keys
 
 Every config model used to run with Pydantic's default `extra="ignore"`, so a key the
@@ -1574,6 +1646,104 @@ Every completed run also stores an estimated cost (`$` per run) computed from th
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
+A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
+`runs.final_loss`: when a trainer's summary says `loss_summary_kind: unavailable`
+(its numeric `initial_loss` / `final_loss` are a `0.0` placeholder), `soup train` and
+`soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
+`Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged `inf` tail is
+kept as logged, a NaN end stores NULL for both (SQLite cannot hold a NaN, and a half-NULL pair would contradict the kind below; the completion panel still prints it), and a run-level `train_loss` mean on a run too short to log a step is stored as
+before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
+below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
+with no loss cannot be the best run.
+
+Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
+omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; an infinity is kept), and HF's final runtime-summary event (`train_runtime`, the
+`train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
+no training row and pushes no live event, while the terminal panel keeps showing the last
+real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm`, `val_loss`
+and the reward columns NULL and `speed` set (#2810), so a reader that wants the training
+curve skips rows whose `kind` is `summary`. A GRPO log that is also this summary can carry
+a leftover reward (TRL merges what is still buffered into the next log, and Hugging Face
+forces no log on the last step, so a run whose step count is not a multiple of
+`logging_steps` has one): that log is written as two rows, the `summary` row as above and
+then a `train` row at the same step that carries the leftover reward (`loss`, `lr`, `speed`
+NULL), so the reward curve keeps its last point. A log whose only reward entries are not
+finite numbers writes nothing beyond the summary row. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
+row written, so a later measurement at the same or a lower step is a new row with a larger
+`id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
+come back ordered by step; sort by `id` for arrival order).
+
+Two nullable columns say what a stored number is, so a reader need not guess. Both are
+added in place to an existing `~/.soup/experiments.db` and are NULL on every row written
+before they existed; nothing is backfilled. Their values are module constants in
+`soup_cli.experiment.row_kinds` and are exactly these:
+
+- `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
+  and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
+  step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
+  `unavailable`: the run observed no loss (or only a NaN one) and both columns are NULL; a
+  pair is never stored with one NULL end. `soup train` and
+  `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
+  from the trainer's summary (`delta` and `single` are `per_step`).
+- `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the
+  same `kind`. `train`: a training log, whose loss / lr / grad norm that log measured.
+  `eval`: an evaluation, carrying a `val_loss` or `val_reward`; its `loss` / `lr` are the
+  last measured training values carried into the row, not a measurement of the evaluation.
+  `summary`: a run-level summary row, written by the HF callback for HF's final runtime
+  event when it carries `train_steps_per_second`: `loss`, `lr`, `grad_norm` and the
+  validation columns are NULL, `speed` is the throughput, and `step` is the last step. Every
+  in-repo writer (the HF callback and the MLX and PPO loops) states its kind through
+  `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
+  and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
+  `ValueError` before anything is written.
+
+A reinforcement-style run records its per-step training reward in two more nullable columns of
+`metrics`: `metrics.reward`, the mean reward over the logging window that ends at the step
+(higher is better; TRL averages what it collected since the previous log), and
+`metrics.reward_std`, where the trainer logs one (GRPO: the window mean of the per-batch
+standard deviations). Both are appended after every
+existing column, added in place to an existing `~/.soup/experiments.db`, and NULL on every row
+written before they existed (nothing is backfilled). NULL means "not measured", never a zero:
+every run that is not reinforcement-style, a row whose log carried no reward, a value that is
+not a number (a `bool`, a string) and a value that is not finite (NaN, an infinity; the row is
+kept and the cell is NULL) all read NULL. The tracker, the callback and the live event share one
+allowlist of the trainer's log keys, exact names only, in `soup_cli.experiment.reward_columns`
+(the keys are those TRL 0.29.1 writes, read from its source; PPO and online DPO have not
+been run end to end against this mapping):
+
+| trainer | log key | column |
+|---|---|---|
+| `grpo` | `reward` | `reward` |
+| `grpo` | `reward_std` | `reward_std` (NaN for a batch of one, stored as NULL) |
+| `ppo`, and `online_dpo` scored by a reward model or function | `objective/scores` | `reward` |
+
+When a log carries both `reward` and `objective/scores`, `reward` wins. Nothing else is
+mapped: DPO's implicit `rewards/chosen` / `rewards/margins`, the KL-shaped
+`objective/rlhf_reward`, a per-function `rewards/<name>/mean` and `frac_reward_zero_std` are
+other numbers with "reward" in their name, and a pairwise judge ranks completions without
+scoring them, so an `online_dpo` run on a judge has no reward. A held-out evaluation's
+`eval_reward` is `val_reward`, not this column. MLX GRPO does not write the per-step
+reward: its rows carry `val_reward` only.
+
+What a program reads. A reward curve is `SELECT step, reward FROM metrics WHERE run_id = ? AND
+reward IS NOT NULL ORDER BY step, id`, or `ExperimentTracker.get_metric_series(run_id,
+"reward")`; `get_reward_summary(run_id)` gives `{"first", "last", "steps"}` or None.
+Only `kind = train` rows carry a reward: skip `eval` rows (their held-out number is
+`val_reward`) and `summary` rows (throughput only). A step that logs a reward and no loss is
+still a `train` row, with `loss` NULL (the previous step's loss is not carried into it), and
+a PPO row has NULL `loss`, `lr` and `grad_norm`: TRL logs PPO's learning rate as `lr` and
+its loss as `loss/policy_avg`, neither of which is read, so a PPO run records its reward
+and nothing else per step (`soup why` says that, and `soup runs show` says it recorded a
+reward and no loss instead of that there is no loss data). `soup runs show` prints a `Reward: first -> last (N steps)` line under `Loss:` (N counts the
+logged rows, one per logging window) and
+`soup runs compare` adds `Initial Reward` / `Final Reward` rows, only for a run that has a
+reward, so the output for any other run is unchanged. `GET /api/runs/{run_id}/metrics` returns
+both columns on every row (null when unset), and the live `metric` event carries `reward` /
+`reward_std` only when set. They are training-time series, so `benchmark:reward` and
+`benchmark:reward_std` are refused by `soup eval against`, like `benchmark:val_reward`.
+
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
 rows — so you can plot a benchmark-score curve (e.g. `mmlu`, `gsm8k`) the same way
@@ -1706,8 +1876,17 @@ When training fails, Soup auto-writes a self-contained `.crash` JSON to
 `./.soup-crashes/crash_<utc>_<hex>.crash` containing: redacted error trace,
 classified failure kind (`oom` / `nan` / `cuda` / `dataloader` / `nccl` /
 `other`), GPU state at crash time, env summary, last-50 metric rows, and the
-config (recursively redacted of `hf_*` / `sk-*` / `Bearer …` tokens). The
-output_dir is reduced to `os.path.basename` so `$HOME` doesn't leak.
+config. The error message, traceback, metric rows, config and env values are
+redacted before anything is written: the userinfo of a URL and the values of
+sensitive query parameters, common API-token shapes (`hf_*`, `sk-*`, GitHub, AWS
+access-key ids, Google, Slack), `Authorization` / `Bearer` headers, JWTs,
+private-key blocks, and values stored under credential-named keys (`token`,
+`secret`, `password`, `api_key`, ...; W&B keys and AWS secret keys are caught under
+their key name, and `max_new_tokens` and `tokenizer` stay readable). A string
+longer than 256 KiB is cut before redaction. Redaction is pattern-based and
+best-effort: read a bundle before sharing it. The bundle's `redaction` block
+records how many values were replaced, as counts only. The output_dir is reduced
+to `os.path.basename` so `$HOME` doesn't leak.
 
 ### `--log-level quiet|normal|verbose|debug`
 
@@ -2032,6 +2211,10 @@ Both commands refuse unreadable inputs before creating or changing the state fil
 Malformed YAML reports the config path and line/column; invalid UTF-8 reports the
 byte offset; an OS read error names its cause. These refusals exit 2. A missing config
 keeps exit 1, and schema validation keeps its existing validation messages and exit code.
+
+Plan and apply display model names, paths and diagnostics literally, including emoji
+aliases and backslashes. Terminal controls and bidi marks are removed only from the
+display; config values, hashes and state-file contents keep their original values.
 
 ```bash
 # Render a pre-flight summary + write soup.tfstate

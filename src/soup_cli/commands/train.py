@@ -25,6 +25,11 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+from soup_cli.trainer.loss_summary import (
+    measured_run_losses,
+    stored_loss_summary_kind,
+    stored_run_losses,
+)
 from soup_cli.utils.gpu import (
     apply_quantization_guard,
     configure_cuda_alloc_hint,
@@ -79,6 +84,33 @@ def _confirm_start_training() -> None:
         raise typer.Exit()
 
 
+def _preflight_config_eval_gate(cfg: "SoupConfig") -> None:
+    """Refuse a ``training.eval_gate.suite`` that cannot load, before any data is read.
+
+    ``--gate`` validates its suite up front and exits 1. A gate enabled in
+    ``soup.yaml`` got no such check: ``SoupTrainerCallback._setup_eval_gate``
+    logs a suite it cannot load at WARNING and trains with no gate at all, so
+    ``on_regression: stop`` could never fire. The callback keeps that lenient
+    handling on purpose (#1895); this runs the same check ``--gate`` already
+    runs, with the same exit code, and before ``--dry-run`` returns (#2231).
+    """
+    gate_cfg = getattr(cfg.training, "eval_gate", None)
+    if gate_cfg is None or not gate_cfg.enabled or not gate_cfg.suite:
+        return
+    from soup_cli.eval.gate import load_suite
+    from soup_cli.utils.terminal import for_terminal
+
+    # ``OSError`` covers a missing file and a path that is a directory
+    # (``PermissionError`` / ``IsADirectoryError``), which the callback also
+    # catches; ``TypeError`` is a suite mapping with a non-string key, which
+    # ``EvalSuite(**data)`` raises. ``UnicodeDecodeError`` is a ``ValueError``.
+    try:
+        load_suite(gate_cfg.suite)
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Invalid training.eval_gate.suite: {for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -107,6 +139,10 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
     if cfg.task in UNSUPPORTED_RESUME_TASKS:
         return f"{flag} is not supported for task {cfg.task!r}"
+    if cfg.task == "sft" and cfg.backend == "mlx" and cfg.training.lora.r == 0:
+        from soup_cli.trainer.mlx_full import RESUME_REFUSAL as FULL_RESUME_REFUSAL
+
+        return FULL_RESUME_REFUSAL.replace("--resume", flag, 1)
     if cfg.task == "grpo" and cfg.backend == "mlx":
         # #1976: the native MLX GRPO loop saves the adapter only. The message
         # lives with the trainer (imported lazily: it pulls in mlx-free code only).
@@ -127,7 +163,11 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
-    if summary_kind == "unavailable":
+    # Neither the kind-"unavailable" placeholder nor a result without numbers (a
+    # missing key, None) is a loss to print: say so instead of formatting None. A NaN
+    # tail is printed (a diverged run says so); only the stored row has no NaN.
+    measured_initial, measured_final = measured_run_losses(result)
+    if measured_initial is None or measured_final is None:
         return "Loss: [bold]unavailable[/]"
     loss_key = result.get("loss_key")
     label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
@@ -393,25 +433,27 @@ def _refuse_over_judge_budget(cfg, dataset) -> None:
         raise typer.Exit(1) from exc
 
 
-def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
+def _build_hardware_fit_input(cfg, gpu_memory_gb=None, kbit_fp32=False):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_or_reason``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
-    printed before the model's details are read from the Hub, without the offline
-    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. ``kbit_fp32`` is
+    True on a CUDA card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's
+    fp32 embeddings, norms and head (#2609). A line is printed before the model's
+    details are read from the Hub, without the offline hint used by ``soup plan`` and
+    ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import FitUnavailable
 
-    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb)
+    result = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=gpu_memory_gb, kbit_fp32=kbit_fp32)
     return None if isinstance(result, FitUnavailable) else result
 
 
 def _hardware_fit_input_or_reason(
-    cfg: SoupConfig, gpu_memory_gb: float | None = None
+    cfg: SoupConfig, gpu_memory_gb: float | None = None, kbit_fp32: bool = False
 ) -> HardwareFitInput | FitUnavailable:
     """Build the train fit input or its reason, announcing any Hub lookup once."""
     from soup_cli.utils.hardware_fit import hardware_fit_input_or_reason
@@ -421,6 +463,7 @@ def _hardware_fit_input_or_reason(
         cfg,
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+        kbit_fp32=kbit_fp32,
     )
 
 
@@ -524,10 +567,16 @@ def _hardware_fit_preflight(
         return
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
+    from soup_cli.utils.gpu import bf16_fp16_flags
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
-    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
-    inp = _hardware_fit_input_or_reason(cfg, gpu_memory_gb=total_bytes / 1024**3)
+    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
+    # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    inp = _hardware_fit_input_or_reason(
+        cfg,
+        gpu_memory_gb=total_bytes / 1024**3,
+        kbit_fp32=bf16_fp16_flags("cuda")[1],
+    )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
@@ -709,6 +758,23 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     if replay_seed is not None:
         payload["data"]["replay_seed"] = replay_seed
     return type(cfg)(**payload)
+
+
+def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
+    """``tracker.fail_run`` that can never replace the original error with its own.
+
+    The failure is already being raised (and, on the training path, written to a crash
+    bundle); a fault while recording it is reported and swallowed.
+    """
+    try:
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+    except Exception as record_error:
+        from soup_cli.utils.terminal import for_terminal
+
+        console.print(
+            f"[dim]Could not record the failure of {for_terminal(run_id)}: "
+            f"{for_terminal(type(record_error).__name__)}[/]"
+        )
 
 
 def _describe_exception_for_tracker(exc: BaseException) -> str:
@@ -1410,8 +1476,14 @@ def train(
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
+        from soup_cli.config.eval_gate_support import eval_gate_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
+
+        refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
+        if refusal is not None:
+            console.print(f"[red]{for_terminal(refusal)}[/]")
+            raise typer.Exit(1)
 
         try:
             # Validate the suite path up-front (path containment + parse).
@@ -1421,6 +1493,8 @@ def train(
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
+    else:
+        _preflight_config_eval_gate(cfg)
 
     # Honesty guard: these staged flags are accepted but not enforced mid-training in
     # this build. Their tuning knobs, forgetting_threshold included (#1814), are
@@ -2295,7 +2369,7 @@ def train(
                 energy_ctx = contextlib.nullcontext()
 
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         raise
 
     try:
@@ -2329,14 +2403,17 @@ def train(
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker
+        # Save completion to tracker. A run that observed no loss stores NULL, not
+        # the trainer's 0.0 placeholder (stored_run_losses).
+        initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
-            initial_loss=result["initial_loss"],
-            final_loss=result["final_loss"],
+            initial_loss=initial_loss,
+            final_loss=final_loss,
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
 
         _run_auto_eval_after_training(
@@ -2346,7 +2423,7 @@ def train(
             trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
@@ -2374,6 +2451,9 @@ def train(
 
     # Report
     merge_hint = (
+        "Full fine-tuning output is a standalone model; no soup merge is needed"
+        if cfg.backend == "mlx" and cfg.training.lora.r == 0
+        else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
         else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
