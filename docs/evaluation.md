@@ -1149,8 +1149,10 @@ built from a GRPO config), as is a list of functions and a bare `verifiable`; al
 `--reward-fn` without `--task-mode reward` or the other way round, are usage errors (exit 3) before
 any model loads.
 
-**A `.py` reward file is code, and `soup ship` executes it.** It runs with your permissions: the
-hash below identifies the file, it does not sandbox it.
+**A `.py` reward file is code, and `soup ship` executes it.** It runs with your permissions, with
+no sandbox: it can read your files, use your network and end the process. The hash below tells you
+which file scored a verdict and protects against accidents; it is not a defence against a hostile
+file. A reward file is code you trust.
 
 - It runs only when you name it, with `--reward-fn` or `eval.ship.reward_fn`. A `reward.py` lying
   in the working directory is never picked up, and a config from somewhere else can only run a
@@ -1162,18 +1164,18 @@ hash below identifies the file, it does not sandbox it.
 - The terminal says so before it runs: `--reward-fn reward.py is a Python file and soup ship
   EXECUTES it (sha256 abcdef123456). Only use a reward file you trust.`
 - It runs once the run is known to evaluate and before any model loads, so a file that cannot load
-  costs no GPU time, and an adapter that changes nothing runs none. A file that exits the process
-  (`sys.exit(0)` must never read as a SHIP) is a usage error (exit 3) while it loads and a runtime
-  error (exit 1) when a call does it. There is no time limit on a call and no isolation: a file
-  that hangs hangs the run.
-- Between the hash and the load there is a short window in which a writer to the working
-  directory could swap the file. The second hash catches that and refuses the run (exit 3), but
-  only after the swapped file ran; keep the directory of a gate private.
+  costs no GPU time, and an adapter that changes nothing runs none. A file that raises
+  `SystemExit` (`sys.exit(0)` must never read as a SHIP) is a usage error (exit 3) while it loads
+  and a runtime error (exit 1) when a call does it. That handling protects against accidents, not
+  against a hostile file: a file that calls `os._exit(0)` ends `soup ship` with exit 0 and no
+  verdict. A run that ends without a verdict line or a verdict file is not a verdict, whatever its
+  exit code. There is no time limit on a call: a file that hangs hangs the run.
 - An offline `--evidence` replay never loads or runs it: `--reward-fn` is refused there (with
   `--require-provenance` it is only hashed, never run).
-- The evidence records its name and the sha256 of its bytes. The bytes are hashed before the file
-  is loaded and again after, and a file that changed in between is refused, so the hash is the hash
-  of what ran.
+- The evidence records its name and the sha256 of its source bytes. The file is read once; those
+  bytes are hashed, compiled and run (no `__pycache__` is consulted and the file is not read a
+  second time), so the hash is of the source bytes that were compiled and run. The modules the file
+  imports are not hashed, and nothing prevents the file from doing anything else.
 
 **What the function is handed, and what it may return.** It is called once per row, for each model:
 
@@ -1215,10 +1217,10 @@ Paired difference (tuned - base per row): mean +0.0917, 95% interval [+0.0167, +
 | key | meaning |
 |-----|---------|
 | `n`, `better`, `worse`, `same` | The rows and the `rows` counts (the same rule, `1e-9`); `better + worse + same == n`. |
-| `mean_difference` | The exact mean of `tuned - base` over the rows: positive exactly when the mean rule says tuned is higher. |
+| `mean_difference` | The exact mean of `tuned - base` over the rows, in exact arithmetic: positive when tuned's exact decimal mean is higher. The verdict compares the two means after rounding each to a float, so a difference smaller than half a float step is a tie (DON'T SHIP) where this can still show a tiny positive number. |
 | `ci_low`, `ci_high`, `confidence` | The percentile bootstrap interval of the mean difference at `confidence` (0.95). |
-| `resamples`, `seed` | 2000 resamples drawn with `random.Random(seed)` (seed `20261114`), recorded so the same rows give the same interval on any machine. |
-| `underpowered` | `true` when `n` is below the rows from which a two-sided sign test could reach `confidence` even if every row got better (`2 / 2**n <= 1 - confidence`: 6 rows at 95%; 5 rows give 6.25%). The panel prints a yellow `Underpowered: 4 rows; ... (at least 6 rows are needed)` line. |
+| `resamples`, `seed` | 2000 resamples drawn with `random.Random(seed)` (seed `20261114`) over the per-row differences in sorted order, each resample summed with `math.fsum`: the same seed and rows give the same interval on every Python and every machine, and the same rows in any order give the same interval. Pure Python: about 5 s at the 10,000-row cap, once per live run. |
+| `underpowered` | A sign-test heuristic: `true` when `n` is below the rows a two-sided sign test needs to reach `confidence` even if every row got better (`2 / 2**n <= 1 - confidence`: 6 rows at 95%; 5 rows give 6.25%). `false` does NOT mean the comparison is well powered (6 rows is the floor, not a target). The panel prints a yellow `Underpowered: 4 rows; ... (at least 6 rows are needed)` line. It is informational: its definition may change, so a reader recomputes it from `n` and `confidence` and does not refuse a file whose stored value differs; it never changes a verdict. |
 
 None of it is a rule: the verdict, `failed_rule` and the exit code are decided by the two means
 alone, so an interval that contains zero still ships a mean that is higher, and one that excludes

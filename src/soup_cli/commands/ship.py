@@ -39,7 +39,7 @@ import numbers
 import os
 import re
 import stat
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -57,6 +57,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from soup_cli import __version__
+from soup_cli.utils.config_bounds import has_control_character
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
 )
@@ -921,15 +922,13 @@ class _RewardTarget:
     label: str  # what the verdict names (``RewardSpec.fn``): the text of the flag
     kind: str  # "builtin" | "verifiable" | "file"
     name: str  # the built-in name, the verifiable domain or the file path
-    sha256: Optional[str] = None  # of the file's bytes, read (never executed) to name it
+    sha256: Optional[str] = None  # of the file's bytes, read once, which are the bytes that run
+    #: The bytes that were hashed: the ones that are compiled and run (never read a second time).
+    source: Optional[bytes] = field(default=None, repr=False, compare=False)
 
     @property
     def spec(self) -> RewardSpec:
         return RewardSpec(fn=self.label, sha256=self.sha256)
-
-
-def _has_control_character(text: str) -> bool:
-    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
 
 
 def _read_reward_file(path: str) -> bytes:
@@ -969,7 +968,7 @@ def _parse_reward_fn(value: object) -> _RewardTarget:
         raise ValueError("--reward-fn must be text")
     if not value:
         raise ValueError("--reward-fn must not be empty")
-    if "\x00" in value or _has_control_character(value):
+    if "\x00" in value or has_control_character(value):
         raise ValueError("--reward-fn must not contain a control character")
     if value != value.strip():
         raise ValueError("--reward-fn must not start or end with whitespace")
@@ -990,8 +989,8 @@ def _parse_reward_fn(value: object) -> _RewardTarget:
             enforce_under_cwd_and_no_symlink(value, "--reward-fn path")
         except (ValueError, TypeError) as exc:
             raise ValueError(str(exc)) from None
-        digest = hashlib.sha256(_read_reward_file(value)).hexdigest()
-        return _RewardTarget(value, "file", value, digest)
+        source = _read_reward_file(value)
+        return _RewardTarget(value, "file", value, hashlib.sha256(source).hexdigest(), source)
     if value == "judge_rank":
         raise ValueError(
             "--reward-fn judge_rank is built from a GRPO config (training.grpo_judge) and "
@@ -1026,16 +1025,43 @@ def _short(text: object, limit: int = 200) -> str:
     return " ".join(str(text).split())[:limit]
 
 
-def _load_reward_callable(target: _RewardTarget) -> Callable[..., object]:
-    """The reward function itself, through the loader ``soup train`` uses (exit 3 on failure).
+def _run_reward_source(target: _RewardTarget) -> Callable[..., object]:
+    """Compile and run the bytes that were hashed; return the file's ``reward_fn``.
 
-    A ``.py`` file is EXECUTED here, so the line saying so is printed first. It runs before any
-    model loads, so a file that cannot load costs no GPU time; ``SystemExit`` from it (a
-    ``sys.exit(0)`` must not read as a SHIP) and any other error are usage errors. The file is
-    read again afterwards: the hash the verdict records must be that of what ran.
+    The bytes were read ONCE, in ``_parse_reward_fn``, and hashed there: those same bytes are
+    compiled here and run in a fresh module, so the recorded sha256 is that of the source that was
+    compiled and run, no ``__pycache__`` is ever consulted (a stale or planted compiled copy
+    cannot run in place of the source) and the file is not read a second time (a swap, or a swap
+    and restore, cannot change what runs). It is the shared loader's behaviour otherwise:
+    a module named ``custom_reward`` that knows its ``__file__``, not registered in
+    ``sys.modules``, and a ``reward_fn`` attribute that must exist. Modules the file imports are
+    not hashed. ``dont_inherit``: a file is compiled like a plain module, not with this module's
+    ``from __future__`` flags.
     """
-    from soup_cli.trainer.rewards import load_reward_fn
+    import types
 
+    module = types.ModuleType("custom_reward")
+    module.__file__ = target.name
+    code = compile(target.source, target.name, "exec", dont_inherit=True)
+    exec(code, module.__dict__)  # noqa: S102 - the point of --reward-fn: the user's own code
+    if not hasattr(module, "reward_fn"):
+        raise ValueError(
+            f"Custom reward file {target.name} must define a 'reward_fn' callable "
+            "(def reward_fn(completions, **kwargs): return [1.0] * len(completions))"
+        )
+    return module.reward_fn
+
+
+def _load_reward_callable(target: _RewardTarget) -> Callable[..., object]:
+    """The reward function itself (exit 3 on failure).
+
+    A built-in or a ``verifiable`` domain goes through the loader ``soup train`` uses. A ``.py``
+    file is EXECUTED here, from the bytes that were hashed (``_run_reward_source``), so the line
+    saying so is printed first. It runs before any model loads, so a file that cannot load costs
+    no GPU time; ``SystemExit`` from it (a ``sys.exit(0)`` must not read as a SHIP) and any other
+    error are usage errors. A file can still end the process (``os._exit``): it is code the user
+    trusts, and a run that ends without a verdict is not a verdict whatever its exit code.
+    """
     label = escape(for_terminal(target.label))
     if target.kind == "file":
         console.print(
@@ -1043,10 +1069,15 @@ def _load_reward_callable(target: _RewardTarget) -> Callable[..., object]:
             f"EXECUTES it (sha256 {target.sha256[:12]}). Only use a reward file you trust."
         )
     try:
-        if target.kind == "verifiable":
-            function = load_reward_fn("verifiable", verifiable_domain=target.name)
+        if target.kind == "file":
+            function = _run_reward_source(target)
         else:
-            function = load_reward_fn(target.name)
+            from soup_cli.trainer.rewards import load_reward_fn
+
+            if target.kind == "verifiable":
+                function = load_reward_fn("verifiable", verifiable_domain=target.name)
+            else:
+                function = load_reward_fn(target.name)
     except SystemExit:
         _fail("--reward-fn file called sys.exit while it was loaded", _EXIT_USAGE)
     except Exception as exc:  # noqa: BLE001 - the file ran arbitrary code
@@ -1056,17 +1087,6 @@ def _load_reward_callable(target: _RewardTarget) -> Callable[..., object]:
         )
     if not callable(function):
         _fail(f"--reward-fn {target.label}: reward_fn is not callable", _EXIT_USAGE)
-    if target.kind == "file":
-        try:
-            unchanged = hashlib.sha256(_read_reward_file(target.name)).hexdigest() == target.sha256
-        except ValueError:
-            unchanged = False
-        if not unchanged:
-            _fail(
-                f"--reward-fn {target.label} changed while it was loaded; no verdict was "
-                "computed for a file that is not the one that was hashed",
-                _EXIT_USAGE,
-            )
     return function
 
 

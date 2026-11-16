@@ -59,7 +59,11 @@ from soup_cli import __version__
 
 # Declared in the dependency-free leaf so the schema can import the bound
 # without this module (#780); re-exported so there is only one object.
-from soup_cli.utils.config_bounds import MAX_NOISE_FLOOR_RUNS, MIN_NOISE_FLOOR_RUNS
+from soup_cli.utils.config_bounds import (
+    MAX_NOISE_FLOOR_RUNS,
+    MIN_NOISE_FLOOR_RUNS,
+    has_control_character,
+)
 from soup_cli.utils.terminal import strip_control as for_terminal
 
 if TYPE_CHECKING:  # typing only: the row module imports this one
@@ -409,10 +413,6 @@ class Judged:
     checkpoint_step: Optional[int] = None
 
 
-def _has_control_character(text: str) -> bool:
-    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
-
-
 @dataclass(frozen=True)
 class RewardSpec:
     """What scored a ``reward`` leg: the reward function as it was named, and its file's hash.
@@ -431,7 +431,7 @@ class RewardSpec:
             raise ValueError(
                 f"reward fn must be a non-empty string of at most {REWARD_FN_MAX_CHARS} characters"
             )
-        if "\x00" in self.fn or _has_control_character(self.fn):
+        if "\x00" in self.fn or has_control_character(self.fn):
             raise ValueError("reward fn must not contain a control character")
         if self.sha256 is not None and (
             not isinstance(self.sha256, str) or not _SHA256_HEX.match(self.sha256)
@@ -849,12 +849,15 @@ def build_paired_summary(
     exact = (
         sum(Fraction(repr(score)) for score in tuned) - sum(Fraction(repr(score)) for score in base)
     ) / size
-    differences = [t - b for b, t in zip(base, tuned)]
+    # Sorted, so the same rows in any order are the same resamples; each resample is summed with
+    # ``math.fsum`` (exactly rounded), because ``sum()`` of floats changed in Python 3.12 and the
+    # interval would differ between 3.11 and 3.12 in its last digits.
+    differences = sorted(t - b for b, t in zip(base, tuned))
     generator = random.Random(PAIRED_BOOTSTRAP_SEED)
     draw = generator.random
     last = size - 1
     means = sorted(
-        sum(differences[min(last, int(draw() * size))] for _ in range(size)) / size
+        math.fsum(differences[min(last, int(draw() * size))] for _ in range(size)) / size
         for _ in range(PAIRED_BOOTSTRAP_RESAMPLES)
     )
     tail = math.floor(
@@ -1929,7 +1932,7 @@ def _reward_from_evidence(payload: object) -> RewardSpec:
         or not fn
         or len(fn) > REWARD_FN_MAX_CHARS
         or "\x00" in fn
-        or _has_control_character(fn)
+        or has_control_character(fn)
     ):
         raise ValueError(
             f"{path}.fn must be a non-empty string of at most {REWARD_FN_MAX_CHARS} characters "
@@ -1976,16 +1979,11 @@ def _paired_from_evidence(payload: object) -> PairedSummary:
         ),
         seed=_evidence_int(block["seed"], f"{path}.seed", low=0, high=_MAX_PAIRED_SEED),
     )
-    stored = block["underpowered"]
-    if not isinstance(stored, bool):
+    # Stored so a reader of the file sees it, and informational: it is a heuristic whose
+    # definition may change, so a stored value that differs from this reader's own is NOT
+    # refused. The type is checked; the value reported (and written back) is the reader's own.
+    if not isinstance(block["underpowered"], bool):
         raise ValueError(f"{path}.underpowered must be true or false")
-    if stored != summary.underpowered:
-        # Stored, so a reader of the file sees it, and checked, so it can never contradict the
-        # row count and confidence beside it.
-        raise ValueError(
-            f"{path}.underpowered is {str(stored).lower()}, but {n} rows at confidence "
-            f"{confidence} make it {str(summary.underpowered).lower()}"
-        )
     return summary
 
 

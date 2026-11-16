@@ -47,6 +47,7 @@ from soup_cli.utils.config_bounds import (
     MIN_STREAM_BUFFERS,
     MIN_STREAM_LOSS_CHUNK,
     MIN_STREAM_READ_AHEAD,
+    has_control_character,
 )
 from soup_cli.utils.config_bounds import (
     ROLLOUT_STREAM_TASKS as _STREAM_ROLLOUT_TASKS,
@@ -5126,7 +5127,7 @@ class ShipConfig(BaseModel):
             raise ValueError("eval.ship.reward_fn must not be blank")
         if len(v) > 512:
             raise ValueError("eval.ship.reward_fn must be <= 512 chars")
-        if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in v):
+        if has_control_character(v):
             raise ValueError("eval.ship.reward_fn must not contain a control character")
         return v
 
