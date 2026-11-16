@@ -34,7 +34,7 @@ SUPPORTED_FORMATS = (
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
-LLAMA_CPP_TAG = "b5270"
+LLAMA_CPP_TAG = "b12423"
 
 
 def export(
@@ -335,6 +335,17 @@ def export(
         )
         raise typer.Exit(1)
 
+    # The converter imports transformers at load time. Refuse before adapter
+    # merging, dependency handling or toolchain cloning when it is absent.
+    if _transformers_missing():
+        console.print(
+            "[red]The pinned llama.cpp converter requires transformers, "
+            "which is not installed in this environment.[/]\n"
+            "Install it the supported way: "
+            + escape('pip install "soup-cli[train]"') + "."
+        )
+        raise typer.Exit(1)
+
     if not (model_path / "adapter_config.json").exists():
         _check_gguf_capabilities(model_path, llama_cpp_path, probe_selected=not no_install_deps)
 
@@ -596,7 +607,23 @@ def _merge_adapter(
 # 2.5.1+cu -> 2.2.2+cpu, transformers 4.57 -> 4.46). Soup's `[train]` extra
 # already provides torch / transformers / numpy, so install ONLY the extra
 # packages the convert script needs, unpinned, and never touch the rest.
+# The converter imports transformers at load time
+# (conversion/base.py: `from transformers import AutoConfig`) — but Soup never
+# auto-installs torch or transformers (an install of llama.cpp requirements
+# once replaced a user's CUDA torch, and transformers is part of the [train]
+# stack the same rule protects). Instead, when transformers is absent the gguf
+# export refuses before any clone/install and points at `[train]`.
 _CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
+
+
+def _transformers_missing() -> bool:
+    """Is transformers absent? The converter needs it at import."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("transformers") is None
+    except (ImportError, ValueError):
+        return True
 
 
 def _missing_convert_deps() -> list[str]:
@@ -839,7 +866,9 @@ def _run_quantize(
         console.print(
             "[red]llama-quantize binary not found.[/]\n"
             "Build llama.cpp first:\n"
-            f"  [bold]cd {llama_dir} && make llama-quantize[/]\n"
+            f"  [bold]cd {llama_dir} && cmake -B build -DGGML_NATIVE=OFF "
+            "-DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release && "
+            "cmake --build build --config Release --target llama-quantize -j 4[/]\n"
             "Or use [bold]--quant f16[/] to skip quantization."
         )
         raise typer.Exit(1)
