@@ -186,34 +186,42 @@ def _trace_dense_weight(modules, trace: list[str]) -> None:
 def test_the_rebuilt_quant_state_dequantises_to_the_same_weight(tmp_path):
     """The streamed route's rebuild is faithful: the same weight, bit for bit.
 
-    The parts are split, saved to disk, loaded back and rebuilt exactly as the
-    streamed route does, and the dequantised weight is compared with the one
-    the original state gives.  The weight is quantised on CUDA when one is
-    there and dequantised on the CPU, so this shows the rebuild is faithful on
+    A quant state is built by hand, its parts are split, saved to disk, loaded
+    back and rebuilt exactly as the streamed route does, and the dequantised
+    weight is compared with the one the original state gives.  Both
+    dequantisations run on the CPU, so this shows the rebuild is faithful on
     this device; the same comparison on the card belongs to the red-row report.
     """
     torch, bnb = _deps()
-    from bitsandbytes.functional import dequantize_4bit
+    from bitsandbytes.functional import QuantState, dequantize_4bit
 
     from soup_cli.utils.fast_lora import _quant_state_parts, _rebuild_quant_state
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
-    weight = torch.randn(64, 64, dtype=torch.float16, device=device)
-    quantised, state = bnb.functional.quantize_4bit(weight, quant_type="nf4")
-    original = dequantize_4bit(quantised, state)
+    size, blocks = 64, 64
+    code = torch.randint(0, 255, (size * size // 2,), dtype=torch.uint8)
+    absmax = torch.rand(size * size // blocks, dtype=torch.float32) + 0.5
+    state = QuantState(
+        absmax=absmax,
+        shape=torch.Size((size, size)),
+        dtype=torch.float16,
+        blocksize=blocks,
+        code=code,
+        quant_type="nf4",
+    )
+    original = dequantize_4bit(code, state)
 
     parts, meta = _quant_state_parts(state)
     for index, tensor in enumerate(parts):
-        torch.save(tensor.cpu(), tmp_path / f"part_{index}.pt")
+        torch.save(tensor, tmp_path / f"part_{index}.pt")
     loaded = [
         torch.load(tmp_path / f"part_{index}.pt", weights_only=True)
         for index in range(len(parts))
     ]
     rebuilt = _rebuild_quant_state(meta, loaded)
 
-    rebuilt_weight = dequantize_4bit(quantised.cpu(), rebuilt)
-    assert torch.equal(rebuilt_weight, original.cpu())
+    rebuilt_weight = dequantize_4bit(code, rebuilt)
+    assert torch.equal(rebuilt_weight, original)
 
 
 # ─── the row, with arms ─────────────────────────────────────────────────────
