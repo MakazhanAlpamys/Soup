@@ -147,15 +147,15 @@ class LoopLog:
         A crash between the log append and ``loop.yaml`` makes the restart do the same step
         again; the second line would be a duplicate, so it is not written (it counts as
         written: the file already says it).
+
+        The key is the iteration's OWN id and the outcome. A canary's closing line (promoted,
+        withdrawn ...) is a complete copy of the line that started the canary (``resolved_line``),
+        so it carries that iteration's id and a new outcome; a restarted cycle writes the same
+        pair. The parent is not part of the key: every iteration of a loop whose production did
+        not change has the same parent, and keying on it dropped the second and every later
+        failed, skipped or canary line of a production version.
         """
-        # A canary's closing line (promoted, withdrawn ...) belongs to the iteration that started
-        # it (parent_iteration_id) and is written by a LATER cycle with an id of its own, so a
-        # restarted cycle is recognised by the parent; any other line by its own id.
-        if line.get("parent_iteration_id") is not None:
-            keys = ("parent_iteration_id", "outcome")
-        else:
-            keys = ("iteration_id", "outcome")
-        return self._append_once("iteration", line, keys)
+        return self._append_once("iteration", line, ("iteration_id", "outcome"))
 
     def version(self, line: Mapping[str, Any]) -> bool:
         """Append a version line unless the same change (version, cause, iteration) is there."""

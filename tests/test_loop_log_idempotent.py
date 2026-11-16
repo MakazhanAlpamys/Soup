@@ -16,7 +16,7 @@ import pytest
 
 import soup_cli.utils.loop_daemon as loop_daemon
 from soup_cli.utils.canary_router import CanaryPolicy, record_bucket_outcome
-from soup_cli.utils.loop_daemon import WatchConfig, watch
+from soup_cli.utils.loop_daemon import WatchConfig, run_once, watch
 from soup_cli.utils.loop_log import LoopLog
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
@@ -95,6 +95,63 @@ class TestLogLevel:
         log.progress({"schema_version": 1, "id": "p2", "iteration_id": "x", "stage": "train"})
 
         assert len(_lines(cwd / "logs" / "progress.jsonl")) == 2
+
+
+class TestEveryIterationGetsItsLine:
+    """Two iterations that share a parent are two iterations (review 5, F4).
+
+    The dedup key of a line with a ``parent_iteration_id`` used to be (parent, outcome): every
+    iteration of a loop whose production did not change shares that parent, so only the first
+    ``failed`` (or ``skipped``, or ``canary``) line of a production version was ever written.
+    """
+
+    def _line(self, iteration_id, outcome, parent="iter-20261110T120000-seed0000"):
+        return {"schema_version": 1, "iteration_id": iteration_id, "outcome": outcome,
+                "parent_iteration_id": parent}
+
+    @pytest.mark.parametrize("outcome", ["failed", "skipped", "canary"])
+    def test_two_iterations_with_one_parent_are_two_lines(self, cwd, outcome):
+        log = LoopLog(str(cwd / "logs"))
+
+        log.iteration(self._line("iter-20261110T120001-aaaaaaaa", outcome))
+        log.iteration(self._line("iter-20261110T120002-bbbbbbbb", outcome))
+
+        ids = [line["iteration_id"] for line in _lines(cwd / "logs" / "iterations.jsonl")]
+        assert ids == ["iter-20261110T120001-aaaaaaaa", "iter-20261110T120002-bbbbbbbb"]
+
+    def test_the_same_iteration_and_outcome_is_still_written_once(self, cwd):
+        log = LoopLog(str(cwd / "logs"))
+
+        log.iteration(self._line("iter-20261110T120001-aaaaaaaa", "failed"))
+        log.iteration(self._line("iter-20261110T120001-aaaaaaaa", "failed"))
+
+        assert len(_lines(cwd / "logs" / "iterations.jsonl")) == 1
+
+    def test_six_failed_cycles_leave_six_failed_lines(self, cwd):
+        config = WatchConfig(
+            poll_interval_sec=1.0, max_iterations=1,
+            state_path=str(cwd / ".soup" / "loop.yaml"),
+            canary_stats_path=str(cwd / ".soup" / "canary-stats.json"),
+            iteration_dir=str(cwd / ".soup-loops"),
+            harvest_fn=lambda state: {"pairs_harvested": 3, "traces_collected": 3},
+            train_fn=lambda state, h: {
+                "run_id": None, "skipped": False, "adapter_path": None, "failed": True,
+                "notes": "train failed (exit code 1): the same message",
+            },
+            gate_fn=lambda state, t: {"gate_verdict": "SKIPPED"},
+            deploy_fn=lambda state, o: {"deployed": False},
+            cost_fn=lambda state: 0.0,
+        )
+        state = LoopState(served_model="base", eval_suite="e", baseline="b", status="running")
+        log = LoopLog(str(cwd / ".soup-loops"))
+
+        for _ in range(6):
+            state, _, _ = run_once(state, config, log=log)
+
+        lines = _lines(cwd / ".soup-loops" / "iterations.jsonl")
+        failed = [line for line in lines if line["outcome"] == "failed"]
+        assert len(failed) == 6, [line["outcome"] for line in lines]
+        assert len({line["iteration_id"] for line in failed}) == 6
 
 
 class _Killed(BaseException):
