@@ -210,9 +210,13 @@ python scripts/gen_llama_cpp_capabilities.py --converter /path/to/convert_hf_to_
 ```
 
 The generated `src/soup_cli/utils/llama_cpp_capabilities.json` records the tag,
-commit, source URL, SHA-256 and Git blob identity. The generator parses registered
+commit, source URL, SHA-256 and Git blob identity for the entry script and each
+top-level `conversion/*.py` file used to derive the maps. The generator parses registered
 classes and inherited model kinds without importing or executing upstream code.
 The pin/data guard rejects a changed pin until its capabilities are regenerated.
+The pinned converter imports `transformers` at startup. Soup does not install it
+automatically; install the compatible training extra with
+`pip install "soup-cli[train]"` before default GGUF export.
 
 ### Building llama.cpp (required for quantized GGUF)
 

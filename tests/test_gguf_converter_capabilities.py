@@ -126,6 +126,35 @@ def test_supported_fresh_default_still_exports(export_flow):
     assert calls == ["clone", "deps", "convert", "quantize"]
 
 
+def test_missing_transformers_refuses_before_clone_and_install(export_flow, monkeypatch):
+    # #1911 — the pinned b12423 converter imports transformers at load time, but
+    # Soup never auto-installs torch/transformers (a llama.cpp requirements
+    # install once downgraded a user's CUDA torch). Refuse by name BEFORE any
+    # clone or install, pointing at the supported way to get it.
+    monkeypatch.setattr(export_mod, "_transformers_missing", lambda: True)
+    result, calls = export_flow({"architectures": ["LlamaForCausalLM"]})
+    assert result.exit_code == 1, result.output
+    assert "transformers" in result.output
+    assert 'pip install "soup-cli[train]"' in result.output
+    assert calls == []
+
+
+
+def test_missing_transformers_refuses_before_adapter_merge(export_flow, monkeypatch):
+    monkeypatch.setattr(export_mod, "_transformers_missing", lambda: True)
+    result, calls = export_flow({"architectures": ["LlamaForCausalLM"]}, adapter=True)
+    assert result.exit_code == 1, result.output
+    assert "transformers" in result.output
+    assert 'pip install "soup-cli[train]"' in result.output
+    assert calls == []
+
+def test_present_transformers_lets_fresh_default_export(export_flow, monkeypatch):
+    monkeypatch.setattr(export_mod, "_transformers_missing", lambda: False)
+    result, calls = export_flow({"architectures": ["LlamaForCausalLM"]})
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert calls == ["clone", "deps", "convert", "quantize"]
+
+
 @pytest.mark.parametrize("architecture,allowed", [
     ("LlamaForCausalLM", True), ("BartForConditionalGeneration", False),
 ])
@@ -293,6 +322,109 @@ class GraniteSpeechMmprojModel(ModelBase): model_arch = gguf.MODEL_ARCH.MMPROJ
         "TEXT": ["GraniteSpeechForConditionalGeneration", "GroveMoeForCausalLM"],
         "VISION": ["MmprojOnly"],
     }
+
+
+def test_regeneration_records_per_file_sources(tmp_path):
+    """The manifest must hash EVERY file the data was read from, not only the
+    entry script (each conversion/*.py module feeds the AST walk too)."""
+    import hashlib
+
+    script = Path(__file__).resolve().parents[1] / "scripts/gen_llama_cpp_capabilities.py"
+    conv = tmp_path / "conversion"
+    conv.mkdir()
+    init_bytes = (
+        b'TEXT_MODEL_MAP = {"LlamaForCausalLM": "llama"}\n'
+        b'MMPROJ_MODEL_MAP = {"MmprojOnly": "somemodule"}\n'
+    )
+    (conv / "__init__.py").write_bytes(init_bytes)
+    (conv / "models.py").write_bytes(b"")
+    entry = tmp_path / "convert_hf_to_gguf.py"
+    entry.write_bytes(b"")
+    output = tmp_path / "capabilities.json"
+    result = subprocess.run([
+        sys.executable, str(script), "--converter", str(entry),
+        "--package-dir", str(conv), "--tag", export_mod.LLAMA_CPP_TAG,
+        "--commit", "f4d0673917c75493c73fc9b64ab42841600ba944",
+        "--output", str(output),
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert set(data["sources"]) == {
+        "convert_hf_to_gguf.py", "conversion/__init__.py", "conversion/models.py",
+    }
+    recorded = data["sources"]["conversion/__init__.py"]
+    assert recorded["sha256"] == hashlib.sha256(init_bytes).hexdigest()
+    blob = f"blob {len(init_bytes)}\0".encode() + init_bytes
+    assert recorded["git_blob"] == hashlib.sha1(blob).hexdigest()
+    # Backward-compat: the entry-script top-level fields survive.
+    assert data["source_sha256"] == data["sources"]["convert_hf_to_gguf.py"]["sha256"]
+    assert data["source_git_blob"] == data["sources"]["convert_hf_to_gguf.py"]["git_blob"]
+
+
+def test_generator_multifile_without_maps_resolves_decorators():
+    """Without conversion/__init__.py model maps, the decorator walk rules —
+    including the b12423 MMPROJ model_arch, which lands in VISION."""
+    from scripts.gen_llama_cpp_capabilities import (
+        ENTRY_NAME,
+        extract_capabilities_from_sources,
+    )
+
+    entry = b"import sys\nsys.exit(1)\n"
+    models = b'''
+raise AssertionError("source must never execute")
+class ModelBase: pass
+class TextModel(ModelBase): model_arch = gguf.MODEL_ARCH.LLAMA
+@ModelBase.register("TextAlias")
+class Decoder(TextModel): pass
+@ModelBase.register("MmprojAlias")
+class Encoder(ModelBase): model_arch = gguf.MODEL_ARCH.MMPROJ
+'''
+    capabilities = extract_capabilities_from_sources(
+        {ENTRY_NAME: entry, "conversion/models.py": models})
+    assert capabilities == {"TEXT": ["TextAlias"], "VISION": ["MmprojAlias"]}
+
+
+@pytest.mark.parametrize("sources,diagnostic", [
+    pytest.param(
+        {"conversion/__init__.py": b'TEXT_MODEL_MAP = {"LlamaForCausalLM": "llama"}\n'},
+        "TEXT_MODEL_MAP and MMPROJ_MODEL_MAP", id="partial-maps",
+    ),
+    pytest.param(
+        {
+            "conversion/__init__.py": (
+                b'TEXT_MODEL_MAP = {"LlamaForCausalLM": "llama"}\n'
+                b'MMPROJ_MODEL_MAP = {"MmprojOnly": "mm"}\n'
+            ),
+            "conversion/other.py": (
+                b'TEXT_MODEL_MAP = {"GPT2LMHeadModel": "gpt2"}\n'
+                b'MMPROJ_MODEL_MAP = {"Other": "o"}\n'
+            ),
+        },
+        "multiple sources define converter model maps", id="multiple-map-sources",
+    ),
+    pytest.param(
+        {
+            "conversion/__init__.py": (
+                b"TEXT_MODEL_MAP: dict[str, str] = {}\n"
+                b'MMPROJ_MODEL_MAP: dict[str, str] = {"MmprojOnly": "mm"}\n'
+            ),
+        },
+        "TEXT_MODEL_MAP lists no architectures", id="empty-text-map",
+    ),
+    pytest.param(
+        {"convert_hf_to_gguf.py": (
+            b"class ModelBase: pass\n"
+            b'@ModelBase.register("Alias")\n'
+            b"class Orphan(ModelBase): pass\n"
+        )},
+        "unrecognized registration on Orphan", id="unrecognized-registration",
+    ),
+])
+def test_generator_refuses_broken_converter_layouts(sources, diagnostic):
+    from scripts.gen_llama_cpp_capabilities import extract_capabilities_from_sources
+
+    with pytest.raises(ValueError, match=diagnostic):
+        extract_capabilities_from_sources(sources)
 
 
 def test_timed_out_probe_is_inconclusive(monkeypatch, tmp_path):

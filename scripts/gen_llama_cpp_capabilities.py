@@ -155,7 +155,13 @@ def main() -> None:
         if len(sources) == 1:
             parser.error(f"--package-dir {arguments.package_dir} contains no *.py modules")
     # Record both the file hash and Git's blob identity, not a reformatted copy.
-    blob = f"blob {len(source)}\0".encode() + source
+    def _provenance(data: bytes) -> dict[str, str]:
+        blob = f"blob {len(data)}\0".encode() + data
+        return {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "git_blob": hashlib.sha1(blob).hexdigest(),
+        }
+
     manifest = {
         "schema_version": 1,
         "tag": arguments.tag,
@@ -163,9 +169,11 @@ def main() -> None:
         "source_url": (
             f"https://github.com/ggml-org/llama.cpp/blob/{arguments.commit}/{ENTRY_NAME}"
         ),
-        "source_sha256": hashlib.sha256(source).hexdigest(),
-        "source_git_blob": hashlib.sha1(blob).hexdigest(),
+        "source_sha256": _provenance(source)["sha256"],
+        "source_git_blob": _provenance(source)["git_blob"],
         "architectures": extract_capabilities_from_sources(sources),
+        # Per-file provenance for EVERY file the data was read from.
+        "sources": {relpath: _provenance(data) for relpath, data in sorted(sources.items())},
     }
     arguments.output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
