@@ -25,7 +25,7 @@ SITES = [
 STAGED_SITES = {"citation_recall_threshold", "lr_groups"}
 
 
-def _config(site: str, value: int | float) -> dict:
+def _config(site: str, value: object) -> dict:
     raw = {"base": "some-model", "data": {"train": "data.jsonl"}, "training": {}}
     if site == "interleave":
         raw["data"] = {
@@ -39,10 +39,15 @@ def _config(site: str, value: int | float) -> dict:
     return raw
 
 
+def _plain(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
+
+
 def _assert_named_refusal(message: str, site: str) -> None:
     assert site in message
     if site in STAGED_SITES:
-        assert f"training.{site} is accepted but read by nothing" in message
+        detail = message.removeprefix("Config validation error: ")
+        assert detail.startswith(f"training.{site} is accepted but read by nothing")
     else:
         assert "must be finite" in message
 
@@ -65,7 +70,7 @@ def test_config_mapping_names_the_field_instead_of_raising_overflow(
     with pytest.raises(SystemExit) as exc:
         loader.validate_config_mapping(_config(site, value))
     assert exc.value.code == 1
-    output = strip_ansi(printed.getvalue())
+    output = _plain(printed.getvalue())
     assert "Config validation error:" in output
     _assert_named_refusal(output, site)
     assert str(value) not in output
@@ -108,9 +113,25 @@ def test_existing_nonfinite_config_values_remain_named_refusals(
     with pytest.raises(SystemExit) as exc:
         loader.validate_config_mapping(_config(site, value))
     assert exc.value.code == 1
-    output = strip_ansi(printed.getvalue())
+    output = _plain(printed.getvalue())
     assert "Config validation error:" in output
     _assert_named_refusal(output, site)
+
+
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("value", [True, False, "not-a-number", [], {}],
+                         ids=["true", "false", "text", "list", "mapping"])
+def test_existing_type_refusals_keep_the_field_and_exit_code(
+    printed: io.StringIO, site: str, value: object,
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        loader.validate_config_mapping(_config(site, value))
+    assert exc.value.code == 1
+    output = _plain(printed.getvalue())
+    assert "Config validation error:" in output
+    assert site in output
+    if site in STAGED_SITES:
+        assert f"training.{site} is accepted but read by nothing" in output
 
 
 @pytest.mark.parametrize("site", SITES)
