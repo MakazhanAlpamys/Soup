@@ -258,7 +258,7 @@ def sample_uncertain_rows(
         raise FileNotFoundError(input_path)
 
     rows: list[Mapping[str, object]] = []
-    with open(input_path, encoding="utf-8") as fh:
+    with open(input_path, encoding="utf-8-sig") as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped:
