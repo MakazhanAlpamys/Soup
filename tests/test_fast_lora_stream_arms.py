@@ -11,12 +11,17 @@ cause is a separate claim; this file only measures.
 
 Arms
 ----
+base_matmul_in_activation_dtype
+    The fast path runs each 4-bit base matmul in bitsandbytes' compute dtype
+    (fp16): the input is cast there and the weight is dequantised there.  The
+    streamed runtime and the row's own oracle multiply with the weight in the
+    activation dtype (bf16).  On a native-bf16 card the two are different
+    computations, and the fast arm is the only one that deviates from the
+    oracle.  This arm runs the base matmul in the activation dtype.
+
 base_weight_dtype
-    The fast path multiplies the base with the weight dequantised into the
-    compute dtype (fp16).  The streamed runtime and the oracle use the
-    activation dtype (bf16), and bitsandbytes' ``MatMul4Bit.backward`` casts
-    the dequantised weight to the grad dtype.  This arm drops the cast, so the
-    fast arm multiplies with the weight the references multiply with.
+    The same choice seen from the weight's side: the dequantised weight keeps
+    its own dtype instead of the requested one.
 
 scaling_order
     The fast path folds the scaling into the addition
@@ -34,6 +39,9 @@ Controls
   card, this card's own numbers elsewhere);
 * every arm on gives the PEFT error on the three names (a ratio near 1);
 * two runs of the same configuration agree.
+
+The report also prints the dtype each base GEMM asked for, so a card owner can
+see which dtypes were in play.
 
 The row needs CUDA; the dequantisation check runs on the CPU.
 """
@@ -54,7 +62,12 @@ THE_THREE_NAMES = (
 )
 
 #: Every arm the harness can switch on.
-ARMS = ("base_weight_dtype", "scaling_order", "per_projection_a")
+ARMS = (
+    "base_matmul_in_activation_dtype",
+    "base_weight_dtype",
+    "scaling_order",
+    "per_projection_a",
+)
 
 
 def _deps():
@@ -71,8 +84,8 @@ def _dense_weight_without_the_cast(weight, qmeta, qparts, dtype):
     """``_dense_weight`` that keeps the weight's own dtype.
 
     ``dequantize_4bit`` returns the weight in the dtype it was quantised from,
-    which is the activation dtype for a bf16 model.  The fast path casts it to
-    the compute dtype instead; this arm does not.
+    which is the compute dtype for weights quantised from it, so this arm only
+    moves a weight whose own dtype differs from the requested one.
     """
     if qmeta is None:
         return weight
@@ -98,8 +111,7 @@ def _per_projection_linear(original):
 
     The adapters are fp32 while the base weights are bf16, and the stacked A
     holds one block of ``r`` rows per projection, so an fp32 weight whose row
-    count is a multiple of the rank is the stacked A.  Splitting it changes
-    the GEMM shape and nothing else.
+    count is a multiple of the rank is the stacked A.
     """
     import torch
 
@@ -113,7 +125,7 @@ def _per_projection_linear(original):
 
 
 @contextlib.contextmanager
-def _arms_enabled(arms):
+def _arms_enabled(arms, trace: list[str] | None = None):
     """Enable the named arms for the duration of the block."""
     import torch
 
@@ -122,6 +134,16 @@ def _arms_enabled(arms):
     modules = (fast_lora, fast_lora_mlp, fast_lora_qkv)
     saved: list[tuple[Any, str, Any]] = []
     try:
+        if "base_matmul_in_activation_dtype" in arms:
+            for module in modules:
+                saved.append((module, "_projection_compute_dtype", module._projection_compute_dtype))
+                monkey = module._projection_compute_dtype
+
+                def in_activation_dtype(meta, fallback, _original=monkey):
+                    """The base matmul in the activation dtype, not the compute one."""
+                    return fallback
+
+                module._projection_compute_dtype = in_activation_dtype
         if "base_weight_dtype" in arms:
             for module in modules:
                 saved.append((module, "_dense_weight", module._dense_weight))
@@ -133,10 +155,29 @@ def _arms_enabled(arms):
         if "per_projection_a" in arms:
             saved.append((torch.nn.functional, "linear", torch.nn.functional.linear))
             torch.nn.functional.linear = _per_projection_linear(torch.nn.functional.linear)
+        if trace is not None:
+            _trace_dense_weight(modules, trace)
         yield
     finally:
         for module, name, old in saved:
             setattr(module, name, old)
+
+
+def _trace_dense_weight(modules, trace: list[str]) -> None:
+    """Record the dtype each base GEMM asked for."""
+    for module in modules:
+        original = module._dense_weight
+
+        def wrapper(*args, _original=original, _name=module.__name__, **kwargs):
+            weight = args[0] if args else None
+            dtype = args[3] if len(args) > 3 else kwargs.get("dtype")
+            trace.append(
+                f"{_name.rsplit('.', 1)[-1]}._dense_weight("
+                f"weight={getattr(weight, 'dtype', None)}, dtype={dtype})"
+            )
+            return _original(*args, **kwargs)
+
+        module._dense_weight = wrapper
 
 
 # ─── the CPU dequantisation check ───────────────────────────────────────────
@@ -181,13 +222,13 @@ def test_the_rebuilt_quant_state_dequantises_to_the_same_weight(tmp_path):
 def _ratio_for(ratios: dict, name: str) -> float | None:
     """The ratio of the measured name that ends with ``name``."""
     for key, value in ratios.items():
-        if key.endswith(name) or f".{name}." in key:
+        if f".{name}." in key:
             return value
     return None
 
 
-def _row_report(tmp_path, monkeypatch, capsys, arms) -> dict:
-    """Run the streamed `4bit` row with the arms on; return the printed report.
+def _row_report(tmp_path, monkeypatch, capsys, arms) -> tuple[dict, list[str]]:
+    """Run the streamed `4bit` row with the arms on; return the report.
 
     The row prints its whole ``#792 {...}`` line before it raises on a name
     above the criterion, so the report is read from the output either way.
@@ -196,7 +237,8 @@ def _row_report(tmp_path, monkeypatch, capsys, arms) -> dict:
 
     capsys.readouterr()  # drop an earlier report before this clean run
     tmp_path.mkdir(parents=True, exist_ok=True)
-    with _arms_enabled(arms):
+    trace: list[str] = []
+    with _arms_enabled(arms, trace):
         try:
             _run_streamed_row(tmp_path, monkeypatch, "4bit")
         except AssertionError:
@@ -204,7 +246,7 @@ def _row_report(tmp_path, monkeypatch, capsys, arms) -> dict:
     printed = capsys.readouterr().out
     for line in printed.splitlines():
         if line.startswith("#792 {"):
-            return json.loads(line[len("#792 "):])
+            return json.loads(line[len("#792 "):]), trace
     raise AssertionError(f"the row printed no report:\n{printed[-2000:]}")
 
 
@@ -212,30 +254,33 @@ def _row_report(tmp_path, monkeypatch, capsys, arms) -> dict:
 def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
     """Each arm, and the controls, on the streamed `4bit` row.
 
-    The row is red on a native-bf16 card and green on this one, so the
-    baseline is whatever this card prints and the arms are read against it.
+    The row is red on a native-bf16 card and green on this one, so the baseline
+    is whatever this card prints and the arms are read against it.  The dtypes
+    each base GEMM asked for are printed with the numbers, so a card owner can
+    see which dtypes were in play.
     """
-    baseline = _row_report(tmp_path / "baseline", monkeypatch, capsys, ())
-    armed = {
-        arm: _row_report(tmp_path / arm, monkeypatch, capsys, (arm,)) for arm in ARMS
-    }
-    every = _row_report(tmp_path / "every", monkeypatch, capsys, ARMS)
-    again = _row_report(tmp_path / "again", monkeypatch, capsys, ())
+    report, trace = _row_report(tmp_path / "baseline", monkeypatch, capsys, ())
+    baseline = report["ratios"]
+    armed = {}
+    for arm in ARMS:
+        arm_report, _ = _row_report(tmp_path / arm, monkeypatch, capsys, (arm,))
+        armed[arm] = arm_report["ratios"]
+    every_report, _ = _row_report(tmp_path / "every", monkeypatch, capsys, ARMS)
+    again_report, _ = _row_report(tmp_path / "again", monkeypatch, capsys, ())
+
+    def names(ratios: dict) -> dict:
+        return {name: _ratio_for(ratios, name) for name in THE_THREE_NAMES}
 
     print("#792 arms " + json.dumps({
-        "baseline": {name: _ratio_for(baseline["ratios"], name) for name in THE_THREE_NAMES},
-        "arms": {
-            arm: {name: _ratio_for(report["ratios"], name) for name in THE_THREE_NAMES}
-            for arm, report in armed.items()
-        },
-        "every_arm": {
-            name: _ratio_for(every["ratios"], name) for name in THE_THREE_NAMES
-        },
+        "baseline": names(baseline),
+        "arms": {arm: names(ratios) for arm, ratios in armed.items()},
+        "every_arm": names(every_report["ratios"]),
         "logits": {
-            "baseline": baseline["ratios"].get("logits"),
-            "every_arm": every["ratios"].get("logits"),
+            "baseline": baseline.get("logits"),
+            "every_arm": every_report["ratios"].get("logits"),
         },
+        "base_gemm_dtypes": sorted(set(trace)),
     }))
 
     # Control: the same configuration twice gives the same numbers.
-    assert again["ratios"] == baseline["ratios"]
+    assert again_report["ratios"] == baseline
