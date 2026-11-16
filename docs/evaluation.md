@@ -217,6 +217,12 @@ Git-for-Windows' bundled bash on Windows.
 
 Halt training automatically if a declarative eval suite regresses beyond a threshold vs a baseline. The gate runs at epoch boundaries — no wasted compute on runs that are already worse.
 
+Eval-gated training requires a live training callback. `soup train` refuses an
+enabled gate on `backend: mlx` and on `task: prm`, `unlearn` or
+`moe_lora_routing`, whether enabled in YAML or through `--gate`. It names the
+unsupported backend or task and exits 1 before building a model. Omit or disable
+`training.eval_gate` and remove `--gate` to train on those paths.
+
 **Configure in `soup.yaml`:**
 
 ```yaml
@@ -257,7 +263,7 @@ tasks:
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
 
-`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` stops with the error and exits 3, and `soup train --gate` and `soup train` with the suite named in `training.eval_gate` stop with it and exit 1, before `--dry-run` returns. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
 An eval gate must contain at least one task. Empty or missing `tasks` lists,
 including a misspelled key that leaves the list empty, are refused with a
@@ -927,6 +933,82 @@ and an offline `--evidence` run, emit `adapter_change: null`. The field is not r
 The table above is the calibration record; the raw per-adapter JSON is not shipped in this
 repository.
 
+
+### Reading the task leg: rows, truncation and what was judged
+
+A SHIP is one number against another. These blocks say what the task-leg number is made of, so a
+reader can tell a clean win from a win bought with cut-off answers. None of it is part of the
+decision: the verdict, `failed_rule` and the exit code are the same with and without it (one
+exception, below: a side whose every generation failed is refused).
+
+```
+Rows (tuned vs base): better 0, worse 5, same 3 of 8
+Truncated answers: base 0, tuned 1 of 8 (cap 256 new tokens)
+Generation failures: base 0, tuned 0 of 8
+Judged: base Qwen/Qwen3-0.6B, adapter out/checkpoint-12 (checkpoint step 12)
+```
+
+The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is removed or renamed.
+
+| key | meaning |
+|-----|---------|
+| `schema_version` | `2`. Absent in 0.77.x output, which is version 1. |
+| `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score. |
+| `task_win.truncated` | `{"base", "tuned", "n", "max_new_tokens", "warning"}`, or `null`. A count is the number of answers that hit the new-token cap and did not stop on their own, read from the generator's token ids, never from the length of the text. A count is `null`, never `0`, when it was not measured: the generator returned plain text with no token information, or a row's generation failed. `max_new_tokens` is the cap the built-in generator uses for the task leg (`BEHAVIOURAL_MAX_NEW_TOKENS`, 256). It is a constant written into the verdict, not read back from the generator, so a generator you supply yourself may use another cap. |
+| `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
+| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is reserved and always `null` in this release. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
+
+**A side whose every generation failed is refused** (exit 1): that is a failed measurement, not a
+score of 0. The message is `Error: live ship verdict failed: RuntimeError: every task generation
+failed on the base side (8 of 8); a model that fails on every row is not a score of 0, so no
+verdict is given. Check that the model loads and generates`. The only variable parts are the side
+(`base` or `tuned`) and the two row counts, which are equal; a program can match the regular
+expression `every task generation failed on the (base|tuned) side \(([0-9]+) of \2\)`. Before
+this check a base that failed on every row read as 0.0 and any tuned model beat it, a SHIP no model earned. A side with
+some failed rows is still judged; the count is shown and printed in yellow.
+
+**The `truncation_growth` warning.** When both counts are measured and
+`tuned - base >= max(3, ceil(0.10 * n))`, the panel prints a yellow
+`Warning truncation_growth: truncated 5 -> 14 of 64 (rise 9, threshold 7)` and
+`task_win.truncated.warning` is `"truncation_growth"`. It is a warning only. One or two rows never
+fire (greedy decoding on a GPU is not bit-stable); a fall never fires; at 11 rows a rise of 3 is
+needed. The two constants (`TRUNCATION_GROWTH_MIN_ROWS = 3`, `TRUNCATION_GROWTH_MIN_SHARE = 0.10`)
+are display constants and are **not calibrated**: there is no table of real runs yet, so the
+warning stays a warning and decides nothing until there is one.
+
+**Evidence schema version 2.** `--emit-evidence` writes `"schema_version": 2` whenever it has
+version-2 content to write: `task.rows`, `task.truncated` (the counts, without `warning`: it is
+recomputed on every read), `task.generation_failures` and `judged`. A replay prints the same lines
+and the same warning. A file with none of it (a replayed version-1 file) stays a version-1 file:
+the stamp says what the file carries, it is not a property of the command. This is a deliberate
+reading, confirmed by a downstream application that consumes the file; stamping version 2 on every
+emitted file is a one-line change if a reader needs it. `schema_version` is always an integer at the
+top level of the `--output` JSON and of the evidence file (the evidence's `provenance.binding`
+block has a `schema_version` of its own: a different key).
+
+```json
+{
+  "schema_version": 2,
+  "task": {
+    "mode": "metric", "base": 0.75, "tuned": 0.125,
+    "rows": {"better": 0, "worse": 5, "same": 3, "n": 8},
+    "truncated": {"base": 0, "tuned": 1, "n": 8, "max_new_tokens": 256},
+    "generation_failures": {"base": 0, "tuned": 0, "n": 8}
+  },
+  "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+  "judged": {"base": "Qwen/Qwen3-0.6B", "adapter": "out/checkpoint-12", "tuned": null,
+             "base_adapter": null, "checkpoint_step": 12}
+}
+```
+
+The reader takes an absent `schema_version` as 1 and reads such a file exactly as before; `1` and
+`2` are accepted; any other value, a boolean, a number that is not an integer, or version-2 keys
+under version 1 are refused (exit 3, the message names `schema_version` or the key). Inside a block
+every key is required (`null` says not measured), counts are integers in range, `better + worse +
+same == n`, every block of one file has the same `n`, and `judged.checkpoint_step` must be what the
+adapter path says. **soup-cli 0.77.x refuses a version-2 file** with `evidence has unsupported
+field(s): 'schema_version'` (exit 3): upgrade whatever reads the evidence, such as the CI gate or
+the MCP `ship_evidence` tool, to 0.78.0 or later before it meets a file written by 0.78.
 
 ## Retention across versions: `soup eval retention`
 

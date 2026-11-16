@@ -32,7 +32,7 @@ def _clock(ns, step=1):
 
 def test_delete_polls_past_stopped_state_until_actual_absence():
     ns = _controller()
-    reads = iter([{"desiredStatus": "EXITED"}, None])
+    reads = iter([{"status": "EXITED"}, None])
     calls = []
     sleeps = _clock(ns)
 
@@ -49,7 +49,7 @@ def test_delete_polls_past_stopped_state_until_actual_absence():
 def test_deletion_timeout_is_a_failure():
     ns = _controller()
     _clock(ns, 100)
-    ns["_request_json"] = lambda *args, **kwargs: {"desiredStatus": "EXITED"}
+    ns["_request_json"] = lambda *args, **kwargs: {"status": "EXITED"}
     with pytest.raises(RuntimeError, match="not confirmed"):
         ns["_terminate"]("secret", "pod-1")
 
@@ -91,9 +91,12 @@ def test_rest_404_get_and_empty_delete_are_accepted(monkeypatch):
     "record",
     [
         None,
-        {"desiredStatus": "EXITED"},
-        {"publicIp": "127.0.0.1", "portMappings": {"22": 1234}},
-        {"publicIp": "169.254.169.254", "portMappings": {"22": 1234}},
+        {"status": "EXITED"},
+        {"status": "ERROR"},
+        {"status": "RUNNING", "ssh": {"direct": {"host": "127.0.0.1", "port": 1234}}},
+        {"status": "RUNNING", "ssh": {"direct": {"host": "169.254.169.254", "port": 1234}}},
+        {"status": "RUNNING", "runtime": {"ports": [
+            {"private": 22, "public": 1234, "type": "tcp", "ip": "127.0.0.1"}]}},
     ],
 )
 def test_ssh_refuses_missing_stopped_or_private_addresses(record):
@@ -105,7 +108,7 @@ def test_ssh_refuses_missing_stopped_or_private_addresses(record):
 
 def test_ssh_waits_for_real_port_and_has_a_deadline():
     ns = _controller()
-    reads = iter([{}, {"publicIp": "8.8.8.8", "portMappings": {"22": 2222}}])
+    reads = iter([{}, {"status": "RUNNING", "ssh": {"direct": {"host": "8.8.8.8", "port": 2222}}}])
     ns["_request_json"] = lambda *args: next(reads)
     sleeps = _clock(ns)
     assert ns["_wait_for_ssh"]("secret", "pod-1") == ("8.8.8.8", 2222)

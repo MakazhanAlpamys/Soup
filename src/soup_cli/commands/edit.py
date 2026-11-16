@@ -13,12 +13,16 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _print_error(label: str, message: object) -> None:
+    console.print(Text.assemble((label, "red"), f" {strip_control(message)}"))
 
 app = typer.Typer(
     name="edit",
@@ -213,17 +217,17 @@ def set_edit(
             layer=layer,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid edit request:[/] {escape(str(exc))}")
+        _print_error("Invalid edit request:", exc)
         raise typer.Exit(2) from exc
 
     # Render the resolved plan.
-    body = (
-        f"[bold]Method:[/] {escape(plan.method)}\n"
-        f"[bold]Base:[/]   {escape(plan.base)}\n"
-        f"[bold]Layer:[/]  {plan.layer}\n"
-        f"[bold]Subject:[/] {escape(plan.subject)}\n"
-        f"[bold]Target:[/]  {escape(plan.target)}\n\n"
-        f"[dim]{escape(plan.spec.description)}[/]"
+    body = Text.assemble(
+        ("Method:", "bold"), f" {plan.method}\n",
+        ("Base:", "bold"), f"   {strip_control(plan.base)}\n",
+        ("Layer:", "bold"), f"  {plan.layer}\n",
+        ("Subject:", "bold"), f" {strip_control(plan.subject)}\n",
+        ("Target:", "bold"), f"  {strip_control(plan.target)}\n\n",
+        (plan.spec.description, "dim"),
     )
     console.print(Panel(body, title="EditPlan", border_style="cyan"))
 
@@ -238,7 +242,7 @@ def set_edit(
         try:
             cov_corpus_rows = _load_cov_corpus(cov_corpus)
         except (ValueError, FileNotFoundError, OSError) as exc:
-            console.print(f"[red]Cannot load --cov-corpus:[/] {escape(str(exc))}")
+            _print_error("Cannot load --cov-corpus:", exc)
             raise typer.Exit(2) from exc
 
     # Load a persisted governor so sequential edits across separate `soup edit
@@ -258,7 +262,7 @@ def set_edit(
             store = EditGovernorStore(default_governor_db_path())
             governor = load_governor(store, plan.base)
         except (ValueError, OSError) as exc:
-            console.print(f"[dim]Governor disabled ({escape(str(exc))}).[/]")
+            console.print(Text(f"Governor disabled ({strip_control(exc)}).", style="dim"))
             governor = None
             store = None
 
@@ -275,7 +279,7 @@ def set_edit(
     except GovernedEditError as exc:
         console.print(
             Panel(
-                f"[red]Edit refused by governor:[/] {escape(str(exc))}",
+                Text.assemble(("Edit refused by governor:", "red"), f" {strip_control(exc)}"),
                 title="Sequential-edit governor",
                 border_style="red",
             )
@@ -284,7 +288,7 @@ def set_edit(
             store.close()
         raise typer.Exit(2) from exc
     except (ValueError, RuntimeError, OSError) as exc:
-        console.print(f"[red]Edit failed:[/] {escape(str(exc))}")
+        _print_error("Edit failed:", exc)
         if store is not None:
             store.close()
         raise typer.Exit(2) from exc
@@ -298,28 +302,22 @@ def set_edit(
         finally:
             store.close()
 
-    console.print(
-        Panel(
-            f"[bold]Method:[/] {escape(result.method)}\n"
-            f"[bold]Layers edited:[/] {list(result.layers_edited)}\n"
-            f"[bold]Norm delta:[/] {result.norm_delta:.4f}\n"
-            f"[bold]Target prob:[/] {result.target_prob_before:.4f} -> "
-            f"{result.target_prob_after:.4f}\n"
-            + (
-                f"[bold]Saved:[/] {escape(result.output_dir)}\n"
-                if result.output_dir
-                else ""
-            )
-            + (
-                f"[bold]Governor:[/] count="
-                f"{governor.edit_count} verdict={escape(governor.last_verdict)}"
-                if governor is not None
-                else "[dim]Governor disabled.[/]"
-            ),
-            title="Edit applied",
-            border_style="green",
-        )
+    body = Text.assemble(
+        ("Method:", "bold"), f" {result.method}\n",
+        ("Layers edited:", "bold"), f" {list(result.layers_edited)}\n",
+        ("Norm delta:", "bold"), f" {result.norm_delta:.4f}\n",
+        ("Target prob:", "bold"),
+        f" {result.target_prob_before:.4f} -> {result.target_prob_after:.4f}\n",
     )
+    if result.output_dir:
+        body.append("Saved:", style="bold")
+        body.append(f" {strip_control(result.output_dir)}\n")
+    if governor is not None:
+        body.append("Governor:", style="bold")
+        body.append(f" count={governor.edit_count} verdict={strip_control(governor.last_verdict)}")
+    else:
+        body.append("Governor disabled.", style="dim")
+    console.print(Panel(body, title="Edit applied", border_style="green"))
 
     if registry_id is not None:
         assert result.output_dir is not None  # narrowed by the early arg-check
@@ -364,12 +362,15 @@ def _attach_result(registry_id: str, output_dir: str, method: str) -> None:
         for path in paths:
             attach_artifact(registry_id, path=path, kind=kind)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error:[/] could not attach to registry: {for_terminal(exc)}")
+        _print_error("Error:", f"could not attach to registry: {exc}")
         raise typer.Exit(1) from exc
     for path in paths:
         console.print(
-            f"[green]Attached[/] {kind} to registry entry "
-            f"[bold]{for_terminal(registry_id)}[/] [dim]({for_terminal(path)})[/]"
+            Text.assemble(
+                ("Attached", "green"), f" {kind} to registry entry ",
+                (strip_control(registry_id), "bold"), " ",
+                (f"({strip_control(path)})", "dim"),
+            )
         )
 
 
@@ -434,7 +435,7 @@ def diff_edit(
             device=device,
         )
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Cannot build diff:[/] {escape(str(exc))}")
+        _print_error("Cannot build diff:", exc)
         raise typer.Exit(2) from exc
 
     render_diff_table(report, console)
@@ -445,6 +446,6 @@ def diff_edit(
         try:
             write_diff_report(report, output)
         except (TypeError, ValueError, OSError) as exc:
-            console.print(f"[red]Cannot write diff:[/] {escape(str(exc))}")
+            _print_error("Cannot write diff:", exc)
             raise typer.Exit(2) from exc
-        console.print(f"Wrote diff -> {escape(output)}")
+        console.print(Text(f"Wrote diff -> {strip_control(output)}"))
