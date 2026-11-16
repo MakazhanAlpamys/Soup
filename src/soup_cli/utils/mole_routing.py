@@ -33,6 +33,7 @@ import math
 import os
 import stat
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
@@ -526,6 +527,7 @@ class LoadedMole:
         if len(self.adapter_names) < MIN_TASK_ADAPTERS:
             raise ValueError("LoadedMole needs >= 2 task adapters")
         self.device = device
+        self._lock = threading.Lock()
 
     def _blended_last_logits(self, input_ids, attention_mask):
         """Per-token blend, last token only — returns ``[B, V]``."""
@@ -657,21 +659,22 @@ class LoadedMole:
         do_sample = isinstance(temperature, (int, float)) and not isinstance(
             temperature, bool
         ) and float(temperature) > 0.0
-        state = _MoleKvState() if _model_supports_cache(self.model) else None
-        for _ in range(int(max_new_tokens)):
-            if state is not None and state.enabled:
-                logits = self._blended_last_logits_cached(seq, attn, state)
-            else:
-                logits = self._blended_last_logits(seq, attn)  # [B, V]
-            if do_sample:
-                next_id = _sample_next(logits, float(temperature), float(top_p))
-            else:
-                next_id = logits.argmax(dim=-1, keepdim=True)  # [B, 1]
-            seq = torch.cat([seq, next_id], dim=1)
-            attn = torch.cat([attn, torch.ones_like(next_id)], dim=1)
-            if eos_token_id is not None and int(next_id[0, 0]) == int(eos_token_id):
-                break
-        return seq
+        with self._lock:
+            state = _MoleKvState() if _model_supports_cache(self.model) else None
+            for _ in range(int(max_new_tokens)):
+                if state is not None and state.enabled:
+                    logits = self._blended_last_logits_cached(seq, attn, state)
+                else:
+                    logits = self._blended_last_logits(seq, attn)  # [B, V]
+                if do_sample:
+                    next_id = _sample_next(logits, float(temperature), float(top_p))
+                else:
+                    next_id = logits.argmax(dim=-1, keepdim=True)  # [B, 1]
+                seq = torch.cat([seq, next_id], dim=1)
+                attn = torch.cat([attn, torch.ones_like(next_id)], dim=1)
+                if eos_token_id is not None and int(next_id[0, 0]) == int(eos_token_id):
+                    break
+            return seq
 
     def generate_text(
         self,
