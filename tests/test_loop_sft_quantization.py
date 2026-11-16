@@ -37,6 +37,13 @@ from soup_cli.utils import loop_quantization as lq
 from soup_cli.utils import model_shape
 from soup_cli.utils.loop_state import LoopState
 
+#: What the train stage notes when the suite's stub tokenizer child "cannot measure"
+#: (tests/conftest.py ``_no_loop_tokenizer_child``): the schema default stays.
+UNMEASURED = (
+    "max_length: 2048 kept, the longest row could not be measured "
+    "(no tokenizer is loaded in a test)"
+)
+
 # The real functions, taken before the suite's autouse stubs replace them for a test.
 _REAL_FREE_VRAM = lq.free_vram_bytes
 _REAL_HUB_PARAM_COUNT = model_shape._hub_param_count
@@ -556,7 +563,7 @@ class TestRender:
         assert rendered["training"]["quantization"] == "none"
         assert config.training.quantization == "none"
         assert config.training.lora.target_modules == "all-linear"
-        assert notes == ["sft quantization auto: none (need 4.7 GB, free 8.0 GB)"]
+        assert notes == ["sft quantization auto: none (need 4.7 GB, free 8.0 GB)", UNMEASURED]
 
     def test_auto_that_does_not_fit_renders_4bit(self, cwd, decide):
         decide.install(5_000_000_000, 2 * GIB)
@@ -567,7 +574,7 @@ class TestRender:
 
         assert rendered["training"]["quantization"] == "4bit"
         assert config.training.quantization == "4bit"
-        assert notes == ["sft quantization auto: 4bit (need 46.6 GB, free 2.0 GB)"]
+        assert notes == ["sft quantization auto: 4bit (need 46.6 GB, free 2.0 GB)", UNMEASURED]
 
     def test_auto_with_an_unknown_size_renders_4bit(self, cwd, decide):
         decide.install(None, 8 * GIB)
@@ -576,7 +583,7 @@ class TestRender:
         rendered = _render(_state(), notes)
 
         assert rendered["training"]["quantization"] == "4bit"
-        assert notes == ["sft quantization auto: 4bit (parameter count unknown)"]
+        assert notes == ["sft quantization auto: 4bit (parameter count unknown)", UNMEASURED]
 
     def test_the_rendered_config_never_says_auto(self, cwd, decide):
         decide.install(500_000_000, 8 * GIB)
@@ -594,7 +601,7 @@ class TestRender:
         rendered = _render(_state(sft_recipe={"quantization": value}), notes)
 
         assert rendered["training"]["quantization"] == value
-        assert notes == []
+        assert notes == [UNMEASURED]
         assert decide.calls == {"params": 0, "free": 0}
 
     @pytest.mark.parametrize("method", ["dpo", "kto"])
@@ -605,7 +612,7 @@ class TestRender:
         rendered = _render(_state(train_method=method), notes)
 
         assert "quantization" not in rendered["training"]
-        assert notes == []
+        assert notes == [UNMEASURED]
         assert decide.calls == {"params": 0, "free": 0}
 
     def test_a_local_model_directory_is_sized_from_its_headers(self, cwd, monkeypatch):
@@ -646,7 +653,9 @@ class TestTrainStage:
         out, configs = self._run(cwd, monkeypatch, _state())
 
         assert out["skipped"] is False, out
-        assert out["notes"] == "sft quantization auto: none (need 4.7 GB, free 8.0 GB)"
+        assert out["notes"] == (
+            "sft quantization auto: none (need 4.7 GB, free 8.0 GB); " + UNMEASURED
+        )
         (config,) = configs
         assert config["training"]["quantization"] == "none"
         SoupConfig(**config)
@@ -660,7 +669,7 @@ class TestTrainStage:
         # the quantization note stays first; the failure (decision S3: the exit code) follows
         assert out["notes"] == (
             "sft quantization auto: none (need 4.7 GB, free 8.0 GB); "
-            "train failed (exit code 1)"
+            + UNMEASURED + "; train failed (exit code 1)"
         )
 
     def test_the_measurement_comes_after_the_skip_checks(self, cwd, monkeypatch, decide):
@@ -679,7 +688,7 @@ class TestTrainStage:
             cwd, monkeypatch, _state(sft_recipe={"quantization": "4bit"})
         )
 
-        assert "notes" not in out
+        assert out["notes"] == UNMEASURED  # no quantization note: the value was explicit
         assert configs[0]["training"]["quantization"] == "4bit"
 
 

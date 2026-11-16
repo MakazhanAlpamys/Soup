@@ -739,12 +739,23 @@ def _render_train_yaml(
         # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
         # and the config is refused (#1420).
         training = {"epochs": 1, "batch_size": 2 if method == "kto" else 1, "lr": 5.0e-5}
+    data: dict = {"train": data_path, "format": _TRAIN_FORMAT[method], "val_split": 0}
+    # data.max_length from the rows just built: soup train's fit gate prices every row of a
+    # micro-batch at that length, and the schema default (2048) made it refuse a 0.6B model on
+    # 26 rows of 25 tokens on an 8 GB card (review 5, F1). Unmeasurable: the default stays.
+    from soup_cli.utils.loop_max_length import decide_max_length
+
+    length = decide_max_length(base, data_path, method)
+    if length.value is not None:
+        data["max_length"] = length.value
+    if notes is not None:
+        notes.append(length.note)
     config = {
         "base": base,
         "task": method,
         # val_split 0: a one- or two-row harvest would otherwise lose its only
         # training rows to the schema default 0.1 (#1909).
-        "data": {"train": data_path, "format": _TRAIN_FORMAT[method], "val_split": 0},
+        "data": data,
         "training": training,
         "output": output_dir,
     }

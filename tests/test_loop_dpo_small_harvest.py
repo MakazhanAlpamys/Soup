@@ -18,6 +18,13 @@ import yaml
 import soup_cli.utils.loop_stages as ls
 from soup_cli.utils.paths import quote_path
 
+#: What the train stage notes when the suite's stub tokenizer child "cannot measure"
+#: (tests/conftest.py ``_no_loop_tokenizer_child``): the schema default stays.
+UNMEASURED = (
+    "max_length: 2048 kept, the longest row could not be measured "
+    "(no tokenizer is loaded in a test)"
+)
+
 
 @pytest.fixture
 def cwd(tmp_path, monkeypatch):
@@ -183,7 +190,7 @@ def test_one_or_two_pairs_reach_training_with_val_split_zero(cwd, monkeypatch, s
     assert runner.config()["data"]["val_split"] == 0
     assert record.pairs_harvested == n
     assert record.run_id is not None
-    assert record.notes == ""
+    assert record.notes == UNMEASURED
 
 
 def test_the_training_note_sits_next_to_the_deploy_note(cwd, monkeypatch):
@@ -274,7 +281,7 @@ def test_a_raising_train_subprocess_keeps_its_return_shape(cwd, monkeypatch):
     # decision S3: a failed run is ``failed`` with skipped False, not a skip
     assert out["run_id"] is None and out["skipped"] is False and out["adapter_path"] is None
     assert out["failed"] is True
-    assert out["notes"] == "train failed: OSError"
+    assert out["notes"] == f"{UNMEASURED}; train failed: OSError"
     assert "no_preference_pairs" not in str(out.get("notes", ""))
 
 

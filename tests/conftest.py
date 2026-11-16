@@ -220,6 +220,25 @@ def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_loop_tokenizer_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``data.max_length`` measurement from starting a tokenizer child.
+
+    The sft / dpo / kto train stage measures the longest row of the dataset it built with the
+    base model's tokenizer, in a short-lived child that imports transformers (and torch) and
+    may reach the Hub (``utils/loop_max_length.py``). Left alone every test that renders the
+    recipe would pay seconds for it and depend on the network. The measurement answers "could
+    not measure" here, which leaves the schema default in the recipe; a test of the
+    measurement patches ``_measure_in_child`` itself.
+    """
+    from soup_cli.utils import loop_max_length
+
+    def refuse(base: str, data_path: str, method: str):
+        raise loop_max_length.MeasureFailedError("no tokenizer is loaded in a test")
+
+    monkeypatch.setattr(loop_max_length, "_measure_in_child", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_windows_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep layer streaming's Windows commit pre-flight off this machine's real counters.
 
