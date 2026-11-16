@@ -163,7 +163,7 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
         calls=("urllib.request.build_opener",),
         gate=None,
         reason=(
-            "fixed host: _API_BASE is hardcoded to https://rest.runpod.io/v1; "
+            "fixed host: _API_BASE is hardcoded to https://api.runpod.io/v2; "
             "the standalone controller refuses redirects and caps response reads"
         ),
     ),
