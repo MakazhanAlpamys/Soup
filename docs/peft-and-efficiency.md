@@ -636,10 +636,11 @@ training:
   curriculum_buckets: 4        # Number of difficulty stages
 ```
 
-Only SFT sorts and orders the rows (`task: sft`, and `tts`, which trains through the SFT
-trainer). Other tasks, such as DPO, KTO, `reward_model` and pretrain, accept `curriculum`
-and, with `curriculum_dynamic`, attach its telemetry callback, but do not sort: their rows
-keep the usual shuffled order.
+Only SFT sorts and orders the rows: `task: sft` (and `tts`, which trains through the SFT
+trainer) on `backend: transformers` or `unsloth`. Other tasks, such as DPO, KTO,
+`reward_model` and pretrain, accept `curriculum` and, with `curriculum_dynamic`, attach its
+telemetry callback, but do not sort, and neither does SFT on `backend: mlx`: their rows keep
+the usual shuffled order.
 
 The SFT trainer sorts the rows by length (`perplexity` and `loss` fall back to length) and
 reads them in that order instead of shuffling them, so each epoch runs from the shortest row
