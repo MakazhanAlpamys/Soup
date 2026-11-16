@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Peak VRAM of resident ``task: distill`` steps, for the estimate's teacher and KD terms.
 
-#ISSUE: the VRAM estimate (``utils/vram_estimate.py``) priced a token-level distillation
+#2909: the VRAM estimate (``utils/vram_estimate.py``) priced a token-level distillation
 run as a plain LoRA step on the student. The frozen teacher, its logits and the fp32
 divergence over the vocabulary were not counted. This harness measures what a distill
-step really holds: one real ``soup train`` setup (``DistillTrainerWrapper.setup``) and
+run really holds: one real ``soup train`` setup (``DistillTrainerWrapper.setup``) and
 ``STEPS`` training steps per row, with ``torch.cuda.max_memory_allocated()`` read over
-them, the same protocol as ``vram_estimate_calibration.py`` (#2049).
+each, the same protocol as ``vram_estimate_calibration.py`` (#2049).
 
 Each row runs in a fresh process; the parent only spawns and collects.
 
@@ -21,16 +21,27 @@ A row is a JSON object::
      "batch": 1, "kernel": "dense" | "checkpoint", "chunk": 128,
      "divergence": "forward_kl", "gradient_checkpointing": true, "lora_r": 8}
 
-``kernel: dense`` is the shipped default (``distill_chunk_size`` unset,
-``distill_checkpoint: false``); ``checkpoint`` sets ``distill_checkpoint: true`` and
-``distill_chunk_size: chunk``. The two models must share a tokenizer (token-level KD).
+``kernel: dense`` is the shipped default (``distill_checkpoint: false``); ``checkpoint``
+sets ``distill_checkpoint: true``. ``chunk`` is ``distill_chunk_size``: ``null`` leaves
+it unset, so the divergence runs as one chunk. Without the key a ``checkpoint`` row uses
+128, as every row recorded before the key could be ``null`` did, and a ``dense`` row
+leaves it unset. ``"mode": "sequence"`` is ``distill_mode: sequence``: the teacher
+generates each row's answer during setup and is freed, and the steps train on that text;
+its rows ask for a long answer, and ``"prompt_words": n`` puts ``n`` words before the
+question, so that prompt and answer fill a ``seq`` longer than the generation budget.
+The two models must share a tokenizer (token-level KD).
 
 What each result line holds
 ---------------------------
 - ``realised`` / ``realised_batch``: the collated batch's shape; a row whose shape is
   not ``seq`` x ``batch`` is void.
+- ``setup_peak_allocated``: ``max_memory_allocated()`` over the setup, which loads both
+  models and, with ``distill_mode: sequence``, runs the teacher's generation.
+- ``generation_lengths``: with ``distill_mode: sequence``, each ``generate`` call's
+  prompt length and total length in teacher tokens.
 - ``peak_allocated`` / ``peak_reserved``: over the steps, after ``reset_peak_memory_stats``.
-- ``before_step_allocated``: student, adapters and teacher, before the first step.
+- ``before_step_allocated``: student, adapters and teacher, before the first step (the
+  student and adapters alone with ``distill_mode: sequence``, whose teacher is freed).
 - ``supervised``: the causal targets (``labels[1:] != -100``) per row.
 - ``student`` / ``teacher``: the ``config.json`` fields the estimate reads and the exact
   parameter count from the safetensors headers.
@@ -62,6 +73,10 @@ STEPS = 2
 
 RESULT_PREFIX = "VRAM_DISTILL_RESULT "
 
+#: The prompt of a ``distill_mode: sequence`` row: an instruct teacher answers it at the
+#: full generation budget (``min(max_length, 256)`` new tokens), and so does a random one.
+SEQUENCE_PROMPT = "Write a detailed essay of 2,000 words on the history of the Roman Empire."
+
 
 def _calibration_helpers() -> Any:
     """``model_facts`` and ``stack`` from the #2049 harness next to this file."""
@@ -77,11 +92,13 @@ def _calibration_helpers() -> Any:
 def config_doc(row: dict, work_dir: pathlib.Path) -> dict:
     lora_r = int(row.get("lora_r", 8))
     checkpointed = row.get("kernel", "dense") == "checkpoint"
+    chunk = row.get("chunk", 128 if checkpointed else None)
     training: dict[str, Any] = {
         "teacher_model": row["teacher"],
+        "distill_mode": row.get("mode", "token"),
         "distill_divergence": row.get("divergence", "forward_kl"),
         "distill_temperature": 2.0,
-        "distill_chunk_size": int(row.get("chunk", 128)) if checkpointed else None,
+        "distill_chunk_size": None if chunk is None else int(chunk),
         "distill_checkpoint": checkpointed,
         "batch_size": int(row["batch"]),
         "gradient_accumulation_steps": 1,
@@ -112,11 +129,16 @@ def config_doc(row: dict, work_dir: pathlib.Path) -> dict:
     }
 
 
-def rows_for(seq: int, batch: int) -> list[dict]:
-    body = "word " * (seq * OVERSHOOT)
-    message = {"role": "assistant", "content": body}
+def rows_for(seq: int, batch: int, mode: str = "token", prompt_words: int = 0) -> list[dict]:
+    if mode == "sequence":
+        # The teacher writes the answer; the one here is dropped. ``prompt_words`` lengthens
+        # the prompt, so a row longer than the generation budget is filled too.
+        user, answer = "word " * prompt_words + SEQUENCE_PROMPT, "ok"
+    else:
+        user, answer = "hi", "word " * (seq * OVERSHOOT)
     return [
-        {"messages": [{"role": "user", "content": "hi"}, message]}
+        {"messages": [{"role": "user", "content": user},
+                      {"role": "assistant", "content": answer}]}
         for _ in range(batch * STEPS)
     ]
 
@@ -129,6 +151,22 @@ def estimate_terms(cfg: Any) -> dict:
         return {"unavailable": inp.reason}
     est = estimate_peak_vram_gb(inp).estimate
     return {"terms": dict(est.terms), "total": est.total_bytes}
+
+
+def _record_generation_lengths() -> list:
+    """Each ``generate`` call's ``[prompt tokens, total tokens]``, appended as it returns."""
+    from transformers import GenerationMixin
+
+    lengths: list = []
+    original = GenerationMixin.generate
+
+    def generate(self: Any, *args: Any, **kwargs: Any) -> Any:
+        out = original(self, *args, **kwargs)
+        lengths.append([int(kwargs["input_ids"].shape[-1]), int(out.shape[-1])])
+        return out
+
+    GenerationMixin.generate = generate
+    return lengths
 
 
 def run_row(row: dict) -> dict:
@@ -150,17 +188,23 @@ def run_row(row: dict) -> dict:
     }
     free, total = torch.cuda.mem_get_info()
     result["free_before"], result["total"] = int(free), int(total)
+    mode = row.get("mode", "token")
     with tempfile.TemporaryDirectory(prefix="vram_estimate_distill_") as tmp:
         work_dir = pathlib.Path(tmp)
-        data = rows_for(int(row["seq"]), int(row["batch"]))
+        data = rows_for(int(row["seq"]), int(row["batch"]), mode, int(row.get("prompt_words", 0)))
         (work_dir / "d.jsonl").write_text(
             "\n".join(json.dumps(r) for r in data), encoding="utf-8"
         )
         (work_dir / "out").mkdir()
         cfg = load_config_from_string(yaml.safe_dump(config_doc(row, work_dir)))
         result["estimate"] = estimate_terms(cfg)
+        lengths = _record_generation_lengths() if mode == "sequence" else None
         wrapper = DistillTrainerWrapper(cfg, device="cuda")
+        torch.cuda.reset_peak_memory_stats()
         wrapper.setup({"train": data})
+        result["setup_peak_allocated"] = int(torch.cuda.max_memory_allocated())
+        if lengths is not None:
+            result["generation_lengths"] = lengths
         trainer = wrapper.trainer
         batch = next(iter(trainer.get_train_dataloader()))
         result["realised"] = int(batch["input_ids"].shape[-1])
@@ -213,8 +257,9 @@ def run_all(rows: list[dict], out: pathlib.Path) -> int:
             sink.flush()
             peak = result.get("peak_allocated")
             shown = "OOM" if result.get("oom") else f"{peak / 1e9:.3f} GB"
+            setup = result["setup_peak_allocated"] / 1e9
             void = " VOID" if result.get("void") else ""
-            print(f"[{index}] {shown}{void}  {json.dumps(row)}", flush=True)
+            print(f"[{index}] {shown} (setup {setup:.3f} GB){void}  {json.dumps(row)}", flush=True)
     return 1 if failures else 0
 
 

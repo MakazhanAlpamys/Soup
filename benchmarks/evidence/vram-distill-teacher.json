@@ -1409,5 +1409,1565 @@
   "peak_reserved": 2625634304,
   "oom": false,
   "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 2857370,
+    "logits": 466747392,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 527538786
+   },
+   "total": 1078314492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 256,
+  "realised_batch": 1,
+  "supervised": [
+   250
+  ],
+  "steps": 2,
+  "before_step_allocated": 161950720,
+  "loss": 5.600836753845215,
+  "peak_allocated": 1944561664,
+  "peak_reserved": 2128609280,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.613779067993164,
+  "peak_allocated": 3738561024,
+  "peak_reserved": 3768582144,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 768,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 8572109,
+    "logits": 1400242176,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 574499262
+   },
+   "total": 2064484491
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 768,
+  "realised_batch": 1,
+  "supervised": [
+   762
+  ],
+  "steps": 2,
+  "before_step_allocated": 161963008,
+  "loss": 5.620029926300049,
+  "peak_allocated": 5527185408,
+  "peak_reserved": 5555355648,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 2,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 256,
+  "realised_batch": 2,
+  "supervised": [
+   250,
+   250
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.600708961486816,
+  "peak_allocated": 4019527680,
+  "peak_reserved": 4357881856,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "js"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.6137800216674805,
+  "peak_allocated": 4355124224,
+  "peak_reserved": 4385144832,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "reverse_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.613779067993164,
+  "peak_allocated": 3738561024,
+  "peak_reserved": 3768582144,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 2,
+   "kernel": "checkpoint",
+   "chunk": null,
+   "divergence": "js"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 256,
+  "realised_batch": 2,
+  "supervised": [
+   250,
+   250
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.600709915161133,
+  "peak_allocated": 4627702272,
+  "peak_reserved": 4966055936,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 1024,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": 512,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 11429479,
+    "logits": 1866989568,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 597979500
+   },
+   "total": 2557569491
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 1024,
+  "realised_batch": 1,
+  "supervised": [
+   1018
+  ],
+  "steps": 2,
+  "before_step_allocated": 161969152,
+  "loss": 5.623312473297119,
+  "peak_allocated": 5777047552,
+  "peak_reserved": 5813305344,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 1024,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": 512,
+   "divergence": "js"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 11429479,
+    "logits": 1866989568,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 597979500
+   },
+   "total": 2557569491
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 1024,
+  "realised_batch": 1,
+  "supervised": [
+   1018
+  ],
+  "steps": 2,
+  "before_step_allocated": 161969152,
+  "loss": 5.6233134269714355,
+  "peak_allocated": 6399377920,
+  "peak_reserved": 6438256640,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "checkpoint",
+   "chunk": 32,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.613779067993164,
+  "peak_allocated": 2294393856,
+  "peak_reserved": 2332033024,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "dense",
+   "chunk": 128,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.613779067993164,
+  "peak_allocated": 3034626048,
+  "peak_reserved": 3095396352,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "Qwen/Qwen2.5-1.5B-Instruct",
+   "seq": 256,
+   "batch": 1,
+   "mode": "sequence"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 1536,
+   "intermediate_size": 8960,
+   "num_hidden_layers": 28,
+   "num_attention_heads": 12,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "torch_dtype": "bfloat16",
+   "params": 1543714304,
+   "model": "Qwen/Qwen2.5-1.5B-Instruct",
+   "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 2857370,
+    "logits": 466747392,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 527538786
+   },
+   "total": 1078314492
+  },
+  "setup_peak_allocated": 3188862464,
+  "generation_lengths": [
+   [
+    49,
+    305
+   ],
+   [
+    49,
+    305
+   ]
+  ],
+  "realised": 256,
+  "realised_batch": 1,
+  "supervised": [
+   231
+  ],
+  "steps": 2,
+  "before_step_allocated": 90575360,
+  "loss": 11.973584175109863,
+  "peak_allocated": 565785088,
+  "peak_reserved": 3175088128,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 1,
+   "mode": "sequence"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 2857370,
+    "logits": 466747392,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 527538786
+   },
+   "total": 1078314492
+  },
+  "setup_peak_allocated": 173361152,
+  "generation_lengths": [
+   [
+    49,
+    305
+   ],
+   [
+    49,
+    305
+   ]
+  ],
+  "realised": 256,
+  "realised_batch": 1,
+  "supervised": [
+   231
+  ],
+  "steps": 2,
+  "before_step_allocated": 90575360,
+  "loss": 10.350759506225586,
+  "peak_allocated": 566214144,
+  "peak_reserved": 815792128,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "mode": "sequence",
+   "prompt_words": 400
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 175101440,
+  "generation_lengths": [
+   [
+    449,
+    705
+   ],
+   [
+    449,
+    705
+   ]
+  ],
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   87
+  ],
+  "steps": 2,
+  "before_step_allocated": 90581504,
+  "loss": 9.69697380065918,
+  "peak_allocated": 1033137664,
+  "peak_reserved": 1212153856,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "Qwen/Qwen2.5-1.5B-Instruct",
+   "seq": 512,
+   "batch": 1,
+   "mode": "sequence",
+   "prompt_words": 400
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 1536,
+   "intermediate_size": 8960,
+   "num_hidden_layers": 28,
+   "num_attention_heads": 12,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "torch_dtype": "bfloat16",
+   "params": 1543714304,
+   "model": "Qwen/Qwen2.5-1.5B-Instruct",
+   "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 3221304320,
+  "generation_lengths": [
+   [
+    449,
+    705
+   ],
+   [
+    449,
+    705
+   ]
+  ],
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   87
+  ],
+  "steps": 2,
+  "before_step_allocated": 90581504,
+  "loss": 11.297380447387695,
+  "peak_allocated": 1033137664,
+  "peak_reserved": 3181379584,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 1024,
+   "batch": 1,
+   "kernel": "dense",
+   "chunk": 512,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 11429479,
+    "logits": 1866989568,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 597979500
+   },
+   "total": 2557569491
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 1024,
+  "realised_batch": 1,
+  "supervised": [
+   1018
+  ],
+  "steps": 2,
+  "before_step_allocated": 161969152,
+  "loss": 5.623312473297119,
+  "peak_allocated": 6382671360,
+  "peak_reserved": 6429868032,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "dense",
+   "chunk": 32,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.613779067993164,
+  "peak_allocated": 2861547520,
+  "peak_reserved": 2952790016,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 512,
+   "batch": 1,
+   "kernel": "dense",
+   "chunk": 128,
+   "divergence": "js"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 512,
+  "realised_batch": 1,
+  "supervised": [
+   506
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.6137800216674805,
+  "peak_allocated": 3957181952,
+  "peak_reserved": 4039114752,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 2,
+   "kernel": "dense",
+   "chunk": 128,
+   "divergence": "forward_kl"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15599927296,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 256,
+  "realised_batch": 2,
+  "supervised": [
+   250,
+   250
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.600708961486816,
+  "peak_allocated": 3319941632,
+  "peak_reserved": 3697278976,
+  "oom": false,
+  "void": false
+ },
+ {
+  "run": {
+   "student": "tiny-qwen2",
+   "teacher": "tiny-qwen2",
+   "seq": 256,
+   "batch": 2,
+   "kernel": "dense",
+   "chunk": 128,
+   "divergence": "js"
+  },
+  "stack": {
+   "torch": "2.11.0+cu130",
+   "transformers": "5.16.1",
+   "trl": "0.29.1",
+   "peft": "0.20.0",
+   "bitsandbytes": "0.50.2",
+   "accelerate": "1.14.0",
+   "cuda": "13.0",
+   "device": "NVIDIA RTX PRO 5000 Blackwell"
+  },
+  "student": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "teacher": {
+   "model_type": "qwen2",
+   "hidden_size": 256,
+   "intermediate_size": 768,
+   "num_hidden_layers": 2,
+   "num_attention_heads": 4,
+   "num_key_value_heads": 2,
+   "vocab_size": 151936,
+   "tie_word_embeddings": true,
+   "dtype": "bfloat16",
+   "params": 40470784,
+   "model": "tiny-qwen2"
+  },
+  "free_before": 15212085248,
+  "total": 50752520192,
+  "estimate_on_main": {
+   "terms": {
+    "weights": 80941568,
+    "adapters": 57344,
+    "gradients": 57344,
+    "optimizer": 114688,
+    "activations": 5714740,
+    "logits": 933494784,
+    "dequant": 0,
+    "optimizer_step": 0,
+    "overhead": 551019024
+   },
+   "total": 1571399492
+  },
+  "setup_peak_allocated": 161944576,
+  "realised": 256,
+  "realised_batch": 2,
+  "supervised": [
+   250,
+   250
+  ],
+  "steps": 2,
+  "before_step_allocated": 161956864,
+  "loss": 5.600709915161133,
+  "peak_allocated": 4233972736,
+  "peak_reserved": 4628414464,
+  "oom": false,
+  "void": false
  }
 ]
