@@ -446,8 +446,12 @@ class TestItReachesTheWireNotJustTheDataclass:
 
         # Every field populated with a distinct non-None value, so nothing is
         # omitted by the None-filter rather than by the tuple.
+        # The three string fields take a valid string; `kind` is an enum (train / eval /
+        # summary) and is validated, so a number there is refused -- it stays in this
+        # contract rather than being exempted from it.
+        strings = {"type": "metric", "message": "m", "kind": "eval"}
         populated = {
-            name: ("metric" if name == "type" else "m" if name == "message" else float(i + 1))
+            name: strings[name] if name in strings else float(i + 1)
             for i, name in enumerate(TrainEvent.__dataclass_fields__)
         }
         populated["step"] = 7

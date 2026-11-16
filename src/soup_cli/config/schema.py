@@ -1,10 +1,36 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
+import functools
 import math
 import re
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
+from types import UnionType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+# The warning for the fields no code reads (#1814) and the release that refuses them,
+# which their descriptions name; deprecation.py imports only the stdlib.
+from soup_cli.config.deprecation import (
+    UNCONSUMED_FIELD_REJECTION_VERSION,
+    warn_unconsumed_field,
+)
 
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
@@ -32,9 +58,32 @@ from soup_cli.utils.config_bounds import (
 # The longrope refusal (#1239) lives with the runtime so config load and
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
+from soup_cli.utils.preference import resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
+
+
+def _type_error_as_value_error(validator: Callable[..., Any]) -> Callable[..., Any]:
+    """#2366 — let a field validator's ``TypeError`` reach Pydantic as a ``ValueError``.
+
+    Pydantic turns a ``ValueError`` raised in a validator into a
+    ``ValidationError`` that names the field; it lets a ``TypeError`` escape
+    ``SoupConfig(...)`` unchanged. Several validators raise ``TypeError`` for a
+    wrong-typed value, directly or through a shared helper that keeps raising
+    it for its other callers, so the conversion happens here, on the schema
+    callback. ``functools.wraps`` keeps the signature Pydantic inspects to
+    decide whether the validator takes ``info``.
+    """
+
+    @functools.wraps(validator)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return validator(*args, **kwargs)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    return wrapper
 
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
@@ -69,7 +118,136 @@ _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
 _LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
+def _is_scalar_numeric_annotation(annotation: Any) -> bool:
+    """Whether an annotation represents a scalar int/float, including unions."""
+    if annotation in (int, float):
+        return True
+    if get_origin(annotation) in (Union, UnionType):
+        return any(
+            _is_scalar_numeric_annotation(member)
+            for member in get_args(annotation)
+        )
+    return False
+
+
+def _scalar_numeric_types(annotation: Any) -> set[type]:
+    """Return scalar numeric types accepted by an annotation."""
+    if annotation in (int, float):
+        return {annotation}
+    if get_origin(annotation) in (Union, UnionType):
+        result: set[type] = set()
+        for member in get_args(annotation):
+            result.update(_scalar_numeric_types(member))
+        return result
+    return set()
+
+
+def _annotation_accepts_bool(annotation: Any) -> bool:
+    """Whether an annotation explicitly permits bool, including bool literals."""
+    if annotation is bool:
+        return True
+
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return any(type(value) is bool for value in get_args(annotation))
+
+    if origin in (Union, UnionType):
+        return any(
+            _annotation_accepts_bool(member)
+            for member in get_args(annotation)
+        )
+
+    return False
+
+
+def _reject_boolean_numeric_field(
+    model: type[BaseModel],
+    field_name: str,
+    value: Any,
+    *,
+    exempt_fields: frozenset[str] = frozenset(),
+) -> Any:
+    """Reject bools in scalar numeric fields before Pydantic coercion."""
+    if not isinstance(value, bool) or field_name in exempt_fields:
+        return value
+
+    field = model.model_fields.get(field_name)
+    if field is None:
+        return value
+
+    annotation = field.annotation
+    if (
+        _is_scalar_numeric_annotation(annotation)
+        and not _annotation_accepts_bool(annotation)
+    ):
+        if _scalar_numeric_types(annotation) == {int}:
+            raise ValueError(f"{field_name} must be an int, not a bool")
+        raise ValueError(f"{field_name} must be a number, not a bool")
+
+    return value
+
+
+_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "seed",
+    "data_seed",
+    "expand_layers",
+    "freeze_trainable_layers",
+    "eval_steps",
+    "grpo_beta",
+    "grpo_judge_max_tokens",
+    "grpo_judge_max_calls",
+    "grpo_judge_max_failure_rate",
+    "reward_hack_dwell_steps",
+    "reward_hack_release_patience",
+    "reward_hack_rollback_patience",
+    "reward_hack_max_recovery_attempts",
+    "reward_hack_smoothing_window",
+    "reward_hack_beta_floor",
+    "reward_hack_beta_ceil",
+    "reward_hack_trip_band",
+    "reward_hack_release_band",
+    "reward_hack_kl_gain",
+    "reward_hack_pid_kp",
+    "reward_hack_pid_ki",
+    "reward_hack_pid_kd",
+    "reward_hack_signal_target",
+    "reward_hack_integral_clamp",
+    "reward_hack_shaping_strength",
+    "minillm_rollout_length",
+    "mole_top_k",
+    "mole_temperature",
+    "distill_chunk_size",
+    "distill_temperature",
+    "mod_capacity_factor",
+    "ebft_temperature",
+    "num_labels",
+    "lisa_num_layers",
+    "lisa_interval_steps",
+    "stream_buffers",
+    "stream_read_ahead",
+    "stream_vram_override",
+    "stream_loss_chunk",
+    "unlearn_alpha",
+    "ref_model_ema_alpha",
+    "tis_threshold",
+    "off_policy_mask_threshold",
+    "replay_buffer_size",
+    "grpo_delta",
+    "yarn_factor",
+    "yarn_attn_factor",
+    "yarn_beta_fast",
+    "yarn_beta_slow",
+    "citation_recall_threshold",
+    "grace_codebook_size",
+    "grace_codebook_dim",
+})
+
 class LoraConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
     # adapter is applied and the base weights train directly. It is the
     # spelling `trainer/classifier.py` has read as "no adapter" since
@@ -1108,12 +1286,24 @@ class EvalGateConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | 'previous' | file path - scores to compare against",
+        description="registry://<id> | file path - scores to compare against",
     )
     on_regression: Literal["stop", "warn", "continue"] = Field(
         default="stop",
         description="Action on regression: stop training | warn only | continue",
     )
+
+    @field_validator("baseline")
+    @classmethod
+    def _refuse_previous_baseline(cls, value: Optional[str]) -> Optional[str]:
+        # 'previous' was documented but never implemented: resolve_baseline read
+        # it as a file named 'previous' and the gate ran with no baseline (#2523).
+        if isinstance(value, str) and value.strip().lower() == "previous":
+            raise ValueError(
+                "training.eval_gate.baseline: 'previous' is not implemented; "
+                "use a path to a baseline results file"
+            )
+        return value
 
     @model_validator(mode="after")
     def _require_suite_when_enabled(self) -> "EvalGateConfig":
@@ -1125,6 +1315,16 @@ class EvalGateConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
+
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
     batch_size: Union[int, Literal["auto"]] = Field(
@@ -1849,10 +2049,10 @@ class TrainingConfig(BaseModel):
     vllm_sleep_mode: bool = Field(
         default=False,
         description=(
-            "Enable vLLM sleep/standby between rollouts (memory savings "
-            "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
-            "runtimes by the GRPO trainer."
+            "vLLM sleep/standby between rollouts. Has no effect in this "
+            "version: GRPO does not use a vLLM server for rollouts, so there "
+            "is no engine to put to sleep. Refused at load as of v0.78.0 when set "
+            "to true."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -2658,12 +2858,13 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_reward_hack_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_reward_hack_bool_fields(cls, v, info: ValidationInfo):
         """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
         if v is None or isinstance(v, bool):
             return v
         raise TypeError(
-            f"reward-hack bool flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2718,6 +2919,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reward_hack_halt", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reward_hack_halt(cls, v):
         """v0.70.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
@@ -2737,14 +2939,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_echo_trap_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_echo_trap_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part F — bool guards for echo-trap toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 echo-trap flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2754,14 +2957,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_rl_checkpoint_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_rl_checkpoint_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part D — bool guards for RL-checkpoint toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 RL-checkpoint flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2771,14 +2975,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_minillm_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_minillm_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("minillm_pretrain_anchor_path")
@@ -2796,6 +3001,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("minillm_rollout_length", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_minillm_rollout_length(cls, v):
         """v0.71.18 #257 — reject bool before Pydantic coerces True->1."""
         if v is None:
@@ -2815,7 +3021,8 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_v053_bool_fields(cls, v):
+    @_type_error_as_value_error
+    def _validate_v053_bool_fields(cls, v, info: ValidationInfo):
         """v0.53.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
 
@@ -2828,11 +3035,12 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.53.0 flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("kv_cache_type", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_kv_cache_type(cls, v):
         """v0.53.0 Part C — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -2861,6 +3069,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_divergence", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_distill_divergence(cls, v):
         """v0.52.0 Part C — canonicalise ``kl`` → ``forward_kl``.
 
@@ -2876,6 +3085,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_temperature(cls, v):
         """v0.52.0 Part C — bool/NaN-rejected float in [0.05, 100]."""
         if v is None:
@@ -2886,6 +3096,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_mode", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_mode(cls, v):
         """v0.71.12 #145 — canonicalise + reject unknown distill modes."""
         if v is None:
@@ -2926,6 +3137,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_mod_capacity_factor(cls, v):
         """v0.71.12 #84 — bool-before-float guard (bool subclasses int)."""
         if v is None:
@@ -2936,6 +3148,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ebft_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ebft_temperature(cls, v):
         """v0.52.0 Part E — bool/NaN-rejected float in [1e-4, 100]."""
         if v is None:
@@ -3048,6 +3261,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("num_labels", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_num_labels(cls, v):
         """v0.52.0 Part B (security review fix) — bool-before-int guard.
 
@@ -3064,6 +3278,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reasoning_effort", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reasoning_effort(cls, v):
         """v0.52.0 Part G (security review fix) — canonicalise case +
         bool/null-byte/oversize rejection via the shared helper.
@@ -3101,6 +3316,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("hub", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_hub(cls, v):
         """v0.51.0 Part E review fix — accept any case (HF / Modelscope /
         MODELERS) and normalise to lowercase before the Literal check.
@@ -3220,8 +3436,9 @@ class TrainingConfig(BaseModel):
             "RoPE scaling method for long-context: linear, dynamic, yarn or llama3 "
             "(v0.49.0). 'longrope' is refused at config load (#1239). Applied by "
             "task sft, tts and pretrain on backend: transformers (sft: the text "
-            "path without layer streaming); refused at config load anywhere else "
-            "(#1697)."
+            "path without layer streaming); on backend: mlx, task sft text supports "
+            "rope_scaling_type: linear with quantization: none (#1995); refused at "
+            "config load anywhere else (#1697)."
         ),
     )
     # v0.49.0 Part A — YaRN-specific tunables (only meaningful when
@@ -3507,14 +3724,33 @@ class TrainingConfig(BaseModel):
             "relative range threshold below which the window is a plateau"
         ),
     )
-    # Warmup auto-schedule (v0.32.0 Part D) — reuses pre-existing warmup_ratio.
+    # Warmup auto-schedule (v0.32.0 Part D): no trainer ever read it (#1814).
     warmup_auto: bool = Field(
         default=False,
         description=(
-            "Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. "
-            "Overrides any manual warmup_steps in the trainer."
+            "Deprecated, no effect: no trainer reads it, and warmup_ratio already sets "
+            "the warmup over the real optimizer steps. Setting it to true warns at load; "
+            f"refused as of v{UNCONSUMED_FIELD_REJECTION_VERSION}."
         ),
     )
+
+    @field_validator("warmup_auto", mode="after")
+    @classmethod
+    def _warn_warmup_auto_has_no_effect(cls, value: bool) -> bool:
+        """#1814: ``true`` never reached a trainer; load it, unchanged, with a warning.
+
+        ``false`` is the default and what Soup's own config dumps write, so it stays
+        silent. The release that refuses ``true`` is named in ``config/deprecation.py``.
+        """
+        if value:
+            warn_unconsumed_field(
+                "training.warmup_auto: true",
+                "no trainer reads it, and training.warmup_ratio already sets the "
+                "warmup over the real optimizer steps",
+                "Remove the line.",
+            )
+        return value
+
     # Auto mixed-precision (v0.32.0 Part C); refused on every task outside
     # AMP_APPLYING_TASKS since #1618 — only the SFT trainer reads it.
     auto_mixed_precision: bool = Field(
@@ -3546,7 +3782,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3556,7 +3792,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
-            "transformers and no layer streaming; refused everywhere else."
+            "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -3681,10 +3917,11 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
-            "model larger than VRAM can be fine-tuned. sft + transformers + "
-            "text + quantization=none only; batch_size 1, no gradient "
-            "accumulation. Slower than resident training, but these models did "
-            "not run on the card at all."
+            "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
+            "simpo and kto, including task='preference' with a single "
+            "preference_loss of dpo, orpo or simpo. Requires transformers + "
+            "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
+            "IPO, BCO and preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -3996,10 +4233,29 @@ class TrainingConfig(BaseModel):
     forgetting_threshold: float = Field(
         default=0.10, ge=0.01, le=0.50,
         description=(
-            "Staged, not enforced during training: warn if accuracy drops beyond "
-            "this threshold (0.01-0.50)"
+            "Deprecated, no effect: nothing reads it (soup ship reads "
+            "eval.ship.forgetting_threshold). Setting it away from the default warns "
+            f"at load; refused as of v{UNCONSUMED_FIELD_REJECTION_VERSION}."
         ),
     )
+
+    @field_validator("forgetting_threshold", mode="after")
+    @classmethod
+    def _warn_forgetting_threshold_has_no_effect(cls, value: float) -> float:
+        """#1814: no check during training reads it; load it, unchanged, with a warning.
+
+        The default is silent, as for the staged fields: a config Soup dumped carries
+        it. ``eval.ship.forgetting_threshold`` is another field, read by ``soup ship``.
+        """
+        if value != cls.model_fields["forgetting_threshold"].default:
+            warn_unconsumed_field(
+                f"training.forgetting_threshold: {value!r}",
+                "nothing reads it, and no check during training uses it",
+                "Remove the line. For regression checks use `soup train --gate "
+                "<suite.yaml>`; `soup ship` reads eval.ship.forgetting_threshold.",
+            )
+        return value
+
     forgetting_benchmark: Literal["mini_mmlu", "mini_common_sense", "mini_instruction"] = Field(
         default="mini_mmlu",
         description=(
@@ -4609,6 +4865,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_method", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_method(cls, v):
         """v0.61.0 Part A — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -4626,6 +4883,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_alpha", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_alpha(cls, v):
         """v0.61.0 Part A — bool/NaN/Inf-rejected float bounded [0.0, 10.0]."""
         if v is None:
@@ -4658,6 +4916,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_stage", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_stage(cls, v):
         """v0.62.0 Part B — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4668,6 +4927,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_retriever_model", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_retriever_model(cls, v):
         """v0.62.0 Part B — bool/null-byte/oversize rejection on retriever id."""
         if v is None:
@@ -4705,6 +4965,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_style", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_style(cls, v):
         """v0.62.0 Part D — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4715,6 +4976,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_recall_threshold", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_recall_threshold(cls, v):
         """v0.62.0 Part D — bool/NaN/Inf-rejected float bounded [0.0, 1.0]."""
         if v is None:
@@ -4751,6 +5013,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_size", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_size(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_SIZE."""
         if v is None:
@@ -4761,6 +5024,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_dim", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_dim(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_DIM."""
         if v is None:
@@ -4768,6 +5032,7 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
 
         return validate_grace_codebook_dim(v)
+
 
 
 class ShipConfig(BaseModel):
@@ -5899,6 +6164,15 @@ class SoupConfig(BaseModel):
         if (self.backend == "mlx"
                 and resolve_mlx_task(self.task, self.training.preference_loss) not in MLX_TASKS):
             return self  # _validate_mlx_task_support refuses the task itself
+        if self.backend == "mlx" and self.task == "sft" and self.modality == "text":
+            if self.training.quantization != "none":
+                raise ValueError(
+                    f"{field} is not applied on backend='mlx' with "
+                    f"training.quantization={self.training.quantization!r}: native MLX "
+                    "vocabulary expansion requires unquantized embeddings (quantization='none'). "
+                    "Use quantization: none, or remove it."
+                )
+            return self
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
             "no step that adds tokens",
@@ -6868,7 +7142,7 @@ class SoupConfig(BaseModel):
                 f"training.neftune_alpha={tcfg.neftune_alpha!r} is set, but "
                 f"task={self.task!r} never applies it (any value, including 0.0, "
                 f"is refused). Only tasks in {sorted(NEFTUNE_APPLYING_TASKS)} forward "
-                f"it to ``TrainingArguments.neftune_noise_alpha``. Remove "
+                f"it to TrainingArguments.neftune_noise_alpha. Remove "
                 f"training.neftune_alpha, or use one of those tasks."
             )
         return self
@@ -7171,7 +7445,8 @@ class SoupConfig(BaseModel):
         """#340 — ``lora.r: 0`` = full fine-tuning (no adapter).
 
         The third member of the "LoRA off" family, sharing Spectrum's and
-        LISA's gate: sft + transformers + text + ``quantization='none'``,
+        LISA's gate: sft + transformers + text + ``quantization='none'``.
+        Native MLX text SFT also qualifies dense Llama models (#1992). Both are
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
@@ -7215,7 +7490,8 @@ class SoupConfig(BaseModel):
             # on the meta device, so there is nothing to full fine-tune).
             # Let it speak rather than reporting a quantization mismatch.
             return self
-        if self.backend != "transformers":
+        mlx_full = self.backend == "mlx" and self.task == "sft"
+        if self.backend != "transformers" and not mlx_full:
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
@@ -7249,6 +7525,17 @@ class SoupConfig(BaseModel):
             )
         lcfg = tcfg.lora
         lora_conflicts = []
+        if mlx_full:
+            defaults = LoraConfig()
+            for field in ("alpha", "dropout", "target_modules"):
+                if getattr(lcfg, field) != getattr(defaults, field):
+                    lora_conflicts.append(f"lora.{field}")
+            for field in ("add_new_tokens", "new_special_tokens"):
+                if getattr(self.data, field):
+                    raise ValueError(
+                        f"MLX full fine-tuning does not support data.{field}; "
+                        "vocabulary expansion currently requires LoRA."
+                    )
         if lcfg.use_dora:
             lora_conflicts.append("lora.use_dora")
         if lcfg.use_vera:
@@ -7448,12 +7735,26 @@ class SoupConfig(BaseModel):
                 f"depends on (one weight read per step, not per token), so this "
                 f"is a permanent exclusion rather than an unimplemented one."
             )
-        if self.task not in _STREAM_SUPPORTED_TASKS:
+        if self.task == "preference" and tcfg.preference_loss_weights is not None:
+            raise ValueError(
+                "training.stream_layers cannot be combined with "
+                "training.preference_loss_weights: weighted preference losses do not "
+                "stream yet. Use a single training.preference_loss of dpo, orpo or "
+                "simpo, or set stream_layers=false."
+            )
+        stream_task = resolve_preference_loss(self) or self.task
+        if self.task == "preference" and stream_task in ("ipo", "bco"):
+            raise ValueError(
+                f"training.stream_layers cannot use "
+                f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
+                "Use dpo, orpo or simpo, or set stream_layers=false."
+            )
+        if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
                 f"{sorted(_STREAM_SUPPORTED_TASKS)}; got task={self.task!r}."
             )
-        if tcfg.stream_vram_probe and self.task != "sft":
+        if tcfg.stream_vram_probe and stream_task != "sft":
             # v0.73.1 #349 — the probe runs a plain causal-LM forward+backward,
             # which IS the SFT step. A preference loss concatenates chosen and
             # rejected and reduces logits to per-token log-probs, so the probe is
@@ -7466,30 +7767,30 @@ class SoupConfig(BaseModel):
             # worse than no probe. Restricted until it is measured across shapes.
             raise ValueError(
                 f"training.stream_vram_probe supports task='sft' only; got "
-                f"task={self.task!r}. The probe measures a causal-LM step, which "
+                f"task={stream_task!r}. The probe measures a causal-LM step, which "
                 f"is the SFT step but not a preference loss — its agreement with "
                 f"DPO/ORPO/SimPO/KTO is measured at one shape only, so it is not "
                 f"offered for them yet. Use the predicted budget, or "
                 f"training.stream_vram_override if you have measured this "
                 f"configuration yourself."
             )
-        if tcfg.stream_loss_chunk is not None and self.task != "sft":
+        if tcfg.stream_loss_chunk is not None and stream_task != "sft":
             # #1693 — the chunked step rebuilds `ForCausalLMLoss`, the sft loss.
             raise ValueError(
                 f"training.stream_loss_chunk supports task='sft' only; got "
-                f"task={self.task!r}. It computes the causal-LM cross-entropy "
+                f"task={stream_task!r}. It computes the causal-LM cross-entropy "
                 f"chunk by chunk; a preference loss reduces the logits to "
                 f"per-token log-probs of chosen and rejected instead, and that "
                 f"reduction is not chunked. Remove training.stream_loss_chunk."
             )
-        if tcfg.stream_recompute != "on" and self.task != "sft":
+        if tcfg.stream_recompute != "on" and stream_task != "sft":
             # Only the SFT step is measured. A loss with two grad-enabled
             # forwards before one backward would unpack a layer's saved pool
             # tensors after its slot was refilled, which the owner check
             # refuses mid-step rather than training on stale weights.
             raise ValueError(
                 f"training.stream_recompute={tcfg.stream_recompute!r} supports "
-                f"task='sft' only; got task={self.task!r}. Keeping activations "
+                f"task='sft' only; got task={stream_task!r}. Keeping activations "
                 f"instead of the checkpoint recompute is measured on the SFT step "
                 f"only; a loss that runs more than one grad-enabled forward per "
                 f"backward is not supported yet. Remove training.stream_recompute "
@@ -8094,11 +8395,15 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_vllm_sleep_mode(self) -> "SoupConfig":
-        """v0.50.0 Part B — ``vllm_sleep_mode`` requires task='grpo' and a
-        vLLM-compatible backend (transformers/unsloth).
+        """``vllm_sleep_mode`` is refused: it never reached a vLLM engine.
 
-        Sleep mode is a between-rollouts feature; setting it on a non-RL
-        task is a probable footgun and silently no-ops, so reject loudly.
+        v0.50.0 Part B made it require task='grpo' and a vLLM-compatible
+        backend (transformers/unsloth); those two gates still run first and
+        keep their wording. A config that passes both used to load and do
+        nothing: the GRPO wrapper copies the flag into TRL's
+        ``vllm_enable_sleep_mode``, which TRL reads only under ``use_vllm``,
+        and Soup never sets ``use_vllm`` (GRPO generates with the model's own
+        ``generate``). The field is kept so this message can name it.
         """
         if not self.training.vllm_sleep_mode:
             return self
@@ -8114,7 +8419,11 @@ class SoupConfig(BaseModel):
             validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "training.vllm_sleep_mode has no effect: GRPO does not use a vLLM server "
+            "for rollouts in this version, so there is no vLLM engine to put to sleep "
+            "between rollouts. Refused as of v0.78.0. Delete the line."
+        )
 
     # ---- v0.53.0 Quant Menu II cross-validators ----------------------------
 
@@ -9287,8 +9596,16 @@ class SoupConfig(BaseModel):
         """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
         SoupTrainerCallback. MLX text SFT implements its own watchdog (#1989),
         but other native tasks do not; MLX has no checkpoint-recovery path or
-        VRAM budget for grad_accum_auto_tune.
+        VRAM budget for grad_accum_auto_tune. Enabled eval gates require the
+        shared callback too (#1811).
         """
+        gate = self.training.eval_gate
+        if gate is not None and gate.enabled:
+            from soup_cli.config.eval_gate_support import eval_gate_refusal
+
+            refusal = eval_gate_refusal(task=self.task, backend=self.backend)
+            if refusal is not None:
+                raise ValueError(refusal)
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
             tcfg = self.training
@@ -9390,6 +9707,11 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, name) is not None
         ]
         if not fields:
+            return self
+        if (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and tcfg.lora.r == 0 and not tcfg.stream_layers
+        ):
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
@@ -9495,7 +9817,23 @@ class SoupConfig(BaseModel):
         # share SFTTrainerWrapper.setup.
         if self.task != "pretrain":
             if self.backend == "mlx":
-                off_path.append(("backend='mlx'", "backend: transformers"))
+                if self.task == "sft" and self.modality == "text":
+                    if tcfg.rope_scaling_type != "linear":
+                        raise ValueError(
+                            f"{named} {verb} not applied on backend='mlx': "
+                            "MLX text SFT currently supports rope_scaling_type='linear' only "
+                            f"(got {tcfg.rope_scaling_type!r}). Use rope_scaling_type: linear "
+                            "and training.quantization: none, or backend: transformers, "
+                            f"or remove {keys}."
+                        )
+                    if tcfg.quantization != "none":
+                        raise ValueError(
+                            f"{named} with backend='mlx' requires training.quantization='none' "
+                            f"(got {tcfg.quantization!r}). Use training.quantization: none, "
+                            f"or backend: transformers, or remove {keys}."
+                        )
+                else:
+                    off_path.append(("backend='mlx'", "backend: transformers"))
             if self.modality in ("vision", "audio"):
                 off_path.append((f"modality={self.modality!r}", "modality: text"))
             if tcfg.stream_layers:
@@ -9586,14 +9924,27 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _reject_resident_kimi_k2(self) -> "SoupConfig":
-        """K2 remote code cannot import or train on the supported 5.x stack."""
-        from soup_cli.utils.kimi import resident_kimi_k2_refusal
+        """Resident K2 remote code cannot import or train on the supported 5.x stack.
+
+        #2104 task 2: Kimi-K2-Base / -Instruct are admitted on sft/grpo (the resident
+        route); every other task, and Thinking / 0905 for all tasks, stays refused.
+        Review round 2: the admission holds only at ``training.quantization: none``
+        (the resident route loads bf16 only); any other quantization is refused here,
+        at config validation, instead of failing inside the model loader.
+        """
+        from soup_cli.utils.kimi import (
+            _ResidentKimiK2QuantizationRefusal,
+            resident_kimi_k2_refusal,
+        )
 
         reason = resident_kimi_k2_refusal(
             self.base, backend=self.backend, hub=self.training.hub,
-            stream_layers=self.training.stream_layers,
+            stream_layers=self.training.stream_layers, task=self.task,
+            modality=self.modality, quantization=self.training.quantization,
         )
         if reason is not None:
+            if isinstance(reason, _ResidentKimiK2QuantizationRefusal):
+                raise ValueError(str(reason))
             raise ValueError(
                 f"{reason} base={self.base}. Its remote code uses removed APIs "
                 "and an inference-only MoE training path. Choose a compatible base."

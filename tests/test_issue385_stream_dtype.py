@@ -21,6 +21,8 @@ float16 as well as bfloat16, in both quantisations, so the fix is a decision and
 not an implementation.
 """
 
+from contextlib import nullcontext
+
 import pytest
 
 
@@ -43,6 +45,9 @@ class _FakeCuda:
 
     def is_available(self) -> bool:
         return self._available
+
+    def device(self, device: str) -> nullcontext:
+        return nullcontext()
 
     def is_bf16_supported(self, including_emulation: bool = True) -> bool:
         self.asked_bf16 += 1

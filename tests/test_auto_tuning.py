@@ -439,9 +439,13 @@ class TestWarmupConfigField:
         assert cfg.warmup_auto is False
 
     def test_warmup_auto_can_be_set(self):
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
         from soup_cli.config.schema import TrainingConfig
 
-        cfg = TrainingConfig(warmup_auto=True)
+        # Still accepted, unchanged, with the warning of #1814 (covered in
+        # tests/test_config_deprecated_fields.py).
+        with pytest.warns(SoupConfigDeprecationWarning, match="training.warmup_auto"):
+            cfg = TrainingConfig(warmup_auto=True)
         assert cfg.warmup_auto is True
 
 
@@ -716,8 +720,9 @@ class TestAutopilotConfigEmission:
     def test_generated_config_includes_warmup_auto_when_set(
         self, tmp_path, monkeypatch,
     ):
-        """Generated config has warmup_auto=true so train.py picks it up."""
+        """Generated config has warmup_auto=true when the decisions ask for it."""
         from soup_cli.autopilot.generate_config import generate_config
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 
         monkeypatch.chdir(tmp_path)
         decisions = {
@@ -738,12 +743,15 @@ class TestAutopilotConfigEmission:
             "mixed_precision": "bf16",
         }
         out = Path("soup.yaml")
-        generate_config(
-            base="meta-llama/Llama-3-8B",
-            data_path="data.jsonl",
-            decisions=decisions,
-            output_path=out,
-        )
+        # The flat generator writes what a legacy decisions dict asks for; the key
+        # warns when loaded (#1814), and building the model here says so.
+        with pytest.warns(SoupConfigDeprecationWarning, match="training.warmup_auto"):
+            generate_config(
+                base="meta-llama/Llama-3-8B",
+                data_path="data.jsonl",
+                decisions=decisions,
+                output_path=out,
+            )
         text = out.read_text(encoding="utf-8")
         cfg = yaml.safe_load(text)
         assert cfg["training"].get("warmup_auto") is True
