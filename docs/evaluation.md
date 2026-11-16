@@ -795,8 +795,10 @@ soup ship --evidence ship_evidence.json --config soup.yaml --adapter ./adapter \
 `--task-eval` and suite/judge settings come from `eval.ship` or explicit CLI flags,
 with the usual CLI precedence. The strict gate (exit 3 on missing/mismatched
 identity) compares adapter and task bytes, current local training-source bytes,
-suite version, policy and the evidence's actual task mode/benchmark set. Unknown
-adapter/task identities are refused. Store emitted evidence outside the adapter
+suite version, policy and the evidence's actual task mode/benchmark set (in reward mode
+also that the evidence's `task.reward`, the function and hash its scores name, is the one in
+the binding's policy, so a hand-edited `task.reward.fn` or `task.reward.sha256` is refused).
+Unknown adapter/task identities are refused. Store emitted evidence outside the adapter
 directory: the manifest covers its files. A changed input during a live emitted
 run is refused on the before/after comparison; this is not a filesystem snapshot.
 

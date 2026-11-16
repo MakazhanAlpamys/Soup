@@ -1723,6 +1723,40 @@ def test_adding_the_reward_to_a_binding_is_building_it_with_the_reward():
     assert ship_cmd._bind_reward(without, None) == without  # no function: nothing added
 
 
+def _edit_bound(work, edit):
+    path = work / "bound.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    edit(data)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_the_gate_accepts_evidence_whose_reward_is_the_one_in_its_binding(tmp_path, monkeypatch):
+    work, digest = _provenance_setup(tmp_path, monkeypatch)
+    bound = json.loads((work / "bound.json").read_text(encoding="utf-8"))
+    assert bound["task"]["reward"] == bound["provenance"]["binding"]["policy"]["reward"]
+    result = _gate()
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+
+
+@pytest.mark.parametrize("field, value", [
+    ("sha256", "e" * 64),
+    ("fn", "other_reward.py"),
+    ("sha256", None),
+])
+def test_the_gate_refuses_a_task_reward_edited_by_hand(tmp_path, monkeypatch, field, value):
+    # the reader accepts any well-formed reward block; only the binding says which function the
+    # scores were produced with, so the two must agree
+    work, _ = _provenance_setup(tmp_path, monkeypatch)
+    _edit_bound(work, lambda data: data["task"]["reward"].__setitem__(field, value))
+    result = _gate()
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    text = _plain(result.output)
+    assert "task.reward" in text and "provenance.binding.policy.reward" in text
+    assert "stale provenance" in text
+    assert "other_reward.py" not in text and "eeee" not in text  # values are not echoed
+    assert not (work / "ran.txt").exists()
+
+
 def test_the_gate_in_reward_mode_needs_the_function_it_compares(tmp_path, monkeypatch):
     work, _ = _provenance_setup(tmp_path, monkeypatch)
     (work / "soup.yaml").write_text(PROVENANCE_CONFIG.replace("{reward}", ""), encoding="utf-8")
