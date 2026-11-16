@@ -2,7 +2,7 @@
 
 This record concerns issue [#2766 part (b)](https://github.com/MakazhanAlpamys/Soup/issues/2766#issuecomment-6898294656). It qualifies BCO independently; IPO stays refused under layer streaming.
 
-The measured source is [`2c57034a35cdd6af43673b7e5f6480bb10ea8655`](https://github.com/here-2007/Soup/commit/2c57034a35cdd6af43673b7e5f6480bb10ea8655), based on upstream `ce928294`. The final Kaggle run clones this commit without a patch. Later commits add this evidence and the changelog only. The environment record includes hashes of the wrapper, schema, task list and fixture/test sources.
+The measured source is [`2c57034a35cdd6af43673b7e5f6480bb10ea8655`](https://github.com/here-2007/Soup/commit/2c57034a35cdd6af43673b7e5f6480bb10ea8655), based on upstream `ce928294`. The final Kaggle run clones this commit without a patch. The rows remain attributed to this source; the review follow-up below records later changes. The environment record includes hashes of the wrapper, schema, task list and fixture/test sources.
 
 ## Card, stack and fixture
 
@@ -23,6 +23,8 @@ The local random Llama fixture uses seed 7, two decoder layers, hidden size 64, 
 
 Fixture `model.safetensors` SHA-256: `d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80`.
 
+All four raw losses are ln 2: the LoRA B matrices start at zero, so policy equals reference and TRL 0.29.1 computes `-logsigmoid(0)` at step 1; this column says nothing about the reference pass, which the CPU test checks with nonzero adapters. These Tesla T4 figures for a two-layer, vocabulary-64 model form a new baseline, separate from the RTX 3050 and RTX 5070 records, with no peak-VRAM claim.
+
 Each passing cell requires a finite raw loss and gradient norm, no skipped optimizer update, a positive adapter delta, actual layer reads, eight nonempty adapter tensors at both checkpoint-1 and final output, exact checkpoint/final tensor equality, and exact saved tensor equality after loading the final adapter on the matching resident base. Raw allocated-memory telemetry is retained in JSON. These tiny one-step runs establish execution, update and adapter persistence on this card at this shape. They do not measure throughput, large-model capacity or CUDA numerical parity.
 
 ## CPU and negative controls
@@ -34,6 +36,14 @@ Each passing cell requires a finite raw loss and gradient norm, no skipped optim
 - A two-step CPU run and a run resumed from checkpoint-1 finish with identical adapters. The test inspects restored adapter tensors and nonzero `running.json` state before the resumed update.
 - Five isolated mutations fail their intended test: remove untied-head refill; bypass cleanup; remove checkpoint save guard; remove final save check; double the one-row BCO budget. The unmodified tests pass. Mutation logs are retained.
 - Ruff over src/tests/scripts/benchmarks and generated-reference structure checks pass. Recipe snapshots pass; no field or default changes. Exact generated reference text has two pre-existing unrelated vocabulary-description differences, so only the generated stream_layers row is refreshed.
+
+## Review follow-up (2026-11-16)
+
+The review moves the existing unusable-row rejection before model and stream allocation, adds BCO to both refusal suggestions, and clarifies the documentation above. New CPU checks exercise batch-one microbatches with accumulation one and two, require a finite loss and gradient norm and changed adapters, and reject empty or incomplete rows before streaming setup is called. The rejection test fails on the pre-review code and when the validation is moved back after allocation; reverting either suggestion also fails its full-message assertion.
+
+The [follow-up verification record](evidence/bco-streaming-review.json) lists 420 targeted and 1,002 caller tests passing, plus 139 targeted and 33 chat-template checks on the floor stack, three caught mutations, and lint/reference checks.
+
+CUDA was not rerun for this follow-up: the BCO executable code differs only in the placement of the existing data check, and the shared runtime changes only its module documentation. The original four T4 rows and their source hashes are preserved, with no claim that they ran on the review head.
 
 ## Attempts and remaining IPO work
 

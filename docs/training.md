@@ -1497,6 +1497,9 @@ frozen reference.
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
 
+The streamed BCO T4 checks use `batch_size: 2` with both labels and
+`gradient_accumulation_steps: 1`; other batch shapes have no CUDA measurement.
+
 **When the prompt is cut, for all six preference tasks (transformers
 backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`
 enforces `data.max_length` itself

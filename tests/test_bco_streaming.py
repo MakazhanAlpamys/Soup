@@ -27,7 +27,10 @@ def checkpoint(tmp_path, monkeypatch):
     return Path(weights)
 
 
-def _build(checkpoint, name, *, device="cpu", quant="none", dispatched=False, stream=True):
+def _build(
+    checkpoint, name, *, device="cpu", quant="none", dispatched=False, stream=True,
+    batch_size=2, gradient_accumulation_steps=1,
+):
     from soup_cli.trainer.bco import BCOTrainerWrapper
     from soup_cli.trainer.preference import PreferenceTrainerWrapper
 
@@ -36,7 +39,8 @@ def _build(checkpoint, name, *, device="cpu", quant="none", dispatched=False, st
         task="preference" if dispatched else "bco",
         **({"preference_loss": "bco"} if dispatched else {}),
         stream_layers=stream, **({"stream_source": "ram"} if stream else {}),
-        quantization=quant, batch_size=2,
+        quantization=quant, batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         seed=7, warmup_ratio=0.0, save_steps=1,
         lora={"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj", "v_proj"]},
     )
@@ -70,6 +74,47 @@ def _assert_equal(left, right):
     assert left and left.keys() == right.keys()
     for key in left:
         torch.testing.assert_close(left[key], right[key], atol=0, rtol=0, msg=key)
+
+
+@pytest.mark.parametrize("rows", [[], [{"prompt": "hello", "chosen": "world"}]])
+def test_unusable_rows_are_rejected_before_stream_allocation(
+    checkpoint: Path, monkeypatch: pytest.MonkeyPatch, rows: list[dict],
+) -> None:
+    from soup_cli.trainer.bco import BCOTrainerWrapper
+
+    cfg = _stream_cfg(str(checkpoint), checkpoint.parent / "empty", task="bco")
+    wrapper = BCOTrainerWrapper(cfg, device="cpu", fsdp_config={"use_cpu": True})
+
+    def refuse_allocation(*args: object, **kwargs: object) -> None:
+        pytest.fail("Unusable rows must be rejected before allocating the streamed base")
+
+    monkeypatch.setattr(wrapper, "_setup_streaming_transformers", refuse_allocation)
+    with pytest.raises(ValueError, match="produced no usable rows"):
+        wrapper.setup({"train": rows})
+    assert wrapper._stream_runtime is None
+    assert wrapper.model is None
+
+
+@pytest.mark.parametrize("accumulation", [1, 2])
+def test_single_label_microbatches_update_adapters(checkpoint: Path, accumulation: int) -> None:
+    wrapper, inner = _build(
+        checkpoint, "single-label", batch_size=1, gradient_accumulation_steps=accumulation,
+        dispatched=True,
+    )
+    try:
+        batch = next(iter(inner.trainer.get_train_dataloader()))
+        assert len(batch["label"]) == 1
+        assert inner.trainer.args.gradient_accumulation_steps == accumulation
+        before = _trained_adapters(inner.model)
+        inner.trainer.args.max_steps = 1
+        result = wrapper.train()
+        row = next(entry for entry in inner.trainer.state.log_history if "loss" in entry)
+        assert result["total_steps"] == 1
+        assert math.isfinite(row["loss"]) and math.isfinite(row["grad_norm"])
+        after = _trained_adapters(inner.model)
+        assert any((after[key] - before[key]).count_nonzero().item() for key in before)
+    finally:
+        inner._close_stream_runtime()
 
 
 def test_streamed_budget_counts_the_loss_batch_shape(checkpoint):

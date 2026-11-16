@@ -7739,15 +7739,15 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "training.stream_layers cannot be combined with "
                 "training.preference_loss_weights: weighted preference losses do not "
-                "stream yet. Use a single training.preference_loss of dpo, orpo or "
-                "simpo, or set stream_layers=false."
+                "stream yet. Use a single training.preference_loss of dpo, orpo, "
+                "simpo or bco, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
         if self.task == "preference" and stream_task == "ipo":
             raise ValueError(
                 f"training.stream_layers cannot use "
                 f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
-                "Use dpo, orpo or simpo, or set stream_layers=false."
+                "Use dpo, orpo, simpo or bco, or set stream_layers=false."
             )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(

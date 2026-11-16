@@ -135,6 +135,14 @@ class BCOTrainerWrapper(StreamingSetupMixin):
         cfg = self.config
         tcfg = cfg.training
 
+        # Reject unusable rows before allocating the streamed base.
+        train_rows = _split_dpo_rows_to_bco(dataset["train"])
+        if not train_rows:
+            raise ValueError(
+                "BCO training: dataset['train'] produced no usable rows. "
+                "Each row must contain 'prompt', 'chosen', and 'rejected'."
+            )
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
@@ -178,12 +186,6 @@ class BCOTrainerWrapper(StreamingSetupMixin):
             console.print(f"[green]Auto batch size (BCO):[/] {batch_size}")
 
         # --- Dataset (split DPO rows into BCO unpaired) ---
-        train_rows = _split_dpo_rows_to_bco(dataset["train"])
-        if not train_rows:
-            raise ValueError(
-                "BCO training: dataset['train'] produced no usable rows. "
-                "Each row must contain 'prompt', 'chosen', and 'rejected'."
-            )
         train_ds = Dataset.from_list(train_rows)
         eval_ds = None
         if "val" in dataset and dataset["val"]:

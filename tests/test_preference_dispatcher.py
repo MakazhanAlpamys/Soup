@@ -53,7 +53,7 @@ class TestPreferenceStreaming:
         assert caught.value.errors()[0]["msg"] == (
             f"Value error, training.stream_layers cannot use "
             f"training.preference_loss={loss!r}: this loss does not stream yet. "
-            "Use dpo, orpo or simpo, or set stream_layers=false."
+            "Use dpo, orpo, simpo or bco, or set stream_layers=false."
         )
 
     @pytest.mark.parametrize("task", ["ipo"])
@@ -73,8 +73,8 @@ class TestPreferenceStreaming:
         assert caught.value.errors()[0]["msg"] == (
             "Value error, training.stream_layers cannot be combined with "
             "training.preference_loss_weights: weighted preference losses do not "
-            "stream yet. Use a single training.preference_loss of dpo, orpo or "
-            "simpo, or set stream_layers=false."
+            "stream yet. Use a single training.preference_loss of dpo, orpo, "
+            "simpo or bco, or set stream_layers=false."
         )
 
     @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco"])
