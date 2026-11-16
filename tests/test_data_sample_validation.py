@@ -1,9 +1,8 @@
-"""Tests for CLI boundary validation of -n and --pct in soup data sample (#2929)."""
+"""Tests for CLI boundary validation of -n and --pct in soup data sample (#2931, #2929)."""
 
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -25,19 +24,11 @@ def _clean(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
-@pytest.fixture(scope="module")
-def sample_test_dir() -> Path:
-    """Fixture creating a test directory under cwd to satisfy is_under_cwd."""
-    test_dir = Path.cwd() / ".tmp_test_sample_data"
-    test_dir.mkdir(parents=True, exist_ok=True)
-    yield test_dir
-    shutil.rmtree(test_dir, ignore_errors=True)
-
-
 @pytest.fixture
-def sample_jsonl(sample_test_dir: Path) -> Path:
-    """Fixture creating a 10-row synthetic JSONL dataset under cwd."""
-    data_file = sample_test_dir / "sample_input.jsonl"
+def sample_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Fixture creating a 10-row synthetic JSONL dataset under temporary cwd."""
+    monkeypatch.chdir(tmp_path)
+    data_file = tmp_path / "sample_input.jsonl"
     rows = [{"id": i, "text": f"row text {i} " * (i + 1)} for i in range(10)]
     with open(data_file, "w", encoding="utf-8") as f:
         for r in rows:
@@ -82,11 +73,9 @@ def test_sample_helpers_guard_against_non_positive_num(invalid_num: int):
 
 @pytest.mark.parametrize("strategy", ["random", "diverse", "hard"])
 @pytest.mark.parametrize("n", [1, 3, 7])
-def test_sample_positive_control_n(
-    sample_jsonl: Path, sample_test_dir: Path, strategy: str, n: int
-):
+def test_sample_positive_control_n(sample_jsonl: Path, tmp_path: Path, strategy: str, n: int):
     """Multi-item positive control fixture: valid -n produces exact sample sizes."""
-    out_file = sample_test_dir / f"out_{strategy}_{n}.jsonl"
+    out_file = tmp_path / f"out_{strategy}_{n}.jsonl"
     res = runner.invoke(
         app,
         [
@@ -105,10 +94,10 @@ def test_sample_positive_control_n(
 
 @pytest.mark.parametrize("pct,expected_len", [(10.0, 1), (50.0, 5), (100.0, 10)])
 def test_sample_positive_control_pct(
-    sample_jsonl: Path, sample_test_dir: Path, pct: float, expected_len: int
+    sample_jsonl: Path, tmp_path: Path, pct: float, expected_len: int
 ):
     """Multi-item positive control fixture: valid --pct produces expected sample sizes."""
-    out_file = sample_test_dir / f"out_pct_{int(pct)}.jsonl"
+    out_file = tmp_path / f"out_pct_{int(pct)}.jsonl"
     res = runner.invoke(
         app,
         [
@@ -125,11 +114,9 @@ def test_sample_positive_control_pct(
 
 
 @pytest.mark.parametrize("strategy", ["random", "diverse", "hard"])
-def test_sample_accepts_n_larger_than_dataset(
-    sample_jsonl: Path, sample_test_dir: Path, strategy: str
-):
+def test_sample_accepts_n_larger_than_dataset(sample_jsonl: Path, tmp_path: Path, strategy: str):
     """Counts larger than dataset are accepted and clamped to full dataset size."""
-    out_file = sample_test_dir / f"out_large_{strategy}.jsonl"
+    out_file = tmp_path / f"out_large_{strategy}.jsonl"
     res = runner.invoke(
         app,
         [
@@ -153,9 +140,9 @@ def test_sample_neither_n_nor_pct_refused(sample_jsonl: Path):
     assert "Specify either --n (count) or --pct (percentage)." in _clean(res.output)
 
 
-def test_sample_both_n_and_pct_given(sample_jsonl: Path, sample_test_dir: Path):
-    """When both --n and --pct are passed, --pct takes precedence as documented."""
-    out_file = sample_test_dir / "out_both.jsonl"
+def test_sample_both_n_and_pct_given(sample_jsonl: Path, tmp_path: Path):
+    """When both valid --n and --pct are passed, --pct takes precedence as documented."""
+    out_file = tmp_path / "out_both.jsonl"
     res = runner.invoke(
         app,
         [
@@ -170,3 +157,13 @@ def test_sample_both_n_and_pct_given(sample_jsonl: Path, sample_test_dir: Path):
     assert out_file.exists()
     lines = [json.loads(line) for line in out_file.read_text(encoding="utf-8").splitlines()]
     assert len(lines) == 5
+
+
+def test_sample_invalid_n_with_valid_pct_refused(sample_jsonl: Path):
+    """Passing an invalid non-positive -n alongside a valid --pct exits 1 with a refusal."""
+    res = runner.invoke(
+        app,
+        ["data", "sample", str(sample_jsonl), "-n", "0", "--pct", "50"],
+    )
+    assert res.exit_code == 1
+    assert "--n must be a positive integer." in _clean(res.output)

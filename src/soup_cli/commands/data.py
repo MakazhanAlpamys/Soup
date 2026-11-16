@@ -900,11 +900,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
