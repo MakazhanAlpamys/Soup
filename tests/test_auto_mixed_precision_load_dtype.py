@@ -208,14 +208,14 @@ def test_the_model_load_is_handed_fp16(card, picked_lines, monkeypatch, tmp_path
     ``dtype`` as ``task: sft``. Stopped at the loader, so nothing touches the card."""
     from soup_cli.utils import kimi_k2
 
-    class _Loaded(Exception):
+    class _LoadedError(Exception):
         pass
 
     seen: dict = {}
 
     def load(base, *, model_kwargs, console=None):
         seen.update(model_kwargs)
-        raise _Loaded
+        raise _LoadedError
 
     monkeypatch.setattr(kimi_k2, "load_resident_model", load)
     monkeypatch.chdir(tmp_path)
@@ -225,7 +225,7 @@ def test_the_model_load_is_handed_fp16(card, picked_lines, monkeypatch, tmp_path
     wrapper = _wrapper_class(task)(cfg, device="cuda")
     card((12, 0))
 
-    with pytest.raises(_Loaded):
+    with pytest.raises(_LoadedError):
         wrapper._setup_transformers(cfg, cfg.training)
     assert seen["dtype"] is torch.float16
     assert len(picked_lines) == 1
