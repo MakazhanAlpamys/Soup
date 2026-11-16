@@ -213,7 +213,7 @@ class RLCheckpointLoadError(ValueError):
 
 
 _REFUSAL_REMEDY = (
-    "Delete this file, or point to a checkpoint written by soup "
+    "Delete this file, or restore from a checkpoint written by soup "
     "(rl-checkpoints/step-N under this run's output directory)."
 )
 
