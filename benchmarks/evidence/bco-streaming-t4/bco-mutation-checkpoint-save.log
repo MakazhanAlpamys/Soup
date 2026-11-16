@@ -2,7 +2,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________ test_wrapper_rejects_empty_streamed_adapter[checkpoint] ____________
 
-checkpoint = PosixPath('/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/pytest-546/test_wrapper_rejects_empty_str0/model')
+checkpoint = PosixPath('<tmp>/pytest-546/test_wrapper_rejects_empty_str0/model')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e856a50>
 where = 'checkpoint'
 
@@ -25,10 +25,10 @@ where = 'checkpoint'
              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 E       Failed: DID NOT RAISE RuntimeError
 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:201: Failed
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:201: Failed
 ----------------------------- Captured stdout call -----------------------------
 Loading tokenizer: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-546/test_wrapper_rejects_empty_str0/model
 ╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
 │ HF/local source: 0.00 GB                                                     │
@@ -39,9 +39,9 @@ test-546/test_wrapper_rejects_empty_str0/model
 │ Free on target volume (layer-shard cache): 26.07 GB                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Preparing layer shards -> 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
-test-546/test_wrapper_rejects_empty_str0/cache/private__var__folders___l__f2y24x
-9s6rzbqr4s0bbws1vh0000gn__T__pytest-of-pernavjain__pytest-546__test_wrapper_reje
+<tmp>/py
+test-546/test_wrapper_rejects_empty_str0/cache/<tmp>
+__pytest-546__test_wrapper_reje
 cts_empty_str0_
 Re-sharding layer cache: cache index is missing or unreadable.
 ╭─────────────────────────── training.stream_layers ───────────────────────────╮

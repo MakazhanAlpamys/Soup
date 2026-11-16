@@ -2,7 +2,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________ test_wrapper_closes_stream_runtime_when_training_raises ____________
 
-checkpoint = PosixPath('/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/pytest-545/test_wrapper_closes_stream_run0/model')
+checkpoint = PosixPath('<tmp>/pytest-545/test_wrapper_closes_stream_run0/model')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ffef9e0>
 
     def test_wrapper_closes_stream_runtime_when_training_raises(checkpoint, monkeypatch):
@@ -27,10 +27,10 @@ E
 E         Right contains one more item: True
 E         Use -v to get more diff
 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:103: AssertionError
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:103: AssertionError
 ----------------------------- Captured stdout call -----------------------------
 Loading tokenizer: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-545/test_wrapper_closes_stream_run0/model
 ╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
 │ HF/local source: 0.00 GB                                                     │
@@ -41,9 +41,9 @@ test-545/test_wrapper_closes_stream_run0/model
 │ Free on target volume (layer-shard cache): 26.06 GB                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Preparing layer shards -> 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
-test-545/test_wrapper_closes_stream_run0/cache/private__var__folders___l__f2y24x
-9s6rzbqr4s0bbws1vh0000gn__T__pytest-of-pernavjain__pytest-545__test_wrapper_clos
+<tmp>/py
+test-545/test_wrapper_closes_stream_run0/cache/<tmp>
+__pytest-545__test_wrapper_clos
 es_stream_run0_
 Re-sharding layer cache: cache index is missing or unreadable.
 ╭─────────────────────────── training.stream_layers ───────────────────────────╮

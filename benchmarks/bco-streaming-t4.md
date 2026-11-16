@@ -53,6 +53,8 @@ Candidate version 3 passed all four BCO cells. All four IPO cells reported raw l
 
 ## Reproduce
 
+The archived logs use placeholders for machine-local paths, including paths embedded in cache names. The attempt metadata also replaces the private notebook identifier with a placeholder. Test IDs, counts, and timings are preserved.
+
 On a T4, check out the measured source and install the recorded stack. The test creates its checkpoint and tokenizer locally. Use `CUDA_VISIBLE_DEVICES=0`, `HF_HUB_OFFLINE=1`, and `HF_DATASETS_OFFLINE=1`:
 
 ```bash

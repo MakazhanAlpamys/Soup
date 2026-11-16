@@ -93,6 +93,6 @@
   "v5": {
     "commit": "2c57034a35cdd6af43673b7e5f6480bb10ea8655",
     "bco": "4 passed",
-    "kernel": "pernavjain/soup-2766-ipo-bco-t4/5"
+    "kernel": "<notebook>/5"
   }
 }

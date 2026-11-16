@@ -11,15 +11,15 @@ tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_e
 tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[simpo]
 tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
 tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[bco]
-  /private/tmp/soup-2766-floor/lib/python3.12/site-packages/torch/utils/data/dataloader.py:759: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+  <site-packages>/torch/utils/data/dataloader.py:759: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
     super().__init__(loader)
 
 tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
-  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:175: FutureWarning: The `KTOConfig` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOConfig`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOConfig`) will remain, but API changes may occur.
+  <home>/Soup/src/soup_cli/trainer/kto.py:175: FutureWarning: The `KTOConfig` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOConfig`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOConfig`) will remain, but API changes may occur.
     kto_config = KTOConfig(
 
 tests/test_issue1011_streamed_save_guard.py::test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save[kto]
-  /Users/pernavjain/Documents/Soup-2766-bco/src/soup_cli/trainer/kto.py:219: FutureWarning: The `KTOTrainer` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOTrainer`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOTrainer`) will remain, but API changes may occur.
+  <home>/Soup/src/soup_cli/trainer/kto.py:219: FutureWarning: The `KTOTrainer` is now located in `trl.experimental`. Please update your imports to `from trl.experimental.kto import KTOTrainer`. For more information, see https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. Until then, this current path (`from trl import KTOTrainer`) will remain, but API changes may occur.
     self.trainer = KTOTrainer(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

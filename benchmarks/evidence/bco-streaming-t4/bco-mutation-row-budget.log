@@ -2,7 +2,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _______________ test_streamed_budget_counts_the_loss_batch_shape _______________
 
-checkpoint = PosixPath('/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/pytest-548/test_streamed_budget_counts_th0/model')
+checkpoint = PosixPath('<tmp>/pytest-548/test_streamed_budget_counts_th0/model')
 
     def test_streamed_budget_counts_the_loss_batch_shape(checkpoint):
         _, inner = _build(checkpoint, "budget")
@@ -16,10 +16,10 @@ E
 E             At index 0 diff: 4 != 2
 E             Use -v to get more diff
 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:81: AssertionError
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:81: AssertionError
 ----------------------------- Captured stdout call -----------------------------
 Loading tokenizer: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-548/test_streamed_budget_counts_th0/model
 ╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
 │ HF/local source: 0.00 GB                                                     │
@@ -30,9 +30,9 @@ test-548/test_streamed_budget_counts_th0/model
 │ Free on target volume (layer-shard cache): 26.10 GB                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Preparing layer shards -> 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
-test-548/test_streamed_budget_counts_th0/cache/private__var__folders___l__f2y24x
-9s6rzbqr4s0bbws1vh0000gn__T__pytest-of-pernavjain__pytest-548__test_streamed_bud
+<tmp>/py
+test-548/test_streamed_budget_counts_th0/cache/<tmp>
+__pytest-548__test_streamed_bud
 get_counts_th0_
 Re-sharding layer cache: cache index is missing or unreadable.
 ╭─────────────────────────── training.stream_layers ───────────────────────────╮

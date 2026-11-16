@@ -1,5 +1,5 @@
 Loading tokenizer: 
-/tmp/pytest-of-root/pytest-0/test_one_cuda_update_and_adapt0/model
+<tmp>/pytest-0/test_one_cuda_update_and_adapt0/model
 ╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
 │ HF/local source: 0.00 GB                                                     │
 │ Soup materialized copy: 0.00 GB (no write required)                          │
@@ -9,8 +9,8 @@ Loading tokenizer:
 │ Free on target volume (layer-shard cache): 1037.82 GB                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Preparing layer shards -> 
-/tmp/pytest-of-root/pytest-0/test_one_cuda_update_and_adapt0/cache/tmp__pytest-o
-f-root__pytest-0__test_one_cuda_update_and_adapt0__model
+<tmp>/pytest-0/test_one_cuda_update_and_adapt0/cache/<tmp>
+__pytest-0__test_one_cuda_update_and_adapt0__model
 Re-sharding layer cache: cache index is missing or unreadable.
 ╭─────────────────────────── training.stream_layers ───────────────────────────╮
 │ Layer streaming BETA — arch llama, tier ram                                  │
@@ -52,11 +52,11 @@ LoRA applied: 1,792 trainable / 82,240 total (2.18%)
 .
 =============================== warnings summary ===============================
 tests/test_bco_streaming.py: 14 warnings
-  /usr/local/lib/python3.13/dist-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  <site-packages>/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
     warnings.warn(
 
 tests/test_bco_streaming.py::test_one_cuda_update_and_adapter_round_trip[none-legacy]
-  /usr/lib/python3.13/importlib/__init__.py:88: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+  <python>/importlib/__init__.py:88: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
     return _bootstrap._gcd_import(name[level:], package, level)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

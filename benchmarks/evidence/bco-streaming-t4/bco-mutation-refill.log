@@ -2,7 +2,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_untied_streamed_loss_and_gradients_match_resident ____________
 
-checkpoint = PosixPath('/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/pytest-544/test_untied_streamed_loss_and_0/model')
+checkpoint = PosixPath('<tmp>/pytest-544/test_untied_streamed_loss_and_0/model')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1103c53d0>
 
     def test_untied_streamed_loss_and_gradients_match_resident(checkpoint, monkeypatch):
@@ -45,13 +45,13 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1103c53d0>
 >               actual, actual_grads = run(streamed)
                                        ^^^^^^^^^^^^^
 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:143: 
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:143: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:137: in run
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:137: in run
     value.backward()
-/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/_tensor.py:623: in backward
+<site-packages>/torch/_tensor.py:623: in backward
     torch.autograd.backward(
-/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/autograd/__init__.py:395: in backward
+<site-packages>/torch/autograd/__init__.py:395: in backward
     _engine_run_backward(
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
@@ -77,10 +77,10 @@ kwargs = {'allow_unreachable': True, 'accumulate_grad': True}
             )  # Calls into the C++ engine to run the backward pass
 E           RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [64, 64]] is at version 4; expected version 2 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True, check_nan=False).
 
-/private/tmp/soup-1992-regression/lib/python3.12/site-packages/torch/autograd/graph.py:1072: RuntimeError
+<site-packages>/torch/autograd/graph.py:1072: RuntimeError
 ----------------------------- Captured stdout call -----------------------------
 Loading tokenizer: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-544/test_untied_streamed_loss_and_0/model
 ╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
 │ HF/local source: 0.00 GB                                                     │
@@ -91,9 +91,9 @@ test-544/test_untied_streamed_loss_and_0/model
 │ Free on target volume (layer-shard cache): 26.05 GB                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Preparing layer shards -> 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
-test-544/test_untied_streamed_loss_and_0/cache/private__var__folders___l__f2y24x
-9s6rzbqr4s0bbws1vh0000gn__T__pytest-of-pernavjain__pytest-544__test_untied_strea
+<tmp>/py
+test-544/test_untied_streamed_loss_and_0/cache/<tmp>
+__pytest-544__test_untied_strea
 med_loss_and_0_
 Re-sharding layer cache: cache index is missing or unreadable.
 ╭─────────────────────────── training.stream_layers ───────────────────────────╮
@@ -112,10 +112,10 @@ push will persist this Jinja string into tokenizer_config.json — replacing
 whatever the model originally shipped.
 LoRA applied: 1,792 trainable / 82,240 total (2.18%)
 Loading tokenizer: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-544/test_untied_streamed_loss_and_0/model
 Loading model: 
-/private/var/folders/_l/f2y24x9s6rzbqr4s0bbws1vh0000gn/T/pytest-of-pernavjain/py
+<tmp>/py
 test-544/test_untied_streamed_loss_and_0/model
 chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
 push will persist this Jinja string into tokenizer_config.json — replacing 
