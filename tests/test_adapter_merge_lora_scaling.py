@@ -251,7 +251,10 @@ class TestZeroScaling:
 
 
 class TestOtherLoraTensors:
-    def _configs(self, tmp_path, **extra):
+    def _configs(self, tmp_path, monkeypatch, **extra):
+        # The config reader refuses a directory outside the working directory, as
+        # the CLI does, so these direct calls run from tmp_path like the CLI tests.
+        monkeypatch.chdir(tmp_path)
         a, b = tmp_path / "a", tmp_path / "b"
         for path, alpha in ((a, 2), (b, 8)):
             path.mkdir()
@@ -261,7 +264,7 @@ class TestOtherLoraTensors:
             )
         return [str(a), str(b)]
 
-    def test_lora_embedding_b_is_rescaled_like_lora_b(self, tmp_path):
+    def test_lora_embedding_b_is_rescaled_like_lora_b(self, tmp_path, monkeypatch):
         """PEFT's LoRA embedding adds ``(x @ A^T) @ B^T * scaling``, the same scaling as a
         linear layer, so ``lora_embedding_B`` is folded and ``lora_embedding_A`` is not."""
         from soup_cli.utils.adapter_merge import fold_lora_scaling
@@ -270,13 +273,13 @@ class TestOtherLoraTensors:
         emb_a = np.ones((2, 10), dtype=np.float32)
         emb_b = np.ones((_DIM, 2), dtype=np.float32)
         weights = {f"{stem}.lora_embedding_A": emb_a, f"{stem}.lora_embedding_B": emb_b}
-        folded = fold_lora_scaling([weights, weights], self._configs(tmp_path))
+        folded = fold_lora_scaling([weights, weights], self._configs(tmp_path, monkeypatch))
 
         assert folded[0] is weights
         np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_B"], emb_b * 4.0)
         np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_A"], emb_a)
 
-    def test_dora_magnitude_vector_is_left_as_it_is(self, tmp_path):
+    def test_dora_magnitude_vector_is_left_as_it_is(self, tmp_path, monkeypatch):
         """DoRA's ``lora_magnitude_vector`` is not multiplied by the LoRA scaling in PEFT's
         forward: it rescales ``W + scaling * B @ A`` column by column. Folding ``lora_B``
         keeps each input's ``scaling * B @ A``, so the magnitude stays as it was and goes
@@ -286,7 +289,8 @@ class TestOtherLoraTensors:
         magnitude = np.full((_DIM,), 7.0, dtype=np.float32)
         b = np.ones((_DIM, 2), dtype=np.float32)
         weights = {_B: b, f"{_STEM}.lora_magnitude_vector": magnitude}
-        folded = fold_lora_scaling([weights, weights], self._configs(tmp_path, use_dora=True))
+        dirs = self._configs(tmp_path, monkeypatch, use_dora=True)
+        folded = fold_lora_scaling([weights, weights], dirs)
 
         np.testing.assert_array_equal(folded[1][_B], b * 4.0)
         assert folded[1][f"{_STEM}.lora_magnitude_vector"] is magnitude
