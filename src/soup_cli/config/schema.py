@@ -7723,10 +7723,8 @@ class SoupConfig(BaseModel):
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
             )
-        # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
-        # reference from the SAME streamed base with adapters disabled (TRL's
-        # `null_ref_context`), so the reference costs no extra weights: measured
-        # 0.914x SFT peak VRAM where a second instance was 9.92x.
+        # DPO/IPO use a frozen reference adapter; KTO disables adapters for its
+        # reference pass. All share the streamed base rather than a second model.
         if self.task in _STREAM_ROLLOUT_TASKS:
             raise ValueError(
                 f"training.stream_layers cannot be used with task={self.task!r}: "

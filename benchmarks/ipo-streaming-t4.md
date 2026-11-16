@@ -25,6 +25,13 @@ size 128, max length 64, seed 7, batch 1, and LoRA rank 4 on q/v. Runs use zero
 warmup, `save_steps: 1`, and `ipo_tau: 0.1`. Streamed runs use the RAM tier.
 Fixture SHA-256 `d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80`.
 
+These Tesla T4 figures establish a new baseline for this two-layer, vocabulary-64
+model; they are not compared with the RTX 3050 or RTX 5070 records.
+The JSON field `peak_allocated_bytes` records PyTorch allocator statistics through
+adapter reload, including 234898432 bytes streamed and 17396224 bytes resident
+for direct IPO without quantization at scale 1024; it is not a peak-VRAM
+measurement or a memory-saving claim.
+
 ## Original default-scale one-step failures
 
 All four original cells below failed with loss 25.0 and NaN gradient norm.
@@ -72,6 +79,14 @@ The tables below come from the rerun with the value comparison.
 | resident | `preference` | none | 25.0 | 26.783069610595703 | 1.99999976757681e-05 |
 | resident | `preference` | 4bit | 25.0 | 25.859407424926758 | 1.99999976757681e-05 |
 
+In this table and the default-settings table below, loss 25.0 is the analytic
+initial value: zero-initialized LoRA B makes policy and reference equal, so that
+column alone does not check the reference pass or streaming.
+The streamed and resident gradient-norm columns are not claimed equal; the CUDA
+cells do not synchronize or compare initial adapter weights, while the
+[nonzero-adapter CPU test](../tests/test_ipo_streaming.py) copies them before
+checking loss and gradients.
+
 ## Default settings, cap 12 attempts
 
 The direct `ipo` spelling with quantization `none` ran at the default scale
@@ -106,11 +121,19 @@ checks. CUDA cases are skipped in those CPU runs. Ruff, generated reference
 structure and recipe snapshots passed. The full local suite was not run.
 The [verification record](evidence/ipo-streaming-t4/verification.json) lists the
 results. [Publication correspondence](evidence/ipo-streaming-t4/publication-correspondence.json)
-checks that the qualified IPO wrapper and test harness are byte-identical to the
-PR source, and records the later descriptions, diagnostic suggestions and fixture
-registration changes.
+records the qualified wrapper and test harness as byte-identical to the initial
+PR head `c5ac634f`, along with the descriptions, diagnostic suggestions and fixture
+registration changes at that head.
 
 After merging upstream `bcd1e6be`, 391 integration checks passed with 28 skips.
-The qualified wrapper and harness still match byte for byte. Wheel and sdist
+At that head, the qualified wrapper and harness matched byte for byte. Wheel and sdist
 builds passed, archive paths are unique, and the wheel includes 16 bundled text
 guides. The wheel includes the existing UI logo and excludes benchmark/test data.
+
+The review follow-up adds a CPU step at batch size 2 and gradient accumulation 2
+through both IPO spellings, requiring finite loss, a changed adapter, nonzero
+saved LoRA B and one accumulation substep. The helper accepts those settings
+with the original defaults of 1 and 1. The IPO wrapper, CUDA test body and
+fixture functions are unchanged; the recorded CUDA run still uses the patch
+above. [Follow-up checks](evidence/ipo-streaming-t4/review-follow-up.json) record
+the test-only delta and its verification.

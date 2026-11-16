@@ -24,7 +24,10 @@ def checkpoint(tmp_path, monkeypatch):
     return Path(weights)
 
 
-def _build(checkpoint, name, *, device="cpu", quant="none", dispatched=False, stream=True):
+def _build(
+    checkpoint, name, *, device="cpu", quant="none", dispatched=False, stream=True,
+    batch_size=1, gradient_accumulation_steps=1,
+):
     from soup_cli.trainer.ipo import IPOTrainerWrapper
     from soup_cli.trainer.preference import PreferenceTrainerWrapper
 
@@ -33,7 +36,8 @@ def _build(checkpoint, name, *, device="cpu", quant="none", dispatched=False, st
         task="preference" if dispatched else "ipo",
         **({"preference_loss": "ipo"} if dispatched else {}),
         stream_layers=stream, **({"stream_source": "ram"} if stream else {}),
-        quantization=quant, batch_size=1,
+        quantization=quant, batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         seed=7, warmup_ratio=0.0, save_steps=1,
         lora={"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj", "v_proj"]},
     )
@@ -67,6 +71,47 @@ def _assert_equal(left, right):
     assert left and left.keys() == right.keys()
     for key in left:
         torch.testing.assert_close(left[key], right[key], atol=0, rtol=0, msg=key)
+
+
+@pytest.mark.parametrize("dispatched", [False, True], ids=["ipo", "preference"])
+def test_streamed_cpu_update_with_batch_and_accumulation_two(checkpoint, dispatched):
+    import math
+
+    from safetensors.torch import load_file
+    from transformers import TrainerCallback
+
+    wrapper, inner = _build(
+        checkpoint, "accumulated", dispatched=dispatched,
+        batch_size=2, gradient_accumulation_steps=2,
+    )
+    try:
+        trainer = inner.trainer
+        assert trainer.args.per_device_train_batch_size == 2
+        assert trainer.args.gradient_accumulation_steps == 2
+        trainer.args.max_steps = 1
+        before = _trained_adapters(inner.model)
+        substeps = []
+
+        class ObserveAccumulation(TrainerCallback):
+            def on_substep_end(self, args, state, control, **kwargs):
+                substeps.append(True)
+
+        trainer.add_callback(ObserveAccumulation())
+        result = wrapper.train()
+        assert result["total_steps"] == 1 and substeps == [True]
+        losses = [entry["loss"] for entry in trainer.state.log_history if "loss" in entry]
+        assert losses and all(math.isfinite(value) for value in losses)
+        after = _trained_adapters(inner.model)
+        assert before and before.keys() == after.keys()
+        assert all(tensor.isfinite().all().item() for tensor in after.values())
+        assert any(not before[name].equal(after[name]) for name in before)
+        adapter = load_file(Path(result["output_dir"]) / "adapter_model.safetensors")
+        assert any(
+            tensor.count_nonzero().item() > 0
+            for name, tensor in adapter.items() if "lora_B" in name
+        )
+    finally:
+        inner._close_stream_runtime()
 
 
 def test_streamed_budget_counts_the_loss_batch_shape(checkpoint):

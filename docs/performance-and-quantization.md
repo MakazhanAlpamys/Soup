@@ -1198,7 +1198,7 @@ instead keeps a frozen reference adapter on the streamed base. IPO uses that sam
 setup. On an untied checkpoint, `dpo`, `kto` and `ipo` also hold
 one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
 the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
-nothing. IPO's peak VRAM has no large-model measurement. The following DPO/SFT
+nothing. IPO's peak VRAM has not been measured. The following DPO/SFT
 figures were measured on an RTX 3050 4 GB with a 730 MB model:
 
 | arm | peak VRAM | vs SFT |
