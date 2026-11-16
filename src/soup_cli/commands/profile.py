@@ -355,6 +355,12 @@ def _render_profile(result: dict, gpu_memory_gb: float, gpu_memory_source: str) 
         mem_table.add_row("Logits and loss", "not counted (vocabulary unknown)")
     if result.get("dequant_memory_gb"):
         mem_table.add_row("4-bit dequantization", f"~{result['dequant_memory_gb']:.1f} GB")
+    if result.get("teacher_memory_gb"):
+        mem_table.add_row("Distillation teacher", f"~{result['teacher_memory_gb']:.1f} GB")
+    if result.get("distill_memory_gb"):
+        mem_table.add_row(
+            "Distillation divergence", f"~{result['distill_memory_gb']:.1f} GB"
+        )
     if result.get("optimizer_step_memory_gb"):
         mem_table.add_row(
             "Optimizer step (over the pass)", f"~{result['optimizer_step_memory_gb']:.1f} GB"

@@ -262,5 +262,8 @@ class TestRunSpec:
 def test_the_tiny_fixture_prices_every_term():
     shape = shape_from_config(TINY_LLAMA, params=10_000, params_source="safetensors")
     est = estimate_vram(shape, _run(quant="4bit", peft="qlora"))
-    # The optimizer step exceeds the pass only on a full fine-tune (#2277).
-    assert all(value > 0 for term, value in est.terms.items() if term != "optimizer_step")
+    # The optimizer step exceeds the pass only on a full fine-tune (#2277); the teacher
+    # and its divergence exist only for task distill (#ISSUE).
+    unpriced = {"optimizer_step", "teacher", "distill"}
+    assert all(value > 0 for term, value in est.terms.items() if term not in unpriced)
+    assert all(est.terms[term] == 0 for term in ("teacher", "distill"))

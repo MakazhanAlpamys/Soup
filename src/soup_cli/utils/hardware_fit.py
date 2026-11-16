@@ -38,9 +38,11 @@ from typing import Any, Callable, Optional, Union
 from soup_cli.utils.model_shape import ModelShape
 from soup_cli.utils.vram_estimate import (
     BYTES_PER_PARAM_BY_QUANT,
+    DISTILL_DIVERGENCES,
     GB,
     OPTIMIZER_BYTES_PER_PARAM,
     OVERHEAD_FIXED_BYTES,
+    TEACHER_DEFAULT_BYTES_PER_PARAM,
     VRAM_SAFETY_MARGIN,
     RunSpec,
     VramEstimate,
@@ -123,8 +125,18 @@ class HardwareFitInput:
     #: A 4-bit or 8-bit run that keeps its embeddings, norms and untied head in fp32: a card
     #: without bf16 hardware, or ``grpo_fp16`` (``RunSpec.kbit_fp32``, #2609).
     kbit_fp32: bool = False
+    #: ``task: distill`` (#ISSUE): the frozen teacher's shape, and the divergence kernel its
+    #: token-level step runs (``RunSpec.distill_kernel``; ``None`` for ``distill_mode:
+    #: sequence``).
+    teacher_shape: Optional[ModelShape] = None
+    distill_kernel: Optional[str] = None
+    distill_divergence: str = "forward_kl"
 
     def __post_init__(self) -> None:
+        if self.teacher_shape is not None and not isinstance(self.teacher_shape, ModelShape):
+            raise TypeError("teacher_shape must be ModelShape")
+        if self.distill_divergence not in DISTILL_DIVERGENCES:
+            raise ValueError(f"unknown distill_divergence {self.distill_divergence!r}")
         if not isinstance(self.kbit_fp32, bool):
             raise TypeError(f"kbit_fp32 must be bool, got {type(self.kbit_fp32).__name__}")
         if isinstance(self.params_b, bool):
@@ -182,6 +194,9 @@ class VRAMBreakdown:
     dequant_gb: float = 0.0
     #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
     optimizer_step_gb: float = 0.0
+    #: A distillation teacher's weights and the divergence over its logits (#ISSUE).
+    teacher_gb: float = 0.0
+    distill_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -189,7 +204,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
-            "optimizer_step_gb",
+            "optimizer_step_gb", "teacher_gb", "distill_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -213,6 +228,8 @@ class VRAMBreakdown:
             + self.logits_gb
             + self.dequant_gb
             + self.optimizer_step_gb
+            + self.teacher_gb
+            + self.distill_gb
         )
 
 
@@ -334,6 +351,10 @@ def outside_calibrated_range(
         reasons.append(f"fused-loss {noun} {' and '.join(sorted(inp.fused_loss))}")
     if backend == "unsloth":
         reasons.append("backend unsloth")
+    if inp.teacher_shape is not None:
+        # #ISSUE: the teacher and divergence terms come from a handful of measured rows
+        # on one card, not from the fitted range above.
+        reasons.append("a distillation step")
     return tuple(reasons)
 
 
@@ -429,6 +450,11 @@ def unextrapolated_floor(
     state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
     floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
     terms = ["weights", "CUDA context"]
+    if breakdown.teacher_gb > 0:
+        # #ISSUE: a distillation teacher is a parameter count times its stored dtype,
+        # and every process holds a whole one.
+        floor += breakdown.teacher_gb
+        terms.insert(1, "teacher weights")
     tcfg = getattr(cfg, "training", None)
     if inp.peft == "full" and _trains_a_subset(tcfg):
         return floor, tuple(terms)
@@ -618,6 +644,10 @@ def hardware_fit_input_or_reason(
     from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 
     task = getattr(cfg, "task", "sft")
+    teacher_shape, distill_kernel = _distill_teacher(
+        cfg, task, allow_network=allow_network, on_hub_request=on_hub_request
+    )
+    divergence = str(getattr(tcfg, "distill_divergence", None) or "forward_kl")
     # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
     # inherited by tts); on any other task the flags change nothing.
     fused_loss = (
@@ -647,10 +677,44 @@ def hardware_fit_input_or_reason(
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
             kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
+            teacher_shape=teacher_shape,
+            distill_kernel=distill_kernel,
+            distill_divergence=divergence,
         )
     except (ValueError, TypeError, ArithmeticError):
         # Any other input the estimate refuses: no one field is known to be the cause.
         return FitUnavailable(None, "the run's inputs are outside the range the estimate prices")
+
+
+def _distill_teacher(
+    cfg: Any,
+    task: str,
+    *,
+    allow_network: bool,
+    on_hub_request: Optional[Callable[[], None]],
+) -> tuple[Optional[ModelShape], Optional[str]]:
+    """The teacher a ``task: distill`` run loads, and its divergence kernel (#ISSUE).
+
+    ``trainer/distill.py`` loads ``training.teacher_model`` frozen beside the student, with
+    ``dtype="auto"``, and keeps it for the whole run except with ``distill_mode: sequence``,
+    where it generates the training text during setup and is freed (``None`` kernel).
+    ``distill_checkpoint: true`` runs the checkpointed divergence, whatever
+    ``distill_chunk_size`` is. Any other task: ``(None, None)``.
+    """
+    if task != "distill":
+        return None, None
+    tcfg = cfg.training
+    teacher = getattr(tcfg, "teacher_model", None)
+    if not isinstance(teacher, str) or not teacher:
+        return None, None
+    from soup_cli.utils.model_shape import read_model_shape
+
+    shape = read_model_shape(
+        teacher, allow_network=allow_network, on_hub_request=on_hub_request
+    )
+    if getattr(tcfg, "distill_mode", "token") == "sequence":
+        return shape, None
+    return shape, ("checkpoint" if getattr(tcfg, "distill_checkpoint", False) else "dense")
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
@@ -679,6 +743,14 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             backend=inp.backend,
             activation_offloading=inp.activation_offloading,
             kbit_fp32=inp.kbit_fp32,
+            teacher_params=0 if inp.teacher_shape is None else int(inp.teacher_shape.params),
+            teacher_bytes_per_param=(
+                TEACHER_DEFAULT_BYTES_PER_PARAM
+                if inp.teacher_shape is None or inp.teacher_shape.stored_bytes_per_param is None
+                else float(inp.teacher_shape.stored_bytes_per_param)
+            ),
+            distill_kernel=inp.distill_kernel,
+            distill_divergence=inp.distill_divergence,
         ),
     )
     return breakdown_from_estimate(est)
@@ -695,6 +767,8 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         logits_gb=est.gb("logits"),
         dequant_gb=est.gb("dequant"),
         optimizer_step_gb=est.gb("optimizer_step"),
+        teacher_gb=est.gb("teacher"),
+        distill_gb=est.gb("distill"),
         estimate=est,
     )
 

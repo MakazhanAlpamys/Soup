@@ -26,6 +26,11 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   bases). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
+- ``teacher`` and ``distill`` (``task: distill``, #ISSUE): the frozen teacher's weights at
+  the dtype its checkpoint stores, and what a token-level distillation step builds over
+  the vocabulary on top of the student's own logits: the teacher's logits and the fp32
+  divergence over both (``trainer/distill.py``'s ``_compute_distill_term``), per element
+  of batch x sequence x vocabulary, measured (``benchmarks/gate-distill-teacher-vram.md``).
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
   does not see but the card's total does.
 
@@ -185,6 +190,29 @@ ACTIVATION_OFFLOADING_MODES = frozenset({"cpu", "disk"})
 #: bf16 copies of the largest dequantized weight live at once under 4-bit loading.
 DEQUANT_COPIES = 1.0
 
+# --- distillation (#ISSUE) ---------------------------------------------------------
+
+#: What a token-level distillation step holds over the vocabulary beyond the student's
+#: own logits and loss chain (``logits``), per element of batch x sequence x vocabulary,
+#: by kernel and ``distill_divergence``: the teacher's half-precision logits, their fp32
+#: copy, the student's fp32 copy, the masked selections of both, the two log-softmaxes
+#: and the divergence's products, which autograd keeps for the backward. ``dense`` is the
+#: shipped kernel; ``checkpoint`` is ``distill_checkpoint: true`` (any
+#: ``distill_chunk_size``), which recomputes each chunk in the backward instead of keeping
+#: its intermediates. The largest figure measured for each, rounded up, on 19 rows on an
+#: RTX PRO 5000 Blackwell (``benchmarks/gate-distill-teacher-vram.md``): a batch of two or
+#: more holds one more fp32 copy of the student's logits than a batch of one (34 against
+#: 38 bytes, dense forward KL), so a batch of one is priced up to 4 bytes high.
+DISTILL_KD_BYTES_PER_ELEMENT: dict[str, dict[str, float]] = {
+    "dense": {"forward_kl": 38.0, "reverse_kl": 38.0, "js": 50.0},
+    "checkpoint": {"forward_kl": 21.0, "reverse_kl": 21.0, "js": 22.0},
+}
+DISTILL_KERNELS = frozenset(DISTILL_KD_BYTES_PER_ELEMENT)
+DISTILL_DIVERGENCES = frozenset(DISTILL_KD_BYTES_PER_ELEMENT["dense"])
+#: The teacher loads with ``dtype="auto"``; a config.json that names no dtype is priced
+#: as a 16-bit checkpoint.
+TEACHER_DEFAULT_BYTES_PER_PARAM = 2.0
+
 # --- overhead ----------------------------------------------------------------------
 
 #: CUDA context and cuBLAS workspaces: on the card, never in ``max_memory_allocated``.
@@ -200,6 +228,8 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "teacher",
+    "distill",
     "optimizer_step",
     "overhead",
 )
@@ -247,6 +277,16 @@ class RunSpec:
     #: a card without bf16 hardware, ``grpo_fp16``, or a run measured before #2609. False
     #: is the bf16 default (``KBIT_UNQUANTIZED_BYTES``).
     kbit_fp32: bool = False
+    #: ``task: distill`` (#ISSUE): the frozen teacher's parameter count and the bytes per
+    #: parameter it loads at; 0 for every other task.
+    teacher_params: int = 0
+    teacher_bytes_per_param: float = TEACHER_DEFAULT_BYTES_PER_PARAM
+    #: The kernel a token-level distillation step computes its divergence with
+    #: (``DISTILL_KERNELS``), or ``None``: no such step (any other task, or
+    #: ``distill_mode: sequence``, which trains on the teacher's text, not its logits).
+    distill_kernel: Optional[str] = None
+    #: ``training.distill_divergence`` (``DISTILL_DIVERGENCES``).
+    distill_divergence: str = "forward_kl"
 
     def __post_init__(self) -> None:
         if not isinstance(self.kbit_fp32, bool):
@@ -274,6 +314,21 @@ class RunSpec:
             raise ValueError(f"unknown quant {self.quant!r}")
         if self.peft not in ("full", "lora", "dora", "qlora"):
             raise ValueError(f"unknown peft {self.peft!r}")
+        if isinstance(self.teacher_params, bool) or not isinstance(self.teacher_params, int):
+            raise TypeError(
+                f"teacher_params must be int, got {type(self.teacher_params).__name__}"
+            )
+        if self.teacher_params < 0:
+            raise ValueError("teacher_params must be >= 0")
+        if self.teacher_bytes_per_param not in (2.0, 4.0):
+            raise ValueError(
+                "teacher_bytes_per_param must be 2.0 or 4.0, "
+                f"got {self.teacher_bytes_per_param!r}"
+            )
+        if self.distill_kernel is not None and self.distill_kernel not in DISTILL_KERNELS:
+            raise ValueError(f"unknown distill_kernel {self.distill_kernel!r}")
+        if self.distill_divergence not in DISTILL_DIVERGENCES:
+            raise ValueError(f"unknown distill_divergence {self.distill_divergence!r}")
 
     @property
     def checkpointing(self) -> str:
@@ -434,6 +489,24 @@ def dequant_bytes(shape: ModelShape, run: RunSpec) -> int:
     return math.ceil(largest * 2.0 * DEQUANT_COPIES)
 
 
+def teacher_bytes(run: RunSpec) -> int:
+    """A distillation teacher's weights, resident for the whole run (#ISSUE)."""
+    return math.ceil(run.teacher_params * run.teacher_bytes_per_param)
+
+
+def distill_bytes(shape: ModelShape, run: RunSpec) -> int:
+    """What a token-level distillation step adds over the vocabulary (#ISSUE).
+
+    ``DISTILL_KD_BYTES_PER_ELEMENT[kernel][divergence]`` per element of batch x sequence
+    x the student's vocabulary, every position charged (the divergence covers the trained
+    ones). Nothing without a token-level step or a known vocabulary.
+    """
+    if run.distill_kernel is None or shape.vocab_size is None:
+        return 0
+    per = DISTILL_KD_BYTES_PER_ELEMENT[run.distill_kernel][run.distill_divergence]
+    return math.ceil(shape.vocab_size * run.seq_len * run.batch_size * per)
+
+
 def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
     """The per-term peak for ``run`` on a model of ``shape``."""
     trainable = trainable_params(shape, run)
@@ -447,15 +520,19 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "activations": activations_bytes(shape, run),
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
+        "teacher": teacher_bytes(run),
+        "distill": distill_bytes(shape, run),
     }
     # The peak is the larger of two phases (#2277). The forward/backward pass holds
-    # every term above. The optimizer step holds the parameters, their gradients, the
-    # optimizer state and the step's scratch, after the activations, logits and
-    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
-    # pass, so the total stays a sum of terms.
+    # every term above. The optimizer step holds the parameters (a distillation
+    # teacher's too), their gradients, the optimizer state and the step's scratch,
+    # after the activations, logits, dequantized copy and divergence are freed.
+    # `optimizer_step` is how far the step exceeds the pass, so the total stays a sum
+    # of terms.
     forward_backward = sum(terms.values())
     step = (
         terms["weights"]
+        + terms["teacher"]
         + terms["adapters"]
         + terms["gradients"]
         + terms["optimizer"]
@@ -503,6 +580,12 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         )
     if run.activation_offloading is not None:
         notes.append(activation_offloading_note(run.activation_offloading, terms["activations"]))
+    if run.teacher_params and run.distill_kernel is None:
+        notes.append(
+            "distill_mode: sequence trains on the text the teacher generates: its weights "
+            "are charged, since the run holds them beside the student while it generates, "
+            "and no divergence over its logits is."
+        )
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
 
 
@@ -531,6 +614,9 @@ def fit_verdict(total_bytes: float, available_bytes: float) -> str:
 __all__ = [
     "ACTIVATION_OFFLOADING_MODES",
     "BYTES_PER_PARAM_BY_QUANT",
+    "DISTILL_DIVERGENCES",
+    "DISTILL_KD_BYTES_PER_ELEMENT",
+    "DISTILL_KERNELS",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
     "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",
