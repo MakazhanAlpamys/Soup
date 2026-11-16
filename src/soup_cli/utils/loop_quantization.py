@@ -27,6 +27,8 @@ import subprocess
 import sys
 from typing import Optional
 
+from soup_cli.utils.loop_spawn import child_popen_kwargs
+
 #: bf16: two bytes per parameter.
 BYTES_PER_PARAM = 2
 #: What a bf16 LoRA run holds per byte of base weights: the weights, the adapter and its
@@ -99,6 +101,7 @@ def free_vram_bytes() -> Optional[int]:
             timeout=PROBE_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
             check=False,
+            **child_popen_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):  # a timeout is a SubprocessError
         return None

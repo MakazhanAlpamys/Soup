@@ -64,6 +64,7 @@ from soup_cli.utils.loop_holdout import (
     waiting_note,
 )
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
+from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
@@ -816,7 +817,7 @@ def _run_logged(runner, argv, *, log_path: str, timeout: float):
     with open(log_path, "wb") as handle:
         return runner(  # noqa: S603 — internal argv, no shell
             argv, stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            timeout=timeout, check=False,
+            timeout=timeout, check=False, **child_popen_kwargs(),
         )
 
 
@@ -951,10 +952,9 @@ def train_dpo_from_pairs(
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
         tail = _log_tail(log_path) or _stderr_tail(getattr(result, "stderr", None))
+        ended = describe_exit(rc)
         return {
-            **_train_failure(
-                f"train failed (exit code {rc})" + (f": {tail}" if tail else ""), decided
-            ),
+            **_train_failure(f"train failed ({ended})" + (f": {tail}" if tail else ""), decided),
             "train_log": log_path,
         }
     trained = {
@@ -1247,7 +1247,8 @@ def verify_with_ship(
             lines = [line.strip() for line in str(stderr).splitlines() if line.strip()]
             tail = lines[-1] if lines else ""
         tail = f": {_printable(tail)}" if tail else ""
-        reason = f"soup ship wrote no verdict (exit {rc}){tail}"
+        ended = describe_exit(rc).removeprefix("exit code ")
+        reason = f"soup ship wrote no verdict (exit {ended}){tail}"
         return {**common, **_verdict_skipped(reason)}
     verdict = {**common, "gate_verdict": _SHIP_DECISIONS[decision], "verdict_decision": decision}
     notes = list(file_notes)
