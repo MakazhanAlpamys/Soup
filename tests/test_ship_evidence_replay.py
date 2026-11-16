@@ -48,30 +48,17 @@ def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
-def _with(base: dict, *args) -> dict:
-    """Apply edits of two shapes: ``(path_tuple, value)`` pairs or ``path..., value`` sequences.
-
-    ``...`` in place of a value deletes the key the path names.
-    """
-    edits: list = []
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], tuple):
-            edits.append((list(arg[0]), arg[1]))
-            i += 1
-        else:
-            edits.append((list(args[i:-1]), args[-1]))
-            break
+def _with(base: dict, *path_and_value) -> dict:
+    """Apply one edit: ``path..., value`` — the keys, then the value; ``...`` deletes the key."""
+    *path, value = path_and_value
     out = copy.deepcopy(base)
-    for path, value in edits:
-        node = out
-        for key in path[:-1]:
-            node = node[key]
-        if value is ...:
-            del node[path[-1]]
-        else:
-            node[path[-1]] = value
+    node = out
+    for key in path[:-1]:
+        node = node[key]
+    if value is ...:
+        del node[path[-1]]
+    else:
+        node[path[-1]] = value
     return out
 
 
@@ -97,35 +84,32 @@ def _dead_message(side: str, failed: int, n: int) -> str:
 
 @pytest.mark.parametrize("side", ["base", "tuned"])
 def test_an_all_failed_side_is_refused(side):
-    other = "tuned" if side == "base" else "base"
-    payload = _with(
-        V2_EVIDENCE,
-        (("task", "generation_failures"),
-         {"base": 8, "tuned": 8, "n": 8} if side == "base" else {side: 8, other: 0, "n": 8}),
+    failures = (
+        {"base": 8, "tuned": 0, "n": 8}
+        if side == "base"
+        else {"base": 0, "tuned": 8, "n": 8}
     )
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", failures)
     with pytest.raises(ValueError, match=re.escape(_dead_message(side, 8, 8))):
         verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
 
 
 def test_both_sides_failed_is_refused_naming_base_first():
-    payload = _with(V2_EVIDENCE, (("task", "generation_failures"), {"base": 8, "tuned": 8, "n": 8}))
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", {"base": 8, "tuned": 8, "n": 8})
     with pytest.raises(ValueError, match=re.escape(_dead_message("base", 8, 8))):
         verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
 
 
 def test_the_smallest_file_1_of_1_is_refused():
-    payload = _with(
-        V2_EVIDENCE,
-        (("task", "generation_failures"), {"base": 1, "tuned": 0, "n": 1}),
-        (("task", "base"), 0.0),
-        (("task", "tuned"), 1.0),
-    )
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", {"base": 1, "tuned": 0, "n": 1})
+    payload = _with(payload, "task", "base", 0.0)
+    payload = _with(payload, "task", "tuned", 1.0)
     with pytest.raises(ValueError, match=re.escape(_dead_message("base", 1, 1))):
         verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
 
 
 def test_n_minus_1_of_n_still_replays():
-    payload = _with(V2_EVIDENCE, (("task", "generation_failures"), {"base": 7, "tuned": 0, "n": 8}))
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", {"base": 7, "tuned": 0, "n": 8})
     verdict = verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
     assert verdict_to_dict(verdict)["decision"] == "SHIP"
 
@@ -134,19 +118,20 @@ def test_n_minus_1_of_n_still_replays():
 
 
 def test_a_measured_zero_with_no_failures_still_replays():
-    payload = _with(V2_EVIDENCE, (("task", "generation_failures"), {"base": 0, "tuned": 0, "n": 8}))
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", {"base": 0, "tuned": 0, "n": 8})
     verdict = verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
     assert verdict_to_dict(verdict)["decision"] == "SHIP"
 
 
 def test_a_schema_1_file_is_unchanged():
-    payload = _with(V2_EVIDENCE, (("schema_version",), ...), (("task", "generation_failures"), ...))
+    payload = _with(V2_EVIDENCE, "schema_version", ...)
+    payload = _with(payload, "task", "generation_failures", ...)
     verdict = verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
     assert verdict_to_dict(verdict)["decision"] == "SHIP"
 
 
-def test_a_partial_block_absent_still_replays():
-    payload = _with(V2_EVIDENCE, (("task", "generation_failures"), ...))
+def test_a_file_without_the_block_still_replays():
+    payload = _with(V2_EVIDENCE, "task", "generation_failures", ...)
     verdict = verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
     assert verdict_to_dict(verdict)["decision"] == "SHIP"
 
@@ -155,17 +140,14 @@ def test_a_partial_block_absent_still_replays():
 
 
 def test_judge_score_all_failed_base_is_refused():
-    payload = _with(V2_EVIDENCE, (("task", "mode"), "judge_score"))
+    payload = _with(V2_EVIDENCE, "task", "mode", "judge_score")
     with pytest.raises(ValueError, match=re.escape(_dead_message("base", 8, 8))):
         verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
 
 
 def test_pairwise_all_failed_tuned_is_refused():
-    payload = _with(
-        V2_EVIDENCE,
-        (("task", "mode"), "pairwise"),
-        (("task", "generation_failures"), {"base": 0, "tuned": 8, "n": 8}),
-    )
+    payload = _with(V2_EVIDENCE, "task", "mode", "pairwise")
+    payload = _with(payload, "task", "generation_failures", {"base": 0, "tuned": 8, "n": 8})
     with pytest.raises(ValueError, match=re.escape(_dead_message("tuned", 8, 8))):
         verdict_from_evidence(payload, forgetting_threshold=THRESHOLD)
 
