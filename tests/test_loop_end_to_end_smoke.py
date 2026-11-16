@@ -52,7 +52,8 @@ def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", ENDPOINT)
     monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, TOKEN)
-    for name in ("_DEPLOY_POSTER", "_LOAD_POSTER", "_TRAIN_RUNNER", "_SHIP_RUNNER"):
+    hooks = ("_DEPLOY_POSTER", "_LOAD_POSTER", "_TRAIN_RUNNER", "_SHIP_RUNNER", "_HEALTH_GETTER")
+    for name in hooks:
         monkeypatch.setattr(ls, name, None)
     (tmp_path / "tasks.jsonl").write_text(
         "".join(
