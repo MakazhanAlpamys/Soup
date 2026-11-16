@@ -37,6 +37,8 @@ from typing import (
     Union,
 )
 
+from rich.text import Text
+
 # Stdlib-only at import (it defers torch to its own constructor), so the
 # default is safe to read at module scope. ``AsyncDiskSource`` itself is
 # imported inside ``_build_source``, where torch is already unavoidable.
@@ -2295,6 +2297,24 @@ def _synthetic_step(model: Any, *, rows: int, seq_len: int, vocab_size: int, dev
         _zero_probe_grads(model)
 
 
+class _RecomputeFallbackMessage(str):
+    """Keep string notifications for benchmark JSON and render literal text in Rich."""
+
+    _rendered: Text
+
+    @classmethod
+    def from_reason(cls, label: str, reason: str) -> "_RecomputeFallbackMessage":
+        from soup_cli.utils.terminal import for_terminal, terminal_text
+
+        # Preserve the existing string for callbacks that record notifications.
+        message = cls(f"[yellow]{label}[/] {for_terminal(reason)}")
+        message._rendered = Text.assemble((label, "yellow"), " ", terminal_text(reason))
+        return message
+
+    def __rich__(self) -> Text:
+        return self._rendered
+
+
 def plan_stream_recompute_auto(
     model: Any,
     *,
@@ -2325,6 +2345,7 @@ def plan_stream_recompute_auto(
     ``memory`` reads the allocator (:class:`CudaMemoryReader` on the streamed
     layers' device when None, which needs a CUDA pool); ``step`` runs the
     synthetic step (:func:`_synthetic_step` when None).
+    ``notify`` receives status strings; the fallback renders literally in Rich.
     """
     from soup_cli.utils.layer_stream import (
         RECOMPUTE_CAP_CARD,
@@ -2334,7 +2355,6 @@ def plan_stream_recompute_auto(
         retained_layer_charge,
         stream_recompute_budget,
     )
-    from soup_cli.utils.terminal import for_terminal
 
     headroom = STREAM_RECOMPUTE_HEADROOM if headroom is None else headroom
     layers = streamed_decoder_layers(model)
@@ -2342,10 +2362,11 @@ def plan_stream_recompute_auto(
 
     def keep(why: str) -> int:
         set_stream_recompute(model, True)
-        notify(
-            f"[yellow]training.stream_recompute='auto' keeps the recompute on all "
-            f"{n_layers} streamed layers:[/] {for_terminal(why)}"
+        label = (
+            "training.stream_recompute='auto' keeps the recompute on all "
+            f"{n_layers} streamed layers:"
         )
+        notify(_RecomputeFallbackMessage.from_reason(label, why))
         return 0
 
     if not layers:
@@ -4438,13 +4459,16 @@ def _say_page_cache_roots(source: Any, console: Any) -> None:
     """Name each drive whose operating system refused direct I/O (#1615)."""
     if console is None:
         return
-    from soup_cli.utils.terminal import for_terminal
+    from soup_cli.utils.terminal import terminal_text
 
     for root, reason in getattr(source, "page_cache_reasons", {}).items():
         console.print(
-            "[yellow]Layer streaming reads "
-            f"{for_terminal(root)} through the page cache: direct I/O is unavailable there "
-            f"({for_terminal(reason)}).[/]"
+            Text.assemble(
+                "Layer streaming reads ", terminal_text(root),
+                " through the page cache: direct I/O is unavailable there (",
+                terminal_text(reason), ").",
+                style="yellow",
+            )
         )
 
 
