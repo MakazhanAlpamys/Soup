@@ -35,6 +35,15 @@ on:
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
+    inputs:
+      matrix:
+        description: >-
+          full: the nightly matrix (seven test cells, newest upstream stack). approval: the
+          four required test cells and the smoke jobs on the pinned stack, as a pull request
+          labelled ci:full runs them (about half the job-minutes of full).
+        type: choice
+        options: [full, approval]
+        default: full
 
 # Supersede, do not queue.
 #
@@ -187,6 +196,9 @@ jobs:
   #   push to release/**               RELEASE: all nine test cells + the six gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
   #     dispatch                         on 3.11) + the six gated jobs
+  #   manual dispatch with             APPROVAL: the four required cells + the four gated
+  #     matrix=approval (2026-11-15)     jobs, on the pinned stack, plus the jobs that only
+  #                                      a run that is not a pull request has (below)
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
   #                                      on 3.11 and 3.12, Windows and macOS on
   #                                      3.12) + the four gated jobs that run on a
@@ -224,6 +236,17 @@ jobs:
   # the three 3.13 cells) is not caught before merge and shows on `main` in the
   # next nightly run instead. Branch protection must not require any of the
   # three: they came off it together with this change.
+  #
+  # 2026-11-15: a manual dispatch asks for FULL (the default, as before) or for the APPROVAL
+  # matrix with `-f matrix=approval`. Measured 2026-11-12..15: nine dispatches of the full
+  # matrix on one integration branch cost 3,404 job-minutes (15% of everything the repository
+  # ran), and what FULL adds to APPROVAL -- the three Python 3.13 cells, the nightly-only jobs
+  # and the unpinned stack -- is about 95 minutes of a run that costs 215 when nothing is
+  # re-run. A dispatch with `matrix=approval` is exactly what a `ci:full` pull request runs
+  # (same cells, same pinned stack), plus `type-check`, `torchao-contract` and
+  # `typer-vendored`, which a run that is not a pull request has; it measures coverage in
+  # ubuntu / 3.11 as every such run does. Nothing else reads the input: the nightly run, a
+  # push and a pull request never see it.
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
@@ -356,8 +379,8 @@ jobs:
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
-          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
-          APPROVAL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          FULL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.matrix != 'approval') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
+          APPROVAL: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
@@ -913,11 +936,57 @@ jobs:
       # `env.RUN_SUITE == 'true'` in its `if:`; a step added here needs it too, or it runs
       # (and installs) on the cells that were meant to do nothing.
       RUN_SUITE: ${{ needs.plan.outputs.docs_only != 'true' || (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12') }}
+      # The one cell that may reuse an earlier green result of the same merge commit
+      # (2026-11-15): a pull request's ubuntu / 3.12, the cell a quick run has and an approval
+      # run repeats. See the first step and tests/test_ci_suite_result_reuse.py.
+      REUSE_CELL: ${{ github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' }}
     steps:
+      # 2026-11-15: a green `test (ubuntu-latest, 3.12)` of a pull request is not run twice for
+      # one merge commit. The quick run records a marker when its cell ends green; when a
+      # maintainer adds `ci:full`, the approval run's cell looks for that marker first and, on
+      # a hit, skips every other step and still reports SUCCESS under the same name (the
+      # required context is neither renamed, nor skipped by a job-level `if:`, nor missing).
+      # Measured 2026-11-12..15: 34 approval runs started on a head whose quick run was already
+      # green, 14 of 14 sampled pairs had checked out the SAME merge commit (`github.sha` of a
+      # `labeled` run is the merge commit of the push, not a rebuilt one), 807 job-minutes in 72
+      # hours. The key is the merge commit, the runner and the Python, with no `restore-keys`:
+      # another push, another `main` or another pull request is a miss and the suite runs. The
+      # marker is written only by a run whose suite step ran and passed (`steps.suite.outcome`),
+      # and only for a pull request. The four steps of the reuse are optional (`continue-on-error`,
+      # 5 minutes): the suite steps are not, and carry neither.
+      # EVERY other step carries `steps.reuse.outputs.cache-hit != 'true'` (a cell that did not
+      # look has an empty output, which reads as a miss); a step added here needs it too.
+      - name: Look for the green result of this merge commit
+        id: reuse
+        if: env.RUN_SUITE == 'true' && env.REUSE_CELL == 'true'
+        # The first step of a required job, and an optimisation: a cache outage must read as a
+        # MISS (the step writes no output, `cache-hit` is empty and every later step runs), not as a
+        # red `test (ubuntu-latest, 3.12)`, and a hung restore must not hold the runner.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/suite-green
+          key: suite-green-v1-${{ github.sha }}-${{ matrix.os }}-${{ matrix.python-version }}
+      - name: Say which run's result is reused
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit == 'true'
+        # The marker file comes out of the Actions cache, which a pull request can write, and goes
+        # into a workflow-command line: only the exact shape this workflow writes is echoed.
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          result=$(cat "$RUNNER_TEMP/suite-green/result" 2>/dev/null || true)
+          pattern='^run [0-9]+ attempt [0-9]+$'
+          if [[ "$result" =~ $pattern ]]; then
+            echo "::notice title=Suite result reused::this exact merge commit passed the suite in ${result}; nothing is run again"
+          else
+            echo "::notice title=Suite result reused::this exact merge commit passed the suite earlier; nothing is run again"
+          fi
       - uses: actions/checkout@v4
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
       - uses: actions/setup-python@v5
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         with:
           python-version: ${{ matrix.python-version }}
         # No pip cache (dropped 2026-10-19; it was ubuntu / 3.12 only). Measured over the
@@ -933,11 +1002,11 @@ jobs:
       # silent: pin it, or the only tests that execute the real escaping logic
       # can disappear without anything turning red.
       - uses: actions/setup-node@v4
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         with:
           node-version: "22"
       - name: Pin the HF cache to a deterministic path
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         # Set here and not in the job-level `env:` block: the `runner` context
         # is not available there (only github / needs / strategy / matrix /
         # vars / secrets / inputs are), and referencing it makes GitHub reject
@@ -950,7 +1019,7 @@ jobs:
         shell: bash
         run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
       - name: Restore HF Hub cache
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         id: hf-cache
         uses: actions/cache/restore@v4
         with:
@@ -959,7 +1028,7 @@ jobs:
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         # pytest-xdist runs the suite in parallel (see the test step below); its
         # psutil extra is what `-n logical` counts the CPUs with. Installed here
         # and not in the dev extra: a local run stays serial unless a contributor
@@ -982,7 +1051,7 @@ jobs:
           PIP_EXTRA_INDEX_URL: ${{ runner.os == 'Linux' && 'https://download.pytorch.org/whl/cpu' || '' }}
         run: pip install -e ".[dev]" "pytest-xdist[psutil]" ${{ needs.plan.outputs.constraints }}
       - name: Warm HF Hub cache (models the tests load)
-        if: env.RUN_SUITE == 'true'
+        if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
         # not red the whole run. Never fails the job: if warming can't complete
@@ -1089,7 +1158,7 @@ jobs:
         # healthy Windows cells were not allowed to save what they had. The
         # losers of the resulting race log "unable to reserve cache" and move
         # on, which is far cheaper than an OS that never gets a cache.
-        if: always() && env.RUN_SUITE == 'true' && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true'
+        if: always() && env.RUN_SUITE == 'true' && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true' && steps.reuse.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/hf-cache
@@ -1152,10 +1221,14 @@ jobs:
         # finished in 2026-11-09..12 took 56.5 minutes (a macOS runner with 3 workers; the
         # 2026-11-13 note above `jobs:`), so none of the caps can fire on a healthy run. A test
         # that needs longer marks itself `@pytest.mark.timeout(N)`.
-        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && steps.reuse.outputs.cache-hit != 'true'
         timeout-minutes: 90
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Run unit tests without coverage
+        # `id: suite`: the record steps at the end read `steps.suite.outcome`, so a marker is
+        # written only by a run in which THIS step ran and passed. Never `continue-on-error` and
+        # never `|| true` here (tests/test_ci_suite_result_reuse.py): a failure must stay a failure.
+        id: suite
         # Same options as the step above minus the coverage reports; `--junitxml` stays in
         # both, because the nightly test-count badge reads report.xml from ubuntu / 3.11,
         # which runs the step above (it is a schedule run, never a pull request) and ran
@@ -1163,7 +1236,7 @@ jobs:
         # cannot leave the badge without a report, and a pull request still writes one.
         # The exact opposite of the step above: every cell of a pull request, and every cell
         # of any run but ubuntu / 3.11. The same two caps.
-        if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11')
+        if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11') && steps.reuse.outputs.cache-hit != 'true'
         timeout-minutes: 90
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
@@ -1172,13 +1245,13 @@ jobs:
         # tests with coverage" -- a pull request has no coverage.xml to send. It was 3.11
         # until the approval run of 2026-10-07 stopped having that cell, 3.10 from then
         # on, and 3.11 again since #1805 made it the oldest.
-        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && steps.reuse.outputs.cache-hit != 'true'
         uses: codecov/codecov-action@v4
         with:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: env.RUN_SUITE == 'true' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup'
+        if: env.RUN_SUITE == 'true' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup' && steps.reuse.outputs.cache-hit != 'true'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET
@@ -1195,3 +1268,28 @@ jobs:
             -H "Authorization: token ${{ secrets.GIST_TOKEN }}" \
             -d "{\"files\":{\"soup_tests.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"tests\\\",\\\"message\\\":\\\"$TESTS passed\\\",\\\"color\\\":\\\"brightgreen\\\"}\"}}}" \
             "https://api.github.com/gists/65fdc943f85f3b2c46ecddb415c2b779"
+
+      - name: Record the green result of this merge commit
+        # After every step above, only if none of them failed (`success()`), and only if the suite
+        # step itself ran and passed: `success()` is also true when every earlier step was SKIPPED,
+        # so it cannot be what says "the suite passed". One run's id and attempt, read back by the
+        # notice. Optional machinery: a failure here must not turn a green suite red.
+        id: marker
+        if: success() && steps.suite.outcome == 'success' && env.RUN_SUITE == 'true' && env.REUSE_CELL == 'true' && steps.reuse.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-green"
+          echo "run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/suite-green/result"
+      - name: Save the green result of this merge commit
+        # Two runs of one pull request that end together race for the key: the loser logs
+        # "unable to reserve cache" and goes on, as the HF cache save above does. Saved only if
+        # the suite passed and the marker was written; optional, like the lookup.
+        if: success() && steps.suite.outcome == 'success' && steps.marker.outcome == 'success' && env.RUN_SUITE == 'true' && env.REUSE_CELL == 'true' && steps.reuse.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/suite-green
+          key: suite-green-v1-${{ github.sha }}-${{ matrix.os }}-${{ matrix.python-version }}
