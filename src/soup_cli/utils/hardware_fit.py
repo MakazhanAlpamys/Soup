@@ -39,10 +39,11 @@ from soup_cli.utils.model_shape import ModelShape
 from soup_cli.utils.vram_estimate import (
     BYTES_PER_PARAM_BY_QUANT,
     DISTILL_DIVERGENCES,
+    DISTILL_KERNELS,
+    DISTILL_MODES,
     GB,
     OPTIMIZER_BYTES_PER_PARAM,
     OVERHEAD_FIXED_BYTES,
-    TEACHER_DEFAULT_BYTES_PER_PARAM,
     VRAM_SAFETY_MARGIN,
     RunSpec,
     VramEstimate,
@@ -125,16 +126,21 @@ class HardwareFitInput:
     #: A 4-bit or 8-bit run that keeps its embeddings, norms and untied head in fp32: a card
     #: without bf16 hardware, or ``grpo_fp16`` (``RunSpec.kbit_fp32``, #2609).
     kbit_fp32: bool = False
-    #: ``task: distill`` (#ISSUE): the frozen teacher's shape, and the divergence kernel its
-    #: token-level step runs (``RunSpec.distill_kernel``; ``None`` for ``distill_mode:
-    #: sequence``).
+    #: ``task: distill`` (#2909): the frozen teacher's shape and how the run uses it
+    #: (``RunSpec.teacher`` and its ``distill_*`` fields); ``None`` for any other task.
     teacher_shape: Optional[ModelShape] = None
-    distill_kernel: Optional[str] = None
+    distill_mode: str = "token"
+    distill_kernel: str = "dense"
+    distill_chunk_size: Optional[int] = None
     distill_divergence: str = "forward_kl"
 
     def __post_init__(self) -> None:
         if self.teacher_shape is not None and not isinstance(self.teacher_shape, ModelShape):
             raise TypeError("teacher_shape must be ModelShape")
+        if self.distill_mode not in DISTILL_MODES:
+            raise ValueError(f"unknown distill_mode {self.distill_mode!r}")
+        if self.distill_kernel not in DISTILL_KERNELS:
+            raise ValueError(f"unknown distill_kernel {self.distill_kernel!r}")
         if self.distill_divergence not in DISTILL_DIVERGENCES:
             raise ValueError(f"unknown distill_divergence {self.distill_divergence!r}")
         if not isinstance(self.kbit_fp32, bool):
@@ -194,9 +200,11 @@ class VRAMBreakdown:
     dequant_gb: float = 0.0
     #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
     optimizer_step_gb: float = 0.0
-    #: A distillation teacher's weights and the divergence over its logits (#ISSUE).
+    #: A distillation teacher's weights and the divergence over its logits, and with
+    #: ``distill_mode: sequence`` how far its generation exceeds training (#2909).
     teacher_gb: float = 0.0
     distill_gb: float = 0.0
+    teacher_generation_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -204,7 +212,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
-            "optimizer_step_gb", "teacher_gb", "distill_gb",
+            "optimizer_step_gb", "teacher_gb", "distill_gb", "teacher_generation_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -230,6 +238,7 @@ class VRAMBreakdown:
             + self.optimizer_step_gb
             + self.teacher_gb
             + self.distill_gb
+            + self.teacher_generation_gb
         )
 
 
@@ -352,8 +361,10 @@ def outside_calibrated_range(
     if backend == "unsloth":
         reasons.append("backend unsloth")
     if inp.teacher_shape is not None:
-        # #ISSUE: the teacher and divergence terms come from a handful of measured rows
-        # on one card, not from the fitted range above.
+        # #2909: the teacher and divergence terms come from a few dozen rows measured on
+        # one card with one student, not from the fitted range above. This also turns a
+        # distill run that the student's own terms already price over the card from a
+        # refusal into a warning, unless its floor alone is more than the card holds.
         reasons.append("a distillation step")
     return tuple(reasons)
 
@@ -448,7 +459,7 @@ def unextrapolated_floor(
     processes = max(int(num_processes or 1), 1)
     param_share = processes if sharding in SHARDS_PARAMETERS else 1
     state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
-    # #ISSUE: a distillation teacher's weights stay out of the floor. The teacher is
+    # #2909: a distillation teacher's weights stay out of the floor. The teacher is
     # frozen and loaded with ``device_map="auto"``, which can keep part of it in CPU
     # memory, so a run whose teacher alone exceeds the card can still start.
     floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
@@ -642,10 +653,11 @@ def hardware_fit_input_or_reason(
     from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 
     task = getattr(cfg, "task", "sft")
-    teacher_shape, distill_kernel = _distill_teacher(
+    distill = _distill_inputs(
         cfg, task, allow_network=allow_network, on_hub_request=on_hub_request
     )
-    divergence = str(getattr(tcfg, "distill_divergence", None) or "forward_kl")
+    if isinstance(distill, FitUnavailable):
+        return distill
     # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
     # inherited by tts); on any other task the flags change nothing.
     fused_loss = (
@@ -675,44 +687,63 @@ def hardware_fit_input_or_reason(
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
             kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
-            teacher_shape=teacher_shape,
-            distill_kernel=distill_kernel,
-            distill_divergence=divergence,
+            **distill,
         )
     except (ValueError, TypeError, ArithmeticError):
         # Any other input the estimate refuses: no one field is known to be the cause.
         return FitUnavailable(None, "the run's inputs are outside the range the estimate prices")
 
 
-def _distill_teacher(
+def _distill_inputs(
     cfg: Any,
     task: str,
     *,
     allow_network: bool,
     on_hub_request: Optional[Callable[[], None]],
-) -> tuple[Optional[ModelShape], Optional[str]]:
-    """The teacher a ``task: distill`` run loads, and its divergence kernel (#ISSUE).
+) -> Union[dict, FitUnavailable]:
+    """The teacher a ``task: distill`` run loads and how it uses it (#2909).
 
     ``trainer/distill.py`` loads ``training.teacher_model`` frozen beside the student, with
-    ``dtype="auto"``, and keeps it for the whole run except with ``distill_mode: sequence``,
-    where it generates the training text during setup and is freed (``None`` kernel).
-    ``distill_checkpoint: true`` runs the checkpointed divergence, whatever
-    ``distill_chunk_size`` is. Any other task: ``(None, None)``.
+    ``dtype="auto"``. With ``distill_mode: token`` it stays for the whole run, and each step
+    computes its divergence with ``_compute_distill_term`` (``dense``, or ``checkpoint``
+    with ``distill_checkpoint: true``, in chunks of ``distill_chunk_size``), or with the
+    ULD or MiniLLM loss when ``uld_strategy`` or ``minillm_enabled`` is set, which reads
+    neither chunk setting. With ``distill_mode: sequence`` it writes the training text
+    during setup and is freed. Returns the fields of :class:`HardwareFitInput`; none for
+    any other task.
     """
     if task != "distill":
-        return None, None
+        return {}
     tcfg = cfg.training
     teacher = getattr(tcfg, "teacher_model", None)
     if not isinstance(teacher, str) or not teacher:
-        return None, None
+        return {}
     from soup_cli.utils.model_shape import read_model_shape
 
     shape = read_model_shape(
         teacher, allow_network=allow_network, on_hub_request=on_hub_request
     )
-    if getattr(tcfg, "distill_mode", "token") == "sequence":
-        return shape, None
-    return shape, ("checkpoint" if getattr(tcfg, "distill_checkpoint", False) else "dense")
+    if shape.params > _MAX_PARAMS_B * GB:
+        return FitUnavailable(
+            "training.teacher_model",
+            f"the model in training.teacher_model has over {_MAX_PARAMS_B:,.0f}B "
+            "parameters, the most the estimate prices",
+        )
+    if getattr(tcfg, "uld_strategy", None) is not None:
+        kernel = "uld"
+    elif getattr(tcfg, "minillm_enabled", False):
+        kernel = "minillm"
+    elif getattr(tcfg, "distill_checkpoint", False):
+        kernel = "checkpoint"
+    else:
+        kernel = "dense"
+    return {
+        "teacher_shape": shape,
+        "distill_mode": str(getattr(tcfg, "distill_mode", None) or "token"),
+        "distill_kernel": kernel,
+        "distill_chunk_size": getattr(tcfg, "distill_chunk_size", None),
+        "distill_divergence": str(getattr(tcfg, "distill_divergence", None) or "forward_kl"),
+    }
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
@@ -741,13 +772,10 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             backend=inp.backend,
             activation_offloading=inp.activation_offloading,
             kbit_fp32=inp.kbit_fp32,
-            teacher_params=0 if inp.teacher_shape is None else int(inp.teacher_shape.params),
-            teacher_bytes_per_param=(
-                TEACHER_DEFAULT_BYTES_PER_PARAM
-                if inp.teacher_shape is None or inp.teacher_shape.stored_bytes_per_param is None
-                else float(inp.teacher_shape.stored_bytes_per_param)
-            ),
+            teacher=inp.teacher_shape,
+            distill_mode=inp.distill_mode,
             distill_kernel=inp.distill_kernel,
+            distill_chunk_size=inp.distill_chunk_size,
             distill_divergence=inp.distill_divergence,
         ),
     )
@@ -767,6 +795,7 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         optimizer_step_gb=est.gb("optimizer_step"),
         teacher_gb=est.gb("teacher"),
         distill_gb=est.gb("distill"),
+        teacher_generation_gb=est.gb("teacher_generation"),
         estimate=est,
     )
 

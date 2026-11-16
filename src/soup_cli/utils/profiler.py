@@ -192,9 +192,11 @@ def profile_result(
         "logits_memory_gb": round(breakdown.logits_gb, 2),
         "dequant_memory_gb": round(breakdown.dequant_gb, 2),
         "optimizer_step_memory_gb": round(breakdown.optimizer_step_gb, 2),
-        # #ISSUE: task distill's frozen teacher and its divergence over the vocabulary.
+        # #2909: task distill's frozen teacher, its divergence over the vocabulary, and
+        # with distill_mode: sequence how far the teacher's generation exceeds training.
         "teacher_memory_gb": round(breakdown.teacher_gb, 2),
         "distill_memory_gb": round(breakdown.distill_gb, 2),
+        "teacher_generation_memory_gb": round(breakdown.teacher_generation_gb, 2),
         "overhead_gb": round(breakdown.overhead_gb, 2),
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,

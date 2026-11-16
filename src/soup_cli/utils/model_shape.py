@@ -101,7 +101,7 @@ class ModelShape:
     remote_code: bool = False
     #: Bytes per parameter of the dtype config.json stores the weights in (``dtype`` /
     #: ``torch_dtype``): 4 for float32, 2 for bfloat16 and float16; ``None`` when it names
-    #: none. What a ``dtype="auto"`` load holds, as a distillation teacher's does (#ISSUE).
+    #: none. What a ``dtype="auto"`` load holds, as a distillation teacher's does (#2909).
     stored_bytes_per_param: Optional[float] = None
 
     @property

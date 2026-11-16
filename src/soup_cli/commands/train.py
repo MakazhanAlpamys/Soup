@@ -646,6 +646,7 @@ def _hardware_fit_preflight(
             ("optimizer step", b.optimizer_step_gb),
             ("teacher", b.teacher_gb),
             ("distillation", b.distill_gb),
+            ("teacher generation", b.teacher_generation_gb),
         )
         if value >= 0.05
     )
