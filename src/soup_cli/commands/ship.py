@@ -450,6 +450,27 @@ def _check_evidence_staleness(payload: dict, expected_sha: str) -> None:
         )
 
 
+def _bind_reward(
+    binding: Dict[str, object], reward: Optional[RewardSpec]
+) -> Dict[str, object]:
+    """``binding`` with the reward function added to its policy (its hash made again).
+
+    The same result as building the binding with ``reward`` (``_compute_ship_binding``) without
+    hashing the adapter and the task file once more. A live run uses it with the function the
+    VERDICT records, the bytes that were hashed, compiled and run: the file is not read a second
+    time for the binding, so what the evidence's ``task.reward.sha256`` says ran and what the
+    stamped binding names cannot differ. A binding of another mode, or no function, is returned
+    as it is.
+    """
+    policy = binding["policy"]
+    if reward is None or not isinstance(policy, dict) or policy.get("task_mode") != MODE_REWARD:
+        return binding
+    from soup_cli.utils.ship_provenance import policy_hash
+
+    with_reward = {**policy, "reward": {"fn": reward.fn, "sha256": reward.sha256}}
+    return {**binding, "policy": with_reward, "policy_sha256": policy_hash(with_reward)}
+
+
 def _compute_ship_binding(
     cfg: Optional["SoupConfig"], *, adapter: Optional[str], task_eval: Optional[str],
     suite_names: List[str], task_mode: str, judge_model: Optional[str],
@@ -1033,7 +1054,7 @@ def _run_reward_source(target: _RewardTarget) -> Callable[..., object]:
     compiled and run, no ``__pycache__`` is ever consulted (a stale or planted compiled copy
     cannot run in place of the source) and the file is not read a second time (a swap, or a swap
     and restore, cannot change what runs). It is the shared loader's behaviour otherwise:
-    a module named ``custom_reward`` that knows its ``__file__``, not registered in
+    a module named ``custom_reward`` that knows its absolute real ``__file__``, not registered in
     ``sys.modules``, and a ``reward_fn`` attribute that must exist. Modules the file imports are
     not hashed. ``dont_inherit``: a file is compiled like a plain module, not with this module's
     ``from __future__`` flags.
@@ -1041,7 +1062,7 @@ def _run_reward_source(target: _RewardTarget) -> Callable[..., object]:
     import types
 
     module = types.ModuleType("custom_reward")
-    module.__file__ = target.name
+    module.__file__ = os.path.realpath(target.name)
     code = compile(target.source, target.name, "exec", dont_inherit=True)
     exec(code, module.__dict__)  # noqa: S102 - what --reward-fn is for: the user's own code
     if not hasattr(module, "reward_fn"):
@@ -2228,8 +2249,8 @@ def ship(
     binding: Optional[Dict[str, object]] = None
 
     def current_reward() -> Optional[RewardSpec]:
-        # the reward function as it is on disk NOW (named and hashed, never run): the live run
-        # compares it before and after the evaluation, like the task file
+        # the reward function as it is on disk NOW (named and hashed, never run): what an offline
+        # gate compares with the evidence (a live run takes it from its verdict instead)
         if task_mode != MODE_REWARD or reward_fn is None:
             return None
         return _resolve_reward_target(reward_fn).spec
@@ -2300,9 +2321,9 @@ def ship(
             )
     elif base or tuned or adapter or task_eval:
         if emit_evidence:
-            binding = capture_binding(
-                task_mode, _parse_suite(general_suite), noise_floor, current_reward(),
-            )
+            # without the reward function: that is added from the verdict below, so the file is
+            # read once by the run and not again for the binding
+            binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
         verdict = _verdict_live(
             base=base,
             tuned=tuned,
@@ -2323,13 +2344,14 @@ def ship(
             ),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
         )
-        if emit_evidence and binding != capture_binding(
-            task_mode, _parse_suite(general_suite), noise_floor, current_reward(),
-        ):
-            _fail(
-                "provenance input changed during live evaluation; re-run before emitting",
-                _EXIT_USAGE,
-            )
+        if emit_evidence:
+            if binding != capture_binding(task_mode, _parse_suite(general_suite), noise_floor):
+                _fail(
+                    "provenance input changed during live evaluation; re-run before emitting",
+                    _EXIT_USAGE,
+                )
+            # the function the verdict records is the one the binding names (one source of truth)
+            binding = _bind_reward(binding, verdict.task_win.reward)
     else:
         _fail(
             "provide --evidence <json> for an offline verdict, or "

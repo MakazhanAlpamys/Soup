@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import random
 from fractions import Fraction
 from pathlib import Path
@@ -1080,10 +1081,11 @@ def test_a_reward_file_is_compiled_like_a_plain_module_not_with_the_commands_fla
     assert "could not load --reward-fn reward.py: NameError" in run.plain
 
 
-def test_the_file_sees_its_own_path_and_a_module_name(tmp_path, monkeypatch):
+def test_the_file_sees_its_own_absolute_real_path_and_a_module_name(tmp_path, monkeypatch):
+    expected = os.path.realpath(tmp_path / "work" / "reward.py")
     source = (
         "def reward_fn(completions, **kwargs):\n"
-        "    ok = (__file__, __name__) == ('reward.py', 'custom_reward')\n"
+        f"    ok = (__file__, __name__) == ({expected!r}, 'custom_reward')\n"
         "    return [0.7] if ok else [0.1]\n"
     )
     run = _run(tmp_path, monkeypatch, _tasks(3), _gen([1] * 3), _gen([2] * 3),
@@ -1678,6 +1680,47 @@ def test_the_binding_names_the_reward_file_and_the_gate_compares_it_without_runn
     assert stale.exit_code == 3, (stale.output, repr(stale.exception))
     assert "provenance" in _plain(stale.output).lower()
     assert not (work / "ran.txt").exists()
+
+
+def test_the_stamped_binding_is_made_from_the_bytes_that_ran_with_no_second_read(
+    tmp_path, monkeypatch
+):
+    # any read of the file after the first sees other bytes: the binding still equals the hash
+    # the verdict records, because nothing reads the file a second time
+    reads = []
+    original = ship_cmd._read_reward_file
+
+    def reading(path):
+        data = original(path)
+        reads.append(path)
+        return data if len(reads) == 1 else b"# a later read sees other bytes\n" + data
+
+    monkeypatch.setattr(ship_cmd, "_read_reward_file", reading)
+    run = _run(tmp_path, monkeypatch, _tasks(6), _gen([1] * 6), _gen([2] * 6),
+               files={"reward.py": LEN_REWARD})
+    assert run.result.exit_code in (0, 2), (run.result.output, repr(run.result.exception))
+    digest = hashlib.sha256(LEN_REWARD.encode("utf-8")).hexdigest()
+    evidence = run.json("ev.json")
+    assert evidence["task"]["reward"] == {"fn": "reward.py", "sha256": digest}
+    assert evidence["provenance"]["binding"]["policy"]["reward"] == {
+        "fn": "reward.py", "sha256": digest,
+    }
+    assert len(reads) == 1  # one read: the bytes that were hashed, compiled and run
+
+
+def test_adding_the_reward_to_a_binding_is_building_it_with_the_reward():
+    common = dict(
+        adapter=None, task_eval=None, suite_names=["mini_arithmetic"], task_mode="reward",
+        judge_model=None, threshold=0.05, noise_floor_runs=None, data_sha256=None,
+    )
+    spec = RewardSpec("rewards/score.py", "c" * 64)
+    without = ship_cmd._compute_ship_binding(None, **common)
+    expected = ship_cmd._compute_ship_binding(None, reward=spec, **common)
+    snapshot = json.dumps(without, sort_keys=True)
+    assert ship_cmd._bind_reward(without, spec) == expected
+    assert json.dumps(without, sort_keys=True) == snapshot  # the binding it was given is not edited
+    assert without["policy_sha256"] != expected["policy_sha256"]
+    assert ship_cmd._bind_reward(without, None) == without  # no function: nothing added
 
 
 def test_the_gate_in_reward_mode_needs_the_function_it_compares(tmp_path, monkeypatch):

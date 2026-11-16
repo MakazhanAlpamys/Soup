@@ -1175,7 +1175,15 @@ file. A reward file is code you trust.
 - The evidence records its name and the sha256 of its source bytes. The file is read once; those
   bytes are hashed, compiled and run (no `__pycache__` is consulted and the file is not read a
   second time), so the hash is of the source bytes that were compiled and run. The modules the file
-  imports are not hashed, and nothing prevents the file from doing anything else.
+  imports are not hashed, and nothing prevents the file from doing anything else. With
+  `--emit-evidence` the stamped provenance binding names the same function and hash (the verdict's,
+  not a second read of the file).
+- The file runs in a fresh module named `custom_reward`, with `__file__` set to its absolute real
+  path, that is not registered in `sys.modules` (the loader `soup train` uses does the same). So
+  `@dataclass` together with `from __future__ import annotations`, and pickling of an object whose
+  class is defined in the file, fail; and a sibling module is importable only if its directory is
+  on `sys.path`, which the working directory is not when you start `soup` through its console
+  script (it is under `python -m soup_cli`).
 
 **What the function is handed, and what it may return.** It is called once per row, for each model:
 
@@ -1219,7 +1227,7 @@ Paired difference (tuned - base per row): mean +0.0917, 95% interval [+0.0167, +
 | `n`, `better`, `worse`, `same` | The rows and the `rows` counts (the same rule, `1e-9`); `better + worse + same == n`. |
 | `mean_difference` | The exact mean of `tuned - base` over the rows, in exact arithmetic: positive when tuned's exact decimal mean is higher. The verdict compares the two means after rounding each to a float, so a difference smaller than half a float step is a tie (DON'T SHIP) where this can still show a tiny positive number. |
 | `ci_low`, `ci_high`, `confidence` | The percentile bootstrap interval of the mean difference at `confidence` (0.95). |
-| `resamples`, `seed` | 2000 resamples drawn with `random.Random(seed)` (seed `20261114`) over the per-row differences in sorted order, each resample summed with `math.fsum`: the same seed and rows give the same interval on every Python and every machine, and the same rows in any order give the same interval. Pure Python: about 5 s at the 10,000-row cap, once per live run. |
+| `resamples`, `seed` | 2000 resamples drawn with `random.Random(seed)` (seed `20261114`) over the per-row differences in sorted order, each resample summed with `math.fsum`: the same seed and rows give the same interval on every Python and every machine, and the same rows in any order give the same interval. Pure Python: about 10 s at the 10,000-row cap (5 to 10 s, depending on the machine), once per live run. |
 | `underpowered` | A sign-test heuristic: `true` when `n` is below the rows a two-sided sign test needs to reach `confidence` even if every row got better (`2 / 2**n <= 1 - confidence`: 6 rows at 95%; 5 rows give 6.25%). `false` does NOT mean the comparison is well powered (6 rows is the floor, not a target). The panel prints a yellow `Underpowered: 4 rows; ... (at least 6 rows are needed)` line. It is informational: its definition may change, so a reader recomputes it from `n` and `confidence` and does not refuse a file whose stored value differs; it never changes a verdict. |
 
 None of it is a rule: the verdict, `failed_rule` and the exit code are decided by the two means
