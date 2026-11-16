@@ -1,5 +1,9 @@
-"""Tests verifying recipe search by declared model size (#2930)."""
+"""Tests verifying recipe search by declared model size (#2932, #2930)."""
 
+from __future__ import annotations
+
+import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -79,7 +83,7 @@ def test_case_insensitive_size_matching():
 
 
 def test_non_size_query_fallback():
-    """Non-size text queries match against name, model id and description (#2930)."""
+    """Non-size text queries match against name, model id and description (#2932, #2930)."""
     results = search_recipes(size="llama")
     assert len(results) > 0
     for r in results:
@@ -90,6 +94,16 @@ def test_non_size_query_fallback():
             or "llama" in r.description.lower()
         )
         assert matched
+
+    # Verify matching specifically through description when absent from name and model
+    desc_only_results = search_recipes(size="unpaired")
+    desc_only_names = [n for n, r in RECIPES.items() if r in desc_only_results]
+    assert "llama3.1-8b-kto" in desc_only_names
+    kto = get_recipe("llama3.1-8b-kto")
+    assert kto is not None
+    assert "unpaired" not in "llama3.1-8b-kto"
+    assert "unpaired" not in kto.model.lower()
+    assert "unpaired" in kto.description.lower()
 
 
 def test_compound_size_and_task_filtering():
@@ -151,6 +165,10 @@ def test_size_query_excludes_longer_token_substrings():
         assert r.size.lower() == "7b"
     scout_17b = get_recipe("llama4-scout-17b-sft")
     assert scout_17b not in results_7b
+    # Recipes with different declared size in name (e.g. magicoder-7b-sft declared 6.7B) excluded
+    magicoder = get_recipe("magicoder-7b-sft")
+    if magicoder is not None:
+        assert magicoder not in results_7b
 
     # 1B must NOT match 11B recipes
     results_1b = search_recipes(size="1B")
@@ -160,19 +178,26 @@ def test_size_query_excludes_longer_token_substrings():
 
 
 def test_mcp_tool_recipes_search_by_declared_size():
-    """MCP tool_recipes_search resolves recipes matching declared model size."""
+    """MCP tool_recipes_search resolves recipes matching declared model size (#2932)."""
     from soup_cli.mcp_server.registry import tool_recipes_search
 
     res = tool_recipes_search({"size": "109B"})
     assert res["count"] >= 4
-    names = [r["name"] for r in res["results"]]
-    assert "llama4-scout-17b-sft" in names
+    mcp_names = [r["name"] for r in res["results"]]
+    expected_recipes = search_recipes(size="109B")
+    expected_names = [next(n for n, r in RECIPES.items() if r is rec) for rec in expected_recipes]
+    assert sorted(mcp_names) == sorted(expected_names)
 
 
-def test_cli_recipes_search_size_flag():
-    """CLI 'soup recipes search --size <size>' displays matching recipes."""
-    cli_runner = CliRunner(env={"COLUMNS": "200"})
-    result = cli_runner.invoke(app, ["recipes", "search", "--size", "109B"])
+def test_cli_recipes_search_size_flag(monkeypatch: pytest.MonkeyPatch):
+    """CLI 'soup recipes search --size <size>' displays matching recipes (#2932)."""
+    monkeypatch.setattr("soup_cli.commands.recipes.console", Console(width=200))
+    result = runner.invoke(app, ["recipes", "search", "--size", "109B"])
     assert result.exit_code == 0
     assert "llama4-scout-17b-sft" in result.output
     assert "109B" in result.output
+
+    # Unmatched size exits 0 with no recipes found message
+    unmatched = runner.invoke(app, ["recipes", "search", "--size", "999999Z"])
+    assert unmatched.exit_code == 0
+    assert "No recipes found" in unmatched.output
