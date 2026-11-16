@@ -471,7 +471,9 @@ def test_a_checkpoint_directory_linked_to_outside_the_run_dir_is_not_read(cwd, c
     assert restored is False
     assert _same(_snapshot(opt), before)
     text = _message(caplog)
-    assert "optimizer.pt" in text and "outside the run directory" in text, text
+    assert "step-1" in text, text  # names the directory
+    assert "was refused" in text and "outside the run directory" in text, text
+    assert "Remove the link" in text and "nothing was loaded" in text, text
 
 
 @pytest.mark.requires_symlink
@@ -495,6 +497,40 @@ def test_a_step_directory_linked_to_outside_the_run_dir_is_not_read(cwd, caplog)
     assert restored is False
     assert _same(_snapshot(opt), before)
     assert "outside the run directory" in _message(caplog), _message(caplog)
+
+
+@pytest.mark.requires_symlink
+def test_a_linked_checkpoint_directory_is_not_read_for_the_adapter_either(cwd, caplog):
+    """The adapter is loaded from the same directory as the optimizer state: same check."""
+    torch = pytest.importorskip("torch")
+    peft = pytest.importorskip("peft")
+
+    class Tiny(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.lin = torch.nn.Linear(4, 4, bias=False)
+
+        def forward(self, inputs):
+            return self.lin(inputs)
+
+    model = peft.get_peft_model(Tiny(), peft.LoraConfig(target_modules=["lin"], r=2))
+    key = "base_model.model.lin.lora_A.default.weight"
+    outside = cwd / "outside"
+    model.save_pretrained(str(outside / "step-1"))  # a valid adapter, outside the run dir
+    with torch.no_grad():
+        dict(model.named_parameters())[key].add_(5.0)
+    drifted = model.state_dict()[key].clone()
+    (cwd / "run").mkdir()
+    os.symlink(str(outside), os.path.join("run", "rl-checkpoints"), target_is_directory=True)
+    cb = _callback()
+
+    with caplog.at_level(logging.WARNING):
+        restored = cb.restore_checkpoint(step=1, model=model, optimizer=None)
+
+    assert restored is False
+    assert torch.equal(model.state_dict()[key], drifted), "the adapter was loaded from outside"
+    text = _message(caplog)
+    assert "was refused" in text and "outside the run directory" in text, text
 
 
 # ----------------------------------------------------- containment on the write side
@@ -588,6 +624,118 @@ def test_the_callback_logs_a_refused_save_once_and_does_not_stop_training(cwd, c
     refusals = [text for text in messages if "outside the run directory" in text]
     assert len(refusals) == 1, refusals
     assert "rl-checkpoints" in refusals[0], refusals[0]
+
+
+def _plant_a_file_link(cwd: Path, entry: str, *, existing: bool) -> tuple[Path, Path]:
+    """``run/rl-checkpoints/step-1/<entry>`` -> a file outside the run directory."""
+    victim = cwd / "outside" / "victim.txt"
+    victim.parent.mkdir()
+    if existing:
+        victim.write_text("ORIGINAL", encoding="utf-8")
+    step_dir = cwd / "run" / "rl-checkpoints" / "step-1"
+    step_dir.mkdir(parents=True)
+    os.symlink(str(victim), str(step_dir / entry))
+    return victim, step_dir
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize(
+    ("entry", "existing"),
+    [("optimizer.pt.tmp", True), ("adapter_config.json", True), ("optimizer.pt.tmp", False)],
+    ids=["tmp-file-link", "adapter-file-link", "dangling-tmp-file-link"],
+)
+def test_a_save_refuses_a_file_link_inside_the_step_dir(cwd, entry, existing):
+    """A link to a file outside the run dir, planted where the save writes: not written through."""
+    from soup_cli.utils.rl_checkpoint import RLCheckpointPathError
+
+    victim, step_dir = _plant_a_file_link(cwd, entry, existing=existing)
+    model = _RecordingModel()
+    cb = _callback()
+
+    with pytest.raises(RLCheckpointPathError) as excinfo:
+        cb.save_checkpoint(step=1, model=model, optimizer=_adamw())
+
+    text = str(excinfo.value)
+    assert entry in text, text  # names the entry
+    assert "was refused" in text and "is a link" in text, text
+    assert "Remove the link" in text and "nothing was written" in text, text
+    if existing:
+        assert victim.read_text(encoding="utf-8") == "ORIGINAL", "the link was written through"
+    else:
+        assert not victim.exists(), "the dangling link was written through"
+    assert model.saved_to == []
+    assert os.listdir(step_dir) == [entry], os.listdir(step_dir)
+    assert cb._saved == [], "a refused save must not become a rollback target"
+
+
+@pytest.mark.requires_symlink
+def test_the_callback_names_a_file_link_once_and_does_not_stop_training(cwd, caplog):
+    import types
+
+    victim, _step_dir = _plant_a_file_link(cwd, "optimizer.pt.tmp", existing=True)
+    opt = _adamw()
+    cb = _callback()
+    control = object()
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(2):
+            returned = cb.on_step_end(
+                None,
+                types.SimpleNamespace(global_step=1),
+                control,
+                model=_RecordingModel(),
+                optimizer=opt,
+            )
+            assert returned is control
+
+    assert victim.read_text(encoding="utf-8") == "ORIGINAL"
+    messages = [rec.getMessage() for rec in caplog.records]
+    refusals = [text for text in messages if "is a link" in text]
+    assert len(refusals) == 1, refusals
+    assert "optimizer.pt.tmp" in refusals[0], refusals[0]
+
+
+@pytest.mark.parametrize("blocked", ["rl-checkpoints", "step-1"])
+def test_a_checkpoint_path_that_is_a_regular_file_is_named_once_in_the_log(
+    cwd, blocked, caplog
+):
+    """``makedirs`` fails on it; the save used to fail silently under the callback's catch-all."""
+    import types
+
+    from soup_cli.utils.rl_checkpoint import RLCheckpointPathError
+
+    run = cwd / "run"
+    run.mkdir()
+    if blocked == "rl-checkpoints":
+        (run / "rl-checkpoints").write_text("not a directory", encoding="utf-8")
+    else:
+        (run / "rl-checkpoints").mkdir()
+        (run / "rl-checkpoints" / "step-1").write_text("not a directory", encoding="utf-8")
+    model = _RecordingModel()
+    opt = _adamw()
+    cb = _callback()
+
+    with pytest.raises(RLCheckpointPathError) as excinfo:
+        cb.save_checkpoint(step=1, model=model, optimizer=opt)
+    text = str(excinfo.value)
+    assert blocked in text, text
+    assert "was refused" in text and "not a directory" in text, text
+    assert "Remove it" in text and "nothing was written" in text, text
+
+    control = object()
+    with caplog.at_level(logging.WARNING):
+        for _ in range(2):
+            returned = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=1), control, model=model, optimizer=opt
+            )
+            assert returned is control
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    refusals = [text for text in messages if "not a directory" in text]
+    assert len(refusals) == 1, refusals
+    assert blocked in refusals[0], refusals[0]
+    assert model.saved_to == []
+    assert cb._saved == []
 
 
 # --------------------------------------------------------------------------- what is saved

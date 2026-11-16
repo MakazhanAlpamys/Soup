@@ -88,6 +88,25 @@ def test_the_helper_refuses_by_name_and_never_runs_the_file(tmp_path, kind):
     assert not marker.exists()
 
 
+def test_the_payload_fixture_is_live_under_the_unsafe_load_and_inert_under_the_helper(tmp_path):
+    """Control: without it, "the marker is absent" above could pass vacuously."""
+    import torch
+
+    from soup_cli.utils.mole_routing import load_gate_state
+
+    marker = tmp_path / "marker"
+    path = tmp_path / "mole_gate.pt"
+    _write(path, "needs-code", marker)
+
+    with pytest.raises(ValueError):
+        load_gate_state(str(path))
+    assert not marker.exists(), "the helper ran the file"
+
+    torch.load(path, map_location="cpu", weights_only=False)
+
+    assert marker.read_text(encoding="utf-8") == "payload ran", "the fixture is not live"
+
+
 # --------------------------------------------------------------------------- the trainer resume
 
 

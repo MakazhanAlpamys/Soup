@@ -29,7 +29,9 @@ Security:
   A save writes only a state that the read-back accepts (:func:`_is_plain_state`); a restore
   reads the file only when the config includes optimizer state and only from inside the
   run directory. A save refuses a checkpoint directory that resolves outside the run
-  directory (:class:`RLCheckpointPathError`) before anything is written.
+  directory, any link inside the step directory and a path that is a file
+  (:class:`RLCheckpointPathError`) before anything is written; a restore reads nothing
+  from a directory that resolves outside the run directory.
 """
 
 from __future__ import annotations
@@ -214,7 +216,11 @@ class RLCheckpointLoadError(ValueError):
 
 
 class RLCheckpointPathError(ValueError):
-    """An RL checkpoint directory resolves outside the run directory; nothing was written."""
+    """A save refused its path: nothing was written.
+
+    Raised for a checkpoint directory that resolves outside the run directory, a link
+    inside the step directory, or a regular file where a directory belongs.
+    """
 
 
 _REFUSAL_REMEDY = (
@@ -254,6 +260,14 @@ def _is_plain_state(obj: Any, _depth: int = 0) -> bool:
     except ImportError:
         return False
     return kind is torch.Tensor
+
+
+def _outside_run_dir_message(directory: str, run_dir: str, outcome: str) -> str:
+    """The refusal for a checkpoint directory that resolves outside the run directory."""
+    return (
+        f"RL checkpoint directory {quote_path(directory)} was refused: it resolves "
+        f"outside the run directory {quote_path(run_dir)}. Remove the link; {outcome}."
+    )
 
 
 def _refusal_message(path: str, reason: str) -> str:
@@ -423,12 +437,29 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         # created or written.
         if not is_under(ckpt_dir, self.output_dir):
             raise RLCheckpointPathError(
-                f"RL checkpoint directory {quote_path(ckpt_dir)} was refused: it resolves "
-                f"outside the run directory {quote_path(self.output_dir)}. Remove the link; "
-                "nothing was written."
+                _outside_run_dir_message(ckpt_dir, self.output_dir, "nothing was written")
             )
+        # A regular file where a directory belongs makes makedirs fail, and the callback's
+        # catch-all would swallow that without a word: name it instead.
+        for blocking in (root, ckpt_dir):
+            if os.path.lexists(blocking) and not os.path.isdir(blocking):
+                raise RLCheckpointPathError(
+                    f"RL checkpoint path {quote_path(blocking)} was refused: it exists and "
+                    "is not a directory. Remove it; nothing was written."
+                )
 
         os.makedirs(ckpt_dir, exist_ok=True)
+
+        # File-level links: a link already sitting in the step directory (optimizer.pt.tmp,
+        # an adapter file) would be written through to its target. Any link there is
+        # refused, before anything is written (nothing the save writes is a link).
+        for name in os.listdir(ckpt_dir):
+            entry = os.path.join(ckpt_dir, name)
+            if os.path.islink(entry):
+                raise RLCheckpointPathError(
+                    f"RL checkpoint entry {quote_path(entry)} was refused: it is a link, and a "
+                    "save would write through it. Remove the link; nothing was written."
+                )
 
         if model is not None and hasattr(model, "save_pretrained"):
             model.save_pretrained(ckpt_dir)
@@ -436,34 +467,29 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         has_optimizer = False
         if self.config.include_optimizer_state and optimizer is not None:
             opt_out = os.path.join(ckpt_dir, "optimizer.pt")
-            # Refuse to write THROUGH a pre-placed symlink (write-to-arbitrary
-            # path in a shared checkpoint dir; security-review LOW #6).
-            if os.path.islink(opt_out):
-                has_optimizer = False
-            else:
-                try:
-                    import torch
+            try:
+                import torch
 
-                    optimizer_state = optimizer.state_dict()
-                    if _is_plain_state(optimizer_state):
-                        # Atomic write: torch.save straight to opt_out could leave a
-                        # truncated file if interrupted. Stage to .tmp then rename.
-                        tmp_out = opt_out + ".tmp"
-                        torch.save(optimizer_state, tmp_out)
-                        os.replace(tmp_out, opt_out)
-                        has_optimizer = True
-                    else:
-                        # A restore reads this file with weights_only=True and refuses
-                        # anything else: do not write what it would refuse.
-                        logger.warning(
-                            "RL checkpoint step %d: optimizer state not saved because it "
-                            "holds objects other than tensors and plain containers, which "
-                            "a restore would refuse to load. The checkpoint holds the "
-                            "adapter only.",
-                            int(step),
-                        )
-                except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
-                    has_optimizer = False
+                optimizer_state = optimizer.state_dict()
+                if _is_plain_state(optimizer_state):
+                    # Atomic write: torch.save straight to opt_out could leave a
+                    # truncated file if interrupted. Stage to .tmp then rename.
+                    tmp_out = opt_out + ".tmp"
+                    torch.save(optimizer_state, tmp_out)
+                    os.replace(tmp_out, opt_out)
+                    has_optimizer = True
+                else:
+                    # A restore reads this file with weights_only=True and refuses
+                    # anything else: do not write what it would refuse.
+                    logger.warning(
+                        "RL checkpoint step %d: optimizer state not saved because it "
+                        "holds objects other than tensors and plain containers, which "
+                        "a restore would refuse to load. The checkpoint holds the "
+                        "adapter only.",
+                        int(step),
+                    )
+            except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
+                has_optimizer = False
 
         manifest = RLCheckpointState(
             step=int(step),
@@ -494,13 +520,20 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         Best-effort — returns ``True`` when at least one artifact was restored,
         ``False`` otherwise, and NEVER raises (rollback must not crash the run).
 
-        The optimizer state is read from ``optimizer.pt`` only when this callback's
-        config includes optimizer state, only from inside the run directory, and only
-        through :func:`load_optimizer_state` (``weights_only=True``). A file that is
-        refused is logged by name and skipped; the optimizer is left untouched.
+        Nothing is read unless the checkpoint directory resolves inside the run directory
+        (the adapter and the optimizer state come from the same directory). The optimizer
+        state is read from ``optimizer.pt`` only when this callback's config includes
+        optimizer state, and only through :func:`load_optimizer_state`
+        (``weights_only=True``). A refusal is logged by name and skipped; the optimizer is
+        left untouched.
         """
         ckpt_dir = os.path.join(self._ckpt_root(), f"step-{int(step)}")
         if not os.path.isdir(ckpt_dir):
+            return False
+        if not is_under(ckpt_dir, self.output_dir):
+            logger.warning(
+                "%s", _outside_run_dir_message(ckpt_dir, self.output_dir, "nothing was loaded")
+            )
             return False
         restored = False
         if model is not None:
@@ -526,25 +559,15 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         """Apply ``opt_path`` to ``optimizer``; True when applied. Never raises."""
         try:
             # The file has to be one this run wrote: refuse a symlinked optimizer.pt
-            # (security review HIGH #1: a link swapped in between save and restore) and
-            # any path that resolves outside the run directory (a linked rl-checkpoints/
-            # or step-N/ directory). The strict loader below is what stops a pickle from
-            # running; these checks keep the read inside the run directory.
+            # (security review HIGH #1: a link swapped in between save and restore). A
+            # linked rl-checkpoints/ or step-N/ directory was refused by the caller. The
+            # strict loader below is what stops a pickle from running.
             if os.path.islink(opt_path):
                 logger.warning(
                     "%s", _refusal_message(opt_path, "it is a symlink (possible tampering)")
                 )
                 return False
             if not os.path.isfile(opt_path):
-                return False
-            if not is_under(opt_path, self.output_dir):
-                logger.warning(
-                    "%s",
-                    _refusal_message(
-                        opt_path,
-                        f"it resolves outside the run directory {quote_path(self.output_dir)}",
-                    ),
-                )
                 return False
             try:
                 state = load_optimizer_state(opt_path)
