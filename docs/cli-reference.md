@@ -2750,6 +2750,7 @@ Usage: `soup loop canary [OPTIONS] NEW_ADAPTER`
 | `NEW_ADAPTER` | text |  | yes | Adapter id/path to canary. |
 | `--traffic` | text | `5%` |  | Traffic share, e.g. "5%" or "5". |
 | `--autoroll-on-regress` / `--no-autoroll-on-regress` | flag | on |  | Roll back automatically on MAJOR verdict. |
+| `--allow-dont-ship` | flag | off |  | Canary the adapter although its last verdict was DON'T SHIP. Recorded in loop.yaml, the progress log and, if it is promoted, the line that records the promotion. |
 
 ### `soup loop init`
 

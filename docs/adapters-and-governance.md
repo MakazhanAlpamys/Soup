@@ -268,6 +268,17 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         iteration's notes say which, for example "sft quantization auto:
 #                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
 #                         (parameter count unknown)".
+# The recipe also writes data.max_length from the rows it just built, so that soup train's
+# hardware-fit gate prices the run that will happen and not 2048 tokens per row: the longest row
+# of the dataset in tokens of the BASE model's tokenizer (the chat template applied for sft), plus
+# 16, rounded up to a multiple of 64, never below 64 and never above the schema default (2048;
+# a longer row is cut by the trainer as before). The tokenizer is loaded in a short-lived child,
+# not in the daemon. The iteration's notes say which value and why ("max_length: 64 (longest of
+# 26 rows is 25 tokens, +16, rounded up to a multiple of 64, ceiling 2048)"), or that the
+# default stayed because the tokenizer could not be loaded ("max_length: 2048 kept, the longest
+# row could not be measured (...)"). The gate is not bypassed, and the loop never passes
+# --allow-oom-attempt. On an 8 GB card the unmeasured default is refused by the gate: a 0.6B
+# model on 26 rows of 25 tokens was predicted at 21.7 GB there and peaks at 1.2 GB.
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
 # built-in recipe is the one the fit runs of 2026-11-06 chose (candidate B in bf16):
@@ -394,11 +405,26 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
 # is invalid (exit 2). The train and ship children write their output to
 # .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
-# train_log, verify_log); only the last lines go into a failure note.
+# train_log, verify_log); only the last lines go into a failure note. On Windows every child
+# the loop starts (train, ship, and the short probes for free VRAM and for the tokenizer) gets
+# CREATE_NO_WINDOW: a detached daemon has no console, and a child that got a console window of its
+# own died with exit 3221225786 (0xC000013A, STATUS_CONTROL_C_EXIT) and no message. A child that
+# ends by a signal or an NTSTATUS is named in last_failure (for example "train failed (exit code
+# 3221225786 (STATUS_CONTROL_C_EXIT 0xC000013A: ...)"); POSIX is unchanged.
+# A training run that failed is not started again on every poll: the same inputs (the dataset,
+# the method, the base model and the recipe) wait 5 minutes after the first failure, 30 minutes
+# after the second, and after the third the loop holds. A held loop trains again when the inputs
+# change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
+# of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
+# train_retry row.
 soup loop watch --detach
 
 # `soup loop status` has a daemon row: "running (pid N), log .soup/loop.log",
-# "not running", or "not running (stale pid file)". It only reads the file.
+# "not running", or "not running (stale pid file)". It only reads the file. When loop.yaml
+# names a production adapter it also has a server row: it asks SOUP_LOOP_SERVE_ENDPOINT's /health
+# which adapter is active and says "serving production NAME", "NOT serving production NAME" (a
+# restarted server answers with the base model; the row names how to go on), "serving OTHER",
+# "not reachable", or "not checked" (no endpoint in that shell).
 soup loop status
 
 # The deploy stage loads a SHIP-verdict adapter into the running server
@@ -423,11 +449,18 @@ SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" sou
 # either, it is refused.
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop rollback
 
-# Start serve with the candidate loaded, then promote it at 5% traffic.
+# Start serve with the candidate loaded, then promote it at 5% traffic. The command refuses an
+# adapter whose last verdict was DON'T SHIP (the latest line of the iteration that trained it in
+# iterations.jsonl, or a verdict file .soup-loops/verdicts/<adapter>.json) and exits 2 naming the
+# adapter; --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
+# (canary_override), in the canary start line of progress.jsonl and, if the canary is promoted,
+# in the promotion's note and its line in versions.jsonl. An adapter the loop has no verdict for
+# (trained by hand, verified by a hand-run soup ship with another file name) is not checked.
 soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
 
-# Pause/resume the daemon between iterations (atomic state flip)
+# Pause/resume the daemon between iterations (atomic state flip). resume also clears a
+# failed-train hold (the train_retry row of status), paused or not.
 soup loop pause
 soup loop resume
 

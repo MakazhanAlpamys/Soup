@@ -335,7 +335,10 @@ manifest is not rewritten.
 ### `iterations.jsonl`
 
 A line is appended when an iteration is recorded (a cycle that only waits for ratings, or
-that the budget skips, records no iteration of its own) and again when its outcome changes:
+that the budget skips, records no iteration of its own) and again when its outcome changes.
+Every recorded iteration has its own line, a failed one and a skipped one included: a line is
+told from a repeat of itself by its `iteration_id` and `outcome` (the parent is the same for
+every iteration of one production version, so it does not identify a line):
 
 | Outcome | When |
 |---|---|
