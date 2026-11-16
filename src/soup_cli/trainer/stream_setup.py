@@ -10,11 +10,10 @@ The move is behaviour-preserving for SFT by design, so v0.72.0-.3's
 bit-exactness gates remain valid without being re-run. The ONE addition is
 ``_STREAM_ROWS_PER_EXAMPLE``: DPO, ORPO and SimPO build their forward through
 TRL's ``concatenated_inputs`` + ``torch.cat``, so 2 x ``batch_size`` rows reach
-the model in a single tensor. v0.72.3's VRAM estimator was validated on the
-property that it NEVER under-predicts, and budgeting those three at 1x rows
-would break exactly that — on Windows the consequence is not an exception but a
-silent WDDM spill to host memory that makes the run an order of magnitude
-slower with no error at all.
+the model in a single tensor. The VRAM estimator is calibrated against named
+hardware and sequence-length grids; it is not a universal upper bound. The
+RTX 3050 grid is now charged for two retained cuBLAS workspaces, but other
+devices and shapes still require measurement.
 
 NO top-level torch: this module is imported by five trainer modules.
 """
@@ -34,14 +33,34 @@ from soup_cli.utils.paths import quote_path
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
+
+def _stream_compute_capability(torch_module: Any, device: Any) -> Optional[tuple[int, int]]:
+    """Read CUDA capability when available; callers charge conservatively otherwise.
+
+    Some CPU CI tests simulate a CUDA path without a CUDA runtime. Keep this
+    capability query patchable and avoid making those checks depend on hardware.
+    """
+    try:
+        return tuple(torch_module.cuda.get_device_capability(device))
+    except Exception:
+        return None
+
+
+def _stream_compute_capability_for_device(device: Any) -> Optional[tuple[int, int]]:
+    """Import the optional CUDA runtime only when the streamed run targets CUDA."""
+    try:
+        import torch
+    except Exception:
+        return None
+    return _stream_compute_capability(torch, device)
+
 console = Console()
 
 
 #: How far over the predicted budget `training.stream_vram_probe` may still
-#: defer to a measurement. The formula's worst measured error is 0.787x (21%
-#: under, seq 6144), so anything beyond a small multiple is not the formula
-#: being wrong — it is the config being too big, and that is refusable by
-#: arithmetic without touching the GPU.
+#: defer to a measurement. The 0.787x result at seq 6144 comes from the earlier
+#: RTX 3050 sequence study; #1407 adds the separately measured cuBLAS workspace
+#: charge. Neither study makes a global guarantee for unmeasured shapes/devices.
 _PROBE_DEFERRAL_CEILING = 4.0
 
 
@@ -1957,7 +1976,17 @@ class StreamingSetupMixin:
             nf4_scale_cache_bytes,
             resolve_available_vram_bytes,
         )
+        from soup_cli.utils.layer_stream import (
+            cublas_workspace_bytes as estimate_cublas_workspace_bytes,
+        )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
+
+        cublas_bytes = 0
+        if on_cuda:
+            cublas_bytes = estimate_cublas_workspace_bytes(
+                compute_capability=_stream_compute_capability_for_device(self.device),
+                workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+            )
 
         # Charged whole even though it fills lazily: the cache is complete after
         # the first step and stays resident for the run.
@@ -1990,9 +2019,8 @@ class StreamingSetupMixin:
         batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
         # v0.72.4 — a paired loss concatenates chosen and rejected into ONE
         # tensor, so twice the rows reach the model per configured batch. The
-        # estimator's contract is that it never under-predicts; budgeting a
-        # paired loss at 1x rows would halve the logits term, which is the
-        # dominant one (measured 146x the buffer pool at batch 8).
+        # budgeting a paired loss at 1x rows would halve the logits term, which
+        # is the dominant one (measured 146x the buffer pool at batch 8).
         rows = batch * self._STREAM_ROWS_PER_EXAMPLE
         if not (vocab and hidden and inter):
             # Never silently: skipping the budget also skips the refusal that
@@ -2063,6 +2091,7 @@ class StreamingSetupMixin:
                 logits_bytes_per_element=calibrated,
                 large_layer_bytes=large_layer_bytes,
                 persistent_bytes=scale_cache_bytes + expert_bytes,
+                cublas_workspace_bytes=cublas_bytes,
                 loss_chunk=loss_chunk,
                 recompute_bytes=recompute_bytes,
             )
@@ -2086,6 +2115,11 @@ class StreamingSetupMixin:
             )
 
         lines = [peak_line(predicted)]
+        if cublas_bytes:
+            lines.append(
+                f"  cuBLAS       {cublas_bytes / (1024 * 1024):.1f} MiB PyTorch allocator "
+                "workspace, included above"
+            )
         if scale_cache_bytes:
             lines.append(
                 f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "

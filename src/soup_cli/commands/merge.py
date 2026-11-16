@@ -185,6 +185,21 @@ def merge(
         )
         raise typer.Exit(1)
 
+    if (adapter_path / "added_tokens.safetensors").exists():
+        console.print(
+            "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+        )
+        raise typer.Exit(1)
+    try:
+        cfg_data = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+        if isinstance(cfg_data, dict) and cfg_data.get("vocab_expansion"):
+            console.print(
+                "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+            )
+            raise typer.Exit(1)
+    except (OSError, ValueError):
+        pass
+
     # --- Resolve base model ---
     if not base:
         base = _detect_base_model(adapter_config_path)
@@ -336,7 +351,11 @@ def _merge_low_memory(
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.lowmem_merge import (
+            LowMemoryMergeError,
+            hub_download_patterns,
+            merge_low_memory,
+        )
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
@@ -363,11 +382,13 @@ def _merge_low_memory(
             from soup_cli.utils.hubs import snapshot_download
 
             console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
+            allow_patterns, ignore_patterns = hub_download_patterns(trc)
             base_dir = Path(
                 snapshot_download(
                     base,
                     cache_dir=None,
-                    allow_patterns=["*.safetensors", "*.json"],
+                    allow_patterns=allow_patterns,
+                    ignore_patterns=ignore_patterns,
                     revision=revision_kwargs.get("revision"),
                 )
             )

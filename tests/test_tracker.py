@@ -1,5 +1,6 @@
 """Tests for experiment tracker (SQLite-backed)."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -80,7 +81,8 @@ def test_finish_run(tracker):
     assert run["final_loss"] == 0.8
     assert run["total_steps"] == 100
     assert run["duration_secs"] == 3600.0
-    assert run["output_dir"] == "/tmp/output"
+    # stored absolute (#2725): on Windows "/tmp/output" gains the current drive
+    assert run["output_dir"] == os.path.abspath("/tmp/output")
 
 
 def test_fail_run(tracker):
