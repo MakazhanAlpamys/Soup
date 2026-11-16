@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -41,7 +42,11 @@ from soup_cli.utils.gpu import (
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
-    from soup_cli.utils.hardware_fit import FitUnavailable, HardwareFitInput
+    from soup_cli.utils.hardware_fit import (
+        FitUnavailable,
+        HardwareFitInput,
+        HardwareFitReport,
+    )
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -525,6 +530,27 @@ def _preflight_sharding(
     return mode, processes
 
 
+@dataclasses.dataclass(frozen=True)
+class _FitDecision:
+    """What the pre-flight decided for a run whose estimate did not fit the card.
+
+    ``refuse`` is the decision at ``data.max_length`` (a warning only outside the calibrated
+    range, a refusal inside it); ``_realised_length_verdict`` re-decides a refusal on the
+    longest row of the data and can only lift it, never add one.
+    """
+
+    inp: HardwareFitInput
+    report: HardwareFitReport
+    refuse: bool
+    outside: tuple[str, ...]
+    floor_gb: float
+    floor_terms: tuple[str, ...]
+    sharded: bool
+    sharding: str | None
+    num_processes: int
+    allow_oom_attempt: bool
+
+
 def _hardware_fit_preflight(
     cfg,
     gpu_info,
@@ -532,7 +558,8 @@ def _hardware_fit_preflight(
     allow_oom_attempt: bool,
     sharding: str | None = None,
     num_processes: int = 1,
-) -> None:
+    defer_refusal_to_data: bool = False,
+) -> _FitDecision | None:
     """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
 
     Skips silently for layer streaming, MLX, or unknown CUDA VRAM. Otherwise,
@@ -544,6 +571,14 @@ def _hardware_fit_preflight(
     sharded across more than one process is checked against its floor per card; its
     estimate, fitted on single-card runs, is a warning as it is outside the calibrated
     range. Any other run, one process included, is priced as one unsharded card.
+
+    ``defer_refusal_to_data`` (``soup train`` sets it): a REFUSAL of a run that pads each
+    micro-batch to its longest row (``utils/realised_length.unpriceable_reason`` is
+    ``None``) and would fit the card at some length is not printed; the decision is
+    returned instead, for ``_realised_length_verdict`` to re-decide once the data is loaded
+    and its longest row is known. Every other outcome is as without the flag: a run that
+    fits returns ``None`` having read nothing, a warning is printed, and a refusal that no
+    row length can lift is printed and raised at once.
     """
     # v0.72.0 — layer streaming bounds peak VRAM by ONE decoder layer, so the
     # resident prediction (full weights + optimizer + grads on the card) is the
@@ -551,22 +586,22 @@ def _hardware_fit_preflight(
     # enable. The streaming path runs its own pre-flight instead (RAM-tier fit
     # + the plan panel in _setup_streaming_transformers).
     if getattr(cfg.training, "stream_layers", False):
-        return
+        return None
     # MLX uses Apple unified memory and its own runtime allocator, so the
     # CUDA-shaped analytical VRAM predictor is skipped.  On a non-Apple host,
     # ``backend: mlx`` still skips harmlessly: ``resolve_trainer`` fails on
     # the ``mlx_lm`` import before training starts, so there is no silent
     # hazard from bypassing the gate.
     if getattr(cfg, "backend", None) == "mlx":
-        return
+        return None
 
     total_bytes = 0
     try:
         total_bytes = int(gpu_info.get("memory_total_bytes", 0) or 0)
     except (AttributeError, TypeError, ValueError):
-        return
+        return None
     if total_bytes <= 0:
-        return  # no CUDA VRAM to predict against
+        return None  # no CUDA VRAM to predict against
     from soup_cli.utils.gpu import bf16_fp16_flags
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
 
@@ -592,10 +627,8 @@ def _hardware_fit_preflight(
             )
         else:
             console.print(f"[yellow]Pre-flight skipped:[/] {markup_escape(inp.reason)}.")
-        return
+        return None
     from soup_cli.utils.hardware_fit import (
-        CALIBRATED_RANGE,
-        VRAM_SAFETY_MARGIN,
         decide_hardware_fit,
         outside_calibrated_range,
         unextrapolated_floor,
@@ -603,8 +636,7 @@ def _hardware_fit_preflight(
 
     report = decide_hardware_fit(inp, available_vram_gb=total_bytes / 1e9)
     if report.ok:
-        return
-    b = report.breakdown
+        return None
     # The estimate is fitted on one range of runs; beyond it the same numbers are an
     # extrapolation, so they are a warning there and a refusal only inside it. The weights,
     # the CUDA context and the state of the parameters the run trains (adapters, gradients,
@@ -619,10 +651,68 @@ def _hardware_fit_preflight(
     else:
         sharding, num_processes = None, 1
     floor_gb, floor_terms = unextrapolated_floor(
-        cfg, inp, b, sharding=sharding, num_processes=num_processes
+        cfg, inp, report.breakdown, sharding=sharding, num_processes=num_processes
     )
     floor_exceeds_card = floor_gb > report.available_vram_gb
     refuse = not allow_oom_attempt and (not outside or floor_exceeds_card)
+    decision = _FitDecision(
+        inp=inp,
+        report=report,
+        refuse=refuse,
+        outside=tuple(outside),
+        floor_gb=floor_gb,
+        floor_terms=tuple(floor_terms),
+        sharded=sharded,
+        sharding=sharding,
+        num_processes=num_processes,
+        allow_oom_attempt=allow_oom_attempt,
+    )
+    if refuse and defer_refusal_to_data and _row_length_could_lift(cfg, decision):
+        return decision
+    _print_fit_panel(decision, report)
+    if refuse:
+        raise typer.Exit(1)
+    return None
+
+
+def _row_length_could_lift(cfg, decision: _FitDecision) -> bool:
+    """Whether the longest row of the data could turn this refusal into a pass.
+
+    Only for a run priced at the longest row of its data at all
+    (``realised_length.unpriceable_reason``), and only when the run would fit the card at the
+    shortest length the estimate prices: a run that does not is refused as it always was,
+    with no data read and no tokenizer loaded.
+    """
+    from soup_cli.utils.hardware_fit import _MIN_SEQ_LEN, decide_hardware_fit
+    from soup_cli.utils.realised_length import unpriceable_reason
+
+    inp = decision.inp
+    remote_code = bool(getattr(getattr(inp, "shape", None), "remote_code", False))
+    if unpriceable_reason(cfg, remote_code=remote_code) is not None:
+        return False
+    # A run already at the shortest length is not on the card at it either, so this is False.
+    shortest = decide_hardware_fit(
+        dataclasses.replace(inp, seq_len=_MIN_SEQ_LEN),
+        available_vram_gb=decision.report.available_vram_gb,
+    )
+    return shortest.ok
+
+
+def _print_fit_panel(
+    decision: _FitDecision, report: HardwareFitReport, *, priced_note: str | None = None
+) -> None:
+    """The hardware-fit panel for ``report``, a warning or a refusal as ``decision`` says.
+
+    ``report`` is the one printed: ``decision.report`` (``data.max_length``), or the same
+    run priced at the longest row of its data, which ``priced_note`` then says (a dim line
+    after the advice).
+    """
+    from soup_cli.utils.hardware_fit import CALIBRATED_RANGE, VRAM_SAFETY_MARGIN
+
+    b = report.breakdown
+    inp, outside, refuse = decision.inp, decision.outside, decision.refuse
+    floor_gb, floor_terms = decision.floor_gb, decision.floor_terms
+    floor_exceeds_card = floor_gb > report.available_vram_gb
     # #1631: a "quantized" run priced like an unquantized one needs a word why.
     dequantized = _HW_FIT_DEQUANTIZED_ON_LOAD.get(inp.quant)
     note = (
@@ -631,9 +721,10 @@ def _hardware_fit_preflight(
         if dequantized
         else ""
     )
-    if sharded:
+    if decision.sharded:
         note += (
-            f"Sharded across {num_processes} processes ({_SHARDING_LABELS[sharding]}): "
+            f"Sharded across {decision.num_processes} processes "
+            f"({_SHARDING_LABELS[decision.sharding]}): "
             "the floor is per card; the other figures are for one unsharded card.\n"
         )
     # #2049: the terms the old formula did not have, shown when they count.
@@ -654,7 +745,9 @@ def _hardware_fit_preflight(
         if b.estimate is not None
         else ""
     )
-    if allow_oom_attempt:
+    if priced_note is not None:
+        footnote = f"\n[dim]{markup_escape(priced_note)}[/]" + footnote
+    if decision.allow_oom_attempt:
         tail = "[yellow]--allow-oom-attempt set: launching anyway.[/]"
     elif refuse:
         tail = (
@@ -696,8 +789,83 @@ def _hardware_fit_preflight(
             border_style="red" if refuse else "yellow",
         )
     )
-    if refuse:
-        raise typer.Exit(1)
+
+
+def _realised_length_verdict(
+    cfg, decision: _FitDecision, dataset, *, trust_remote_code: bool = False
+) -> None:
+    """Re-decide a deferred refusal on the longest row of the loaded data.
+
+    A micro-batch of a run that pads to its longest row holds at most ``batch_size`` rows
+    of that length, so the same estimate priced at ``min(longest row, data.max_length)``
+    (``utils/realised_length``) is the run's own peak where ``data.max_length`` priced rows
+    nobody has. A run that fits there continues, with one line giving both numbers. One that
+    still does not fit is refused as it was, with both numbers on the panel; one whose longest
+    row cannot be read (no tokenizer, too many rows, ...) or reaches ``data.max_length`` gets
+    the panel it always got, with the reason after the advice. The decision to refuse is the
+    one made at ``data.max_length``: this can lift a refusal, never add one.
+    """
+    from soup_cli.utils.hardware_fit import (
+        _MIN_SEQ_LEN,
+        VRAM_SAFETY_MARGIN,
+        decide_hardware_fit,
+    )
+    from soup_cli.utils.realised_length import LongestRow, longest_row_tokens
+
+    inp, at_max = decision.inp, decision.report
+    max_length = inp.seq_len
+    console.print(
+        "[dim]Pre-flight: the run does not fit the card at data.max_length "
+        f"({max_length}); reading the longest row of the data, with the model's tokenizer "
+        "from the cache or the Hub, to price it...[/]"
+    )
+    measured = longest_row_tokens(
+        cfg,
+        dataset,
+        trust_remote_code=trust_remote_code,
+        remote_code=bool(getattr(getattr(inp, "shape", None), "remote_code", False)),
+    )
+    if isinstance(measured, LongestRow) and measured.tokens < max_length:
+        priced = max(_MIN_SEQ_LEN, measured.tokens)
+        at_row = decide_hardware_fit(
+            dataclasses.replace(inp, seq_len=priced),
+            available_vram_gb=at_max.available_vram_gb,
+        )
+        which = (
+            f"priced at {priced} tokens, the longest row; data.max_length is {max_length}"
+            if priced == measured.tokens
+            else f"priced at {priced} tokens, the shortest length the estimate prices (the "
+            f"longest row is {measured.tokens}); data.max_length is {max_length}"
+        )
+        at_max_says = (
+            f"at data.max_length it would be {at_max.peak_vram_gb:.1f} GB "
+            f"({at_max.required_with_margin_gb:.1f} GB with the margin)"
+        )
+        if at_row.ok:
+            console.print(
+                f"[green]Pre-flight:[/] {which} ({measured.rows:,} rows read). Predicted peak "
+                f"VRAM {at_row.peak_vram_gb:.1f} GB (+{int(VRAM_SAFETY_MARGIN * 100)}% margin = "
+                f"{at_row.required_with_margin_gb:.1f} GB) fits {at_row.available_vram_gb:.1f} "
+                f"GB available; {at_max_says}."
+            )
+            return
+        _print_fit_panel(
+            decision, at_row, priced_note=f"Pre-flight: {which}; {at_max_says}."
+        )
+    else:
+        if isinstance(measured, LongestRow):
+            why = (
+                f"the longest row reaches data.max_length ({measured.tokens} tokens), so "
+                "nothing shorter is priced"
+            )
+        else:
+            why = measured.reason
+        _print_fit_panel(
+            decision,
+            at_max,
+            priced_note=f"Pre-flight: not priced at the longest row of the data: {why}.",
+        )
+    raise typer.Exit(1)
 
 
 def _loads_on_unsloth(cfg) -> bool:
@@ -1852,12 +2020,16 @@ def train(
     # outside its range, or a quantization with no memory model such as hqq:*)
     # it says the fit is not checked and why.
     sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
-    _hardware_fit_preflight(
+    # A refusal of a run that pads to its longest row is held back until the data is loaded
+    # and its longest row is known (`_realised_length_verdict`, below); anything else the
+    # pre-flight decides here, as before.
+    fit_deferred = _hardware_fit_preflight(
         cfg,
         gpu_info,
         allow_oom_attempt=allow_oom_attempt,
         sharding=sharding,
         num_processes=sharded_processes,
+        defer_refusal_to_data=True,
     )
 
     backend_label = cfg.backend
@@ -2094,7 +2266,9 @@ def train(
             format_friendly_error(exc)
             raise typer.Exit(1) from exc
 
-    if not dry_run and not yes:
+    # A held-back refusal is settled after the data is loaded; asking "Start training?" before
+    # it would ask about a run that may be refused a moment later.
+    if not dry_run and not yes and fit_deferred is None:
         _confirm_start_training()
 
     # #1223: a split nothing evaluates is not withheld -- generation tasks train
@@ -2117,6 +2291,10 @@ def train(
         _validate_classification_dataset_if_applicable(cfg, dataset)
         _validate_csm_dataset_if_applicable(cfg, dataset)
         _refuse_over_judge_budget(cfg, dataset)
+        if fit_deferred is not None:
+            _realised_length_verdict(
+                cfg, fit_deferred, dataset, trust_remote_code=trust_remote_code
+            )
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -2146,6 +2324,11 @@ def train(
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
+    if fit_deferred is not None:
+        # Before a run is registered, so a refusal leaves none behind.
+        _realised_length_verdict(cfg, fit_deferred, dataset, trust_remote_code=trust_remote_code)
+        if not yes:
+            _confirm_start_training()
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).
