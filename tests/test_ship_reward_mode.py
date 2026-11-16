@@ -1520,3 +1520,63 @@ def test_the_gate_in_reward_mode_needs_the_function_it_compares(tmp_path, monkey
         result.output
     )
     assert not (work / "ran.txt").exists()
+
+
+def test_a_foreign_file_at_the_rows_path_is_refused_before_the_reward_file_runs(
+    tmp_path, monkeypatch
+):
+    # the early check of the per-row file covers the reward mode, and it runs before the reward
+    # file is executed and before any model loads
+    marker = "ran.txt"
+    run = _refuse(
+        tmp_path, monkeypatch, "--task-mode", "reward", "--reward-fn", "reward.py",
+        "--output", "out.json",
+        files={
+            "reward.py": f"open('{marker}', 'w').write('x')\n" + LEN_REWARD,
+            "out.task-rows.jsonl": "not a file of ours\n",
+        },
+    )
+    assert "is not a task-rows file written by soup ship" in run.plain
+    assert marker not in run.files
+    assert run.files["out.task-rows.jsonl"] == b"not a file of ours\n"
+    assert "out.json" not in run.files
+
+
+def _rows_file_and_verdict(work, mode):
+    """Three rows of 0.1 0.2 0.3 (base) against 0.3 0.2 0.1 (tuned) and the verdict that names
+    them: the exact decimal mean of each column is 0.2, a plain left-to-right sum is not."""
+    from soup_cli.utils.ship_task_rows import TaskRow, prompt_hash, rows_to_jsonl
+    from soup_cli.utils.ship_verdict import row_change
+
+    base, tuned = [0.1, 0.2, 0.3], [0.3, 0.2, 0.1]
+    rows = [
+        TaskRow(
+            index=i, prompt_hash=prompt_hash(f"q{i}"), prompt=f"q{i}", expected="e",
+            category="default", scoring=None, base_answer="a", tuned_answer="b",
+            base_score=b, tuned_score=t, change=row_change(b, t), base_truncated=None,
+            tuned_truncated=None, base_failed=False, tuned_failed=False,
+        )
+        for i, (b, t) in enumerate(zip(base, tuned))
+    ]
+    (work / "v.task-rows.jsonl").write_text(rows_to_jsonl(rows), encoding="ascii", newline="")
+    verdict = {
+        "task_win": {
+            "mode": mode, "base": 0.2, "tuned": 0.2,
+            "rows": {"better": 1, "worse": 1, "same": 1, "n": 3},
+        },
+        "task_rows": "v.task-rows.jsonl",
+    }
+    (work / "v.json").write_text(json.dumps(verdict), encoding="utf-8")
+    return str(work / "v.json")
+
+
+def test_the_loader_takes_the_exact_decimal_mean_for_a_reward_verdict_and_no_other(
+    tmp_path, monkeypatch
+):
+    work = _work(tmp_path, monkeypatch, _tasks(3))
+    loaded = load_task_rows_for(_rows_file_and_verdict(work, "reward"))
+    assert loaded.base_mean == loaded.tuned_mean == 0.2
+    # the same numbers under another mode are checked with the plain loop (whose sum is one
+    # rounding off), exactly for a metric verdict
+    with pytest.raises(ValueError, match="is not the reported"):
+        load_task_rows_for(_rows_file_and_verdict(work, "metric"))
