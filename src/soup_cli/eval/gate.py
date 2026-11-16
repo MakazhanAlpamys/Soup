@@ -16,7 +16,7 @@ from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
@@ -149,6 +149,45 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         names.add(task.name)
 
 
+def _suite_error_location(loc: tuple[object, ...]) -> str:
+    """Render a pydantic error location as ``tasks[0].name``."""
+    rendered: list[str] = []
+    for part in loc:
+        if isinstance(part, int) and rendered:
+            rendered[-1] = f"{rendered[-1]}[{part}]"
+        elif isinstance(part, int):
+            rendered.append(f"[{part}]")
+        else:
+            rendered.append(str(part))
+    return ".".join(rendered)
+
+
+def _suite_validation_message(path: str, exc: ValidationError, *, empty: bool) -> str:
+    """Name the suite file and each field a pydantic refusal is about.
+
+    An empty document only fails ``suite`` (``tasks`` has a default), so say
+    what to write instead of repeating that one missing field.
+    """
+    if empty:
+        return (
+            f"eval-gate suite '{path}' is empty: it needs 'suite' (a name) "
+            "and 'tasks' (a list of tasks)"
+        )
+    pieces: list[str] = []
+    for err in exc.errors():
+        loc = _suite_error_location(tuple(err["loc"]))
+        if err["type"] == "missing":
+            pieces.append(f"{(loc or 'value')!r} is required")
+            continue
+        # A validator's own text comes from the original exception in ``ctx``;
+        # anything else (a field-type refusal) already reads fine verbatim.
+        ctx_error = err.get("ctx", {}).get("error")
+        msg = str(ctx_error) if ctx_error is not None else str(err["msg"])
+        pieces.append(f"{loc}: {msg}" if loc else msg)
+    detail = "; ".join(pieces)
+    return f"eval-gate suite '{path}': {detail}"
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -176,13 +215,23 @@ def load_suite(path: str) -> EvalSuite:
         )
     else:
         data = dict(raw)
+    empty = raw is None
     for key in data:
         if not isinstance(key, str):
             raise MalformedSuiteError(
                 f"eval-gate suite '{path}' has a non-string key {key!r}; "
                 "top-level keys must be strings"
             )
-    suite = EvalSuite(**data)
+    # #2295: a plain ValueError (not MalformedSuiteError) so the training hook
+    # keeps warning and leaves the gate inert. The message names the file and
+    # each failing field; the chained pydantic report is suppressed so an
+    # uncaught SDK traceback does not surface its documentation URL either.
+    try:
+        suite = EvalSuite(**data)
+    except ValidationError as exc:
+        raise ValueError(
+            _suite_validation_message(path, exc, empty=empty)
+        ) from None
     _require_gate_tasks(suite)
     return suite
 
