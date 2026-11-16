@@ -38,8 +38,9 @@ def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
-def _unit(slot: int, index: int, *, rank: int = 2, dim: int = 8,
-          a_key: str = A_KEY, b_key: str = B_KEY) -> dict[str, np.ndarray]:
+def _unit(
+    slot: int, index: int, *, rank: int = 2, dim: int = 8, a_key: str = A_KEY, b_key: str = B_KEY
+) -> dict[str, np.ndarray]:
     """An adapter whose delta is a single 1 at ``[index, index]``, via ``slot``."""
     lora_a = np.zeros((rank, dim), dtype=np.float32)
     lora_b = np.zeros((dim, rank), dtype=np.float32)
@@ -57,9 +58,9 @@ def _own_terms(merged, count: int = 2) -> list[float]:
     return [float(delta[i, i]) for i in range(count)]
 
 
-FIRST = _unit(0, 0)       # ΔW = e0·e0ᵀ
-SECOND = _unit(1, 1)      # ΔW = e1·e1ᵀ, the other rank slot: no cross terms
-SAME_SLOT = _unit(0, 1)   # ΔW = e1·e1ᵀ, in FIRST's rank slot
+FIRST = _unit(0, 0)  # ΔW = e0·e0ᵀ
+SECOND = _unit(1, 1)  # ΔW = e1·e1ᵀ, the other rank slot: no cross terms
+SAME_SLOT = _unit(0, 1)  # ΔW = e1·e1ᵀ, in FIRST's rank slot
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +138,10 @@ def test_dare_at_density_one_scales_each_own_term_by_its_weight() -> None:
 def test_dare_below_density_one_keeps_its_rescale_on_top() -> None:
     rng = np.random.default_rng(5)
     inputs = [
-        {A_KEY: rng.standard_normal((2, 8)).astype(np.float32),
-         B_KEY: rng.standard_normal((8, 2)).astype(np.float32)}
+        {
+            A_KEY: rng.standard_normal((2, 8)).astype(np.float32),
+            B_KEY: rng.standard_normal((8, 2)).astype(np.float32),
+        }
         for _ in range(2)
     ]
     density, seed, coeffs = 0.5, 3, (0.7, 0.3)
@@ -199,8 +202,9 @@ def _write(name: str, tensors: dict[str, np.ndarray]) -> str:
     folder.mkdir()
     save_file(tensors, str(folder / "adapter_model.safetensors"))
     (folder / "adapter_config.json").write_text(
-        json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": 2,
-                    "base_model_name_or_path": "tiny-base"}),
+        json.dumps(
+            {"peft_type": "LORA", "r": 2, "lora_alpha": 2, "base_model_name_or_path": "tiny-base"}
+        ),
         encoding="utf-8",
     )
     return name
@@ -225,23 +229,37 @@ def _soup(*args: str):
     return CliRunner().invoke(app, list(args))
 
 
-@pytest.mark.parametrize("strategy,extra", [
-    ("linear", {}),
-    ("dare", {"density": 1.0}),
-    ("svd", {}),
-    ("svd", {"rank": 2}),
-])
+@pytest.mark.parametrize(
+    "strategy,extra",
+    [
+        ("linear", {}),
+        ("dare", {"density": 1.0}),
+        ("svd", {}),
+        ("svd", {"rank": 2}),
+    ],
+)
 def test_merge_adapters_writes_the_weighted_deltas(on_disk, strategy, extra) -> None:
     merge_adapters(["a", "b"], "out", strategy=strategy, weights=[0.7, 0.3], **extra)
     assert _own_terms(_load("out")) == pytest.approx([0.7, 0.3], abs=1e-5)
 
 
 def test_the_command_and_adapters_arithmetic_agree_on_one_pair(on_disk) -> None:
-    merged = _soup("adapters", "merge", "a", "b", "-o", "merged", "--weights", "0.7,0.3",
-                   "--allow-unscanned")
+    merged = _soup(
+        "adapters", "merge", "a", "b", "-o", "merged", "--weights", "0.7,0.3", "--allow-unscanned"
+    )
     assert merged.exit_code == 0, _plain(merged.output)
-    arithmetic = _soup("adapters", "arithmetic", "0.7*a + 0.3*b", "--adapter", "a=a",
-                       "--adapter", "b=b", "-o", "arith", "--allow-unscanned")
+    arithmetic = _soup(
+        "adapters",
+        "arithmetic",
+        "0.7*a + 0.3*b",
+        "--adapter",
+        "a=a",
+        "--adapter",
+        "b=b",
+        "-o",
+        "arith",
+        "--allow-unscanned",
+    )
     assert arithmetic.exit_code == 0, _plain(arithmetic.output)
 
     assert _own_terms(_load("merged")) == pytest.approx([0.7, 0.3], abs=1e-6)
@@ -263,8 +281,14 @@ def test_cmaes_scores_candidates_merged_with_the_same_rule(on_disk) -> None:
         seen.append(_own_terms(_load(merged_dir)))
         return 0.5
 
-    plan = CmaesPlan(adapters=("a", "b"), eval_suite="suite.jsonl", budget_seconds=600,
-                     population_size=4, max_generations=2, seed=0)
+    plan = CmaesPlan(
+        adapters=("a", "b"),
+        eval_suite="suite.jsonl",
+        budget_seconds=600,
+        population_size=4,
+        max_generations=2,
+        seed=0,
+    )
     eval_fn = build_cmaes_eval_fn(plan, scorer=scorer)
     eval_fn((0.7, 0.3))
     eval_fn((1.0, 3.0))
@@ -272,9 +296,7 @@ def test_cmaes_scores_candidates_merged_with_the_same_rule(on_disk) -> None:
     assert seen[1] == pytest.approx([0.25, 0.75], abs=1e-6)
 
 
-def test_the_cmaes_command_writes_its_best_weights_with_the_same_rule(
-    on_disk, monkeypatch
-) -> None:
+def test_the_cmaes_command_writes_its_best_weights_with_the_same_rule(on_disk, monkeypatch) -> None:
     import soup_cli.utils.cmaes_merge as cm
 
     def scorer(merged_dir: str, eval_suite: str) -> float:
@@ -283,9 +305,25 @@ def test_the_cmaes_command_writes_its_best_weights_with_the_same_rule(
 
     monkeypatch.setattr(cm, "_CMAES_SCORER_OVERRIDE", scorer)
     Path("suite.jsonl").write_text('{"prompt": "hi", "expected": "hi"}\n', encoding="utf-8")
-    result = _soup("adapters", "merge", "a", "b", "-o", "best", "--strategy", "cmaes",
-                   "--eval", "suite.jsonl", "--budget", "60s", "--population", "4",
-                   "--max-generations", "3", "--allow-unscanned")
+    result = _soup(
+        "adapters",
+        "merge",
+        "a",
+        "b",
+        "-o",
+        "best",
+        "--strategy",
+        "cmaes",
+        "--eval",
+        "suite.jsonl",
+        "--budget",
+        "60s",
+        "--population",
+        "4",
+        "--max-generations",
+        "3",
+        "--allow-unscanned",
+    )
     assert result.exit_code == 0, _plain(result.output)
     first, second = _own_terms(_load("best"))
     # The normalised weights sum to 1, so the own terms do as well. With each
