@@ -1,0 +1,12 @@
+{
+  "wheel": "soup_cli-0.77.2-py3-none-any.whl",
+  "unique_wheel_and_sdist_paths": true,
+  "bundled_markdown_guides": 16,
+  "new_binary_assets": false,
+  "existing_binary_assets": [
+    "soup_cli/ui/static/logo.png"
+  ],
+  "benchmarks_or_tests_in_wheel": false,
+  "sdist": "soup_cli-0.77.2.tar.gz",
+  "personal_notes_packaged": false
+}

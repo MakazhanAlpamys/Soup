@@ -115,9 +115,11 @@ def mix(
         raise typer.Exit(code=2)
 
     if apply_recipe is not None:
+        import yaml
+
         try:
             data_block = load_mix_recipe(apply_recipe)
-        except (ValueError, FileNotFoundError, TypeError) as exc:
+        except (ValueError, FileNotFoundError, TypeError, yaml.YAMLError) as exc:
             # Most messages name the path with repr(), but a YAML error quotes the
             # source line as it is in the file, and PyYAML accepts U+202E there.
             console.print(f"[red]apply failed: {for_terminal(exc)}[/red]", emoji=False)
@@ -143,7 +145,6 @@ def mix(
         console.print("    probs:")
         for p in probs:
             console.print(f"      - {float(p):.6f}")
-        import yaml
 
         if isinstance(train_value, str):
             # Quote the legacy single-string shape as YAML, like the list below.

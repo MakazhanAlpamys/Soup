@@ -744,7 +744,7 @@ Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** a
 
 The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not arithmetic** — see point 2 above. The two rows also come from different sessions, and this card's boost clock varies ~13% between sessions, so treat the factor as indicative and the mechanism as the claim.
 
-The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. Under `dpo` and `kto` that saving is spent again: the output head's forward keeps a private copy of the matrix for its backward every step (about 1.05 GB for Llama-3.1-8B in bf16, charged by the pre-flight, #1049). CPU CI pins bit-exact logits for both controls. The post-#331 row above is that updated peak, measured on another RTX 3050 Laptop 4 GB: 2.40 GB allocated (2.66 GB reserved), while the pinned store grew from 3.60 GB to 5.70 GB, exactly the two 0.525B bf16 tensors (2.10 GB) that moved into it; the historical 3.32 GB figure is not relabelled as a new measurement.
+The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. Under `dpo` and `kto` that saving is spent again: the output head's forward keeps a private copy of the matrix for its backward every step (about 1.05 GB for Llama-3.1-8B in bf16, charged by the pre-flight, #1049). BCO retains that private copy too; its peak VRAM has not been measured. CPU CI pins bit-exact logits for both controls. The post-#331 row above is that updated peak, measured on another RTX 3050 Laptop 4 GB: 2.40 GB allocated (2.66 GB reserved), while the pinned store grew from 3.60 GB to 5.70 GB, exactly the two 0.525B bf16 tensors (2.10 GB) that moved into it; the historical 3.32 GB figure is not relabelled as a new measurement.
 
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified. **The read is off the compute thread**: a background reader parses each shard's header itself (no memory map) and stages `training.stream_read_ahead` layers in host RAM (page-locked where the box allows — see `stream_pin` below), so the GPU is fed while the next layer is still arriving. **Measured cold and warm against a same-day control of the source it replaces** (RTX 5070 Laptop, 2026-09-14, [record](../benchmarks/gate-971-async-nvme-source.md)).
@@ -973,7 +973,7 @@ AdamW update are bit-equal to the dense arm in the CPU tests); the panel says wh
 A run whose dense-retaining arm fits keeps it, unchanged, and so does one with `stream_vram_probe`
 on: the measurement stays the authority there and the dense arm is left to it (a probe refusal
 then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
-DPO, KTO, ORPO and SimPO), not by SFT alone; only `stream_vram_probe` is SFT-only.
+DPO, KTO, ORPO, SimPO and BCO); only `stream_vram_probe` is SFT-only.
 
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
@@ -1077,7 +1077,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes allowed (v0.72.3)
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
-- `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
+- `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` / `bco` → named explicitly; IPO stays refused. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
@@ -1184,16 +1184,17 @@ output: ./output
 
 ### Preference losses over streaming (v0.72.4)
 
-`dpo`, `orpo`, `simpo` and `kto` stream exactly like `sft` — same config keys, same
+`dpo`, `orpo`, `simpo`, `kto` and `bco` stream like `sft` — same config keys, same
 pre-flight, same refusals. The interesting part is DPO's reference model.
 
 **DPO compares the model being trained against a frozen reference.** Implemented as a
 second model instance that doubles memory and there is no point streaming at all. Soup
-instead uses *the same streamed base with its LoRA adapters switched off*, so the
-reference costs no extra weights. On an untied checkpoint, `dpo` and `kto` also hold
+instead keeps a frozen `ref` adapter on the same streamed base, so the reference
+needs no second base model. On an untied checkpoint, `dpo`, `kto` and `bco` also hold
 one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
 the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
-nothing. Measured on an RTX 3050 4 GB with a 730 MB model:
+nothing. BCO's peak VRAM has not been measured; the following DPO/SFT figures
+were measured on an RTX 3050 4 GB with a 730 MB model:
 
 | arm | peak VRAM | vs SFT |
 |---|---|---|
@@ -1205,16 +1206,20 @@ The third row is the control: a second instance costs **+730.44 MB against 730.4
 weights**, i.e. exactly one copy. The RAM store and the VRAM buffer pool are
 byte-identical between the SFT and DPO arms.
 
-**KTO is not reference-free**, however it is usually described — it selects a reference
-the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
-reference-free. All four are verified **bit-exact** against a resident run of the same
-loss on a tied checkpoint; on an untied one, that check covers `dpo`
-(`tests/test_issue1049_untied_streamed_preference.py`). Same resident-control scope as the note under *Correctness* above.
+**KTO and BCO use the same streamed base with adapters switched off for the
+reference**, with one completion row per example; ORPO and SimPO are reference-free.
+The original four losses (`dpo`, `orpo`, `simpo`, `kto`) are verified **bit-exact**
+against a resident run of the same loss on a tied checkpoint; on an untied one,
+that check covers `dpo` (`tests/test_issue1049_untied_streamed_preference.py`).
+BCO's separate CPU check uses an untied head and nonzero adapters
+(`tests/test_bco_streaming.py`); its [one-step T4 record](../benchmarks/bco-streaming-t4.md)
+is limited to the recorded shape. Same resident-control scope as the note under
+*Correctness* above.
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
 the layer reads on a 24-layer model. Streaming adds no second copy of the weights for the
-reference (on an untied checkpoint `dpo` and `kto` still hold one output-head copy, see
+reference (on an untied checkpoint `dpo`, `kto` and `bco` still hold one output-head copy, see
 above); it does not make the reference free.
 
 **Two things to know before you configure it:**
@@ -1907,7 +1912,7 @@ supported transformers path for these precision features.
 
 `soup merge --save-format 4bit` and `--save-format 4bit_forced` write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). `4bit_forced` quantizes all linear layers including `lm_head`; models with tied embeddings (`tie_word_embeddings: true`) cannot hold a 4-bit `lm_head` sharing weights with embeddings and are explicitly refused by name with `ValueError`. v0.53.0 shipped the closed allowlist + spec metadata; the live writer landed in v0.53.1.
 
-`soup export --format torchao --quant-config <yaml>` is the live PTQ export (v0.53.1, #142): it runs `torchao.quantize_` on the model and writes the result with `save_pretrained`, to `--output` or, by default, next to the model as `<model>.torchao.<scheme>`. `--quant-config` is required with `--format torchao` (the command exits 2 without it) and the YAML must declare a top-level `scheme:` key. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are Soup's scheme names, mapped to the torchao class that implements each one in `utils/torchao_compat.py` (three of the four names Soup used to look up by `hasattr` do not exist in torchao; #826). `Int4WeightOnly` and `Int8DynActInt4` accept `group_size`, `Float8DynActFloat8` and `NVFP4` take no extra keys, and any other key is refused (exit 2) with a message listing the allowed ones; `inner_k_tiles` was removed, because `Int4WeightOnlyConfig` raises `TypeError` for it. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
+`soup export --format torchao --quant-config <yaml>` is the live PTQ export (v0.53.1, #142): it runs `torchao.quantize_` on the model and writes the result with `save_pretrained`, to `--output` or, by default, next to the model as `<model>.torchao.<scheme>`. A LoRA adapter directory is merged into its base first (`--base`, or the adapter's `base_model_name_or_path`), as the other export formats do; before this, the adapter was quantized on top of its base and only the adapter was written. `--quant-config` is required with `--format torchao` (the command exits 2 without it) and the YAML must declare a top-level `scheme:` key. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are Soup's scheme names, mapped to the torchao class that implements each one in `utils/torchao_compat.py` (three of the four names Soup used to look up by `hasattr` do not exist in torchao; #826). `Int4WeightOnly` and `Int8DynActInt4` accept `group_size`, `Float8DynActFloat8` and `NVFP4` take no extra keys, and any other key is refused (exit 2) with a message listing the allowed ones; `inner_k_tiles` was removed, because `Int4WeightOnlyConfig` raises `TypeError` for it. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
 
 
 ## Quant Menu II + Export Pipeline (v0.53.1)

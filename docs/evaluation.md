@@ -978,7 +978,10 @@ verdict is given. Check that the model loads and generates`. The only variable p
 (`base` or `tuned`) and the two row counts, which are equal; a program can match the regular
 expression `every task generation failed on the (base|tuned) side \(([0-9]+) of \2\)`. Before
 this check a base that failed on every row read as 0.0 and any tuned model beat it, a SHIP no model earned. A side with
-some failed rows is still judged; the count is shown and printed in yellow.
+some failed rows is still judged; the count is shown and printed in yellow. A replay of an evidence file that records such
+a side is refused the same way by the shared reader (`--evidence` and the MCP `ship_evidence` tool), with exit 3 and the
+first part of the message — `every task generation failed on the base side (8 of 8)` — without the "Check that the model
+loads and generates" tail; the regular expression above still matches it.
 
 **The `truncation_growth` warning.** When both counts are measured and
 `tuned - base >= max(3, ceil(0.10 * n))`, the panel prints a yellow
@@ -1020,7 +1023,8 @@ The reader takes an absent `schema_version` as 1 and reads such a file exactly a
 under version 1 are refused (exit 3, the message names `schema_version` or the key). Inside a block
 every key is required (`null` says not measured), counts are integers in range, `better + worse +
 same == n`, every block of one file has the same `n`, and `judged.checkpoint_step` must be what the
-adapter path says. **soup-cli 0.77.x refuses a version-2 file** with `evidence has unsupported
+adapter path says. A `generation_failures` block whose `base` or `tuned` equals `n` is refused the
+same way as the live path refuses such a side (exit 3, the first part of the live message). **soup-cli 0.77.x refuses a version-2 file** with `evidence has unsupported
 field(s): 'schema_version'` (exit 3): upgrade whatever reads the evidence, such as the CI gate or
 the MCP `ship_evidence` tool, to 0.78.0 or later before it meets a file written by 0.78.
 

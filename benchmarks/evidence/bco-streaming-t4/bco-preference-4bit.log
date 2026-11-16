@@ -1,0 +1,62 @@
+Loading tokenizer: 
+<tmp>/pytest-3/test_one_cuda_update_and_adapt0/model
+╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
+│ HF/local source: 0.00 GB                                                     │
+│ Soup materialized copy: 0.00 GB (no write required)                          │
+│ Layer-shard cache: 0.00 GB (write required)                                  │
+│ Projected total on disk: 0.00 GB                                             │
+│ Additional writes before training: 0.00 GB                                   │
+│ Free on target volume (layer-shard cache): 1037.82 GB                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> 
+<tmp>/pytest-3/test_one_cuda_update_and_adapt0/cache/<tmp>
+__pytest-3__test_one_cuda_update_and_adapt0__model
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────── training.stream_layers ───────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                  │
+│   base store   0.00 GB across 2 layers (pinned)                              │
+│   VRAM buffers 2 x 0 MB + 1 x 0 MB large-layer slot = 0 MB                   │
+│   resident     0 MB extras + adapters                                        │
+│   peak VRAM    ~0.03 GB at batch 2 x seq 64 (logits 0.00 GB)                 │
+│   cuBLAS       16.2 MiB PyTorch allocator workspace, included above          │
+│   free VRAM    15.51 GB                                                      │
+│   forecast     35070043-51573592 tok/s — a compute-bound bound, not a        │
+│ promise                                                                      │
+│                (from 25.45 TFLOPS measured on this card now using float16 @  │
+│ 1095 MHz)                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not 
+run resident on this card at all.
+expandable_segments allocator hint not enabled: CUDA was already initialised 
+before Soup could set it — the allocator reads PYTORCH_CUDA_ALLOC_CONF once, at 
+context creation
+Layer streaming ready: 2 layers, 0.00 GB pinned RAM store (0.00 GB page-locked),
+2 x 0 MB decoder buffers + 1 x 0 MB large-layer slot
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 82,240 total (2.18%)
+Extracting prompt from train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]Extracting prompt from train dataset: 100%|██████████| 8/8 [00:00<00:00, 2307.26 examples/s]
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]Map: 100%|██████████| 8/8 [00:00<00:00, 2306.94 examples/s]
+Tokenizing train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]Tokenizing train dataset: 100%|██████████| 8/8 [00:00<00:00, 1067.93 examples/s]
+Processing tokenized train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]Processing tokenized train dataset: 100%|██████████| 8/8 [00:00<00:00, 1095.91 examples/s]
+Filtering desirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]Filtering desirable examples: 100%|██████████| 8/8 [00:00<00:00, 2115.93 examples/s]
+Filtering undesirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]Filtering undesirable examples: 100%|██████████| 8/8 [00:00<00:00, 2417.81 examples/s]
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]Map: 100%|██████████| 8/8 [00:00<00:00, 1120.31 examples/s]
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 3}.
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:00<00:00,  1.64it/s]                                             {'loss': '0.6931', 'grad_norm': '0.09188', 'learning_rate': '2e-05', 'rewards/chosen': '0', 'logps/chosen': '-11.7', 'logits/chosen': '3.974', 'rewards/rejected': '0', 'logps/rejected': '-8.063', 'logits/rejected': '4.017', 'rewards/margins': '0', 'delta': '0', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:00<00:00,  1.64it/s]                                             {'train_runtime': '0.6508', 'train_samples_per_second': '3.073', 'train_steps_per_second': '1.537', 'train_loss': '0.6931', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:00<00:00,  1.64it/s]100%|██████████| 1/1 [00:00<00:00,  1.54it/s]
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 2713.92it/s]
+.
+=============================== warnings summary ===============================
+tests/test_bco_streaming.py: 14 warnings
+  <site-packages>/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_bco_streaming.py::test_one_cuda_update_and_adapter_round_trip[4bit-preference]
+  <python>/importlib/__init__.py:88: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 15 warnings in 14.01s
