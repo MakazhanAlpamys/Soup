@@ -402,11 +402,19 @@ def tool_runs_list(args: dict) -> dict:
 
 def tool_runs_show(args: dict) -> dict:
     """`soup runs show` — one run's full record."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
-    run = ExperimentTracker().get_run(_require_str(args, "run_id"))
-    if run is None:
-        raise McpToolError("run not found")
+    run_id = _require_str(args, "run_id")
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            # get_run answers None for an ambiguous prefix too (#2470).
+            if tracker.count_run_id_matches(run_id) > 1:
+                raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
+            raise McpToolError("run not found")
+    finally:
+        tracker.close()
     return run
 
 
