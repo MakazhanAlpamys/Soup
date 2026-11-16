@@ -1081,7 +1081,11 @@ counted on the name with `.task-rows.jsonl`, 16 more than the `--output` stem ha
 or device, a file of yours the rows would replace (the task file, the config, `--emit-evidence`),
 a foreign file at the path, and a path that cannot be looked at (`... cannot be checked`). A
 `--output` name that is within the limit by itself but not once the suffix is added, which worked
-before, is refused for that reason. If the write fails, the verdict, the evidence and the PR
+before, is refused for that reason.
+To fix a refused name use a shorter or plainer `--output` name: the stem plus
+`.task-rows.jsonl` must fit in 255 bytes on POSIX or 255 UTF-16 code units on Windows (a stem
+of more than 239 ASCII characters no longer works), with no control character in it and, on
+POSIX, no backslash. If the write fails, the verdict, the evidence and the PR
 comment are written first, then `cannot write the task rows next to --output: ...` is printed:
 a SHIP exits 1, a DON'T SHIP keeps exit 2 (a pipeline that retries on exit 1 must not run a
 finished verdict again). The file is part of the evidence, and the verdict JSON never names a file
