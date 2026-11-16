@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.profiler import (
     GPU_MEMORY,
@@ -26,7 +27,7 @@ from soup_cli.utils.profiler import (
     profile_from_config,
     profile_from_model,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.vram_estimate import VRAM_SAFETY_MARGIN
 
 console = Console()
@@ -171,7 +172,7 @@ def _estimate(
     config = config or _DEFAULT_CONFIG
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config file not found:[/] {for_terminal(config)}")
+        console.print(Text.assemble(("Config file not found:", "red"), f" {strip_control(config)}"))
         raise typer.Exit(1)
 
     cfg = load_config(config_path)
@@ -211,8 +212,11 @@ def _choice(flag: str, value: Optional[str], default: str, valid) -> str:
         return default
     if value not in valid:
         console.print(
-            f"[red]Unknown {flag}:[/] {for_terminal(value)}\n"
-            f"[dim]Valid options: {', '.join(sorted(valid))}[/]"
+            Text.assemble(
+                (f"Unknown {flag}:", "red"),
+                f" {strip_control(value)}\n",
+                (f"Valid options: {', '.join(sorted(valid))}", "dim"),
+            )
         )
         raise typer.Exit(1)
     return value
@@ -245,8 +249,11 @@ def _profile_model(
         )
     except ModelShapeUnavailableError as exc:
         console.print(
-            f"[red]Cannot read {for_terminal(model)}:[/] {exc}. Nothing was estimated: "
-            "--model needs the model's own config.json, not a size guessed from its name."
+            Text.assemble(
+                (f"Cannot read {strip_control(model)}:", "red"),
+                f" {exc}. Nothing was estimated: --model needs the model's own "
+                "config.json, not a size guessed from its name.",
+            )
         )
         raise typer.Exit(1) from None
     except (ValueError, TypeError):
@@ -285,8 +292,11 @@ def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
         if gpu_key not in GPU_MEMORY:
             valid = ", ".join(sorted(GPU_MEMORY.keys()))
             console.print(
-                f"[red]Unknown GPU:[/] {for_terminal(gpu)}\n"
-                f"[dim]Valid options: {valid}[/]"
+                Text.assemble(
+                    ("Unknown GPU:", "red"),
+                    f" {strip_control(gpu)}\n",
+                    (f"Valid options: {valid}", "dim"),
+                )
             )
             raise typer.Exit(1)
         return float(GPU_MEMORY[gpu_key]), "flag"
@@ -303,19 +313,23 @@ def _render_profile(result: dict, gpu_memory_gb: float, gpu_memory_source: str) 
         targets = ", ".join(result.get("lora_targets", []))
         trainable_str = (
             f"(trainable: {result['trainable_params']:,.0f} with LoRA r={result['lora_r']}"
-            + (f" on {for_terminal(targets)})" if targets else ")")
+            + (f" on {strip_control(targets)})" if targets else ")")
         )
 
-    model_info = (
-        f"Model:     [bold]{for_terminal(result['model_name'])}[/]\n"
-        f"Params:    [bold]{result['model_params_b']:.1f}B[/] {trainable_str}\n"
-        f"Quantization: [bold]{result['quantization']}[/]"
+    # Text, not markup: the model name and the target modules come from the config
+    # or the command line and must show as typed (#2489).
+    model_info = Text.assemble(
+        "Model:     ",
+        (strip_control(result["model_name"]), "bold"),
+        "\nParams:    ",
+        (f"{result['model_params_b']:.1f}B", "bold"),
+        f" {trainable_str}\nQuantization: ",
+        (str(result["quantization"]), "bold"),
     )
     if result["gradient_checkpointing_tier"] != "off":
-        model_info += (
-            "\nGradient checkpointing: "
-            f"[bold green]enabled[/] ({result['gradient_checkpointing_tier']})"
-        )
+        model_info.append("\nGradient checkpointing: ")
+        model_info.append("enabled", "bold green")
+        model_info.append(f" ({result['gradient_checkpointing_tier']})")
 
     # Memory breakdown table
     mem_table = Table(show_header=False, box=None, padding=(0, 2))

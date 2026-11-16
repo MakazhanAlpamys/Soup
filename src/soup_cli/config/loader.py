@@ -7,12 +7,13 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
+from rich.text import Text
 
 from soup_cli.config.deprecation import SoupConfigDeprecationWarning, deadline_clause
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 from soup_cli.utils.yaml_limits import (
     MAX_CONFIG_BYTES,
     YamlLimitError,
@@ -72,8 +73,8 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     message = format_unknown_keys(unknown, include_deadline=warning)
     if not warning:
         return message
-    # The key names in ``message`` came from the config file: escape them.
-    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+    # The key names came from the config file: display them literally.
+    console.print(Text.assemble(("Warning:", "yellow"), " ", terminal_text(message)))
     console.print(
         "[dim]An unapplied key is ignored, not defaulted -- the run proceeds as "
         "if you had not written it.[/]"
@@ -98,7 +99,7 @@ def _report_staged_fields(
     message = format_staged_fields(staged, include_deadline=warning)
     if not warning:
         return message
-    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+    console.print(Text.assemble(("Warning:", "yellow"), " ", terminal_text(message)))
     return None
 
 
@@ -149,7 +150,7 @@ _MAX_DETAIL_CHARS = 200
 
 def _refuse(message: str) -> None:
     """Print a one-line refusal and exit 1; the text may quote the file."""
-    console.print(f"[red]{for_terminal(message)}[/]")
+    console.print(terminal_text(message, "red"))
     raise SystemExit(1)
 
 
@@ -157,9 +158,9 @@ def _print_refusal_lines(message: str) -> None:
     """Print a multi-line refusal under ``Config validation error:``, indenting
     every line, not only the first (one line per unknown key or staged field).
     The text quotes key names from the file, so each line is made terminal-safe,
-    and printed with emoji codes off, so a key ``:warning:`` shows as written."""
+    and rendered literally, so aliases and backslashes show as written."""
     for line in message.splitlines():
-        console.print(f"  [red]{for_terminal(line)}[/]", emoji=False)
+        console.print(Text.assemble("  ", terminal_text(line, "red")))
 
 
 #: What Pydantic puts in front of the text of a ``ValueError`` raised in a validator.
@@ -178,7 +179,7 @@ def _print_validation_errors(errors: list) -> None:
     the text after it is Soup's own and already names the fix. Only the terminal
     is changed; ``load_config_from_string`` keeps Pydantic's text in its
     ``ValueError``, which API callers read. Both parts can quote config keys or
-    values from the file, so each goes through :func:`for_terminal`.
+    values from the file, so each goes through :func:`terminal_text`.
 
     A deprecated-value refusal (#759) at field level is also the message alone:
     its text is the v0.76 warning's, which had no location and so starts with
@@ -192,9 +193,11 @@ def _print_validation_errors(errors: list) -> None:
         if loc and msg.startswith(f"{dotted}: ") and deadline_clause() in msg:
             loc = ""
         if loc:
-            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(msg)}", emoji=False)
+            console.print(
+                Text.assemble("  ", terminal_text(f"{loc}:", "red"), " ", terminal_text(msg))
+            )
         else:
-            console.print(f"  {for_terminal(msg)}", emoji=False)
+            console.print(Text.assemble("  ", terminal_text(msg)))
 
 
 def _clip(detail: str) -> str:
@@ -269,7 +272,9 @@ def _build_config(raw: dict) -> SoupConfig:
                 message = str(item.message)
                 if message not in printed:
                     printed.add(message)
-                    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+                    console.print(
+                        Text.assemble(("Warning:", "yellow"), " ", terminal_text(message))
+                    )
             else:
                 warnings.warn_explicit(item.message, item.category, item.filename, item.lineno)
     return config

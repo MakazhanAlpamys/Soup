@@ -57,8 +57,16 @@ file; a single-file model is memory-mapped as a whole, so it saves little). The
 tensor values are the same as the regular merge, but the output keeps the base's
 shard layout instead of a single `model.safetensors`. It needs the default
 `fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`, rank or
-alpha patterns, adapters on embeddings or `lm_head`, and base weights stored in a
-quantized dtype are refused with a message to run the regular merge. The merge is
+alpha patterns, adapters on embeddings or `lm_head`, an `init_lora_weights`
+outside the values below, and base weights stored in a quantized dtype are
+refused with a message to run the regular merge. `init_lora_weights` is accepted
+when it is `true`, `false`, `0`, `null` or left out, `"gaussian"` or `"mica"` in any
+letter case, or `"eva"` or `"orthogonal"` in lower case, as peft spells them;
+none of these changes the base weights. Any other value is refused, any other
+non-string included (`1`, a list): `"pissa"` (and `"pissa_niter_<n>"`), `"olora"`, `"corda"`, `"loftq"`
+and `"lora_ga"` rewrite the base weights at initialization (`lora.init_strategy`
+writes `"pissa"`, `"olora"` and `"loftq"`), and peft rejects other spellings
+such as `"EVA"`. The merge is
 written to a staging directory next to `--output` and moved into place only when
 complete; an existing non-empty `--output` is not overwritten, and base-model
 files that are symlinks pointing outside the model directory (other than a
@@ -975,7 +983,7 @@ soup serve --model ./output \
 
 The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`; a host written only as numbers that is not a valid IPv4 address is rejected too. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
-> **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
+> **Note:** `max_tokens` is capped at 16,384 per request. `--max-tokens`, the default for a request that omits `max_tokens`, must be at least 1: `soup serve` refuses 0 or a negative value at startup with exit 2, on every backend. Error details are never exposed in HTTP responses.
 
 
 ## Web UI
@@ -1009,7 +1017,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 179 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 180 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -1018,7 +1026,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (179 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (180 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false

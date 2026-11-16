@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, NoReturn, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.config.schema import DataConfig
@@ -38,7 +38,7 @@ from soup_cli.utils.canary import (
 )
 from soup_cli.utils.live_eval import compute_pair_losses
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 
 if TYPE_CHECKING:  # static types only — transformers stays a lazy import
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -66,8 +66,7 @@ def _load_pair(
 def _guard_under_cwd(target: str, label: str) -> None:
     if not is_under_cwd(Path(target)):
         console.print(
-            f"[red]{label} path is outside the working directory: "
-            f"{escape(str(target))}[/]"
+            terminal_text(f"{label} path is outside the working directory: {target}", "red")
         )
         raise typer.Exit(1)
 
@@ -78,7 +77,7 @@ _OUTPUT_SUFFIXES = (".jsonl", ".json")
 
 
 def _refuse(message: str) -> NoReturn:
-    console.print(f"[red]{escape(message)}[/]")
+    console.print(terminal_text(message, "red"))
     raise typer.Exit(1)
 
 
@@ -165,7 +164,7 @@ def insert(
     """Insert K unique canaries into a dataset and record them."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {escape(str(file_path))}[/]")
+        console.print(terminal_text(f"File not found: {file_path}", "red"))
         raise typer.Exit(1)
     _guard_under_cwd(output, "Output")
     _guard_under_cwd(manifest, "Manifest")
@@ -190,7 +189,7 @@ def insert(
     try:
         canaries = generate_canaries(count=count, seed=seed)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Spread through the file, not appended: the loader holds out the file's
@@ -209,7 +208,7 @@ def insert(
             positions=positions, total_rows=len(mixed),
         )
     except (ValueError, OSError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
     try:
         if suffix == ".json":
@@ -221,19 +220,22 @@ def insert(
         # The manifest now describes canaries that are in no dataset. Say so
         # rather than leaving a manifest that looks authoritative.
         console.print(
-            f"[red]Could not write {escape(str(output))}: "
-            f"{escape(str(exc))}[/]\n"
-            f"[yellow]{escape(str(manifest))} was already written and now "
-            "describes canaries that were NOT inserted — delete it or re-run."
-            "[/]"
+            Text.assemble(
+                terminal_text(f"Could not write {output}: {exc}", "red"), "\n",
+                terminal_text(
+                    f"{manifest} was already written and now describes canaries that were "
+                    "NOT inserted — delete it or re-run.", "yellow",
+                ),
+            )
         )
         raise typer.Exit(1)
 
     console.print(
-        f"[green]Inserted {len(canaries)} {fmt} canaries:[/] "
-        f"{len(rows)} -> {len(mixed)} rows\n"
-        f"Output: [bold]{escape(output)}[/]\n"
-        f"Manifest: [bold]{escape(manifest)}[/]"
+        Text.assemble(
+            (f"Inserted {len(canaries)} {fmt} canaries:", "green"),
+            f" {len(rows)} -> {len(mixed)} rows\nOutput: ",
+            terminal_text(output, "bold"), "\nManifest: ", terminal_text(manifest, "bold"),
+        )
     )
     # The loader's own split, so the count is what `soup train` holds out.
     val_split = DataConfig.model_fields["val_split"].default
@@ -277,7 +279,7 @@ def check(
     try:
         canaries = load_manifest(manifest)
     except (ValueError, OSError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
     if not canaries:
         console.print("[red]Manifest contains no canaries.[/]")
@@ -289,7 +291,7 @@ def check(
             exclude={canary.secret for canary in canaries},
         )
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     try:
@@ -303,7 +305,7 @@ def check(
         )
         raise typer.Exit(1)
     except (ValueError, OSError, RuntimeError) as exc:
-        console.print(f"[red]Could not load model: {escape(str(exc))}[/]")
+        console.print(terminal_text(f"Could not load model: {exc}", "red"))
         raise typer.Exit(1)
 
     pairs = [(canary.carrier, canary.secret) for canary in canaries]
@@ -319,7 +321,7 @@ def check(
             [canary.secret for canary in canaries],
         )
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     table = Table(
@@ -335,7 +337,7 @@ def check(
             "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
         )
         table.add_row(
-            for_terminal(exposure.secret.strip()),
+            terminal_text(exposure.secret.strip()),
             loss_text,
             f"{exposure.percentile * 100:.1f}%",
             "[red]YES[/]" if exposure.memorized else "no",
@@ -352,7 +354,8 @@ def check(
             json.dumps(canary_report_to_dict(report), indent=2), output
         )
         _harden_permissions(output)
-        console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")
+        console.print(Text.assemble(("Report written:", "green"), " ",
+                                    terminal_text(output, "bold")))
         console.print(
             "[yellow]The report lists the canary secrets — treat it like the "
             "manifest and do not commit it.[/]"
