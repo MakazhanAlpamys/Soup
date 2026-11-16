@@ -77,6 +77,7 @@ from soup_cli.utils.ship_loop_gate import (
     GATES,
     GateInputError,
     GateInputs,
+    GateProgress,
     check_corrections,
     check_held_out,
     parse_corrections,
@@ -1469,11 +1470,17 @@ def _apply_loop_gate(
         f"{len(inputs.held_out)} held-out question(s) (up to {ANSWER_MAX_NEW_TOKENS} new tokens "
         "each).[/]"
     )
+    # Both versions answer every question one at a time: say where it is every few answers
+    # (review 5, F8: a 40 minute gate that printed nothing read as a hang). Counts only.
+    asked = 2 * (sum(len(edit.paraphrases) for edit in inputs.corrections) + len(inputs.held_out))
+    progress = GateProgress(asked, lambda text: console.print(f"[dim]{for_terminal(text)}[/]"))
+    old_gen, new_gen = progress.wrap(old_gen), progress.wrap(new_gen)
     corrections = check_corrections(old_gen, new_gen, inputs.corrections)
     judge_rate = None
     if task_mode == "pairwise" and judge_model:
         judge_rate = partial(_held_out_win_rate, judge_model)
     held_out = check_held_out(old_gen, new_gen, inputs.held_out, judge_rate=judge_rate)
+    progress.finish()
     return apply_loop_gate(verdict, corrections, held_out)
 
 

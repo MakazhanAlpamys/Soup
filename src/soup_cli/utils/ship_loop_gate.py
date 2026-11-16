@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from math import comb
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -480,6 +481,83 @@ def check_held_out(old_gen: Generator, new_gen: Generator, edits: Sequence[HeldO
                    for edit, before, after in zip(edits, old_answers, new_answers)]
         style = style_from_win_rate(judge_rate(triples), len(edits))
     return held_out_check(better, worse, ties, style)
+
+
+# ---------------------------------------------------------------------------
+# Progress: the gate asks one answer at a time, for many minutes
+# ---------------------------------------------------------------------------
+
+#: A progress line at least every this many answers ...
+EVERY_ANSWERS = 5
+#: ... or this many seconds, whichever comes first (checked as an answer comes in).
+EVERY_SECONDS = 30.0
+
+
+class GateProgress:
+    """Counts the answers the gate asks for and says where it is (review 5, F8).
+
+    The two checks ask BOTH versions every question, one generation at a time; on a small model
+    that was about 40 minutes with nothing printed. ``say`` gets one line at least every
+    ``EVERY_ANSWERS`` answers or ``EVERY_SECONDS`` seconds, and one when the last answer is in.
+    The line holds counts and the elapsed time only, never a prompt or an answer. ``wrap`` counts
+    a generator's calls; an answer that raised is not counted.
+    """
+
+    def __init__(
+        self,
+        total: int,
+        say: Callable[[str], None],
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        every_answers: int = EVERY_ANSWERS,
+        every_seconds: float = EVERY_SECONDS,
+    ) -> None:
+        self._total = total
+        self._say = say
+        self._clock = clock
+        self._every_answers = every_answers
+        self._every_seconds = every_seconds
+        self._started = clock()
+        self._last_say = self._started
+        self._done = 0
+        self._said_at = 0
+
+    def step(self) -> None:
+        """One more answer is in."""
+        self._done += 1
+        now = self._clock()
+        due = (
+            self._done - self._said_at >= self._every_answers
+            or now - self._last_say >= self._every_seconds
+            or self._done == self._total
+        )
+        if due:
+            self._report(now)
+
+    def finish(self) -> None:
+        """Say where it ended, unless the last answer was just reported."""
+        if self._done and self._said_at != self._done:
+            self._report(self._clock())
+
+    def wrap(self, generate: Generator) -> Generator:
+        """``generate`` that counts every answer it returns."""
+
+        def counted(prompt: str) -> str:
+            answer = generate(prompt)
+            self.step()
+            return answer
+
+        return counted
+
+    def _report(self, now: float) -> None:
+        self._said_at = self._done
+        self._last_say = now
+        elapsed = int(now - self._started)
+        minutes, seconds = divmod(elapsed, 60)
+        clock_text = f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+        self._say(
+            f"Gate loop-v2: {self._done}/{self._total} answers asked ({clock_text} elapsed)"
+        )
 
 
 # ---------------------------------------------------------------------------
