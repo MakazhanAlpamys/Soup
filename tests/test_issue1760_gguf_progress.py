@@ -210,7 +210,8 @@ def test_gguf_only_flags_refusal_sentence(monkeypatch, cli_inputs, flags, expect
 
 def test_dependency_probe_names_all_missing_packages(monkeypatch):
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    assert export_module._missing_convert_deps() == ["gguf", "sentencepiece", "protobuf"]
+    assert export_module._missing_convert_deps() == [
+        "gguf", "sentencepiece", "protobuf", "transformers"]
 
 
 def test_only_protobuf_missing_is_probed_and_triggers_the_pip_attempt(monkeypatch):
@@ -221,7 +222,7 @@ def test_only_protobuf_missing_is_probed_and_triggers_the_pip_attempt(monkeypatc
         probed.append(name)
         if name == "google.protobuf":
             return None
-        return object()  # gguf and sentencepiece look installed
+        return object()  # gguf, sentencepiece and transformers look installed
 
     monkeypatch.setattr(importlib.util, "find_spec", find_spec)
     assert export_module._missing_convert_deps() == ["protobuf"]

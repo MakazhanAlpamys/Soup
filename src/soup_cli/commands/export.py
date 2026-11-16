@@ -34,7 +34,7 @@ SUPPORTED_FORMATS = (
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
-LLAMA_CPP_TAG = "b5270"
+LLAMA_CPP_TAG = "b12423"
 
 
 def export(
@@ -596,7 +596,10 @@ def _merge_adapter(
 # 2.5.1+cu -> 2.2.2+cpu, transformers 4.57 -> 4.46). Soup's `[train]` extra
 # already provides torch / transformers / numpy, so install ONLY the extra
 # packages the convert script needs, unpinned, and never touch the rest.
-_CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
+# Since the b12423 pin, the converter imports transformers at load time
+# (conversion/base.py: `from transformers import AutoConfig`), so a fresh
+# default export needs it even without the `[train]` extra.
+_CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf", "transformers")
 
 
 def _missing_convert_deps() -> list[str]:
@@ -605,7 +608,7 @@ def _missing_convert_deps() -> list[str]:
 
     missing = []
     for module, package in (("gguf", "gguf"), ("sentencepiece", "sentencepiece"),
-                            ("google.protobuf", "protobuf")):
+                            ("google.protobuf", "protobuf"), ("transformers", "transformers")):
         try:
             present = importlib.util.find_spec(module) is not None
         except (ImportError, ValueError):

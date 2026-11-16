@@ -111,10 +111,11 @@ def export_flow(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("managed", [False, True])
 def test_unsupported_fresh_default_refuses_before_any_work(export_flow, managed):
-    result, calls = export_flow({"architectures": ["Qwen3_5ForCausalLM"]}, managed=managed)
+    result, calls = export_flow(
+        {"architectures": ["BartForConditionalGeneration"]}, managed=managed)
     assert result.exit_code == 1, result.output
-    assert "Qwen3_5ForCausalLM" in result.output
-    assert "b5270" in result.output
+    assert "BartForConditionalGeneration" in result.output
+    assert "b12423" in result.output
     assert "--llama-cpp" in result.output
     assert calls == []
 
@@ -126,7 +127,7 @@ def test_supported_fresh_default_still_exports(export_flow):
 
 
 @pytest.mark.parametrize("architecture,allowed", [
-    ("LlamaForCausalLM", True), ("Qwen3_5ForCausalLM", False),
+    ("LlamaForCausalLM", True), ("BartForConditionalGeneration", False),
 ])
 def test_adapter_checks_merged_metadata_and_cleans_up(export_flow, tmp_path, architecture, allowed):
     result, calls = export_flow({"architectures": [architecture]}, adapter=True)
@@ -181,8 +182,8 @@ def test_vision_support_does_not_imply_text_support(export_flow):
 
 
 @pytest.mark.parametrize("root,nested,allowed", [
-    ("Qwen3_5ForCausalLM", "LlamaForCausalLM", True),
-    ("LlamaForCausalLM", "Qwen3_5ForCausalLM", False),
+    ("BartForConditionalGeneration", "LlamaForCausalLM", True),
+    ("LlamaForCausalLM", "BartForConditionalGeneration", False),
 ])
 def test_nested_text_architecture_takes_precedence(export_flow, root, nested, allowed):
     result, calls = export_flow({"architectures": [root],
@@ -224,12 +225,13 @@ def test_generated_capabilities_match_pin_and_record_immutable_source():
     path = Path(export_mod.__file__).parents[1] / "utils/llama_cpp_capabilities.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["tag"] == export_mod.LLAMA_CPP_TAG
-    assert data["commit"] == "3bf785f3efa89ed28294fbf73054558a2b034bfb"
-    assert data["source_git_blob"] == "838999531e58041976c8e612bc97b382874bf227"
+    assert data["commit"] == "f4d0673917c75493c73fc9b64ab42841600ba944"
+    assert data["source_git_blob"] == "8cee1f8646e113accba4de2c5e68b7b0804252eb"
     assert data["source_url"].endswith(f'{data["commit"]}/convert_hf_to_gguf.py')
     supported = pinned_text_architectures(export_mod.LLAMA_CPP_TAG)
     assert {"LlamaForCausalLM", "GPT2LMHeadModel", "Qwen2ForCausalLM"} <= supported
-    assert "Qwen3_5ForCausalLM" not in supported
+    # b12423 registers Qwen3.5 dense and MoE text models.
+    assert {"Qwen3_5ForCausalLM", "Qwen3_5MoeForCausalLM"} <= supported
     with pytest.raises(ValueError, match="regenerate"):
         pinned_text_architectures("changed-pin")
 
@@ -255,6 +257,44 @@ class Encoder(VisionModel): pass
     }
 
 
+def test_generator_prefers_init_model_maps_for_multi_file_layout():
+    from scripts.gen_llama_cpp_capabilities import (
+        ENTRY_NAME,
+        extract_capabilities_from_sources,
+    )
+
+    # b12423 splits the converter into convert_hf_to_gguf.py plus conversion/*.py,
+    # and its printed listing is the static __init__.py maps' keys — not the
+    # decorator buckets. A name registered only by an mmproj class still counts
+    # as TEXT, and dotted remote-code aliases are never listed.
+    init = b'''
+raise AssertionError("source must never execute")
+TEXT_MODEL_MAP: dict[str, str] = {
+    "GroveMoeForCausalLM": "grovemoe",
+    "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
+    "GraniteSpeechForConditionalGeneration": "granite",
+}
+MMPROJ_MODEL_MAP: dict[str, str] = {"MmprojOnly": "somemodule"}
+'''
+    models = b'''
+raise AssertionError("source must never execute")
+class ModelBase: pass
+class TextModel(ModelBase): model_arch = gguf.MODEL_ARCH.LLAMA
+@ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
+class GroveMoeModel(TextModel): pass
+@ModelBase.register("GraniteSpeechForConditionalGeneration")
+class GraniteSpeechMmprojModel(ModelBase): model_arch = gguf.MODEL_ARCH.MMPROJ
+'''
+    entry = b"import sys\nsys.exit(1)\n"
+    capabilities = extract_capabilities_from_sources({
+        "conversion/__init__.py": init, "conversion/models.py": models, ENTRY_NAME: entry,
+    })
+    assert capabilities == {
+        "TEXT": ["GraniteSpeechForConditionalGeneration", "GroveMoeForCausalLM"],
+        "VISION": ["MmprojOnly"],
+    }
+
+
 def test_timed_out_probe_is_inconclusive(monkeypatch, tmp_path):
     from soup_cli.utils.gguf_capabilities import probe_text_architectures
 
@@ -266,9 +306,33 @@ def test_timed_out_probe_is_inconclusive(monkeypatch, tmp_path):
     assert probe_text_architectures(tmp_path / "convert_hf_to_gguf.py") is None
 
 
+def test_probe_mmproj_section_does_not_leak_into_text(tmp_path):
+    """The conversion/ package listing prints TEXT then MMPROJ sections
+    (conversion/__init__.py print_registered_models); MMPROJ names must not
+    land in the TEXT set (b12423 layout, #1911)."""
+    from soup_cli.utils.gguf_capabilities import probe_text_architectures
+
+    stub = tmp_path / "convert_hf_to_gguf.py"
+    stub.write_text(
+        "import sys\n"
+        "print('ERROR:root:TEXT models:', file=sys.stderr)\n"
+        "print('  - Qwen3_5ForCausalLM', file=sys.stderr)\n"
+        "print('ERROR:root:MMPROJ models:', file=sys.stderr)\n"
+        "print('  - Qwen3_5VLForConditionalGeneration', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [__import__("sys").executable, str(stub), "--print-supported-models"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert result.returncode == 0
+    names = probe_text_architectures(stub)
+    assert names == frozenset({"Qwen3_5ForCausalLM"})
+
+
 @pytest.mark.parametrize("tag,commit,diagnostic", [
     ("different-pin", "a" * 40, "LLAMA_CPP_TAG"),
-    ("b5270", "short-sha", "immutable Git commit"),
+    ("b12423", "short-sha", "immutable Git commit"),
 ])
 def test_regeneration_refuses_wrong_pin_or_mutable_source(tmp_path, tag, commit, diagnostic):
     script = Path(__file__).resolve().parents[1] / "scripts/gen_llama_cpp_capabilities.py"
