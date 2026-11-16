@@ -448,13 +448,11 @@ def unextrapolated_floor(
     processes = max(int(num_processes or 1), 1)
     param_share = processes if sharding in SHARDS_PARAMETERS else 1
     state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
+    # #ISSUE: a distillation teacher's weights stay out of the floor. The teacher is
+    # frozen and loaded with ``device_map="auto"``, which can keep part of it in CPU
+    # memory, so a run whose teacher alone exceeds the card can still start.
     floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
     terms = ["weights", "CUDA context"]
-    if breakdown.teacher_gb > 0:
-        # #ISSUE: a distillation teacher is a parameter count times its stored dtype,
-        # and every process holds a whole one.
-        floor += breakdown.teacher_gb
-        terms.insert(1, "teacher weights")
     tcfg = getattr(cfg, "training", None)
     if inp.peft == "full" and _trains_a_subset(tcfg):
         return floor, tuple(terms)

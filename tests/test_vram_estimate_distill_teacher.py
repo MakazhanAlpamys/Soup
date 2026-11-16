@@ -13,7 +13,9 @@ repo's own H200 record measured (``benchmarks/distill-chunked-h200-2026-11-10.md
 The estimate now charges a ``teacher`` term (its parameter count times its stored dtype)
 and a ``distill`` term (bytes per element of batch x sequence x vocabulary, by kernel and
 divergence). A distillation step counts as outside the calibrated range, so the pre-flight
-warns instead of refusing unless the student and teacher weights alone exceed the card.
+warns instead of refusing unless the student's own floor exceeds the card, as before; the
+teacher's weights stay out of the floor (``device_map: auto`` can keep part of a frozen
+teacher in CPU memory).
 """
 
 from __future__ import annotations
@@ -385,14 +387,22 @@ def test_the_pre_flight_warns_where_main_passed_silently(tmp_path, monkeypatch, 
     assert "Warning only: launching anyway." in text
 
 
-def test_the_pre_flight_refuses_when_the_two_models_alone_exceed_the_card(
-    tmp_path, monkeypatch, screen
-):
+def test_the_teacher_stays_out_of_the_floor(tmp_path, monkeypatch, screen):
+    """A 4 GB card holds the student's floor (1.5 GB) but not the teacher (3.1 GB).
+    ``device_map: auto`` can keep part of a frozen teacher in CPU memory, so the run is
+    warned, not refused: nothing that starts on ``main`` is refused for its teacher."""
     monkeypatch.chdir(_big(tmp_path))
-    assert _preflight(_h200_cfg(tmp_path), 4) == 1
+    assert _preflight(_h200_cfg(tmp_path), 4) is None
     text = _plain(screen.getvalue())
-    assert "Hardware-fit gate" in text
-    assert "teacher weights" in text
+    assert "Hardware-fit warning" in text
+    assert "a distillation step" in text
+
+
+def test_the_student_floor_still_refuses(tmp_path, monkeypatch, screen):
+    """As on ``main``: a card smaller than the student's own floor is refused."""
+    monkeypatch.chdir(_big(tmp_path))
+    assert _preflight(_h200_cfg(tmp_path), 1) == 1
+    assert "Hardware-fit gate" in _plain(screen.getvalue())
 
 
 def test_soup_profile_reports_the_teacher_and_the_divergence(workdir):

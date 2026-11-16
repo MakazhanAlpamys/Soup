@@ -91,8 +91,10 @@ checkpointing on) is the check on a larger student that was not used to fit anyt
 - Every position is charged; the divergence covers only trained ones, so a run with long
   prompts and `train_on_responses_only` holds less.
 - Because of that, a distillation run counts as outside the calibrated range: the pre-flight
-  warns when it does not fit, and refuses only when its floor (the student's and the teacher's
-  weights, the CUDA context and the trained parameters' state) is more than the card holds.
+  warns when it does not fit, and refuses only when the student's floor (its weights, the CUDA
+  context and the trained parameters' state) is more than the card holds, as before. The
+  teacher's weights stay out of the floor: it is frozen and loaded with `device_map: auto`,
+  which can keep part of it in CPU memory.
 
 ## Reproduce
 
