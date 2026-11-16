@@ -316,7 +316,9 @@ def test_the_0_77_reader_refuses_a_v2_file_and_names_schema_version():
 
 
 def test_the_registry_adds_exactly_the_v2_fields_to_the_0_77_sets():
-    assert EVIDENCE_SCHEMA_FIELDS["root"] == _OLD_FIELDS["root"] | {"schema_version", "judged"}
+    assert EVIDENCE_SCHEMA_FIELDS["root"] == _OLD_FIELDS["root"] | {
+        "schema_version", "judged", "task_rows",
+    }
     assert EVIDENCE_SCHEMA_FIELDS["task"] == _OLD_FIELDS["task"] | {
         "rows", "truncated", "generation_failures",
     }
@@ -440,6 +442,11 @@ def _live_then_replay(
     return live, replay, files
 
 
+# what only a live run has: adapter_change (#2762) is display only and not in the evidence, and
+# task_rows names the per-row file that only a live run writes (a replay has no answers to write)
+_RUN_ONLY_KEYS = ("adapter_change", "task_rows")
+
+
 def test_a_live_run_emits_v2_and_the_replay_is_identical(monkeypatch):
     base = _scripted(_answers(correct={0, 1, 2, 3}))
     tuned = _scripted(_answers(correct={0, 1, 2, 3, 4, 5, 6}, truncated={5, 6, 7}))
@@ -455,8 +462,8 @@ def test_a_live_run_emits_v2_and_the_replay_is_identical(monkeypatch):
     assert "warning" not in evidence["task"]["truncated"]
     # one verdict, written twice. adapter_change (#2762) is display only and not part of the
     # evidence schema, so a live run has it and a replay does not.
-    live_verdict = {k: v for k, v in files["live.json"].items() if k != "adapter_change"}
-    replay_verdict = {k: v for k, v in files["replay.json"].items() if k != "adapter_change"}
+    live_verdict = {k: v for k, v in files["live.json"].items() if k not in _RUN_ONLY_KEYS}
+    replay_verdict = {k: v for k, v in files["replay.json"].items() if k not in _RUN_ONLY_KEYS}
     assert replay_verdict == live_verdict
     assert live_verdict["task_win"]["truncated"]["warning"] == "truncation_growth"
     for line in ("Rows (tuned vs base): better 3, worse 0, same 5 of 8",
@@ -545,8 +552,8 @@ def test_an_empty_adapter_or_tuned_writes_evidence_that_replays(
         "checkpoint_step": step,
     }
     # an empty value is absent, never the string "": the reader refuses an empty string
-    live_verdict = {k: v for k, v in files["live.json"].items() if k != "adapter_change"}
-    replay_verdict = {k: v for k, v in files["replay.json"].items() if k != "adapter_change"}
+    live_verdict = {k: v for k, v in files["live.json"].items() if k not in _RUN_ONLY_KEYS}
+    replay_verdict = {k: v for k, v in files["replay.json"].items() if k not in _RUN_ONLY_KEYS}
     assert replay_verdict == live_verdict
 
 
