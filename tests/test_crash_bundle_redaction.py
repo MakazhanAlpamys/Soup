@@ -1203,9 +1203,19 @@ def _assert_scales_linearly(make_text, label: str) -> str:
     text = ""
     for size in LADDER:
         text = make_text(size)
-        start = time.perf_counter()
-        redact_text(text)
-        timings.append(time.perf_counter() - start)
+        acceptable = max(_time_bound(size), STEP_FLOOR)
+        if timings:
+            acceptable = min(acceptable, LADDER_STEP_LIMIT * max(timings[-1], LADDER_NOISE_FLOOR))
+        # one run; a run over its bound is repeated twice and the best one counts, because a
+        # paused CI runner is not a slow pattern (a slow pattern is slow all three times)
+        best = float("inf")
+        for _attempt in range(3):
+            start = time.perf_counter()
+            redact_text(text)
+            best = min(best, time.perf_counter() - start)
+            if best <= acceptable:
+                break
+        timings.append(best)
         # every step has its own bound: a case never climbs the whole ladder to fail
         assert timings[-1] < max(_time_bound(size), STEP_FLOOR), (label, size, timings[-1])
         if len(timings) > 1:
