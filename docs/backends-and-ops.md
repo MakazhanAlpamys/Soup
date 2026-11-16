@@ -163,6 +163,16 @@ without a native trainer are refused when the config is loaded, with an error
 naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
+Single-process native MLX `soup train` binds the actual Hugging Face base loader
+to one commit across its model, tokenizer and config, including the first RoPE
+config read. The original base ID, commit and source are retained in the run row
+and final `soup_run.json`; see [Recorded base identity](#recorded-base-identity).
+An imported non-HF provider keeps its existing loading behavior, records no Hub
+revision and prints an explanatory line for a remote base. Local directories
+keep the ordinary unknown-identity message; cache paths keep their unverified-hint
+message. This does not bind MLX sweeps or
+independent inference, chat, serve, merge and export consumers.
+
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
@@ -1399,6 +1409,12 @@ soup version --full --json
 
 ## Error Handling
 
+`soup bench infer` and `soup bench train` show model names, paths, diagnostics and
+report receipts literally, preserving emoji aliases and backslashes. Terminal controls
+and bidi marks are removed from the display only; measurement inputs and JSON reports
+keep their original values.
+Backend parsing and its diagnostic messages retain their existing behavior.
+
 Soup shows friendly error messages by default (2-3 lines with a fix suggestion). For full tracebacks:
 
 ```bash
@@ -1567,6 +1583,17 @@ The first pinned streamed run after upgrading re-shards and re-copies the base
 into the new `<slug>@<commit>` cache slots, costing disk space and time; old slots
 are left in place.
 
+Single-process native MLX `soup train` uses the same identity on the backend's
+supported text tasks and scalar preference aliases. Soup qualifies the provider
+already imported by mlx-lm before the first optional revision lookup; changing
+`MLXLM_USE_MODELSCOPE` after import does not change that provider. The first RoPE
+`config.json` read (both cache-first and download fallback) and mlx-lm's model,
+weights and tokenizer load receive the same resolved commit. A failed download
+at that commit does not retry the moving default branch. Model config overrides
+and dense SFT's effective-config return are preserved. Unqualified providers or
+distributed launcher environments record no bound Hub revision and print why,
+without initializing an Accelerate group or introducing a new load refusal.
+
 The new nullable `runs.base_revision`, `runs.base_revision_source` and
 `runs.training_data_sha256` columns upgrade existing databases in place. Historical
 rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
@@ -1616,8 +1643,10 @@ and Windows because env:// rendezvous can time out on loaded macOS runners. Rank
 failures include both child logs after cleanup. NCCL/FSDP hardware execution is
 not established by those tests.
 
-**Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
-are recorded as such; a cache-path hint on any backend is still unverified. Standalone
+**Remaining boundaries:** Non-HF hubs, Unsloth, distributed MLX and MLX sweep
+loads remain unbound and are recorded as such. Independent MLX inference, chat,
+serve, merge and export consumers are outside this training binding; a cache-path
+hint on any backend is still unverified. Standalone
 wrapper invocations and distributed sweep launches do not gain a binding guarantee.
 Metadata is written for the final artifact, not each intermediate checkpoint. Other exporters
 (including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
@@ -1661,9 +1690,15 @@ omitted `loss` / `lr` NULL (a NaN reads NULL too, since SQLite cannot hold one; 
 `train_loss` mean, throughput; it carries no loss, learning rate or gradient norm) writes
 no training row and pushes no live event, while the terminal panel keeps showing the last
 real values. Its throughput (`train_steps_per_second`) is a measurement and is kept: it is
-stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm` and
-`val_loss` NULL and `speed` set (#2810), so a reader that wants the training curve skips
-rows whose `kind` is `summary`. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
+stored as one row of its own, `kind = summary`, with `loss`, `lr`, `grad_norm`, `val_loss`
+and the reward columns NULL and `speed` set (#2810), so a reader that wants the training
+curve skips rows whose `kind` is `summary`. A GRPO log that is also this summary can carry
+a leftover reward (TRL merges what is still buffered into the next log, and Hugging Face
+forces no log on the last step, so a run whose step count is not a multiple of
+`logging_steps` has one): that log is written as two rows, the `summary` row as above and
+then a `train` row at the same step that carries the leftover reward (`loss`, `lr`, `speed`
+NULL), so the reward curve keeps its last point. A log whose only reward entries are not
+finite numbers writes nothing beyond the summary row. Every `metrics` row has its own integer `id` (`ExperimentTracker.get_metrics`
 returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow with each
 row written, so a later measurement at the same or a lower step is a new row with a larger
 `id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
@@ -1692,6 +1727,51 @@ before they existed; nothing is backfilled. Their values are module constants in
   `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
   and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
   `ValueError` before anything is written.
+
+A reinforcement-style run records its per-step training reward in two more nullable columns of
+`metrics`: `metrics.reward`, the mean reward over the logging window that ends at the step
+(higher is better; TRL averages what it collected since the previous log), and
+`metrics.reward_std`, where the trainer logs one (GRPO: the window mean of the per-batch
+standard deviations). Both are appended after every
+existing column, added in place to an existing `~/.soup/experiments.db`, and NULL on every row
+written before they existed (nothing is backfilled). NULL means "not measured", never a zero:
+every run that is not reinforcement-style, a row whose log carried no reward, a value that is
+not a number (a `bool`, a string) and a value that is not finite (NaN, an infinity; the row is
+kept and the cell is NULL) all read NULL. The tracker, the callback and the live event share one
+allowlist of the trainer's log keys, exact names only, in `soup_cli.experiment.reward_columns`
+(the keys are those TRL 0.29.1 writes, read from its source; PPO and online DPO have not
+been run end to end against this mapping):
+
+| trainer | log key | column |
+|---|---|---|
+| `grpo` | `reward` | `reward` |
+| `grpo` | `reward_std` | `reward_std` (NaN for a batch of one, stored as NULL) |
+| `ppo`, and `online_dpo` scored by a reward model or function | `objective/scores` | `reward` |
+
+When a log carries both `reward` and `objective/scores`, `reward` wins. Nothing else is
+mapped: DPO's implicit `rewards/chosen` / `rewards/margins`, the KL-shaped
+`objective/rlhf_reward`, a per-function `rewards/<name>/mean` and `frac_reward_zero_std` are
+other numbers with "reward" in their name, and a pairwise judge ranks completions without
+scoring them, so an `online_dpo` run on a judge has no reward. A held-out evaluation's
+`eval_reward` is `val_reward`, not this column. MLX GRPO does not write the per-step
+reward: its rows carry `val_reward` only.
+
+What a program reads. A reward curve is `SELECT step, reward FROM metrics WHERE run_id = ? AND
+reward IS NOT NULL ORDER BY step, id`, or `ExperimentTracker.get_metric_series(run_id,
+"reward")`; `get_reward_summary(run_id)` gives `{"first", "last", "steps"}` or None.
+Only `kind = train` rows carry a reward: skip `eval` rows (their held-out number is
+`val_reward`) and `summary` rows (throughput only). A step that logs a reward and no loss is
+still a `train` row, with `loss` NULL (the previous step's loss is not carried into it), and
+a PPO row has NULL `loss`, `lr` and `grad_norm`: TRL logs PPO's learning rate as `lr` and
+its loss as `loss/policy_avg`, neither of which is read, so a PPO run records its reward
+and nothing else per step (`soup why` says that, and `soup runs show` says it recorded a
+reward and no loss instead of that there is no loss data). `soup runs show` prints a `Reward: first -> last (N steps)` line under `Loss:` (N counts the
+logged rows, one per logging window) and
+`soup runs compare` adds `Initial Reward` / `Final Reward` rows, only for a run that has a
+reward, so the output for any other run is unchanged. `GET /api/runs/{run_id}/metrics` returns
+both columns on every row (null when unset), and the live `metric` event carries `reward` /
+`reward_std` only when set. They are training-time series, so `benchmark:reward` and
+`benchmark:reward_std` are refused by `soup eval against`, like `benchmark:val_reward`.
 
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
@@ -1825,8 +1905,17 @@ When training fails, Soup auto-writes a self-contained `.crash` JSON to
 `./.soup-crashes/crash_<utc>_<hex>.crash` containing: redacted error trace,
 classified failure kind (`oom` / `nan` / `cuda` / `dataloader` / `nccl` /
 `other`), GPU state at crash time, env summary, last-50 metric rows, and the
-config (recursively redacted of `hf_*` / `sk-*` / `Bearer …` tokens). The
-output_dir is reduced to `os.path.basename` so `$HOME` doesn't leak.
+config. The error message, traceback, metric rows, config and env values are
+redacted before anything is written: the userinfo of a URL and the values of
+sensitive query parameters, common API-token shapes (`hf_*`, `sk-*`, GitHub, AWS
+access-key ids, Google, Slack), `Authorization` / `Bearer` headers, JWTs,
+private-key blocks, and values stored under credential-named keys (`token`,
+`secret`, `password`, `api_key`, ...; W&B keys and AWS secret keys are caught under
+their key name, and `max_new_tokens` and `tokenizer` stay readable). A string
+longer than 256 KiB is cut before redaction. Redaction is pattern-based and
+best-effort: read a bundle before sharing it. The bundle's `redaction` block
+records how many values were replaced, as counts only. The output_dir is reduced
+to `os.path.basename` so `$HOME` doesn't leak.
 
 ### `--log-level quiet|normal|verbose|debug`
 
@@ -2255,6 +2344,45 @@ print(report.ok, report.reason)
 That input carries no shape, so it is guessed from `params_b` and the logits term is left out; `hardware_fit_input_from_config(cfg)` builds the input `soup train` uses, with the model's own shape. When the run doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
 
 `mxfp4` and `fp8` are dequantized on load, so they are priced as bf16. `gptq`, `awq`, `aqlm` and `eetq` stay packed and are priced at their own figures (0.55, 0.55, 0.5 and 1.0 bytes a parameter). `soup train` has no figure for `hqq:*` and says it skipped the check ([Quant Menu](performance-and-quantization.md#quant-menu--9-quantization-formats)).
+
+### Asking for the estimate from a program
+
+`soup_cli.utils.profiler.profile_from_config(cfg, *, allow_network=True, gpu_memory_gb=None, on_hub_request=None, seq_len=None, shape=None)` is what a program calls for the estimate when it has no `soup train` to run. `cfg` is a `SoupConfig` (`load_config_from_string(yaml_text)` in `soup_cli.config.loader`; `batch_size: auto` is priced at 4, as `soup profile` does). `soup profile --config` and the MCP `profile` tool call it, and it builds the same input as the train pre-flight, with one exception: on a CUDA card without bf16 hardware the pre-flight passes `kbit_fp32` (`commands/train.py:551`), which this function cannot take, so there the pre-flight prices fp32 embeddings and head under 4-bit and 8-bit loading where this function prices bf16.
+
+It returns a dict, or a `soup_cli.utils.hardware_fit.FitUnavailable` with `.field` (the soup.yaml field that stops it) and `.reason` for a run it cannot price: a `batch_size` outside 1 to 1,024, a model over 1,000B parameters, or inputs the estimate otherwise refuses (`.field` is then `None`). `allow_network=False` reads only a local directory and the Hugging Face cache. `soup_cli.utils.profiler.estimate_total` was removed in 0.77.2 and has no replacement with its signature: it priced a run from a parameter count, with no vocabulary and so no logits.
+
+**Limits of the numbers, first.**
+
+- The estimate alone is below the whole-card peak on three of the eleven clean runs measured on an RTX 5070 Laptop before #2683. Keep the pre-flight's 10% margin: `total_memory_bytes * (1 + VRAM_SAFETY_MARGIN)` was at least 1.002 times the peak on all eleven, and 1.002 is the tightest, a filled 1,024-token micro-batch. These are uncapped peaks, which include allocator cache (the third item).
+- Only the five `soup bench train` runs behind those eleven (including the three tight rows, M3, M4 and M6) have 200 ms device samples. The six downstream readings are lower bounds: one is sampled about every 5 s, three every second (gaps up to 2 s), two are not described.
+- **An uncapped whole-card peak includes allocator cache, so the need is lower than it, except for large filled micro-batches.** The peaks above are of runs with torch's allocator uncapped: they include blocks it only caches and gives back when a request would otherwise fail. The same recipes re-run with the allocator capped (`torch.cuda.set_per_process_memory_fraction`, origin/main `a6f5e7246`, one run per cap) train in less. The 4-bit run (M4: Qwen3-0.6B, LoRA r16, rows of at most 79 tokens, embeddings and head in bf16 since #2683) peaked uncapped at 1407 MiB allocated, 2248 MiB reserved and 2410 MiB on the whole card, against an estimate of 2003 MiB: 1.033 of its allocated peak, 0.83 of the uncapped whole-card peak and 0.91 of it with the margin. Capped at 1,500 MiB it trains and the card shows 1,646 MiB, which the estimate is 1.22 times (1,700 MiB trains too); at 1,450 MiB it fails while the model is being prepared, before the first step. Right after that preparation torch holds 514 MiB allocated and 598 MiB reserved, and emptying the cache there changes no peak, so the reserved memory above the allocated peak builds up during training and is not left over from the cast. The five 4-bit runs among the eleven were measured before #2683 and are priced with fp32 embeddings and head.
+- Capped, the short-row bf16 runs agree. The helpdesk run (M1) trained at a 2,150 MiB cap (2,312 MiB on the card) against an estimate of 2,728, and failed at 2,200, so one cap's outcome is one run, not a boundary. The r64 run on rows of at most 147 tokens (M3) trained at 3,150 MiB (3,312 on the card) against 3,716.
+- **One measured case is below the need: the micro-batch that fills 512 tokens (M6, 1,024 tokens per micro-batch).** It failed at allocator caps of 5,700, 5,850 and 6,000 MiB, each time on a 594 MiB block (its fp32 logits copy, which has to be contiguous), and trains uncapped at 6,510 MiB on the card, so its need is between about 6,160 and 6,510 MiB; the estimate is 5,930 MiB. The 10% margin matters most for large filled micro-batches. It is not known where between those figures the need lies; no capped run of a filled 4-bit micro-batch or of a 256-token one exists, and every capped row is one run of one model on one card.
+- The coefficients were fitted on rows that fill `max_length` (below). The 2,048-token case the pre-flight prices by default was not run on that card: its estimate, 10.19 GB, is over the card.
+- Parameters are counted from the safetensors header, so a checkpoint that stores a tied `lm_head.weight` (Qwen3-0.6B and Qwen3-1.7B do) has it counted twice: 0.31 GB too many in bf16 for 0.6B, 0.62 GB for 1.7B. It is not corrected on its own: at short lengths the measured peaks hold a fixed 0.35 GB or so that the estimate does not price, and the double count happens to cover it.
+- The fixed overhead is 0.5 GB; a CUDA process that had allocated nothing held 226 MiB on that card, and the whole-card peak was 162 MiB above torch's reserved peak in every `soup bench train` run. Reserved peaks depend on the runner (one recipe gave 3388 MiB in a downstream runner and 3732 MiB in `soup bench train`), so compare the estimate's terms with the allocated peak. The 4-bit allocated terms were 16% under `max_memory_allocated` on the one 4-bit run measured before #2683 (priced with fp32 embeddings and head), which the margin covers and the estimate alone does not; on current main they are 1.03 of the allocated peak.
+- Nothing here prices generation: there is no KV cache and no context length in these terms.
+
+**The estimate prices rows that fill the length it is given.** Every micro-batch is `data.max_length` tokens in each of its `batch_size` rows, because the runs its coefficients come from did that. The activations and the logits are proportional to those tokens, and they are most of the estimate of a small model with a large vocabulary: 74% of the 9,718 MiB (10.19 GB) for Qwen3-0.6B at `max_length: 1024`, `batch_size: 2` (1.87 and 1.82 MB per token).
+
+Training data with short rows peaks far lower. On an RTX 5070 Laptop (8 GB), Qwen3-0.6B with LoRA r16 on rows of at most 79 tokens peaked at 2108 MiB allocated and 2462 MiB on the whole card; with `max_length: 256` the peak was the same to the MiB (`soup bench train`). Seventeen more runs from a downstream application (2114 to 3388 MiB of torch-reserved peak, rows of at most 63 to 147 tokens) are in `benchmarks/evidence/vram-qwen3-0.6b-realised-length.json`, held by `tests/test_vram_estimate_realised_length.py`. Priced at the longest row, the estimate's allocated terms were 0.96 to 1.02 of `max_memory_allocated` on the three bf16 runs measured that way (0.84 on the 4-bit run), and its total was 0.91 to 1.23 times the whole-card peak over the eleven clean runs.
+
+For short data, either set `data.max_length` to the longest row rounded up (the pre-flight then prices that length, and nothing is truncated), or pass `seq_len`: an int of at least 1 (a bool or a non-int raises `TypeError`, a value below 1 raises `ValueError`), clamped to `[64, data.max_length]`. The result has `seq_len_requested`, a note, and `seq_len_source`, and its `seq_len` is the length priced. `seq_len=None` is the estimate it always was, and `soup profile` and the pre-flight do not take it.
+
+**When `seq_len` applies.** Only for a run that pads each micro-batch to its longest row: `task: sft`, `modality: text`, `backend: transformers`, with `training.packing`, `training.multipack`, `data.streaming` and `training.stream_layers` off. Then the longest row of the data is the figure to pass, `seq_len_source` is `"caller"`, and a longer row in the data is not priced. Any other run is priced at `data.max_length`, `seq_len_source` is `"max_length"` (so is it when the value is above `data.max_length`), `seq_len_requested` keeps the value, and a note names the reason:
+
+- packing and multipack fill every sequence of a micro-batch to `data.max_length`;
+- grpo, ppo and online_dpo generate tokens on top of the prompt; the preference tasks (dpo, kto, orpo, simpo, ipo, bco, preference) and reward_model run a chosen and a rejected sequence per row; distill and unlearn run a second model or set; pretrain's rows are long documents cut to `max_length`; tts, asr, vision and audio carry media tokens; the classifier family, embedding, prm and moe_lora_routing have their own collators. None of those is measured, so `sft` is the only task listed;
+- the longest row of a streamed dataset is not known before the run, and layer streaming has its own planner.
+
+**`shape`** is for a model whose `config.json` cannot be read (not in the cache, no network, a gated repository), where the estimate otherwise guesses a shape from the name and prices no logits (`shape_source: "guessed"`, `vocab_size: None`, a note says so). Pass a mapping with `hidden_size`, `num_layers`, `intermediate_size`, `vocab_size` and `params`, all together; a parameter count alone is refused, since it is that blind spot. `num_attention_heads`, `num_key_value_heads` and `head_dim` (for a model whose attention is not `hidden_size` wide, such as Qwen3) and `tie_word_embeddings` are optional. Each field must be a positive int (a bool is refused) and each refusal names the field.
+
+- `params` is a raw parameter count, not billions. The other four numbers are not checked against it beyond a floor: it must be at least `vocab_size * hidden_size`, the embedding table alone.
+- Which count to pass depends on the checkpoint, because whether a tied output head is stored once or twice varies. SmolLM2-135M and Qwen2.5-0.5B store it once (the header sum is the loaded count: 134,515,008 and 494,032,768); Qwen3-0.6B and Qwen3-1.7B store it twice (751,632,384 and 2,031,739,904, against 596,049,920 loaded for the 0.6B). Pass the sum of the tensors stored in the checkpoint (the safetensors header sum) when the files are at hand: it is what the evidence rows of this change use, and what the estimate itself reads for a model it can see (`utils/gpu.py:42`; the Hub's header-only metadata call sums the same headers), so the two agree by construction. With only a loaded count of a tied model, add `vocab_size * hidden_size`: that is never too small and at most one head matrix too large. A loaded count passed as it is for a checkpoint that stores the head twice prices `2 * vocab_size * hidden_size * 1.05` bytes lower (about 312 MiB for Qwen3-0.6B) and takes the tightest clean row from 1.002 to about 0.95 of the peak with the margin.
+- A wrong `tie_word_embeddings: true` under-prices 4-bit and 8-bit loading (a tied head is one table, an untied one two). Omitting it is the safe choice.
+- The shape is used only when the model's own `config.json` cannot be read; a readable one wins and a note says the supplied shape was not used. Weights on disk without a `config.json` keep their measured parameter count over the supplied one. The result has `shape_source: "caller"`.
+
+**The result's keys:** `total_memory_gb`, `total_memory_bytes` (the sum of `memory_terms_bytes`, one entry per term of the table above, which is the exact figure; the `*_gb` fields are rounded to two decimals), `model_memory_gb`, `lora_memory_gb`, `gradients_memory_gb`, `optimizer_memory_gb`, `activation_memory_gb`, `logits_memory_gb`, `dequant_memory_gb`, `optimizer_step_memory_gb`, `overhead_gb`, and what the run was priced on: `model_name`, `model_params_b`, `trainable_params`, `quantization`, `peft`, `lora_r`, `lora_targets`, `batch_size`, `seq_len`, `gradient_checkpointing`, `gradient_checkpointing_tier`, `hidden_size`, `num_layers`, `vocab_size`, `shape_source` (`config.json`, `guessed`, or `caller`), `params_source` and `notes`. `total_memory_gb` is the estimate before the pre-flight's 10% margin; GB are 1e9 bytes.
 
 
 ## Shell Completions (`soup completions`)

@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
+from soup_cli.utils.yaml_limits import (
+    MAX_CONFIG_BYTES,
+    duplicate_keys_in_sequence_mappings,
+    load_yaml_limited,
+    read_text_limited,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +203,21 @@ def load_suite(path: str) -> EvalSuite:
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
     try:
-        raw = load_yaml_file_limited(
-            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        what = f"eval-gate suite '{path}'"
+        source = read_text_limited(suite_path, what, max_bytes=MAX_CONFIG_BYTES)
+        raw = load_yaml_limited(source, what, max_bytes=MAX_CONFIG_BYTES)
+        duplicates = duplicate_keys_in_sequence_mappings(
+            source,
+            what,
+            sequence_key="tasks",
+            max_bytes=MAX_CONFIG_BYTES,
         )
+        if duplicates:
+            key, line = duplicates[0]
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has duplicate key {key!r} "
+                f"in a task mapping on line {line}"
+            )
     except yaml.YAMLError as exc:
         raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"
