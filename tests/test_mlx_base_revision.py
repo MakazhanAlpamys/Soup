@@ -387,3 +387,42 @@ def test_alternate_hub_config_keeps_its_existing_refusal(train_cli):
     assert "hub='modelscope' is not supported on backend=mlx" in _plain(result.output)
     assert train_cli.state.lookups == train_cli.state.loads == []
     assert train_cli.runs() == []
+
+
+@pytest.mark.parametrize("colour", [False, True], ids=["plain", "colour"])
+@pytest.mark.parametrize("cached", [False, True], ids=["local", "cache-hint"])
+@pytest.mark.parametrize("provider", ["hf", "modelscope", "launcher"])
+def test_local_base_diagnostic_does_not_blame_an_unused_provider(
+    train_cli, monkeypatch, colour, cached, provider,
+):
+    state = train_cli.state
+    if provider == "modelscope":
+        state.upstream.snapshot_download = lambda *args, **kwargs: None
+    elif provider == "launcher":
+        monkeypatch.setenv("WORLD_SIZE", "bad")
+    base = train_cli.root / (f"snapshots/{FIRST}" if cached else "local-base")
+    base.mkdir(parents=True)
+    state.config["base"] = str(base)
+
+    result = train_cli.invoke(colour=colour)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "not qualified" not in plain
+    expected = (
+        "Base revision: cache-path metadata; local bytes are unverified" if cached else
+        "Base revision: unknown (existing loading behavior preserved)"
+    )
+    assert plain.count(expected) == 1
+    assert state.lookups == []
+    assert state.loads == [
+        (str(base), {"return_config": True}), (str(base), {}), ("other/teacher", {}),
+    ]
+    row, = train_cli.runs()
+    source, revision = ("cache_path", FIRST) if cached else ("local", None)
+    assert (row["base_model"], row["base_revision_source"], row["base_revision"]) == (
+        str(base), source, revision,
+    )
+    metadata = provenance.read_run_provenance(train_cli.root / "final")
+    assert metadata["base_revision_source"] == source
+    assert metadata["base_revision"] == revision
+    assert provenance.base_revision_kwargs(str(base)) == {}

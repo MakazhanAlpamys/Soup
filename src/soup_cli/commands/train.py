@@ -2262,7 +2262,7 @@ def train(
             console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
         elif base_identity.source == "cache_path":
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
-        elif mlx_binding_reason:
+        elif mlx_binding_reason and base_identity.source == "unsupported_backend":
             console.print(
                 f"[dim]Base revision: unknown ({mlx_binding_reason}; "
                 "existing loading behavior preserved)[/]"

@@ -168,7 +168,9 @@ to one commit across its model, tokenizer and config, including the first RoPE
 config read. The original base ID, commit and source are retained in the run row
 and final `soup_run.json`; see [Recorded base identity](#recorded-base-identity).
 An imported non-HF provider keeps its existing loading behavior, records no Hub
-revision and prints an explanatory line. This does not bind MLX sweeps or
+revision and prints an explanatory line for a remote base. Local directories
+keep the ordinary unknown-identity message; cache paths keep their unverified-hint
+message. This does not bind MLX sweeps or
 independent inference, chat, serve, merge and export consumers.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
