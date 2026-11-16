@@ -22,11 +22,22 @@ for `bf16` and `INT8_CHECKPOINT_KEPT_FP32 = (5.0, 2.0)` for `kbit_fp32`, the cas
 hardware, so rows 45 to 47 hold the fp32 norms through an fp16 pick instead; the test prices
 them with `kbit_fp32`, and the pre-flight does not (below).
 
+**Re-run on the main this branch merges.** Set B ran on `3f9ba5ce`, the first main with
+#2683 in that this branch merged; the branch now merges `a998362a`. The measured path is the
+same file for file on both (`trainer/sft.py`, `utils/kbit_prepare.py`,
+`utils/mixed_precision.py`, `utils/vram_estimate.py` and the harness), and 19 of the 21 rows,
+run again on `a998362a` with the same driver, models and package versions, read the same
+`peak_allocated`, `peak_reserved`, `before_step_allocated` and loss as on `3f9ba5ce`: rows 27
+to 30, 32 to 44, 46 and 47. Rows 31 and 45 reserve 11.6 and 11.2 GB at their peak, and the
+shared card had 9.7 to 10.1 GB free during the re-run, so to leave its other users room they
+were not run again. The evidence file holds the `3f9ba5ce` lines.
+
 **What is measured.** The #2049 harness, `benchmarks/harness/vram_estimate_calibration.py`,
 unchanged (sha256 `cd4687bf327086dd5efdd0442a8cd7315ceb37da013dfb3dc35455c95ce898fb`, the
 file [`gate-2049-resident-vram.md`](gate-2049-resident-vram.md) names; the same file on
-both commits). Each row runs its `run_row` in a process of its own, through a driver that
-sets the memory fraction first and adds `memory_fraction_cap` to the result line:
+`527314a4`, `3f9ba5ce` and `a998362a`). Each row runs its `run_row` in a process of its
+own, through a driver that sets the memory fraction first and adds `memory_fraction_cap` to
+the result line:
 `soup train`'s own setup (`SFTTrainerWrapper.setup`), two training steps,
 `torch.cuda.max_memory_allocated()` over them. Every row fills `max_length`, LoRA r8 on the
 default targets, alpha 16, AdamW. For rows 45 to 47 the driver also adds
@@ -76,16 +87,20 @@ one tensor for the three projections), the o_proj input (the attention output), 
 gate/up input (the MLP norm's output) and the down_proj input. Read off layer 5 with
 forward pre-hooks:
 
-- **`bf16`, main `3f9ba5ce`.** `prepare_kbit_model(compute_dtype=torch.bfloat16)`, autocast
-  bf16: all seven int8 linear layers of Qwen2.5-1.5B-Instruct, Qwen2.5-0.5B-Instruct and
-  SmolLM2-360M-Instruct get bf16 inputs. That is 1 + 1 + 1 bf16 values per hidden unit and
-  1 per intermediate unit: `INT8_CHECKPOINT_KEPT = (3.0, 1.0)`.
+- **`bf16`, main `3f9ba5ce`, repeated on `a998362a`.**
+  `prepare_kbit_model(compute_dtype=torch.bfloat16)`, autocast bf16: all seven int8 linear
+  layers of Qwen2.5-1.5B-Instruct, Qwen2.5-0.5B-Instruct and SmolLM2-360M-Instruct get bf16
+  inputs. That is 1 + 1 + 1 bf16 values per hidden unit and 1 per intermediate unit:
+  `INT8_CHECKPOINT_KEPT = (3.0, 1.0)`.
 - **`kbit_fp32`.** The q/k/v and gate/up inputs are fp32 (the norms are fp32), the o_proj
   input is half precision, and the down_proj input is fp32 when gate/up met no outlier
   column and half precision when they did, because bitsandbytes adds the outlier columns
   back with an `addmm` (`backends/default/ops.py:98`) that autocast runs in half precision.
   On set A's commit Qwen2.5-0.5B and Qwen2.5-1.5B gave a bf16 down_proj input and
-  SmolLM2-360M an fp32 one. The estimate charges the fp32 case: 4 + 2 + 4 bytes per hidden
+  SmolLM2-360M an fp32 one; on `a998362a` with the fp16 pick of rows 45 to 47
+  (`compute_dtype=torch.float16`, autocast fp16) the Qwen2.5 models gave an fp16 one and
+  SmolLM2-360M an fp32 one, with fp32 q/k/v and gate/up inputs and an fp16 o_proj input on
+  all three. The estimate charges the fp32 case: 4 + 2 + 4 bytes per hidden
   unit and 4 per intermediate unit, `INT8_CHECKPOINT_KEPT_FP32 = (5.0, 2.0)`.
 
 Both are charged on every checkpointed layer.
