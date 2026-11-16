@@ -1154,6 +1154,79 @@ def _read_ship_decision(path: str) -> Optional[str]:
     return data["decision"] if data is not None else None
 
 
+#: The most the loop reads of its iteration log to look an adapter up.
+_MAX_ITERATION_LOG_BYTES = 64 * 1024 * 1024
+_MAX_ITERATION_LINE_BYTES = 1024 * 1024
+
+
+def _iteration_lines_of(name: str) -> "list[dict]":
+    """The latest ``iterations.jsonl`` line of every iteration that trained adapter ``name``.
+
+    An iteration trained ``name`` when its artifacts' adapter path, its served name or its run id
+    is ``name``. The log is read in full unless it is over ``_MAX_ITERATION_LOG_BYTES``; a torn or
+    over-long line is skipped. Oldest first.
+    """
+    from soup_cli.utils.loop_log import LOG_DIR, LOG_FILES
+
+    path = os.path.join(LOG_DIR, LOG_FILES["iteration"])
+    latest: "dict[str, dict]" = {}
+    try:
+        if os.path.getsize(path) > _MAX_ITERATION_LOG_BYTES:
+            return []
+        with open(path, "rb") as handle:
+            for raw in handle:
+                if len(raw) > _MAX_ITERATION_LINE_BYTES:
+                    continue
+                try:
+                    line = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(line, dict) or not isinstance(line.get("iteration_id"), str):
+                    continue
+                artifacts = line.get("artifacts") if isinstance(line.get("artifacts"), dict) else {}
+                train = line.get("train") if isinstance(line.get("train"), dict) else {}
+                adapter = artifacts.get("adapter")
+                names = {
+                    artifacts.get("served_as"),
+                    train.get("run_id"),
+                    os.path.basename(adapter.rstrip("/\\")) if isinstance(adapter, str) else None,
+                }
+                if name in names:
+                    latest[line["iteration_id"]] = line  # the latest line per iteration wins
+    except (OSError, UnicodeDecodeError):
+        return []
+    return list(latest.values())
+
+
+def known_dont_ship(name: str) -> Optional[str]:
+    """Why the loop knows adapter ``name`` must not be canaried, or ``None``.
+
+    The newest iteration that trained ``name`` decides: a verdict of DON'T SHIP on an iteration
+    that ended ``skipped`` (the loop did not deploy it) is a "no". An iteration that went on to a
+    canary (the check found nothing to verify and the canary's ratings decide), was promoted or
+    withdrawn, or held a SHIP, is not. With no such iteration, a verdict file
+    ``.soup-loops/verdicts/<name>.json`` (the name the loop gives its own; a hand-run
+    ``soup ship --output`` can use it too) that says DON'T SHIP is a "no". The text names where
+    the verdict is recorded.
+    """
+    if not isinstance(name, str) or _ADAPTER_NAME_RE.fullmatch(name) is None:
+        return None
+    lines = _iteration_lines_of(name)
+    if lines:
+        newest = lines[-1]
+        verdict = newest.get("verdict") if isinstance(newest.get("verdict"), dict) else {}
+        if verdict.get("decision") == "DON'T SHIP" and newest.get("outcome") == "skipped":
+            reason = verdict.get("reason")
+            why = f": {_printable(reason, 160)}" if isinstance(reason, str) and reason else ""
+            where = _printable(newest["iteration_id"], 80)
+            return f"its last verdict is DON'T SHIP (iteration {where}{why})"
+        return None
+    file_path = os.path.join(_VERDICTS_DIR, f"{name}.json")
+    if _read_ship_decision(file_path) == "DON'T SHIP":
+        return f"its verdict file {file_path.replace(os.sep, '/')} says DON'T SHIP"
+    return None
+
+
 def _write_gate_files(
     ctx: Mapping[str, object], run_id: str
 ) -> "Tuple[str, str, list]":

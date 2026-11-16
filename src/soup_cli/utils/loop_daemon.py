@@ -282,6 +282,7 @@ def run_once(
             canary_started_ts=None,
             canary_cursor_ts=None,
             canary_iteration=None,
+            canary_override=None,
         )
     elif canary_verdict == "OK" and state.canary_active:
         canary_before = state
@@ -858,10 +859,15 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
         canary_rollout_id=None,
         canary_adapter=None,
         canary_started_ts=None,
+        canary_override=None,
         **promotion_changes(state),
         **promotion_cursor_changes(state),
     )
     note = f"canary {name} promoted to production"
+    if state.canary_override:
+        # A person started this canary over a DON'T SHIP verdict (soup loop canary
+        # --allow-dont-ship): the promotion line and the version line say so.
+        note += f"; {state.canary_override}"
     if out.get("notes"):
         note += f" ({out['notes']})"
     if state.canary_adapter is None:

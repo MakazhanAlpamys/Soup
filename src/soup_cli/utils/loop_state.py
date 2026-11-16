@@ -281,6 +281,11 @@ class LoopState:
     # ``utils/loop_retry.py`` decides; ``soup loop resume`` clears it. None = nothing remembered.
     # Last, so adding it shifted no existing positional field; loads as None from before.
     failed_train: Optional[dict] = None
+    # Set when ``soup loop canary --allow-dont-ship`` started the running canary over a
+    # verdict of DON'T SHIP (review 5, F10): the words that say so, carried to the line
+    # that records its promotion, cleared when the canary ends. None = no override.
+    # Last, so adding it shifted no existing positional field; loads as None from before.
+    canary_override: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -468,6 +473,10 @@ class LoopState:
             _check_pending_deploy(self.pending_deploy)
         if self.failed_train is not None:
             _check_failed_train(self.failed_train)
+        if self.canary_override is not None:
+            _require_str("canary_override", self.canary_override, allow_empty=False)
+            if any(ord(char) < 0x20 or ord(char) == 0x7F for char in self.canary_override):
+                raise ValueError("canary_override must not contain control characters")
         if self.last_failure is not None:
             _require_str("last_failure", self.last_failure, allow_empty=False)
 

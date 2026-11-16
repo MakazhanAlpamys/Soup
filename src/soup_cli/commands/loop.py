@@ -1134,10 +1134,38 @@ def canary_cmd(
         "--autoroll-on-regress/--no-autoroll-on-regress",
         help="Roll back automatically on MAJOR verdict.",
     ),
+    allow_dont_ship: bool = typer.Option(
+        False,
+        "--allow-dont-ship",
+        help=(
+            "Canary the adapter although its last verdict was DON'T SHIP. Recorded in loop.yaml, "
+            "the progress log and, if it is promoted, the line that records the promotion."
+        ),
+    ),
 ) -> None:
-    """Promote ``new_adapter`` as the canary with a traffic split."""
+    """Promote ``new_adapter`` as the canary with a traffic split.
+
+    Refuses an adapter whose last verdict was DON'T SHIP (the iteration log, or a verdict file
+    ``.soup-loops/verdicts/<adapter>.json``) unless ``--allow-dont-ship`` is given.
+    """
     pct = _parse_traffic(traffic)
     state = _safe_read()
+    from soup_cli.utils.loop_stages import known_dont_ship
+
+    against = known_dont_ship(new_adapter)
+    override = None
+    if against is not None:
+        if not allow_dont_ship:
+            console.print(
+                f"[red]refusing to canary {for_terminal(new_adapter)}:[/] "
+                f"{for_terminal(against)}. A promoted canary answers everyone's requests; pass "
+                "--allow-dont-ship to canary it anyway (the override is recorded)"
+            )
+            raise typer.Exit(code=2)
+        override = (
+            f"{new_adapter} was canaried over a DON'T SHIP verdict with --allow-dont-ship "
+            f"({against})"
+        )[:1000]
     # CanaryPolicy validates name shape + cross-fields; reuse here so the
     # state file can never disagree with the live router schema.
     try:
@@ -1160,6 +1188,7 @@ def canary_cmd(
         canary_started_ts=time.time(),
         canary_cursor_ts=None,  # no iteration started it: its promotion leaves the data cursor
         canary_iteration=None,  # no iteration started this canary
+        canary_override=override,
     )
     # The log lines come first, as the daemon's do. A canary started by hand changes no
     # version; a running canary it replaces is withdrawn.
@@ -1167,17 +1196,21 @@ def canary_cmd(
     line = withdrawn_line(state, f"replaced by soup loop canary {policy.canary}")
     if line is not None:
         log.iteration(line)
+    start_message = (
+        f"{policy.traffic_pct:g}% of keyed traffic; verdict after "
+        f"{CANARY_MIN_SAMPLES} canary answers"
+    )
+    if override is not None:
+        start_message = f"{start_message}; {override}"
     log.progress(progress_line(
-        None, "canary", "start", done=0, total=CANARY_MIN_SAMPLES,
-        message=f"{policy.traffic_pct:g}% of keyed traffic; verdict after "
-        f"{CANARY_MIN_SAMPLES} canary answers",
+        None, "canary", "start", done=0, total=CANARY_MIN_SAMPLES, message=start_message[:300],
     ))
     owned = {
         name: getattr(new_state, name)
         for name in (
             "canary_active", "canary_traffic_pct", "canary_autoroll_on_regress",
             "canary_rollout_id", "canary_started_ts", "canary_cursor_ts",
-            "canary_iteration",
+            "canary_iteration", "canary_override",
         )
     }
     # Only the canary fields are this command's: what a daemon wrote meanwhile is kept.
@@ -1222,6 +1255,7 @@ def rollback_cmd() -> None:
                 canary_started_ts=None,
                 canary_cursor_ts=None,
                 canary_iteration=None,
+                canary_override=None,
             )
         )
         console.print(
@@ -1264,6 +1298,7 @@ def rollback_cmd() -> None:
             canary_rollout_id=None,
             canary_adapter=None,
             canary_started_ts=None,
+            canary_override=None,
             **changes,
             # the data cursor goes back with production (a running canary's own is withdrawn)
             **cursor_changes,
