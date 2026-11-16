@@ -128,11 +128,14 @@ def check_mergeable(weights_list: Sequence[Mapping[str, Any]]) -> None:
     Raises ``ValueError`` when:
 
     - the inputs share no tensor name at all (disjoint ``target_modules``), or
-    - a shared tensor differs in shape between inputs (on every module, or on
-      some only, as with ``rank_pattern``).
+    - a shared LoRA tensor differs in shape between inputs (on every module,
+      or on some only, as with ``rank_pattern``), or
+    - no shared tensor has one shape, so the merge would be empty.
 
-    A tensor present in only some inputs is not a refusal: it stays out of the
-    merge, as before.
+    Not a refusal, as before: a tensor present in only some inputs stays out
+    of the merge, and a shared tensor that is not a LoRA one (a
+    ``modules_to_save`` head, say) and differs in shape is skipped by the
+    strategy and listed as skipped.
     """
     import numpy as np
 
@@ -147,9 +150,13 @@ def check_mergeable(weights_list: Sequence[Mapping[str, Any]]) -> None:
             "adapter would hold no weights (the inputs target different "
             "modules). Nothing was written."
         )
+    mergeable = 0
     for name in sorted(shared):
         shapes = [tuple(np.shape(adapter[name])) for adapter in weights_list]
         if len(set(shapes)) == 1:
+            mergeable += 1
+            continue
+        if "lora_" not in name:
             continue
         ranks = [_lora_rank_of(name, shape) for shape in shapes]
         if None not in ranks and len(set(ranks)) > 1:
@@ -169,6 +176,12 @@ def check_mergeable(weights_list: Sequence[Mapping[str, Any]]) -> None:
             f"cannot merge: tensor {name!r} has shape {per_input}. "
             "`soup adapters merge` needs every shared tensor to have one shape "
             "(were the adapters trained on the same base model?). "
+            "Nothing was written."
+        )
+    if not mergeable:
+        raise ValueError(
+            "cannot merge: no tensor the adapters share has the same shape in "
+            "every input, so the merged adapter would hold no weights. "
             "Nothing was written."
         )
 
