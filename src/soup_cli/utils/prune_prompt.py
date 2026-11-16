@@ -322,7 +322,7 @@ def prune_traces(
     # First pass: collect prompts (capped).
     prompts: list[str] = []
     rows_total = 0
-    with open(input_path, encoding="utf-8") as fh:
+    with open(input_path, encoding="utf-8-sig") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -376,7 +376,7 @@ def _prune_char_level(
 
     def lines() -> Iterator[str]:
         nonlocal rows_pruned
-        with open(input_path, encoding="utf-8") as fh_in:
+        with open(input_path, encoding="utf-8-sig") as fh_in:
             for line in fh_in:
                 line = line.strip()
                 if not line:
@@ -427,7 +427,7 @@ def _prune_token_level(
 
     def lines() -> Iterator[str]:
         nonlocal rows_pruned
-        with open(input_path, encoding="utf-8") as fh_in:
+        with open(input_path, encoding="utf-8-sig") as fh_in:
             for line in fh_in:
                 line = line.strip()
                 if not line:
