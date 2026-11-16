@@ -72,6 +72,18 @@ EVIDENCE_CORPUS = (
             "checkpoint_step": 12,
         },
     },
+    # version 2 that names the per-row file written next to it (a bare file name)
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.25,
+            "tuned": 0.5,
+            "rows": {"better": 2, "worse": 0, "same": 2, "n": 4},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "task_rows": "verdict.task-rows.jsonl",
+    },
     # version 2 with nothing measured: every count is null, never 0
     {
         "schema_version": 2,
@@ -242,6 +254,30 @@ MALFORMED_CORPUS = (
         },
         "benchmarks": {},
     },
+    # the per-row pointer must be a bare file name; under version 1 it is a version-2 key
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "../verdict.task-rows.jsonl",
+    },
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "/abs/verdict.task-rows.jsonl",
+    },
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": True,
+    },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "verdict.task-rows.jsonl",
+    },
 )
 
 
@@ -345,7 +381,9 @@ def test_schema_keys_are_derived_from_the_canonical_serializer(evidence):
         evidence, forgetting_threshold=FORGETTING_THRESHOLD
     )
     replay = verdict_to_evidence(
-        canonical, provenance=evidence.get(PROVENANCE_FIELD)
+        canonical,
+        provenance=evidence.get(PROVENANCE_FIELD),
+        task_rows=evidence.get("task_rows"),  # metadata of the file, like the provenance
     )
 
     assert replay == evidence

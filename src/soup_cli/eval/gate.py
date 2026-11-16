@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
+from soup_cli.utils.yaml_limits import (
+    MAX_CONFIG_BYTES,
+    duplicate_keys_in_sequence_mappings,
+    load_yaml_limited,
+    read_text_limited,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +203,21 @@ def load_suite(path: str) -> EvalSuite:
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
     try:
-        raw = load_yaml_file_limited(
-            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        what = f"eval-gate suite '{path}'"
+        source = read_text_limited(suite_path, what, max_bytes=MAX_CONFIG_BYTES)
+        raw = load_yaml_limited(source, what, max_bytes=MAX_CONFIG_BYTES)
+        duplicates = duplicate_keys_in_sequence_mappings(
+            source,
+            what,
+            sequence_key="tasks",
+            max_bytes=MAX_CONFIG_BYTES,
         )
+        if duplicates:
+            key, line = duplicates[0]
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has duplicate key {key!r} "
+                f"in a task mapping on line {line}"
+            )
     except yaml.YAMLError as exc:
         raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"
@@ -595,7 +612,7 @@ def _run_judge_task(
     provider, model, api_base = _parse_judge_url(task.judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
 
-    items: list[dict] = []
+    validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, start=1):
             line = line.strip()
@@ -618,15 +635,20 @@ def _run_judge_task(
                     f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
                     f"field 'prompt' must be a string, got {type(prompt).__name__}"
                 )
-            response = generate_fn(prompt)
-            items.append({
-                "prompt": prompt,
-                "response": response,
-                "category": row.get("category", "default"),
-            })
+            category = row.get("category", "default")
+            validated_rows.append((prompt, category))
 
-    if not items:
+    if not validated_rows:
         raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
+
+    items: list[dict] = [
+        {
+            "prompt": prompt,
+            "response": generate_fn(prompt),
+            "category": category,
+        }
+        for prompt, category in validated_rows
+    ]
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
