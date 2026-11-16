@@ -10,6 +10,7 @@ from soup_cli.cli import app
 from soup_cli.commands import cache as cache_cmd
 from soup_cli.trainer import stream_setup
 from soup_cli.utils.layer_cache_slots import list_base_slots, prune_slots
+from tests._windows_filenames import skip_colon_on_windows
 
 OLD = time.time() - 7200
 INDEX = (
@@ -125,15 +126,27 @@ def test_symlinked_slot_ignored(root, tmp_path_factory):
     assert (target / "f").exists()
 
 
-def test_hostile_name_renders(root, monkeypatch):
-    # A narrow console must not put a line break inside the path (soft_wrap), so no widening.
+@pytest.mark.parametrize(
+    "suffix",
+    ["[red]x", pytest.param("cache:warning:", marks=skip_colon_on_windows, id="emoji-code")],
+)
+@pytest.mark.parametrize("confirm", [False, True], ids=["dry-run", "remove"])
+def test_hostile_name_renders(root, monkeypatch, suffix, confirm):
+    # The path must stay on one line even in a narrow terminal.
     monkeypatch.setattr(cache_cmd.console, "_width", 20)
-    hostile = _slot(root, "org__m@[red]x", age=OLD - 100)
+    slot = _slot(root, f"org__m@{suffix}", age=OLD - 100)
+    displayed_path = os.path.realpath(slot)
     _slot(root, "org__m@z")
-    result = runner.invoke(
-        app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
-    )
-    assert result.exit_code == 0 and str(hostile) in result.output
+    args = ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
+    if confirm:
+        args.append("--yes")
+
+    result = runner.invoke(app, args)
+
+    verb = "Removed" if confirm else "Would remove"
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"{verb} {displayed_path} (" in result.stdout
+    assert slot.exists() is not confirm
 
 
 def test_cli_prune_requires_yes(root):
