@@ -1629,6 +1629,28 @@ def _failures_from_evidence(payload: object) -> GenerationFailures:
     )
 
 
+def _refuse_a_dead_side_in_evidence(failures: Optional[GenerationFailures]) -> None:
+    """A side the evidence records as entirely failed is a failed measurement, not a 0.
+
+    The replay twin of ``commands/ship.py::_refuse_a_dead_side`` (#2870): the live path
+    refuses before a verdict is built, so a file written by a live run cannot carry a
+    dead side; only a hand-made or edited file reaches the gap (#2899). Reuses the first
+    part of the live message — the shape a program matches — and drops the "Check that
+    the model loads" tail, which says nothing about a file. Refused as a ValueError, so
+    replay exits 3 (usage) while the live path keeps its RuntimeError (exit 1).
+    """
+    if failures is None:
+        return
+    if failures.base == failures.n:
+        raise ValueError(
+            f"every task generation failed on the base side ({failures.base} of {failures.n})"
+        )
+    if failures.tuned == failures.n:
+        raise ValueError(
+            f"every task generation failed on the tuned side ({failures.tuned} of {failures.n})"
+        )
+
+
 def _task_detail_from_evidence(task: Mapping[object, object]) -> Optional[TaskDetail]:
     """Decode the version-2 detail blocks of ``evidence.task`` (each is optional)."""
     rows = _rows_from_evidence(task["rows"]) if "rows" in task else None
@@ -1652,6 +1674,7 @@ def _task_detail_from_evidence(task: Mapping[object, object]) -> Optional[TaskDe
                 f"evidence.task.{sizes[0][0]}.n ({sizes[0][1]})"
             )
     detail = TaskDetail(rows=rows, truncated=truncated, generation_failures=failures)
+    _refuse_a_dead_side_in_evidence(failures)
     return None if detail.is_empty() else detail
 
 
