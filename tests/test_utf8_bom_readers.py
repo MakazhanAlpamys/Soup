@@ -57,6 +57,29 @@ def test_draft_keeps_first_jsonl_record(
     assert _read_jsonl(str(path), "--prompts", max_rows=10) == [{"text": text} for text in _TEXTS]
 
 
+def test_active_sample_can_select_the_first_jsonl_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bom: bool, newline: str
+) -> None:
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    first = {"text": _TEXTS[0], "rm_score": 0.5}
+    second = {"text": _TEXTS[1], "rm_score": 1.0}
+    rows = "\n".join(json.dumps(row, ensure_ascii=False) for row in (first, second)) + "\n"
+    _write_input(tmp_path / "traces.jsonl", rows, bom, newline)
+    result = CliRunner().invoke(
+        app,
+        [
+            "data", "active-sample", "--input", "traces.jsonl", "--output", "selected.jsonl",
+            "--budget", "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads((tmp_path / "selected.jsonl").read_text(encoding="utf-8")) == first
+    assert "Selected 1/2 rows" in strip_ansi(result.stdout)
+
+
 @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
 def test_edit_covariance_corpus_extracts_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str, bom: bool, newline: str
