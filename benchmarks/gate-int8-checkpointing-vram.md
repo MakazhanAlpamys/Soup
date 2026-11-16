@@ -14,10 +14,13 @@ output head (`setting`):
 |---|---|---|---|---|
 | A | `527314a4` (before #2683) | 1 to 26 | `kbit_fp32` | PEFT's `prepare_model_for_kbit_training` alone: fp32 embeddings, norms and head, bf16 compute |
 | B | `3f9ba5ce` (#2683 in) | 27 to 44 | `bf16` | `prepare_kbit_model` on a bf16 card: bf16 embeddings, norms and head, the #2683 default (`RunSpec.kbit_fp32` False) |
-| B | `3f9ba5ce` (#2683 in) | 45 to 47 | `kbit_fp32` | `auto_mixed_precision: true` on a Qwen2.5 base, which picks fp16: `prepare_kbit_model` keeps PEFT's fp32 (`RunSpec.kbit_fp32` True) |
+| B | `3f9ba5ce` (#2683 in) | 45 to 47 | `kbit_fp32` | `auto_mixed_precision: true` on a Qwen2.5 base, which picks fp16: `prepare_kbit_model` keeps PEFT's fp32 norms, as on a card without bf16 hardware |
 
 The estimate prices the two settings with two constants: `INT8_CHECKPOINT_KEPT = (3.0, 1.0)`
-for `bf16` and `INT8_CHECKPOINT_KEPT_FP32 = (5.0, 2.0)` for `kbit_fp32`.
+for `bf16` and `INT8_CHECKPOINT_KEPT_FP32 = (5.0, 2.0)` for `kbit_fp32`, the case
+`RunSpec.kbit_fp32` marks (a card without bf16 hardware, `grpo_fp16`). This card has bf16
+hardware, so rows 45 to 47 hold the fp32 norms through an fp16 pick instead; the test prices
+them with `kbit_fp32`, and the pre-flight does not (below).
 
 **What is measured.** The #2049 harness, `benchmarks/harness/vram_estimate_calibration.py`,
 unchanged (sha256 `cd4687bf327086dd5efdd0442a8cd7315ceb37da013dfb3dc35455c95ce898fb`, the
@@ -214,6 +217,14 @@ estimate for every 8-bit run with checkpointing, and the same for every other ru
   (`A` shares their storage) and an empty `subA`, so they are kept elsewhere; this record
   does not trace them. The pretrained `bf16` rows read 1.103 to 1.144 with the term, inside
   the band, and the test uses the 4,096-wide MLP, where the term is 0.95 of the gap.
+- **An `auto_mixed_precision` pick of fp16 on a card with bf16 hardware, as the pre-flight
+  prices it.** Such a run keeps PEFT's fp32 norms (rows 45 to 47), but `RunSpec.kbit_fp32`
+  is set only for a card without bf16 hardware and for `grpo_fp16` (`commands/train.py`,
+  `utils/hardware_fit.py`, #2683), so the pre-flight, `soup profile` and `soup plan` price
+  it with the `bf16` figures, for this term as for `KBIT_UNQUANTIZED_BYTES`. Priced that
+  way, rows 45 to 47 read 0.760, 0.871 and 0.735 of their peak on main and 0.937, 0.993 and
+  0.869 with the term: closer, and still under the band. Telling the estimate about the fp16
+  pick changes #2683's wiring, not this term, and is not done here.
 - One card, one software stack, one memory cap, three pretrained models of 1.5B parameters
   and below, at up to 4,096 tokens a step.
 - Not the cause, but noted: the `A` that bitsandbytes keeps is never read in its backward,
