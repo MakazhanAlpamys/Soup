@@ -178,7 +178,7 @@ def _top_drift_tokens(
 
 def _read_jsonl_outputs(path: str) -> list[str]:
     rows: list[str] = []
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped:
