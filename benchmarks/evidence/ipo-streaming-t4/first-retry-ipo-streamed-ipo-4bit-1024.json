@@ -1,0 +1,24 @@
+{
+  "task": "ipo",
+  "mode": "streamed",
+  "quantization": "4bit",
+  "instrument": "initial scale 1024, set in the harness only",
+  "default_initial_scale": 65536.0,
+  "effective_initial_scale": 1024.0,
+  "attempt_cap": 1,
+  "attempts": [
+    {
+      "step": 1,
+      "scale_before": 1024.0,
+      "scale_after": 1024.0,
+      "optimizer_skipped": false,
+      "adapter_max_delta": 1.9999999494757503e-05,
+      "loss": 25.0,
+      "grad_norm": 13.991411209106445
+    }
+  ],
+  "skipped_steps": 0,
+  "first_applied_step": 1,
+  "fixture_sha256": "d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80",
+  "layer_reads": 2
+}

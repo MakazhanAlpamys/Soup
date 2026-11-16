@@ -10,15 +10,14 @@
 > 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
 > every further 512 tokens costs about 1 GB more (see
 > [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
-> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
-> `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
-> `kto` still hold one copy of the output head per step) — see
-> [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
-> You can also select `dpo`, `orpo` or `simpo` with `task: preference` and
-> `training.preference_loss`. The same streaming restrictions apply: use a concrete
-> `batch_size`; `stream_vram_probe`, `stream_loss_chunk` and `stream_recompute` other than
-> `on` remain SFT-only. IPO, BCO and `preference_loss_weights` do not stream yet.
+> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, and `ipo`. DPO and IPO
+> keep a frozen reference adapter on the streamed base. On untied checkpoints,
+> DPO, KTO and IPO keep a private copy of the output head for backward.
+> See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Select `dpo`, `orpo`, `simpo`, or `ipo` with `task: preference` and
+> `training.preference_loss`, or use the loss as the task name. Use a concrete
+> `batch_size`. `stream_vram_probe`, `stream_loss_chunk`, and `stream_recompute`
+> other than `on` remain SFT-only. Streaming refuses BCO and `preference_loss_weights`.
 
 **Contents:**
 
@@ -2142,6 +2141,10 @@ On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; se
 
 
 ## IPO Training (Regularized Preference)
+
+On an FP16 card, the gradient scaler can skip the first IPO updates and lower
+its scale until gradients are finite. This can happen with resident IPO too.
+See the [one-step and backoff checks on a Tesla T4](../benchmarks/ipo-streaming-t4.md).
 
 IPO is a theoretically grounded DPO variant with stronger regularization:
 

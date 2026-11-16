@@ -23,13 +23,9 @@ MIN_STREAM_LOSS_CHUNK = 16
 MAX_STREAM_LOSS_CHUNK = 8192
 
 # --- layer streaming: tasks ------------------------------------------------
-#: Tasks whose trainers can run against a streamed base (v0.72.4).
-#:
-#: DPO and KTO take their reference model from the SAME streamed base with the
-#: adapters disabled (TRL's ``null_ref_context``), so the reference costs no
-#: extra weights at all — measured 0.914x the SFT peak, where forcing a real
-#: second instance cost 9.92x. ORPO and SimPO are reference-free.
-SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto")
+#: DPO and IPO keep a frozen reference adapter on the streamed base.
+#: KTO uses the shared base with adapters disabled. ORPO and SimPO are reference-free.
+SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto", "ipo")
 
 #: Tasks PERMANENTLY excluded, not merely unimplemented. Generation rollouts
 #: re-read every layer once per generated token, which destroys the whole

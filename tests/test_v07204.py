@@ -271,6 +271,7 @@ _TASK_ROWS = {
     "orpo": _pref_rows,
     "simpo": _pref_rows,
     "kto": _kto_rows,
+    "ipo": _pref_rows,
 }
 
 #: KTO refuses a per-device batch size of 1 outright ("the KL term will be
@@ -320,6 +321,7 @@ def _stream_cfg(weights, out_dir, task="dpo", **training):
 
 def _wrapper_for(task):
     from soup_cli.trainer.dpo import DPOTrainerWrapper
+    from soup_cli.trainer.ipo import IPOTrainerWrapper
     from soup_cli.trainer.kto import KTOTrainerWrapper
     from soup_cli.trainer.orpo import ORPOTrainerWrapper
     from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -331,6 +333,7 @@ def _wrapper_for(task):
         "orpo": ORPOTrainerWrapper,
         "simpo": SimPOTrainerWrapper,
         "kto": KTOTrainerWrapper,
+        "ipo": IPOTrainerWrapper,
     }[task]
 
 

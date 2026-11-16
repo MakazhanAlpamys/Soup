@@ -1,0 +1,65 @@
+{
+  "cpu-final.log": {
+    "passed": 390,
+    "skipped": 28
+  },
+  "floor-final.log": {
+    "passed": 139,
+    "skipped": 10
+  },
+  "callers-final.log": {
+    "passed": 1291,
+    "skipped": 3
+  },
+  "hygiene-final.log": {
+    "passed": 253,
+    "skipped": 1
+  },
+  "mutations_caught": [
+    {
+      "mutant": "reference-materialization",
+      "node": "tests/test_ipo_streaming.py::test_untied_streamed_loss_and_gradients_match_resident",
+      "caught": true
+    },
+    {
+      "mutant": "refill",
+      "node": "tests/test_ipo_streaming.py::test_untied_streamed_loss_and_gradients_match_resident",
+      "caught": true
+    },
+    {
+      "mutant": "resume",
+      "node": "tests/test_ipo_streaming.py::test_streamed_resume_restores_adapter_and_reference_state",
+      "caught": true
+    },
+    {
+      "mutant": "row-budget",
+      "node": "tests/test_ipo_streaming.py::test_streamed_budget_counts_the_loss_batch_shape",
+      "caught": true
+    },
+    {
+      "mutant": "cleanup",
+      "node": "tests/test_ipo_streaming.py::test_wrapper_closes_stream_runtime_when_training_raises",
+      "caught": true
+    },
+    {
+      "mutant": "checkpoint-save",
+      "node": "tests/test_ipo_streaming.py::test_wrapper_rejects_empty_streamed_adapter[checkpoint]",
+      "caught": true
+    },
+    {
+      "mutant": "final-save",
+      "node": "tests/test_ipo_streaming.py::test_wrapper_rejects_empty_streamed_adapter[final]",
+      "caught": true
+    }
+  ],
+  "cuda": {
+    "passed": 10,
+    "failed": 0,
+    "first_applied_default_step": 5,
+    "default_skipped_steps": 4,
+    "qualification_patch_sha256": "4334662f352b1ed43cece34b10b426fdd1f07b2b03989602a796524c12a8e638"
+  },
+  "ruff": "src/ tests/ scripts/ benchmarks/ passed",
+  "generated_reference_structure": "passed",
+  "full_local_suite": "not run"
+}
