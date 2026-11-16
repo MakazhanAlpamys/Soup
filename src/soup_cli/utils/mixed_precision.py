@@ -115,6 +115,35 @@ def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
     return casted
 
 
+def upcast_trainable_half_to_fp32(model, *, fp16: bool, bf16: bool) -> int:
+    """Give every trainable bf16/fp16 parameter an fp32 master copy under autocast (#ISSUE).
+
+    peft trains a copy of each ``modules_to_save`` module (the classification head of
+    a ``SEQ_CLS`` adapter) in the frozen base's dtype, and its ``autocast_adapter_dtype``
+    upcasts only the ``lora_*`` weights. A bf16 copy gets bf16 AdamW state, and an
+    update of about ``lr`` is below half a bf16 ulp for most of the head's weights, so
+    they never move; a fp16 copy makes the fp16 GradScaler refuse to unscale.
+
+    Only under mixed precision (``bf16`` or ``fp16`` set): autocast then runs the
+    module's matmul in the half dtype whatever its weight's dtype. Without it (the
+    CPU) the frozen base's half-precision activations would meet an fp32 weight, so
+    nothing is cast. The trainable set this touches is the head, a few thousand
+    parameters; a full fine-tune already loads fp32.
+
+    Returns the number of params cast.
+    """
+    if model is None or not (fp16 or bf16):
+        return 0
+    import torch
+
+    casted = 0
+    for _name, param in model.named_parameters():
+        if param.requires_grad and param.dtype in (torch.bfloat16, torch.float16):
+            param.data = param.data.to(torch.float32)
+            casted += 1
+    return casted
+
+
 def align_trainable_dtype_for_fsdp_qlora(
     model,
     *,

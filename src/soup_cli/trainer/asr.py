@@ -32,7 +32,7 @@ from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
@@ -225,8 +225,14 @@ class AsrTrainerWrapper:
             )
 
         console.print(f"[dim]Loading Whisper model: {cfg.base}[/]")
+        # #ISSUE: a full fine-tune (the default; ``asr_lora`` is opt-in) steps every
+        # weight, so it loads fp32 master weights. With no ``dtype`` transformers 5
+        # loads the checkpoint's own: fp16 for whisper-large-v3 and -large-v3-turbo.
         self.model = WhisperForConditionalGeneration.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code,
+            dtype=resolve_base_load_dtype(
+                self.device, full_finetune=not self._should_use_lora(tcfg)
+            ),
             **base_revision_kwargs(cfg.base),
         )
         self.model.config.forced_decoder_ids = None
