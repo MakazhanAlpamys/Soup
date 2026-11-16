@@ -28,7 +28,8 @@ Security:
   containers is refused by name (:class:`RLCheckpointLoadError`), never loaded another way.
   A save writes only a state that the read-back accepts (:func:`_is_plain_state`); a restore
   reads the file only when the config includes optimizer state and only from inside the
-  run directory.
+  run directory. A save refuses a checkpoint directory that resolves outside the run
+  directory (:class:`RLCheckpointPathError`) before anything is written.
 """
 
 from __future__ import annotations
@@ -212,6 +213,10 @@ class RLCheckpointLoadError(ValueError):
     """An RL checkpoint's ``optimizer.pt`` was refused; nothing from it was loaded."""
 
 
+class RLCheckpointPathError(ValueError):
+    """An RL checkpoint directory resolves outside the run directory; nothing was written."""
+
+
 _REFUSAL_REMEDY = (
     "Delete this file, or restore from a checkpoint written by soup "
     "(rl-checkpoints/step-N under this run's output directory)."
@@ -388,6 +393,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
             soup_version = _v
         self.soup_version = soup_version
         self._saved: list[int] = []
+        self._warned_path = False
 
     def _ckpt_root(self) -> str:
         return os.path.join(self.output_dir, "rl-checkpoints")
@@ -410,6 +416,17 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         # nothing. Non-main ranks return the (rank-0-written) path unchanged.
         if not _is_main_process():
             return ckpt_dir
+
+        # Containment on the write side: a link at rl-checkpoints/ or step-N/ that leads
+        # out of the run directory would have the adapter and optimizer files written
+        # there. realpath + commonpath (``is_under``) is checked before anything is
+        # created or written.
+        if not is_under(ckpt_dir, self.output_dir):
+            raise RLCheckpointPathError(
+                f"RL checkpoint directory {quote_path(ckpt_dir)} was refused: it resolves "
+                f"outside the run directory {quote_path(self.output_dir)}. Remove the link; "
+                "nothing was written."
+            )
 
         os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -583,6 +600,12 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                 return control
             optimizer = kwargs.get("optimizer")
             self.save_checkpoint(step=step, model=model, optimizer=optimizer)
+        except RLCheckpointPathError as exc:
+            # Training goes on without checkpoints, but say so once: a rollback target
+            # that is never saved would otherwise disappear silently.
+            if not self._warned_path:
+                self._warned_path = True
+                logger.warning("%s", exc)
         except Exception:  # noqa: BLE001 — checkpoint failure must not crash run
             pass
         return control

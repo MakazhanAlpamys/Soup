@@ -497,6 +497,99 @@ def test_a_step_directory_linked_to_outside_the_run_dir_is_not_read(cwd, caplog)
     assert "outside the run directory" in _message(caplog), _message(caplog)
 
 
+# ----------------------------------------------------- containment on the write side
+
+
+class _RecordingModel:
+    """A model whose ``save_pretrained`` records where it was asked to write."""
+
+    def __init__(self) -> None:
+        self.saved_to: list[str] = []
+
+    def save_pretrained(self, path: str) -> None:
+        self.saved_to.append(path)
+        os.makedirs(path, exist_ok=True)
+        Path(path, "adapter_config.json").write_text("{}", encoding="utf-8")
+
+
+def _link_a_checkpoint_dir(cwd: Path, linked: str, target: Path) -> Path:
+    """Make ``run/rl-checkpoints`` or ``run/rl-checkpoints/step-1`` a link to ``target``."""
+    run = cwd / "run"
+    run.mkdir(exist_ok=True)
+    if linked == "rl-checkpoints":
+        link = run / "rl-checkpoints"
+    else:
+        (run / "rl-checkpoints").mkdir(exist_ok=True)
+        link = run / "rl-checkpoints" / "step-1"
+    os.symlink(str(target), str(link), target_is_directory=True)
+    return link
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("linked", ["rl-checkpoints", "step-1"])
+def test_a_save_refuses_a_linked_directory_that_leaves_the_run_dir(cwd, linked):
+    from soup_cli.utils.rl_checkpoint import RLCheckpointPathError
+
+    outside = cwd / "outside"
+    outside.mkdir()
+    _link_a_checkpoint_dir(cwd, linked, outside)
+    model = _RecordingModel()
+    cb = _callback()
+
+    with pytest.raises(RLCheckpointPathError) as excinfo:
+        cb.save_checkpoint(step=1, model=model, optimizer=_adamw())
+
+    text = str(excinfo.value)
+    assert "step-1" in text, text  # names the directory
+    assert "was refused" in text and "outside the run directory" in text, text
+    assert "Remove the link" in text and "nothing was written" in text, text
+    assert isinstance(excinfo.value, ValueError)
+    assert os.listdir(outside) == [], "something was written outside the run directory"
+    assert model.saved_to == []
+    assert cb._saved == [], "a refused save must not become a rollback target"
+
+
+@pytest.mark.requires_symlink
+def test_a_save_allows_a_linked_directory_that_stays_inside_the_run_dir(cwd):
+    target = cwd / "run" / "elsewhere-in-the-run"
+    target.mkdir(parents=True)
+    _link_a_checkpoint_dir(cwd, "rl-checkpoints", target)
+    model = _RecordingModel()
+    cb = _callback()
+
+    cb.save_checkpoint(step=1, model=model, optimizer=_adamw())
+
+    assert (target / "step-1" / "optimizer.pt").is_file()
+    assert (target / "step-1" / "manifest.json").is_file()
+    assert cb._saved == [1]
+
+
+@pytest.mark.requires_symlink
+def test_the_callback_logs_a_refused_save_once_and_does_not_stop_training(cwd, caplog):
+    import types
+
+    outside = cwd / "outside"
+    outside.mkdir()
+    _link_a_checkpoint_dir(cwd, "rl-checkpoints", outside)
+    model = _RecordingModel()
+    opt = _adamw()
+    cb = _callback()
+    control = object()
+
+    with caplog.at_level(logging.WARNING):
+        for step in (1, 2):
+            returned = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=step), control, model=model, optimizer=opt
+            )
+            assert returned is control
+
+    assert os.listdir(outside) == []
+    messages = [rec.getMessage() for rec in caplog.records]
+    refusals = [text for text in messages if "outside the run directory" in text]
+    assert len(refusals) == 1, refusals
+    assert "rl-checkpoints" in refusals[0], refusals[0]
+
+
 # --------------------------------------------------------------------------- what is saved
 
 

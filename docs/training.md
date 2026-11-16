@@ -625,7 +625,7 @@ soup iterative-dpo \
 soup train --config grpo.yaml
 ```
 
-The optimizer state of a mid-epoch RL checkpoint (`rl-checkpoints/step-N/optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory. A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup.
+The optimizer state of a mid-epoch RL checkpoint (`rl-checkpoints/step-N/optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory. A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. A save refuses, by name in the log, a checkpoint directory that is a link leading outside the run's output directory, and writes nothing there.
 
 `training.echo_trap_tokenizer_aware` (also available as the real
 `--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
