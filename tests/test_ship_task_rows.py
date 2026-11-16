@@ -1,11 +1,13 @@
 """`soup ship` writes one line per judged task row, so a verdict can be audited row by row.
 
-With ``--output verdict.json`` (or, when there is no ``--output``, ``--emit-evidence ev.json``) a
+With ``--output verdict.json`` (and only then: ``--emit-evidence`` alone writes nothing new) a
 live ``--task-mode metric`` or ``judge_score`` run also writes ``verdict.task-rows.jsonl`` next to
 it: one JSON object per task with both answers, both scores, whether each answer was cut off at
 the token cap, whether a generation failed, and which of better / worse / same the row is. The
-mean of each score column, computed as ``row_mean`` says, EQUALS the reported ``task_win.base`` /
-``task_win.tuned`` exactly (``==``), because the reported number of a leg is built from its rows.
+mean of each score column, computed as ``row_mean`` says, is the reported ``task_win.base`` /
+``task_win.tuned``: EXACTLY (``==``) for ``metric``, within ``JUDGE_MEAN_TOLERANCE`` (1e-12) for
+``judge_score``, whose reported number stays the evaluator's own and is never rebuilt from the
+rows. The file is checked against the verdict, never the other way round.
 
 Everything runs on CPU with no model: the pure functions take ``LegScore`` objects, the CLI tests
 patch ``ship_cmd._resolve_generators`` with scripted generators of both shapes (a scalar callable,
@@ -152,7 +154,7 @@ def test_an_anchor_that_cannot_carry_the_rows_file_is_refused_with_a_named_reaso
 
 @pytest.mark.skipif(os.name == "nt", reason="a backslash is a path separator on Windows")
 def test_on_posix_a_backslash_in_the_file_name_cannot_be_named_by_the_pointer():
-    with pytest.raises(ValueError, match="path separator"):
+    with pytest.raises(ValueError, match="path separator.*use a plain --output name"):
         task_rows_path("sub\\out.json")
 
 
@@ -2190,3 +2192,46 @@ def test_on_windows_the_name_limit_counts_utf16_units_not_characters():
     assert task_rows_path("\U0001f600" * 119 + ".json")  # 2 * 119 + 16 = 254 units
     with pytest.raises(ValueError, match="is too long"):
         task_rows_path("\U0001f600" * 120 + ".json")  # 256 units, though only 136 characters
+
+
+# -- delta read: a score beyond float range, and what a refused name tells you to do ------------
+
+
+def test_cli_a_judge_row_score_beyond_float_range_leaves_the_file_out_and_the_verdict_alone(
+    monkeypatch,
+):
+    # an integer of 400 digits is not a float: ``math.isfinite`` overflows on it. A judge whose
+    # rows carry such scores (a fake one: the real evaluator always returns a float) must end
+    # exactly as it does without the file: base == tuned here, so DON'T SHIP, exit 2, no file.
+    from types import SimpleNamespace
+
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
+    monkeypatch.setattr(
+        JudgeEvaluator, "evaluate_batch",
+        lambda self, items: SimpleNamespace(
+            overall_score=3.0,
+            scores=[
+                SimpleNamespace(weighted_score=10 ** 400),
+                SimpleNamespace(weighted_score=-(10 ** 400)),
+            ][: len(items)],
+        ),
+    )
+    base = _scripted({"q0": ("b0", False), "q1": ("b1", False)})
+    tuned = _scripted({"q0": ("t0", False), "q1": ("t1", False)})
+    run = _run(monkeypatch, _tasks(2), base, tuned,
+               "--task-mode", "judge_score", "--judge-model", "ollama://judge")
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    assert run.result.exception is None or isinstance(run.result.exception, SystemExit)
+    verdict = run.json("out.json")
+    assert verdict["task_win"]["base"] == verdict["task_win"]["tuned"] == 0.5
+    assert verdict["failed_rule"] == "task_win" and verdict["task_rows"] is None
+    assert not [name for name in run.files if name.endswith(".task-rows.jsonl")]
+
+
+def test_a_refused_name_says_what_to_do():
+    with pytest.raises(ValueError, match="is too long.*use a shorter --output name"):
+        task_rows_path("x" * 245 + ".json")
+    with pytest.raises(ValueError, match="has a control character.*use a plain --output name"):
+        task_rows_path("o\n.json")
