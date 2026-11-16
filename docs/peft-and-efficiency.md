@@ -644,7 +644,9 @@ the usual shuffled order.
 
 The SFT trainer sorts the rows by length (`perplexity` and `loss` fall back to length) and
 reads them in that order instead of shuffling them, so each epoch runs from the shortest row
-to the longest. That holds for text, vision and audio rows and for RAFT, with or without
+to the longest. A run resumed from a checkpoint written by v0.77.2 continues that order from
+the batch it stopped at, so in that epoch rows it already saw in shuffled order can repeat
+and others are left out. That holds for text, vision and audio rows and for RAFT, with or without
 `raft_epoch_shuffle` (which re-permutes the documents inside a row, not the rows). Three
 setups keep the usual shuffled order, and none is refused:
 
