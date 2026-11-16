@@ -126,9 +126,9 @@ def test_backend_estimate_preserves_activation_offloading(
     assert estimate.lora_targets == (
         SEVEN_PROJECTIONS if backend == "unsloth" else ("q_proj", "v_proj")
     )
-    assert estimate.terms["weights"] == (
-        5_800_527_995 if backend == "unsloth" else 7_901_874_299
-    )
+    # Both backends keep the two [128256, 4096] matrices in bf16 on a bf16 card: Unsloth by
+    # measurement, the transformers default since #2609 (7_901_874_299 with kbit_fp32).
+    assert estimate.terms["weights"] == 5_800_527_995
     notes = [note for note in estimate.notes if "activation_offloading" in note]
     if mode is None:
         assert notes == []
@@ -147,20 +147,24 @@ def test_unsloth_auto_uses_seven_projections_for_any_architecture(targets: str |
 
 
 @pytest.mark.parametrize(
-    ("backend", "weight_bytes", "floor_gb"),
+    ("backend", "kbit_fp32", "weight_bytes", "floor_gb"),
     [
-        ("transformers", 7_901_874_299, 8.510926203),
-        ("unsloth", 5_800_527_995, 6.971616635),
+        # peft's fp32 embeddings and head: a card without bf16, and the pre-#2609 default.
+        ("transformers", True, 7_901_874_299, 8.510926203),
+        # #2609: bf16 on a bf16 card. 2 * 2 * 128256 * 4096 = 2,101,346,304 bytes less,
+        # so the floor is 2.101346304 GB lower than the fp32 row above.
+        ("transformers", False, 5_800_527_995, 6.409579899),
+        ("unsloth", False, 5_800_527_995, 6.971616635),
     ],
 )
 def test_llama31_8b_floor_uses_backend_targets_and_weight_precision(
-    tmp_path: Path, backend: str, weight_bytes: int, floor_gb: float
+    tmp_path: Path, backend: str, kbit_fp32: bool, weight_bytes: int, floor_gb: float
 ) -> None:
     # Dtype provenance: benchmarks/unsloth-4bit-weight-dtypes.md. The RTX 5090
     # load + get_peft_model kept both [128256, 4096] weights in bf16 (2 bytes).
     # These are fixed expectations; the test never loads Unsloth or model weights.
     cfg = _config(tmp_path, backend)
-    inp = hardware_fit_input_from_config(cfg, allow_network=False)
+    inp = hardware_fit_input_from_config(cfg, allow_network=False, kbit_fp32=kbit_fp32)
     assert inp is not None
     breakdown = estimate_peak_vram_gb(inp)
     assert breakdown.estimate.shape.params == 8_030_261_248
@@ -170,14 +174,19 @@ def test_llama31_8b_floor_uses_backend_targets_and_weight_precision(
     assert terms == ("weights", "CUDA context", "adapters", "gradients", "optimizer state")
 
 
-@pytest.mark.parametrize("backend", ["transformers", "unsloth"])
-def test_tied_embeddings_are_charged_once(tmp_path: Path, backend: str) -> None:
+@pytest.mark.parametrize(
+    ("backend", "kbit_fp32", "per_embedding"),
+    [("transformers", False, 2), ("transformers", True, 4), ("unsloth", False, 2),
+     ("unsloth", True, 2)],
+)
+def test_tied_embeddings_are_charged_once(
+    tmp_path: Path, backend: str, kbit_fp32: bool, per_embedding: int
+) -> None:
     inp = hardware_fit_input_from_config(_config(tmp_path, backend), allow_network=False)
     assert inp is not None
     shape = inp.shape
     tied = replace(shape, params=shape.params - 525_336_576, tie_word_embeddings=True)
-    run = RunSpec(seq_len=2048, batch_size=1, quant="4bit", backend=backend)
-    per_embedding = 2 if backend == "unsloth" else 4
+    run = RunSpec(seq_len=2048, batch_size=1, quant="4bit", backend=backend, kbit_fp32=kbit_fp32)
     assert weights_bytes(shape, run) - weights_bytes(tied, run) == 525_336_576 * per_embedding
 
 

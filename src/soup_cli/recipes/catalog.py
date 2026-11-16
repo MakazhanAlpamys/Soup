@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import (
+    KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
+    resident_kimi_k2_quantization_refusal,
+)
 
 
 @dataclass(frozen=True)
@@ -51,7 +54,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (178 recipes)
+# Recipe catalog (180 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2813,7 +2816,7 @@ output: ./output
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
-        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
+        unavailable_reason=resident_kimi_k2_quantization_refusal("4bit"),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -4028,6 +4031,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-9b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-9B-Base",
+        task="pretrain",
+        size="9B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 9B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
     "qwen3.5-27b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-27B",
         task="sft",
@@ -4266,6 +4299,45 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-122b-a10b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="dpo",
+        size="122B",
+        tags=(
+            "qwen", "qwen3.5", "dpo", "alignment", "preference", "moe", "large", "multi-gpu",
+        ),
+        description=(
+            "Qwen 3.5 122B-A10B MoE DPO alignment (Apache-2.0, 10B active). "
+            "Inherited starting settings; multi-GPU memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
   gradient_checkpointing: true
 
 output: ./output

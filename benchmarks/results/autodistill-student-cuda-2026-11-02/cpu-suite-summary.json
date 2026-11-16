@@ -1,0 +1,22 @@
+{
+  "tested_source_commit": "794fecabf77e77c97071b4f71b63d48fe42936ba",
+  "baseline_commit": "74081886",
+  "platform": "Windows",
+  "python": "3.12.15",
+  "passed": 48716,
+  "failed": 6,
+  "skipped": 507,
+  "coverage_percent": 88.02772970579949,
+  "baseline_failed": 6,
+  "failure_sets_match": true,
+  "failures": [
+    "tests/test_adapter_bisect_eval_command.py::test_program_start_errors_stop_without_a_verdict_or_result[error0]",
+    "tests/test_adapter_bisect_eval_command.py::test_program_start_errors_stop_without_a_verdict_or_result[error1]",
+    "tests/test_adapter_bisect_eval_command.py::test_program_start_errors_stop_without_a_verdict_or_result[error2]",
+    "tests/test_export_progress_isolation.py::test_export_progress_ignores_external_llama_cpp[environment]",
+    "tests/test_export_progress_isolation.py::test_export_progress_ignores_external_llama_cpp[home]",
+    "tests/test_external_tool_paths.py::TestSoupLeavesTheCurrentDirectoryOutOfItsProgramSearch::test_a_program_only_in_the_current_directory_is_not_started_by_bare_name"
+  ],
+  "command": "pytest -p xdist.plugin -p pytest_timeout -p pytest_cov -n 8 --dist loadfile --timeout=180 --timeout-method=thread tests/ -q --tb=short --cov-report=json:coverage.json",
+  "note": "The report output path is generalized; runtime flags are unchanged. This is not a green full-suite result. Evidence-only files were added afterward."
+}

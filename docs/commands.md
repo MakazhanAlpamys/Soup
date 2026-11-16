@@ -24,7 +24,8 @@ soup train --config soup.yaml --gpus auto|N      Launch on local GPUs through Ac
 soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.0.0.10 --master-port 29500  Multi-node launch; run on each node with its own rank
 soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
-soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
+soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch (a repository it creates is private)
+soup train --config soup.yaml --push-as user/repo --push-public  Create that repository public (an existing one keeps its visibility)
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda|runpod --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
@@ -52,7 +53,7 @@ soup export --model ./output --format gguf --no-install-deps  Never invoke pip; 
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
-soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
+soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat [--hardware slug]  Create HF Space (Streamlit deprecation warning in v0.78.0; use gradio-chat for new Spaces)
 soup deploy autopilot --target mac-m3|rtx-4090-24gb|...  Pick PEFT+quant+spec-decoding for a hardware target
 soup deploy autopilot --list                  List all 10 deploy profiles
 soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
@@ -156,6 +157,7 @@ soup data score --input rows.jsonl            Composite quality scorecard (PII +
 soup data score --input rows.jsonl --benchmark-file benchmark.jsonl --threshold 0.8  Score with real n-gram comparison texts
 soup data score ... -b gsm8k --benchmark-file benchmark.jsonl  Labels are validated only, not corpus selectors; all file texts are compared
 soup data decontaminate --input rows.jsonl --benchmark-file benchmarks.jsonl  Drop rows overlapping the benchmark texts in that file
+soup data leakage --train train.jsonl --eval eval.jsonl [--json] [--samples 5]  Read-only exact input-text overlap (0 clean, 2 overlap, 3 input)
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
 soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
@@ -188,7 +190,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 178 ready-made recipes
+soup recipes list                             List all 180 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
@@ -230,6 +232,7 @@ soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via sw
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
+soup ship ... --output v.json  `schema_version: 2` verdict JSON: `task_win.rows` (better / worse / same), `task_win.truncated` (answers cut off at the token cap, plus the `truncation_growth` warning), `task_win.generation_failures`, `judged` (adapter, checkpoint step); a warning never changes the verdict or exit code, a side whose every generation failed is refused (exit 1); `--emit-evidence` carries the same blocks, which soup-cli 0.77.x refuses as `unsupported field(s)`
 soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance.config_sha and numerics family, --emit-evidence STAMPS both (v0.71.39 / #367); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
 soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
 soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)
@@ -273,6 +276,7 @@ soup bench infer <model> --cuda-graphs         Bench with experimental CUDA grap
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --model ./output --reasoning-parser deepseek-r1   Strip <think> blocks from responses (v0.53.9)
+soup docs search <query> [-k N] [-f json]  Offline BM25 search over the guides; -f json prints the hits as a JSON array
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
                                               --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
