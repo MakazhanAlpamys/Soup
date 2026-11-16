@@ -34,6 +34,13 @@ SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto", "bco", "ipo")
 #: single decoded token (plan §3.2).
 ROLLOUT_STREAM_TASKS = ("grpo", "ppo")
 
+# --- text that names something (a reward function, a path) -------------------
+def has_control_character(text: str) -> bool:
+    """True when ``text`` holds a C0 control character (TAB, LF and CR included), DEL or a C1
+    control: what a name or a path that is printed, recorded or run must not contain."""
+    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
+
+
 # --- ship verdict: noise floor (utils/ship_verdict.py) ---------------------
 #: A floor needs a spread, and a spread needs at least two samples.
 MIN_NOISE_FLOOR_RUNS = 2

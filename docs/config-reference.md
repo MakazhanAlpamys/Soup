@@ -400,14 +400,15 @@ Sections:
 | `eval.benchmarks` | `list[str] \| null` | `null` |  | lm-evaluation-harness benchmark names to run |
 | `eval.custom_tasks` | `str \| null` | `null` |  | Path to custom eval JSONL file |
 | `eval.judge` | `dict \| null` | `null` |  | LLM-as-a-judge config: model, rubric, provider |
-| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
+| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / reward_fn / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
 
 ## `eval.ship`
 
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `eval.ship.task_eval` | `str \| null` | `null` |  | JSONL of leg-1 task-win eval tasks |
-| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) |
+| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"`, `"reward"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs reward_fn or --reward-fn) |
+| `eval.ship.reward_fn` | `str \| null` | `null` |  | Reward function for task_mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| the path of a .py file, which soup ship EXECUTES as Python code (under the working directory, never a symlink): only name a file you trust. Only meaningful with task_mode reward; it is read by soup ship, never by soup train. |
 | `eval.ship.general_suite` | `str \| null` | `null` |  | Comma list of leg-2 benchmarks (default: bundled offline suite) |
 | `eval.ship.forgetting_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max allowed leg-2 drop in absolute points before DON'T SHIP |
 | `eval.ship.judge_model` | `str \| null` | `null` |  | Judge model URL for task_mode judge_score / pairwise |
