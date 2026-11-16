@@ -23,14 +23,25 @@ Security:
 - ``checkpoint_dir`` shape-validated (null-byte / oversize) — cwd
   containment + symlink rejection happen at v0.70.1 disk-write time
   (matches v0.69.0 build_dag deferred-write-containment policy).
+- ``optimizer.pt`` is a torch pickle. :func:`load_optimizer_state` reads it with
+  ``torch.load(weights_only=True)`` only: a file that needs more than tensors and plain
+  containers is refused by name (:class:`RLCheckpointLoadError`), never loaded another way.
+  A save writes only a state that the read-back accepts (:func:`_is_plain_state`); a restore
+  reads the file only when the config includes optimizer state and only from inside the
+  run directory.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import pickle
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
+
+from soup_cli.utils.paths import is_under, quote_path
 
 if TYPE_CHECKING:
     from soup_cli.utils.rl_checkpoint import RLCheckpointCallback
@@ -197,6 +208,97 @@ class RLCheckpointState:
         }
 
 
+class RLCheckpointLoadError(ValueError):
+    """An RL checkpoint's ``optimizer.pt`` was refused; nothing from it was loaded."""
+
+
+_REFUSAL_REMEDY = (
+    "Delete this file, or point to a checkpoint written by soup "
+    "(rl-checkpoints/step-N under this run's output directory)."
+)
+
+# An optimizer state_dict is tensors in dicts, lists and tuples with str / int keys and
+# int / float / bool / str / None leaves. Exact types only: a subclass can carry state the
+# strict loader does not read, and an unlisted object would make a later restore refuse.
+_PLAIN_LEAVES = (str, int, float, bool, type(None))
+_PLAIN_CONTAINER_DICTS = (dict, OrderedDict)
+_PLAIN_CONTAINER_SEQS = (list, tuple)
+_PLAIN_KEYS = (str, int)
+_MAX_PLAIN_DEPTH = 16
+
+
+def _is_plain_state(obj: Any, _depth: int = 0) -> bool:
+    """Whether ``obj`` is made only of what ``torch.load(weights_only=True)`` reads back.
+
+    Cyclic or very deep containers answer False (depth cap), so the check always ends.
+    """
+    if _depth > _MAX_PLAIN_DEPTH:
+        return False
+    kind = type(obj)
+    if kind in _PLAIN_LEAVES:
+        return True
+    if kind in _PLAIN_CONTAINER_DICTS:
+        return all(
+            type(key) in _PLAIN_KEYS and _is_plain_state(value, _depth + 1)
+            for key, value in obj.items()
+        )
+    if kind in _PLAIN_CONTAINER_SEQS:
+        return all(_is_plain_state(item, _depth + 1) for item in obj)
+    try:
+        import torch
+    except ImportError:
+        return False
+    return kind is torch.Tensor
+
+
+def _refusal_message(path: str, reason: str) -> str:
+    """The one wording every refusal uses: which file, why, and what to do."""
+    return (
+        f"RL checkpoint optimizer state {quote_path(path)} was refused: {reason}. "
+        f"{_REFUSAL_REMEDY} Nothing was loaded from it."
+    )
+
+
+def load_optimizer_state(path: str) -> dict:
+    """Read an RL checkpoint's ``optimizer.pt`` with ``weights_only=True``, or refuse it.
+
+    Returns the optimizer ``state_dict``. Raises :class:`RLCheckpointLoadError` (never a
+    bare pickle / torch error, and never a retry with the unsafe loader) when the file is
+    missing, truncated or corrupt, needs more than tensors and plain containers to load
+    (a pickle that would run code), or is not an optimizer state dict. The message names
+    the file and says what to do. Files written by earlier versions are plain tensors and
+    containers too, so they load unchanged.
+    """
+    if not os.path.isfile(path):
+        raise RLCheckpointLoadError(
+            _refusal_message(path, "it cannot be read (it is missing or not a regular file)")
+        )
+    try:
+        import torch
+
+        state = torch.load(path, map_location="cpu", weights_only=True)
+    except ImportError as exc:
+        raise RLCheckpointLoadError(
+            _refusal_message(path, "it cannot be read (torch is not installed)")
+        ) from exc
+    except OSError as exc:
+        raise RLCheckpointLoadError(
+            _refusal_message(path, f"it cannot be read ({type(exc).__name__})")
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — every loader failure becomes a named refusal
+        if isinstance(exc, pickle.UnpicklingError) and "Unsupported" in str(exc):
+            reason = (
+                "it holds objects other than tensors and plain containers "
+                "(a pickle that needs code to load)"
+            )
+        else:
+            reason = "it is truncated or corrupt"
+        raise RLCheckpointLoadError(_refusal_message(path, reason)) from exc
+    if not (isinstance(state, dict) and "state" in state and "param_groups" in state):
+        raise RLCheckpointLoadError(_refusal_message(path, "it is not an optimizer state dict"))
+    return state
+
+
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
@@ -223,8 +325,6 @@ def _is_main_process() -> bool:
     Prefers ``torch.distributed`` when initialised; otherwise reads the
     launcher env vars (accelerate / torchrun set ``RANK`` / ``LOCAL_RANK``).
     """
-    import os
-
     try:
         import torch.distributed as dist
 
@@ -290,8 +390,6 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         self._saved: list[int] = []
 
     def _ckpt_root(self) -> str:
-        import os
-
         return os.path.join(self.output_dir, "rl-checkpoints")
 
     def save_checkpoint(self, *, step: int, model, optimizer) -> str:
@@ -300,8 +398,6 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         Pure of HF Trainer state — exercised directly by tests with a tiny
         peft model + a real torch optimizer.
         """
-        import os
-
         from soup_cli.utils.paths import atomic_write_text
 
         root = self._ckpt_root()
@@ -331,12 +427,24 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                 try:
                     import torch
 
-                    # Atomic write: torch.save straight to opt_out could leave a
-                    # truncated file if interrupted. Stage to .tmp then rename.
-                    tmp_out = opt_out + ".tmp"
-                    torch.save(optimizer.state_dict(), tmp_out)
-                    os.replace(tmp_out, opt_out)
-                    has_optimizer = True
+                    optimizer_state = optimizer.state_dict()
+                    if _is_plain_state(optimizer_state):
+                        # Atomic write: torch.save straight to opt_out could leave a
+                        # truncated file if interrupted. Stage to .tmp then rename.
+                        tmp_out = opt_out + ".tmp"
+                        torch.save(optimizer_state, tmp_out)
+                        os.replace(tmp_out, opt_out)
+                        has_optimizer = True
+                    else:
+                        # A restore reads this file with weights_only=True and refuses
+                        # anything else: do not write what it would refuse.
+                        logger.warning(
+                            "RL checkpoint step %d: optimizer state not saved because it "
+                            "holds objects other than tensors and plain containers, which "
+                            "a restore would refuse to load. The checkpoint holds the "
+                            "adapter only.",
+                            int(step),
+                        )
                 except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
                     has_optimizer = False
 
@@ -368,9 +476,12 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         ``set_peft_model_state_dict`` and the optimizer via ``load_state_dict``.
         Best-effort — returns ``True`` when at least one artifact was restored,
         ``False`` otherwise, and NEVER raises (rollback must not crash the run).
-        """
-        import os
 
+        The optimizer state is read from ``optimizer.pt`` only when this callback's
+        config includes optimizer state, only from inside the run directory, and only
+        through :func:`load_optimizer_state` (``weights_only=True``). A file that is
+        refused is logged by name and skipped; the optimizer is left untouched.
+        """
         ckpt_dir = os.path.join(self._ckpt_root(), f"step-{int(step)}")
         if not os.path.isdir(ckpt_dir):
             return False
@@ -388,37 +499,57 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                     restored = True
             except Exception:  # noqa: BLE001 — best-effort restore, never crash
                 pass
-        if optimizer is not None:
+        if optimizer is not None and self.config.include_optimizer_state:
             opt_path = os.path.join(ckpt_dir, "optimizer.pt")
-            # SECURITY (review HIGH #1): torch.load(weights_only=False) executes
-            # arbitrary pickle. Refuse a SYMLINKED optimizer.pt — an attacker
-            # with write access to a shared checkpoint dir could swap the file
-            # for a symlink to a malicious pickle between save and restore (RCE).
-            # opt_path is otherwise contained (output_dir is_under_cwd-verified in
-            # __init__ + int-cast step); the symlink check closes the TOCTOU.
+            if self._restore_optimizer_state(opt_path, optimizer):
+                restored = True
+        return restored
+
+    def _restore_optimizer_state(self, opt_path: str, optimizer) -> bool:
+        """Apply ``opt_path`` to ``optimizer``; True when applied. Never raises."""
+        try:
+            # The file has to be one this run wrote: refuse a symlinked optimizer.pt
+            # (security review HIGH #1: a link swapped in between save and restore) and
+            # any path that resolves outside the run directory (a linked rl-checkpoints/
+            # or step-N/ directory). The strict loader below is what stops a pickle from
+            # running; these checks keep the read inside the run directory.
             if os.path.islink(opt_path):
                 logger.warning(
-                    "refusing to restore optimizer state from a symlinked "
-                    "optimizer.pt (%s) — possible tampering",
-                    opt_path,
+                    "%s", _refusal_message(opt_path, "it is a symlink (possible tampering)")
                 )
-            elif os.path.isfile(opt_path):
-                try:
-                    import torch
-
-                    optimizer.load_state_dict(
-                        torch.load(
-                            opt_path, map_location="cpu", weights_only=False
-                        )
-                    )
-                    restored = True
-                except Exception:  # noqa: BLE001
-                    pass
-        return restored
+                return False
+            if not os.path.isfile(opt_path):
+                return False
+            if not is_under(opt_path, self.output_dir):
+                logger.warning(
+                    "%s",
+                    _refusal_message(
+                        opt_path,
+                        f"it resolves outside the run directory {quote_path(self.output_dir)}",
+                    ),
+                )
+                return False
+            try:
+                state = load_optimizer_state(opt_path)
+            except RLCheckpointLoadError as exc:
+                logger.warning("%s", exc)
+                return False
+            try:
+                optimizer.load_state_dict(state)
+            except Exception as exc:  # noqa: BLE001 — a mismatched state is not a crash
+                logger.warning(
+                    "RL checkpoint optimizer state %s was read but could not be applied "
+                    "to the optimizer (%s).",
+                    quote_path(opt_path),
+                    type(exc).__name__,
+                )
+                return False
+            return True
+        except Exception:  # noqa: BLE001 — rollback must never crash the run
+            return False
 
     def _prune(self) -> None:
         """Keep only the ``keep_last`` most-recent step checkpoints."""
-        import os
         import shutil
 
         root = self._ckpt_root()
