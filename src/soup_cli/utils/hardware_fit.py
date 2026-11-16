@@ -587,11 +587,14 @@ def hardware_fit_input_or_reason(
     gpu_memory_gb: Optional[float] = None,
     on_hub_request: Optional[Callable[[], None]] = None,
     kbit_fp32: bool = False,
+    price_teacher: bool = True,
 ) -> Union[HardwareFitInput, FitUnavailable]:
     """:func:`hardware_fit_input_from_config`, or the one cause that stops it (#2306).
 
     The batch size, the sequence length and the quantization are checked before the
     model is read, so a run the estimate cannot price makes no request to the Hub.
+    ``price_teacher=False`` leaves out a ``task: distill`` run's teacher, so the student
+    is priced alone (#2909).
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -655,8 +658,10 @@ def hardware_fit_input_or_reason(
     from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 
     task = getattr(cfg, "task", "sft")
-    distill = _distill_inputs(
-        cfg, task, allow_network=allow_network, on_hub_request=on_hub_request
+    distill = (
+        _distill_inputs(cfg, task, allow_network=allow_network, on_hub_request=on_hub_request)
+        if price_teacher
+        else {}
     )
     if isinstance(distill, FitUnavailable):
         return distill

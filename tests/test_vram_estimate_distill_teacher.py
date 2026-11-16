@@ -691,6 +691,29 @@ def test_the_student_floor_still_refuses(tmp_path, monkeypatch, screen):
     assert "Hardware-fit gate" in _plain(screen.getvalue())
 
 
+def test_a_teacher_too_large_to_price_still_refuses_a_student_that_does_not_fit(
+    tmp_path, monkeypatch, screen
+):
+    """A teacher over 1,000B parameters is not priced, but the student still is: on a 4 GB
+    card the H200 student alone needs 10.8 GB with the margin, so the run is refused, as on
+    ``main``, rather than skipped."""
+    monkeypatch.chdir(_big(tmp_path))
+    real = model_shape_mod.read_model_shape
+    teacher = str(tmp_path / "teacher")
+
+    def read(base, **kwargs):
+        shape = real(base, **kwargs)
+        if base == teacher:
+            return ModelShape(**{**shape.__dict__, "params": 2 * 10**12})
+        return shape
+
+    monkeypatch.setattr(model_shape_mod, "read_model_shape", read)
+    assert _preflight(_h200_cfg(tmp_path), 4) == 1
+    text = _plain(screen.getvalue())
+    assert "the student is checked alone" in text
+    assert "Hardware-fit gate" in text
+
+
 def test_soup_profile_reports_the_teacher_and_the_divergence(workdir):
     (workdir / "soup.yaml").write_text(_yaml(workdir), encoding="utf-8")
     result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])

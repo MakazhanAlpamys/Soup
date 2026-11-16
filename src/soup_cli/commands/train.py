@@ -568,15 +568,29 @@ def _hardware_fit_preflight(
     if total_bytes <= 0:
         return  # no CUDA VRAM to predict against
     from soup_cli.utils.gpu import bf16_fp16_flags
-    from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
+    from soup_cli.utils.hardware_fit import (
+        CONFIG_QUANT_TO_FIT,
+        FitUnavailable,
+        hardware_fit_input_or_reason,
+    )
 
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
     # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    kbit_fp32 = bf16_fp16_flags("cuda")[1]
     inp = _hardware_fit_input_or_reason(
-        cfg,
-        gpu_memory_gb=total_bytes / 1024**3,
-        kbit_fp32=bf16_fp16_flags("cuda")[1],
+        cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32
     )
+    if isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model":
+        # #2909: a teacher the estimate cannot price; the student still can be, and a run
+        # whose student alone does not fit the card is refused, as before the teacher was
+        # priced. The first read already announced any Hub request.
+        console.print(
+            "[yellow]Pre-flight: the student is checked alone:[/] "
+            f"{markup_escape(inp.reason)}."
+        )
+        inp = hardware_fit_input_or_reason(
+            cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32, price_teacher=False
+        )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
