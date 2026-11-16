@@ -723,6 +723,12 @@ def status_cmd() -> None:
             f"({state.production_adapter or 'no adapter'})"
         ),
     )
+    from soup_cli.utils.loop_reconcile import detect as detect_promotion_mismatch
+
+    mismatch = detect_promotion_mismatch(state, LoopLog())
+    if mismatch is not None:
+        # loop.yaml and versions.jsonl disagree about a promotion: say it, by name (read only).
+        table.add_row("promotion", for_terminal(mismatch.text))
     from soup_cli.utils.loop_stages import server_adapter_note
 
     server_note = server_adapter_note(state)

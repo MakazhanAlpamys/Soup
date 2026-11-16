@@ -1572,15 +1572,19 @@ def server_adapter_note(state: LoopState) -> Optional[str]:
     ``loop.yaml`` keeps production (``production_name``) across a restart of ``soup serve``, but
     the server does not: a restarted server answers with the base model, and nothing told the
     operator (review 5, F11). This asks ``<SOUP_LOOP_SERVE_ENDPOINT>/health`` which adapter is
-    active. ``None`` when production is the served model itself (nothing to compare). Otherwise one
-    line: serving it, NOT serving it (with the way back), serving another, not reachable, or not
-    checked (no usable endpoint in this environment).
+    active. ``None`` when loop.yaml names neither a production adapter nor a canary (nothing to
+    compare). With a production adapter, one line: serving it, NOT serving it (with the way back),
+    serving another, not reachable, or not checked (no usable endpoint in this environment). With
+    only a running canary, a line only when the server answers with an adapter active: that is a
+    server serving a version loop.yaml has not promoted (an unfinished promotion, review 5b N1).
     """
-    name = state.production_name
-    if name is None:
+    name, canary = state.production_name, state.canary_active
+    if name is None and canary is None:
         return None
     endpoint, why = _checked_endpoint()
     if endpoint is None:
+        if name is None:
+            return None
         if why.startswith("no SOUP_LOOP_SERVE_ENDPOINT"):
             return (
                 f"not checked: SOUP_LOOP_SERVE_ENDPOINT is not set here, so it is not known "
@@ -1589,8 +1593,23 @@ def server_adapter_note(state: LoopState) -> Optional[str]:
         return f"not checked: {why}"
     health = _get_health(endpoint)
     if health is None:
+        if name is None:
+            return None
         return f"not reachable at {endpoint}: cannot tell whether it serves production {name}"
     active = health.get("active_adapter")
+    if name is None:
+        if not active:
+            return None
+        if active == canary:
+            return (
+                f"the server serves the canary {_printable(str(active), 100)} as production, but "
+                "loop.yaml has not promoted it (an unfinished promotion): the next cycle with "
+                "a healthy canary finishes it, or run soup loop rollback"
+            )
+        return (
+            f"the server has the adapter {_printable(str(active), 100)} active, but loop.yaml "
+            "names no production adapter (the served model)"
+        )
     if active == name:
         return f"serving production {name}"
     if active is None or active == "":
@@ -1599,6 +1618,11 @@ def server_adapter_note(state: LoopState) -> Optional[str]:
             "the base model (it was restarted, or the adapter was unloaded). Load and activate "
             f"it again (POST /v1/adapters/load, then /v1/adapters/activate/{name}) or run "
             "soup loop rollback"
+        )
+    if active == canary:
+        return (
+            f"serving the canary {_printable(str(active), 100)} as production, not production "
+            f"{name} (an unfinished promotion): the next cycle with a healthy canary finishes it"
         )
     return f"serving {_printable(str(active), 100)}, not production {name}"
 

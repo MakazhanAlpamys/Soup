@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import signal
 import threading
 import uuid
@@ -46,7 +47,6 @@ from soup_cli.utils.loop_gate import GATE, clean_corrections, clean_held_out
 from soup_cli.utils.loop_holdout import (
     HoldoutPlan,
     later,
-    promotion_cursor_changes,
     record_plan,
     valid_cursor,
 )
@@ -62,18 +62,20 @@ from soup_cli.utils.loop_log import (
     canary_result,
     iteration_from_record,
     progress_line,
-    promotion_changes,
     resolved_line,
     start_log,
     utc_now_iso,
     version_line,
     withdrawn_line,
 )
+from soup_cli.utils.loop_reconcile import finish as finish_promotion
+from soup_cli.utils.loop_reconcile import promoted_state
 from soup_cli.utils.loop_retry import after_failure
 from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
     StateMergeError,
+    default_state_path,
     format_wait_duration,
     merge_state,
     read_state,
@@ -225,6 +227,7 @@ def run_once(
     *,
     now: Optional[datetime] = None,
     log: Optional[LoopLog] = None,
+    on_persisted: Optional[Callable[[LoopState], None]] = None,
 ) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
     """Execute one full iteration synchronously. Pure with respect to time.
 
@@ -235,6 +238,11 @@ def run_once(
     and ``progress.jsonl`` (``soup loop watch`` passes one); None writes nothing and leaves
     the version counter alone. A line that cannot be written is a note on the returned
     record, never an error.
+
+    A promotion is written to ``loop.yaml`` the moment it happens, not when the cycle ends
+    (the cycle goes on into the next harvest, train and ship): ``on_persisted`` is called with
+    the state that was written, so the caller merges only what changes after it
+    (``loop_reconcile``).
     """
     if not isinstance(state, LoopState):
         raise TypeError("state must be LoopState")
@@ -295,6 +303,13 @@ def run_once(
         if reading.promote_note and state.canary_active is None:
             canary_notes.append(reading.promote_note)  # (a refused promotion keeps the canary)
         canary_notes.extend(quality_notes)
+        if state.canary_active is None:
+            # Promoted: the server has switched. loop.yaml decides which version is production,
+            # so it is written now (atomic, under the lock), before the log lines and not at the
+            # end of the cycle (loop_reconcile has the order and the recovery).
+            saved = _persist_promotion(canary_before, state, config, on_persisted)
+            if saved:
+                canary_notes.append(saved)
         _log_promotion(log, canary_before, state, reading, canary_notes, note)
     elif state.canary_active:
         # A canary is still collecting answers: no new iteration until it is decided.
@@ -838,6 +853,33 @@ def _evidence(gate_out: Mapping[str, object]) -> "dict[str, object]":
     return fields
 
 
+def _persist_promotion(
+    before: LoopState,
+    after: LoopState,
+    config: WatchConfig,
+    on_persisted: Optional[Callable[[LoopState], None]],
+) -> Optional[str]:
+    """Write a promotion's state change to ``loop.yaml`` now; a note if that failed, else ``None``.
+
+    Only the fields the promotion changed are merged (``merge_state``), onto the file as it is
+    now. A run with no ``loop.yaml`` (a stub run in a test) writes nothing. A failure is not fatal:
+    the end of the cycle writes the state as before, and the note says the early write failed.
+    """
+    path = config.state_path or default_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        merge_state(before, after, path)
+    except (StateMergeError, OSError) as exc:  # a lock timeout is an OSError
+        return (
+            f"loop.yaml could not be updated at the promotion ({for_terminal(exc)}); "
+            "the end of the cycle tries again"
+        )
+    if on_persisted is not None:
+        on_persisted(after)
+    return None
+
+
 def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
     """Promote the active canary to production when the server agrees."""
     name = state.canary_active
@@ -848,21 +890,7 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
     if not out.get("promoted"):
         why = out.get("notes") or "the promote stage failed"
         return state, f"canary {name} passed but was not promoted: {why}"
-    promoted = _state_with(
-        state,
-        previous_production_name=state.production_name,
-        previous_production_adapter=state.production_adapter,
-        production_name=name,
-        production_adapter=state.canary_adapter,
-        canary_active=None,
-        canary_traffic_pct=None,
-        canary_rollout_id=None,
-        canary_adapter=None,
-        canary_started_ts=None,
-        canary_override=None,
-        **promotion_changes(state),
-        **promotion_cursor_changes(state),
-    )
+    promoted = promoted_state(state)
     note = f"canary {name} promoted to production"
     if state.canary_override:
         # A person started this canary over a DON'T SHIP verdict (soup loop canary
@@ -1207,6 +1235,15 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     except BaseException:
         _restore_signal_handlers(previous_handlers)
         raise
+    if log is not None:
+        # A promotion that a stop cut in two (loop.yaml and the version log disagree) is finished
+        # now, or reported by name when it is not one this tool can finish.
+        try:
+            for sentence in finish_promotion(config.state_path, log):
+                _LOG.warning("watch: %s", sentence)
+                log.progress(progress_line(None, "promote", "progress", message=sentence[:300]))
+        except OSError:
+            _LOG.warning("watch: the version log could not be read", exc_info=True)
     try:
         while not stop.is_set():
             if config.max_iterations is not None and iterations >= config.max_iterations:
@@ -1236,8 +1273,13 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                 continue
             if state.status == "stopped":
                 break
-            started_from = state
-            state, record, decision = run_once(state, config, log=log)
+            base = [state]  # what the file holds of this cycle's state; a promotion moves it on
+
+            def _persisted(saved: LoopState, holder: list = base) -> None:
+                holder[0] = saved
+
+            state, record, decision = run_once(state, config, log=log, on_persisted=_persisted)
+            started_from = base[0]
             # The iteration may have run for hours: persist only the fields it changed onto
             # the file as it is NOW, so a rollback / pause / canary made meanwhile survives.
             skipped: list = []
