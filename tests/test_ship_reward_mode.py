@@ -572,6 +572,26 @@ def test_a_stored_underpowered_is_informational_and_is_recomputed_on_read():
     assert again.task_win.detail.paired.underpowered is True  # 4 rows, whatever the file says
 
 
+@pytest.mark.parametrize("side", ["base", "tuned"])
+def test_a_reward_evidence_that_records_a_dead_side_is_refused_on_replay(
+    tmp_path, monkeypatch, side
+):
+    # the replay twin of the live refusal (#2911) holds under the reward mode too
+    evidence = _evidence_of(lambda e: e["task"]["generation_failures"].update({side: 12}))
+    message = f"every task generation failed on the {side} side (12 of 12)"
+    with pytest.raises(ValueError) as caught:
+        verdict_from_evidence(evidence)
+    assert message in str(caught.value)
+    work = _work(tmp_path, monkeypatch, _tasks(3))
+    (work / "ev.json").write_text(json.dumps(evidence), encoding="utf-8")
+    result = runner.invoke(ship_cmd.app, ["--evidence", "ev.json"])
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    assert message in _plain(result.output)
+    # one row short of all of them is a side that was measured: it replays
+    nearly = _evidence_of(lambda e: e["task"]["generation_failures"].update({side: 11}))
+    assert verdict_from_evidence(nearly).task_win.reward is not None
+
+
 def test_an_evidence_of_a_reward_mode_without_a_summary_still_reads():
     evidence = _evidence_of(_set(("task", "paired"), ...))
     verdict = verdict_from_evidence(evidence)
