@@ -760,6 +760,23 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
+    """``tracker.fail_run`` that can never replace the original error with its own.
+
+    The failure is already being raised (and, on the training path, written to a crash
+    bundle); a fault while recording it is reported and swallowed.
+    """
+    try:
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+    except Exception as record_error:
+        from soup_cli.utils.terminal import for_terminal
+
+        console.print(
+            f"[dim]Could not record the failure of {for_terminal(run_id)}: "
+            f"{for_terminal(type(record_error).__name__)}[/]"
+        )
+
+
 def _describe_exception_for_tracker(exc: BaseException) -> str:
     """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
 
@@ -2239,10 +2256,15 @@ def train(
             synchronize_base_revision,
         )
 
-        base_identity = BaseRevision(
-            run_base,
-            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"),
-        )
+        binding_supported = cfg.backend == "transformers" and hub_name == "hf"
+        mlx_binding_reason = None
+        if cfg.backend == "mlx" and hub_name == "hf":
+            from soup_cli.utils.mlx import mlx_revision_binding_reason
+
+            # Qualify before setup's first RoPE config read or native download.
+            mlx_binding_reason = mlx_revision_binding_reason()
+            binding_supported = mlx_binding_reason is None
+        base_identity = BaseRevision(run_base, binding_supported=binding_supported)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
@@ -2257,6 +2279,11 @@ def train(
             console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
         elif base_identity.source == "cache_path":
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        elif mlx_binding_reason and base_identity.source == "unsupported_backend":
+            console.print(
+                f"[dim]Base revision: unknown ({mlx_binding_reason}; "
+                "existing loading behavior preserved)[/]"
+            )
         else:
             console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
@@ -2352,7 +2379,7 @@ def train(
                 energy_ctx = contextlib.nullcontext()
 
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         raise
 
     try:
@@ -2406,7 +2433,7 @@ def train(
             trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle

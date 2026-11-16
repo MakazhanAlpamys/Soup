@@ -29,7 +29,8 @@ is:
 * ``summary``     a run-level summary: HF's final runtime event, which measures no
                   per-step loss. The callback stores its throughput
                   (``train_steps_per_second``) as ``speed`` and nothing else: ``loss``,
-                  ``lr``, ``grad_norm`` and the validation columns are NULL, never the
+                  ``lr``, ``grad_norm``, the reward columns and the validation columns
+                  are NULL, never the
                   last training values carried forward, and the ``train_loss`` mean is
                   not stored. A reader of the training curve skips these rows.
 """
