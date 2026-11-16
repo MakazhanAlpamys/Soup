@@ -6,6 +6,8 @@
   "first-retry-ipo-streamed-preference-4bit-1024.json": "60947a08ce128c25804baef734031d8e69ee8fb5ccf52446f828c5a35e0b175a",
   "first-retry-qualification.patch": "f9f83f04ea3849875c9ac1f6fccc96e861157298567748984af218324979271f",
   "first-retry-status.json": "cbab1eb09893454b8d0cd9bb8ffd66bf222d14bf6e417a0261b679e788ff2c48",
+  "first-retry-streamed-ipo-nf4-1024.log": "d5f73f6b2f746dd4011c07e5228ffc24fad898488529c8d6bcbb3fb23603924d",
+  "first-retry-streamed-preference-nf4-1024.log": "30fd189590171f71701b6105f36f8c29a08987792b9b02291ab5d9617e32cb86",
   "ipo-diagnostic-False-None-4bit.json": "2bb8f7eaef096002843f9d751f08ae3429ccf11325fe3f6f2ee32a2fe90aadd6",
   "ipo-diagnostic-False-None-none.json": "cd0f11bcfb1429fa293868171b0dae5726b06902cb0421c99000461db4757930",
   "ipo-diagnostic-True-None-4bit.json": "2d4a185dd42af93c872c702d9e88479b75493a71bd5f0d18541a84cfe19ab360",
@@ -43,5 +45,5 @@
   "streamed-ipo-none-default.log": "00787617bc87b0751bc7feeeb80590c1e27ab291e2a10553e4286f9c8ce750a5",
   "streamed-preference-nf4-1024.log": "35b08e03dbcdd17b6e29894b713009b6e77b0be83017f584f7ae047bb58f959b",
   "streamed-preference-none-1024.log": "874176966ecc9a73d08c1b18a3c2f35165b08a878b7d8073ba5eae14b9e81a02",
-  "verification.json": "b343a8c5bc7dadf2cf8c37aba76e335fdee39f3d4bb9fa25f375abc9f6bb80ac"
+  "verification.json": "7f9b7e06ce8c12fb5b5479e31534ee7cc45c0d36060c28a0581506393e3d95ec"
 }

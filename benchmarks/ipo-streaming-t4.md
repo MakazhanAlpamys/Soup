@@ -109,3 +109,8 @@ results. [Publication correspondence](evidence/ipo-streaming-t4/publication-corr
 checks that the qualified IPO wrapper and test harness are byte-identical to the
 PR source, and records the later descriptions, diagnostic suggestions and fixture
 registration changes.
+
+After merging upstream `bcd1e6be`, 391 integration checks passed with 28 skips.
+The qualified wrapper and harness still match byte for byte. Wheel and sdist
+builds passed, archive paths are unique, and the wheel includes 16 bundled text
+guides. The wheel includes the existing UI logo and excludes benchmark/test data.

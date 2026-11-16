@@ -61,5 +61,19 @@
   },
   "ruff": "src/ tests/ scripts/ benchmarks/ passed",
   "generated_reference_structure": "passed",
-  "full_local_suite": "not run"
+  "full_local_suite": "not run",
+  "integration": {
+    "upstream": "bcd1e6be",
+    "head_before_record_update": "d32c0e8d",
+    "passed": 391,
+    "skipped": 28
+  },
+  "packaging": {
+    "wheel_and_sdist_built": true,
+    "unique_paths": true,
+    "bundled_guides": 16,
+    "benchmarks_or_tests_in_wheel": false,
+    "new_binary_assets": false,
+    "personal_notes_in_sdist": false
+  }
 }
