@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from soup_cli.autopilot import generate_config
 from soup_cli.autopilot.decisions import decide_performance_flags
 from soup_cli.autopilot.generate_config import build_soup_config
 
@@ -111,3 +112,27 @@ class TestAutopilotGradientCheckpointing:
         assert flags_none["gradient_checkpointing"] is True
         flags_spacious = decide_performance_flags(**kwargs, vram_headroom_gb=24.0)
         assert flags_spacious["gradient_checkpointing"] is True
+
+    def test_build_soup_config_passes_signed_headroom_unclamped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify build_soup_config passes signed headroom without clamping at 0.0."""
+        recorded_headrooms: list[float | None] = []
+        original_decide = generate_config.decide_performance_flags
+
+        def spy_decide(**kwargs: object) -> dict:
+            recorded_headrooms.append(kwargs.get("vram_headroom_gb"))  # type: ignore[arg-type]
+            return original_decide(**kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(generate_config, "decide_performance_flags", spy_decide)
+
+        data_file = self._write_data(tmp_path)
+        for budget in (10.0, 16.0, 18.0):
+            build_soup_config(
+                model="meta-llama/Llama-3.1-8B-Instruct",
+                data_path=str(data_file),
+                goal="chat",
+                vram_gb=budget,
+            )
+
+        assert recorded_headrooms == [-6.0, 0.0, 2.0]

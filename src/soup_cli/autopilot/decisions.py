@@ -365,8 +365,10 @@ def decide_performance_flags(
       blind wrote configs that ``soup train`` then refused. The probes are
       the same ones ``soup train`` validates with, so the two cannot disagree.
     - ``gradient_checkpointing`` enabled when the sequence is long (>8k tokens)
-      or VRAM headroom is tight (<4GB), to avoid OOM. Otherwise left off so we
-      don't pay the recompute cost when there's plenty of headroom.
+      or VRAM headroom is tight (<4GB), to avoid OOM. A deficit (negative value)
+      or zero headroom counts as tight; None represents unknown headroom and is
+      left off. Otherwise left off so we don't pay the recompute cost when
+      there's plenty of headroom.
     """
     del gpu_name  # reserved for future GPU-specific overrides
     is_ampere_or_newer = compute_capability >= 8.0
