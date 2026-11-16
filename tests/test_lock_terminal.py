@@ -382,4 +382,4 @@ def test_lock_directory_is_usage_error(command):
         result = _check(path)
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
-    assert "lock path is not a regular file: 'run.lock'" in _plain(result)
+    assert "lock path is a directory: 'run.lock'" in _plain(result)
