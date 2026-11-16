@@ -627,7 +627,7 @@ Works with SFT and Pretrain tasks. Packed SFT keeps the assistant-only loss mask
 
 ## Curriculum Learning
 
-Sort dataset by difficulty (easy → hard) for better convergence:
+Sort the SFT dataset by difficulty (easy → hard) for better convergence:
 
 ```yaml
 training:
@@ -635,6 +635,31 @@ training:
   curriculum_metric: length    # Sort by: length, perplexity, or loss
   curriculum_buckets: 4        # Number of difficulty stages
 ```
+
+Only SFT sorts and orders the rows: `task: sft` (and `tts`, which trains through the SFT
+trainer) on `backend: transformers` or `unsloth`. Other tasks, such as DPO, KTO,
+`reward_model` and pretrain, accept `curriculum` and, with `curriculum_dynamic`, attach its
+telemetry callback, but do not sort, and neither does SFT on `backend: mlx`: their rows keep
+the usual shuffled order.
+
+The SFT trainer sorts the rows by length (`perplexity` and `loss` fall back to length) and
+reads them in that order instead of shuffling them, so each epoch runs from the shortest row
+to the longest. A run resumed from a checkpoint written by v0.77.2 continues that order from
+the batch it stopped at, so in that epoch rows it already saw in shuffled order can repeat
+and others are left out. That holds for text, vision and audio rows and for RAFT, with or without
+`raft_epoch_shuffle` (which re-permutes the documents inside a row, not the rows). Three
+setups keep the usual shuffled order, and none is refused:
+
+- a pre-tokenised dataset (`soup data preprocess`), which replaces the sorted rows with the
+  cached ones;
+- `packing: true`, whose packing sorts the rows longest first into bins, so reading them in
+  order would run from long to short;
+- `multipack: true`, whose bin-packing sampler chooses the batches.
+
+`curriculum_buckets` does not shape the order: the rows are one sort over the whole set,
+read in that order, with no shuffling inside a stage. It sets how many buckets
+`curriculum_dynamic` reports in its telemetry; without `curriculum_dynamic` it is only
+printed.
 
 
 ## Freeze Training
