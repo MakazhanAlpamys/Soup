@@ -25,6 +25,7 @@
 - [Version Info](#version-info)
 - [Error Handling](#error-handling)
 - [Unknown config keys](#unknown-config-keys)
+- [Numeric config validation](#numeric-config-validation)
 - [Config size limits](#config-size-limits)
 - [External programs](#external-programs)
 - [Experiment Tracking](#experiment-tracking)
@@ -1486,6 +1487,16 @@ The whole sweep is refused before the first arm starts, and the command exits no
 a scripted or CI-driven sweep fails rather than reporting a grid of arms that each failed
 for the same reason. A sweep whose swept knob is never applied produces arms that are all
 identical, so there is no partially-useful result to preserve by continuing.
+
+
+## Numeric config validation
+
+An integer beyond the floating-point range is refused during config validation,
+with the field named: for example, `training -> grpo_beta: grpo_beta must be finite`.
+This also applies to learning rates in `training.lr_groups` and probabilities in
+`data.interleave`. Use a finite value in the field's documented range. Staged fields
+such as `training.lr_groups` keep their existing "accepted but read by nothing"
+refusal first; remove those fields from the config.
 
 
 ## Config size limits

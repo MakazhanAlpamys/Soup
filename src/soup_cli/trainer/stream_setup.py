@@ -1,9 +1,9 @@
 """Shared layer-streaming setup for every trainer wrapper that supports it.
 
-v0.72.4 — extracted verbatim from ``trainer/sft.py`` so that SFT and the four
-preference losses (DPO / ORPO / SimPO / KTO) cannot drift. There is exactly one
+v0.72.4 — extracted verbatim from ``trainer/sft.py`` so that SFT and the supported
+preference losses (DPO / ORPO / SimPO / KTO / BCO) cannot drift. There is exactly one
 copy of the NF4 pre-flight, the RAM/disk tier decision, the VRAM fit refusal and
-the runtime release; a per-wrapper copy would be five places to fix the next
+the runtime release; a per-wrapper copy would be six places to fix the next
 time any of them is wrong.
 
 The move is behaviour-preserving for SFT by design, so v0.72.0-.3's
@@ -15,7 +15,7 @@ hardware and sequence-length grids; it is not a universal upper bound. The
 RTX 3050 grid is now charged for two retained cuBLAS workspaces, but other
 devices and shapes still require measurement.
 
-NO top-level torch: this module is imported by five trainer modules.
+NO top-level torch: this module is imported by six trainer modules.
 """
 
 import contextlib

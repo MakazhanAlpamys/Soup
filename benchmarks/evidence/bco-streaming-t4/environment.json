@@ -1,0 +1,18 @@
+{
+  "devices": [
+    "Tesla T4, 580.178.04, 7.5",
+    "Tesla T4, 580.178.04, 7.5"
+  ],
+  "visible_devices": "0",
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "commit": "2c57034a35cdd6af43673b7e5f6480bb10ea8655",
+  "source": "https://github.com/here-2007/Soup.git",
+  "source_file_hashes": {
+    "src/soup_cli/trainer/bco.py": "4eddc8f37dff218a636676af092088384247f985d708407430464273bff77c56",
+    "src/soup_cli/config/schema.py": "5174437c75b081614a9cb7ec38e1fa3405de6c3b432f454d847f85c738205b5f",
+    "src/soup_cli/utils/config_bounds.py": "afa945aa489aedd679eaf16bfa8e98c2ff82b2bb9ec44166919034d0d12972ba",
+    "tests/test_bco_streaming.py": "818023ae149b358343817c66c90ef79e1dcd1de2d49b19d34ffe70d7013196c3",
+    "tests/test_v07204.py": "77b3db56817c4dbaf1c09d86c9e7e999a32307d789175be342b3d908694e1c5b"
+  },
+  "torch_cuda": "2.11.0+cu130 13.0"
+}
