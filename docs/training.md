@@ -127,7 +127,10 @@ advantages are normalised within each group, so it stays near zero, can be
 negative, and does not measure held-out quality. It is not recorded or shown as
 a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
 appear. The per-task choice lives in `VALIDATION_METRICS` in
-`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`. The
+per-step training reward (`reward`, `reward_std`) is stored in the metrics table's
+`reward` / `reward_std` columns, which are separate from `val_reward`; see
+`docs/backends-and-ops.md` for the logged keys and what NULL means.
 TRL needs whole groups of
 `num_generations` completions in an evaluation batch, so `grpo` evaluates at the
 largest multiple of `num_generations` that fits in the train batch, and says so
@@ -1154,7 +1157,7 @@ Where they come from depends on which trainer is built:
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
 | `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
 | `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
-| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+| `bco` mixed with anything | Loads, then refused at the start of trainer setup, after the data has loaded and before the model does (`validate_weight_compat`): BCO takes the same rows as DPO, but its trainer splits each one into unpaired completion and label rows, which the paired losses cannot read. Run BCO as its own `task: bco` stage. |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
 only* — the margin / odds-ratio objective — without the likelihood (NLL) term
@@ -1588,8 +1591,10 @@ training:
   preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+Schema validates 2-5 entries summing to 1. A `bco` blend with a paired loss
+passes that check and is refused when the trainer is set up (see the table in
+[Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
 and `orpo` trains; which reference and which tokens the terms use depends on
 the loss with the largest weight
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
@@ -2610,6 +2615,15 @@ The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights 
 Linear weights. (v0.71.23)
 
 ## Training source identity
+
+Single-process native MLX `soup train` also records the actual Hugging Face base
+commit in its `runs` row and final `soup_run.json`, retaining the configured base
+ID. Its first RoPE config read and native model/weights/tokenizer load share that
+commit. An imported non-HF or unqualified provider records no Hub revision and
+prints why, preserving its existing load flow. Local/cache-path hints and offline
+or failed metadata lookup retain their existing nullable semantics. This does not
+bind MLX sweeps or independent inference/chat/serve/merge/export consumers; see
+[Recorded base identity](backends-and-ops.md#recorded-base-identity).
 
 `soup train` captures `training_data_sha256` before loading or transforming a
 supported single local raw text-training file. The digest is SHA-256 of the
