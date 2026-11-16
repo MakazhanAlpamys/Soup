@@ -75,7 +75,7 @@ def build_soup_config(
     )
     lr = decide_lr(rank=peft["r"], quantization=quantization)
     epochs = decide_epochs(dataset_profile.samples)
-    vram_headroom_gb = max(0.0, target_vram - model_profile.params_b * 2.0)
+    vram_headroom_gb = target_vram - model_profile.params_b * 2.0
     perf_flags = decide_performance_flags(
         gpu_name=hardware_profile.gpu_name,
         compute_capability=hardware_profile.compute_capability,

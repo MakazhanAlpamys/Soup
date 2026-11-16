@@ -1676,11 +1676,14 @@ class TrainingConfig(BaseModel):
     preference_loss_weights: Optional[dict[str, float]] = Field(
         default=None,
         description=(
-            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. "
+            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'simpo': 0.3}. "
             "Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys "
             "must be members of {dpo, simpo, orpo, ipo, bco}. Requires "
             "task='preference'; mutually exclusive with preference_loss (the "
-            "scalar form). Capped at 5 components (the supported set)."
+            "scalar form). Capped at 5 components (the supported set). "
+            "A blend that contains bco is refused when the trainer is set up, "
+            "because the bco trainer splits each row into unpaired completion "
+            "and label rows."
         ),
     )
     # GRPO-specific
@@ -3918,10 +3921,10 @@ class TrainingConfig(BaseModel):
         description=(
             "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
             "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
-            "simpo, kto and ipo, including task='preference' with a single "
-            "preference_loss of dpo, orpo, simpo or ipo. Requires transformers + "
+            "simpo, kto, bco and ipo, including task='preference' with a single "
+            "preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + "
             "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
-            "BCO and preference_loss_weights do not stream yet."
+            "Weighted preference_loss_weights do not stream yet."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -7723,8 +7726,8 @@ class SoupConfig(BaseModel):
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
             )
-        # DPO/IPO use a frozen reference adapter; KTO disables adapters for its
-        # reference pass. All share the streamed base rather than a second model.
+        # DPO/IPO use a frozen reference adapter on the streamed base.
+        # KTO/BCO use the same base with adapters disabled for the reference pass.
         if self.task in _STREAM_ROLLOUT_TASKS:
             raise ValueError(
                 f"training.stream_layers cannot be used with task={self.task!r}: "
@@ -7738,15 +7741,9 @@ class SoupConfig(BaseModel):
                 "training.stream_layers cannot be combined with "
                 "training.preference_loss_weights: weighted preference losses do not "
                 "stream yet. Use a single training.preference_loss of dpo, orpo, "
-                "simpo or ipo, or set stream_layers=false."
+                "simpo, bco or ipo, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
-        if self.task == "preference" and stream_task == "bco":
-            raise ValueError(
-                f"training.stream_layers cannot use "
-                f"training.preference_loss={stream_task!r}: this loss does not stream yet. "
-                "Use dpo, orpo, simpo or ipo, or set stream_layers=false."
-            )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
@@ -8817,7 +8814,7 @@ class SoupConfig(BaseModel):
         if not isinstance(weights, dict):
             raise ValueError(
                 "preference_loss_weights must be a dict, e.g. "
-                "{'dpo': 0.7, 'bco': 0.3}."
+                "{'dpo': 0.7, 'simpo': 0.3}."
             )
         if self.task != "preference":
             raise ValueError(

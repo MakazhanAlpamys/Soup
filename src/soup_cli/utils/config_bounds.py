@@ -23,9 +23,10 @@ MIN_STREAM_LOSS_CHUNK = 16
 MAX_STREAM_LOSS_CHUNK = 8192
 
 # --- layer streaming: tasks ------------------------------------------------
-#: DPO and IPO keep a frozen reference adapter on the streamed base.
-#: KTO uses the shared base with adapters disabled. ORPO and SimPO are reference-free.
-SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto", "ipo")
+#: Trainers that can run against a streamed base. DPO and IPO use a frozen
+#: reference adapter on that base. KTO and BCO use the shared base for their
+#: reference pass. ORPO and SimPO are reference-free.
+SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto", "bco", "ipo")
 
 #: Tasks PERMANENTLY excluded, not merely unimplemented. Generation rollouts
 #: re-read every layer once per generated token, which destroys the whole

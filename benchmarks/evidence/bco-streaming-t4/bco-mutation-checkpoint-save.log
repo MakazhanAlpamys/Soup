@@ -1,0 +1,108 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_wrapper_rejects_empty_streamed_adapter[checkpoint] ____________
+
+checkpoint = PosixPath('<tmp>/pytest-546/test_wrapper_rejects_empty_str0/model')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e856a50>
+where = 'checkpoint'
+
+    @pytest.mark.parametrize("where", ["checkpoint", "final"])
+    def test_wrapper_rejects_empty_streamed_adapter(checkpoint, monkeypatch, where):
+        from safetensors.torch import save_file
+    
+        wrapper, inner = _build(checkpoint, "empty")
+        inner.trainer.args.max_steps = 1
+        save = inner.trainer.save_model
+    
+        def empty_on_save(output_dir=None, *args, **kwargs):
+            save(output_dir, *args, **kwargs)
+            output = Path(output_dir or inner.trainer.args.output_dir)
+            if output.name.startswith("checkpoint-") == (where == "checkpoint"):
+                save_file({}, output / "adapter_model.safetensors")
+    
+        monkeypatch.setattr(inner.trainer, "save_model", empty_on_save)
+>       with pytest.raises(RuntimeError, match="holds 0 LoRA tensors"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:201: Failed
+----------------------------- Captured stdout call -----------------------------
+Loading tokenizer: 
+<tmp>/py
+test-546/test_wrapper_rejects_empty_str0/model
+╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
+│ HF/local source: 0.00 GB                                                     │
+│ Soup materialized copy: 0.00 GB (no write required)                          │
+│ Layer-shard cache: 0.00 GB (write required)                                  │
+│ Projected total on disk: 0.00 GB                                             │
+│ Additional writes before training: 0.00 GB                                   │
+│ Free on target volume (layer-shard cache): 26.07 GB                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> 
+<tmp>/py
+test-546/test_wrapper_rejects_empty_str0/cache/<tmp>
+__pytest-546__test_wrapper_reje
+cts_empty_str0_
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────── training.stream_layers ───────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                  │
+│   base store   0.00 GB across 2 layers (pinned)                              │
+│   VRAM buffers 2 x 0 MB + 1 x 0 MB large-layer slot = 0 MB                   │
+│   resident     0 MB extras + adapters                                        │
+│   peak VRAM    ~0.01 GB at batch 2 x seq 64 (logits 0.00 GB)                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not 
+run resident on this card at all.
+Layer streaming ready: 2 layers, 0.00 GB pageable RAM store, 2 x 0 MB decoder 
+buffers + 1 x 0 MB large-layer slot
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 82,240 total (2.18%)
+{'loss': '0.6931', 'grad_norm': '0.09567', 'learning_rate': '2e-05', 'rewards/chosen': '0', 'logps/chosen': '-11.7', 'logits/chosen': '3.06', 'rewards/rejected': '0', 'logps/rejected': '-8.04', 'logits/rejected': '3.62', 'rewards/margins': '0', 'delta': '0', 'epoch': '0.25'}
+{'train_runtime': '0.0229', 'train_samples_per_second': '87.42', 'train_steps_per_second': '43.71', 'train_loss': '0.6931', 'epoch': '0.25'}
+----------------------------- Captured stderr call -----------------------------
+
+Extracting prompt from train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Extracting prompt from train dataset: 100%|██████████| 8/8 [00:00<00:00, 2413.99 examples/s]
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 10233.13 examples/s]
+
+Tokenizing train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Tokenizing train dataset: 100%|██████████| 8/8 [00:00<00:00, 2760.32 examples/s]
+
+Processing tokenized train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Processing tokenized train dataset: 100%|██████████| 8/8 [00:00<00:00, 4296.34 examples/s]
+
+Filtering desirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering desirable examples: 100%|██████████| 8/8 [00:00<00:00, 7483.15 examples/s]
+
+Filtering undesirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering undesirable examples: 100%|██████████| 8/8 [00:00<00:00, 10581.66 examples/s]
+[transformers] The model is already on multiple devices. Skipping the move to device specified in `args`.
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 4009.85 examples/s]
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 3}.
+
+  0%|          | 0/1 [00:00<?, ?it/s]
+                                     
+
+100%|██████████| 1/1 [00:00<00:00, 129.65it/s]
+                                              
+
+100%|██████████| 1/1 [00:00<00:00, 44.10it/s]
+100%|██████████| 1/1 [00:00<00:00, 43.85it/s]
+------------------------------ Captured log call -------------------------------
+WARNING  transformers.trainer:trainer.py:4708 The model is already on multiple devices. Skipping the move to device specified in `args`.
+WARNING  transformers.trainer_utils:trainer_utils.py:1246 The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 3}.
+=============================== warnings summary ===============================
+tests/test_bco_streaming.py::test_wrapper_rejects_empty_streamed_adapter[checkpoint]
+  /opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py:90: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_bco_streaming.py::test_wrapper_rejects_empty_streamed_adapter[checkpoint]
+1 failed, 1 warning in 3.47s
