@@ -369,3 +369,17 @@ def test_show_preserves_backslashes_in_stored_fields():
                        ("created_at", "Created at:")):
         assert f"{label} {key}\\[unclosed" in _plain(result)
     assert Path(name).read_bytes() == before
+
+
+@pytest.mark.parametrize("command", ["show", "check"])
+def test_lock_directory_is_usage_error(command):
+    path = "run.lock"
+    Path(path).mkdir()
+
+    if command == "show":
+        result = runner.invoke(app, ["lock", command, path])
+    else:
+        result = _check(path)
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    assert "lock path is not a regular file: 'run.lock'" in _plain(result)
