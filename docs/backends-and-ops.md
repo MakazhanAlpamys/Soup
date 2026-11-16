@@ -1825,8 +1825,17 @@ When training fails, Soup auto-writes a self-contained `.crash` JSON to
 `./.soup-crashes/crash_<utc>_<hex>.crash` containing: redacted error trace,
 classified failure kind (`oom` / `nan` / `cuda` / `dataloader` / `nccl` /
 `other`), GPU state at crash time, env summary, last-50 metric rows, and the
-config (recursively redacted of `hf_*` / `sk-*` / `Bearer …` tokens). The
-output_dir is reduced to `os.path.basename` so `$HOME` doesn't leak.
+config. The error message, traceback, metric rows, config and env values are
+redacted before anything is written: the userinfo of a URL and the values of
+sensitive query parameters, common API-token shapes (`hf_*`, `sk-*`, GitHub, AWS
+access-key ids, Google, Slack), `Authorization` / `Bearer` headers, JWTs,
+private-key blocks, and values stored under credential-named keys (`token`,
+`secret`, `password`, `api_key`, ...; W&B keys and AWS secret keys are caught under
+their key name, and `max_new_tokens` and `tokenizer` stay readable). A string
+longer than 256 KiB is cut before redaction. Redaction is pattern-based and
+best-effort: read a bundle before sharing it. The bundle's `redaction` block
+records how many values were replaced, as counts only. The output_dir is reduced
+to `os.path.basename` so `$HOME` doesn't leak.
 
 ### `--log-level quiet|normal|verbose|debug`
 
