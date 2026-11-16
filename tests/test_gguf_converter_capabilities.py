@@ -134,25 +134,43 @@ def test_missing_transformers_refuses_before_clone_and_install(export_flow, monk
     monkeypatch.setattr(export_mod, "_transformers_missing", lambda: True)
     result, calls = export_flow({"architectures": ["LlamaForCausalLM"]})
     assert result.exit_code == 1, result.output
-    assert "transformers" in result.output
-    assert 'pip install "soup-cli[train]"' in result.output
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "transformers" in plain
+    assert 'pip install "soup-cli[train]"' in plain
     assert calls == []
-
 
 
 def test_missing_transformers_refuses_before_adapter_merge(export_flow, monkeypatch):
     monkeypatch.setattr(export_mod, "_transformers_missing", lambda: True)
     result, calls = export_flow({"architectures": ["LlamaForCausalLM"]}, adapter=True)
     assert result.exit_code == 1, result.output
-    assert "transformers" in result.output
-    assert 'pip install "soup-cli[train]"' in result.output
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "transformers" in plain
+    assert 'pip install "soup-cli[train]"' in plain
     assert calls == []
+
 
 def test_present_transformers_lets_fresh_default_export(export_flow, monkeypatch):
     monkeypatch.setattr(export_mod, "_transformers_missing", lambda: False)
     result, calls = export_flow({"architectures": ["LlamaForCausalLM"]})
     assert result.exit_code == 0, (result.output, result.exception)
     assert calls == ["clone", "deps", "convert", "quantize"]
+
+
+@pytest.mark.parametrize("spec,raises,expected", [
+    (SimpleNamespace(), False, False),
+    (None, False, True),
+    (None, True, True),
+])
+def test_transformers_missing_checks_import_spec(monkeypatch, spec, raises, expected):
+    def find_spec(name):
+        assert name == "transformers"
+        if raises:
+            raise ValueError("transformers.__spec__ is None")
+        return spec
+
+    monkeypatch.setattr("importlib.util.find_spec", find_spec)
+    assert export_mod._transformers_missing() is expected
 
 
 @pytest.mark.parametrize("architecture,allowed", [
@@ -256,6 +274,10 @@ def test_generated_capabilities_match_pin_and_record_immutable_source():
     assert data["tag"] == export_mod.LLAMA_CPP_TAG
     assert data["commit"] == "f4d0673917c75493c73fc9b64ab42841600ba944"
     assert data["source_git_blob"] == "8cee1f8646e113accba4de2c5e68b7b0804252eb"
+    assert data["sources"]["conversion/__init__.py"] == {
+        "sha256": "c922e7710c53a8352789c999f00b7c8cc49c1733c21453c566af73334194300b",
+        "git_blob": "fb6b8464c4a1e99fbefd58aa856d89b1f8b6d5cd",
+    }
     assert data["source_url"].endswith(f'{data["commit"]}/convert_hf_to_gguf.py')
     supported = pinned_text_architectures(export_mod.LLAMA_CPP_TAG)
     assert {"LlamaForCausalLM", "GPT2LMHeadModel", "Qwen2ForCausalLM"} <= supported
@@ -475,6 +497,25 @@ def test_regeneration_refuses_wrong_pin_or_mutable_source(tmp_path, tag, commit,
     ], capture_output=True, text=True)
     assert result.returncode == 2
     assert diagnostic in result.stderr
+    assert not output.exists()
+
+
+def test_regeneration_refuses_empty_package_dir(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "scripts/gen_llama_cpp_capabilities.py"
+    entry = tmp_path / "convert_hf_to_gguf.py"
+    entry.write_text("", encoding="utf-8")
+    package = tmp_path / "conversion"
+    package.mkdir()
+    output = tmp_path / "capabilities.json"
+    result = subprocess.run([
+        sys.executable, str(script), "--converter", str(entry),
+        "--package-dir", str(package), "--tag", export_mod.LLAMA_CPP_TAG,
+        "--commit", "f4d0673917c75493c73fc9b64ab42841600ba944",
+        "--output", str(output),
+    ], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "--package-dir" in result.stderr
+    assert "contains no *.py modules" in result.stderr
     assert not output.exists()
 
 

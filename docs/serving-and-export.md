@@ -194,9 +194,11 @@ including stderr), with a 15-second timeout. A failed or unrecognized probe is
 inconclusive: conversion remains the final check, without applying the default
 pin's capability set to that checkout. No runtime network lookup is added.
 
-The shared pin `b12423` registers Qwen3.5 dense and MoE text models, so they now
-pass this diagnostic on the default checkout. Older or otherwise selected
-converters may still lack support, and the MTP boundary remains tracked in
+The shared pin `b12423` registers Qwen3.5 dense and MoE text models, so they pass
+this diagnostic on a fresh default checkout. An existing `~/.soup/llama.cpp`
+checkout is not updated automatically; remove it to have the next export clone the
+pinned tag, then rebuild the quantizer. Older or otherwise selected converters
+may still lack support, and the MTP boundary remains tracked in
 [#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
 
 To regenerate capabilities when changing the pin, obtain the unmodified
@@ -214,9 +216,10 @@ commit, source URL, SHA-256 and Git blob identity for the entry script and each
 top-level `conversion/*.py` file used to derive the maps. The generator parses registered
 classes and inherited model kinds without importing or executing upstream code.
 The pin/data guard rejects a changed pin until its capabilities are regenerated.
-The pinned converter imports `transformers` at startup. Soup does not install it
-automatically; install the compatible training extra with
-`pip install "soup-cli[train]"` before default GGUF export.
+GGUF export needs `transformers`, which the converter imports at load. Soup now
+reports it missing before cloning for default GGUF export rather than letting the
+converter fail later; it does not install it automatically. Install the compatible
+training extra with `pip install "soup-cli[train]"`.
 
 ### Building llama.cpp (required for quantized GGUF)
 

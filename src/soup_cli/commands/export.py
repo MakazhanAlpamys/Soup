@@ -335,8 +335,8 @@ def export(
         )
         raise typer.Exit(1)
 
-    # The pinned b12423 converter imports transformers at load time. Refuse
-    # before adapter merging, dependency handling or toolchain cloning instead.
+    # The converter imports transformers at load time. Refuse before adapter
+    # merging, dependency handling or toolchain cloning when it is absent.
     if _transformers_missing():
         console.print(
             "[red]The pinned llama.cpp converter requires transformers, "
@@ -607,7 +607,7 @@ def _merge_adapter(
 # 2.5.1+cu -> 2.2.2+cpu, transformers 4.57 -> 4.46). Soup's `[train]` extra
 # already provides torch / transformers / numpy, so install ONLY the extra
 # packages the convert script needs, unpinned, and never touch the rest.
-# Since the b12423 pin, the converter imports transformers at load time
+# The converter imports transformers at load time
 # (conversion/base.py: `from transformers import AutoConfig`) — but Soup never
 # auto-installs torch or transformers (an install of llama.cpp requirements
 # once replaced a user's CUDA torch, and transformers is part of the [train]
@@ -617,7 +617,7 @@ _CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
 
 
 def _transformers_missing() -> bool:
-    """Is transformers absent? The pinned b12423 converter needs it at import."""
+    """Is transformers absent? The converter needs it at import."""
     import importlib.util
 
     try:
