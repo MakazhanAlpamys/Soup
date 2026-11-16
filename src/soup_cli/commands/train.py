@@ -791,8 +791,43 @@ def _print_fit_panel(
     )
 
 
+def _held_back_base_identity(cfg):
+    """The base revision a held-back run measures its tokenizer at, and then keeps.
+
+    ``soup train`` binds the base to one Hub commit just before its first load
+    (``run_provenance.BaseRevision``). The measurement reads the tokenizer at that same
+    commit: this identity is created here, resolved on the first tokenizer load, and handed
+    to the run (``_base_identity_for_run``), which would otherwise create and resolve its own
+    a moment later. ``None`` under a distributed launch (rank zero resolves and broadcasts the
+    identity there, and that flow is left alone): the tokenizer is then the current revision.
+    A held-back run is transformers on the ``hf`` hub, which is what binding supports.
+    """
+    from soup_cli.utils.run_provenance import BaseRevision
+
+    try:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    except ValueError:
+        world_size = 1
+    if world_size >= 2:
+        return None
+    return BaseRevision(cfg.base, binding_supported=True)
+
+
+def _base_identity_for_run(base: str, binding_supported: bool, early):
+    """The identity the run binds its base with: the one the measurement used, or a new one."""
+    from soup_cli.utils.run_provenance import BaseRevision
+
+    if (
+        early is not None
+        and early.base == base
+        and early.binding_supported == binding_supported
+    ):
+        return early
+    return BaseRevision(base, binding_supported=binding_supported)
+
+
 def _realised_length_verdict(
-    cfg, decision: _FitDecision, dataset, *, trust_remote_code: bool = False
+    cfg, decision: _FitDecision, dataset, *, trust_remote_code: bool = False, identity=None
 ) -> None:
     """Re-decide a deferred refusal on the longest row of the loaded data.
 
@@ -819,12 +854,15 @@ def _realised_length_verdict(
         f"({max_length}); reading the longest row of the data, with the model's tokenizer "
         "from the cache or the Hub, to price it...[/]"
     )
-    measured = longest_row_tokens(
-        cfg,
-        dataset,
-        trust_remote_code=trust_remote_code,
-        remote_code=bool(getattr(getattr(inp, "shape", None), "remote_code", False)),
-    )
+    from soup_cli.utils.run_provenance import base_revision_scope
+
+    with base_revision_scope(identity) if identity is not None else contextlib.nullcontext():
+        measured = longest_row_tokens(
+            cfg,
+            dataset,
+            trust_remote_code=trust_remote_code,
+            remote_code=bool(getattr(getattr(inp, "shape", None), "remote_code", False)),
+        )
     if isinstance(measured, LongestRow) and measured.tokens < max_length:
         priced = max(_MIN_SEQ_LEN, measured.tokens)
         at_row = decide_hardware_fit(
@@ -2023,6 +2061,7 @@ def train(
     # A refusal of a run that pads to its longest row is held back until the data is loaded
     # and its longest row is known (`_realised_length_verdict`, below); anything else the
     # pre-flight decides here, as before.
+    fit_identity = None
     fit_deferred = _hardware_fit_preflight(
         cfg,
         gpu_info,
@@ -2293,7 +2332,11 @@ def train(
         _refuse_over_judge_budget(cfg, dataset)
         if fit_deferred is not None:
             _realised_length_verdict(
-                cfg, fit_deferred, dataset, trust_remote_code=trust_remote_code
+                cfg,
+                fit_deferred,
+                dataset,
+                trust_remote_code=trust_remote_code,
+                identity=_held_back_base_identity(cfg),
             )
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
@@ -2326,7 +2369,14 @@ def train(
     )
     if fit_deferred is not None:
         # Before a run is registered, so a refusal leaves none behind.
-        _realised_length_verdict(cfg, fit_deferred, dataset, trust_remote_code=trust_remote_code)
+        fit_identity = _held_back_base_identity(cfg)
+        _realised_length_verdict(
+            cfg,
+            fit_deferred,
+            dataset,
+            trust_remote_code=trust_remote_code,
+            identity=fit_identity,
+        )
         if not yes:
             _confirm_start_training()
 
@@ -2445,7 +2495,6 @@ def train(
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
         from soup_cli.utils.run_provenance import (
-            BaseRevision,
             base_revision_scope,
             confirm_distributed_base_revision,
             synchronize_base_revision,
@@ -2459,7 +2508,7 @@ def train(
             # Qualify before setup's first RoPE config read or native download.
             mlx_binding_reason = mlx_revision_binding_reason()
             binding_supported = mlx_binding_reason is None
-        base_identity = BaseRevision(run_base, binding_supported=binding_supported)
+        base_identity = _base_identity_for_run(run_base, binding_supported, fit_identity)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)

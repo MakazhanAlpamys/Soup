@@ -291,6 +291,138 @@ def _tokenizer(base: str):
     return AutoTokenizer.from_pretrained(base)
 
 
+# --- the revision the run binds ------------------------------------------------------------
+
+
+_COMMIT = "a" * 40
+
+
+def _bound_identity(base: str):
+    """A ``BaseRevision`` already resolved to a Hub commit, as the run's is after its first load."""
+    from soup_cli.utils.run_provenance import BaseRevision
+
+    identity = BaseRevision(base)
+    identity.revision, identity.source, identity._pending = _COMMIT, "hub_commit", False
+    return identity
+
+
+class TestTheRevisionTheRunBinds:
+    def test_the_tokenizer_is_loaded_at_the_active_base_revision(self, tiny_base, monkeypatch):
+        import transformers
+
+        from soup_cli.utils.run_provenance import base_revision_scope
+
+        tokenizer = _tokenizer(tiny_base)
+        seen = []
+
+        def recording(*args, **kwargs):
+            seen.append(kwargs)
+            return tokenizer
+
+        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", recording)
+        cfg = types.SimpleNamespace(base="owner/model")
+        with base_revision_scope(_bound_identity("owner/model")):
+            realised_length._load_tokenizer(cfg, trust_remote_code=False)
+        realised_length._load_tokenizer(cfg, trust_remote_code=False)
+        assert seen[0]["revision"] == _COMMIT
+        assert "revision" not in seen[1]  # no scope: the repository's current revision
+
+    def test_a_scope_for_another_model_pins_nothing(self, tiny_base, monkeypatch):
+        import transformers
+
+        from soup_cli.utils.run_provenance import base_revision_scope
+
+        tokenizer = _tokenizer(tiny_base)
+        seen = []
+        monkeypatch.setattr(
+            transformers.AutoTokenizer,
+            "from_pretrained",
+            lambda *args, **kwargs: seen.append(kwargs) or tokenizer,
+        )
+        with base_revision_scope(_bound_identity("owner/model")):
+            realised_length._load_tokenizer(
+                types.SimpleNamespace(base="someone/else"), trust_remote_code=False
+            )
+        assert "revision" not in seen[0]
+
+    def test_the_verdict_measures_inside_the_runs_identity_scope(self, tiny_base, monkeypatch):
+        from soup_cli.utils.run_provenance import base_revision_kwargs
+
+        cfg = _config(tiny_base)
+        decision = _held_back(cfg, 100)
+        seen = []
+
+        def fake(cfg, dataset, **kwargs):
+            seen.append(base_revision_kwargs(cfg.base))
+            return LongestRow(tokens=79, rows=3)
+
+        monkeypatch.setattr(realised_length, "longest_row_tokens", fake)
+        _realised_length_verdict(cfg, decision, _dataset(3), identity=_bound_identity(cfg.base))
+        _realised_length_verdict(cfg, decision, _dataset(3))
+        assert seen == [{"revision": _COMMIT}, {}]
+
+    def test_the_run_keeps_the_identity_the_measurement_used(self):
+        early = _bound_identity("owner/model")
+        assert train_mod._base_identity_for_run("owner/model", True, early) is early
+
+    @pytest.mark.parametrize(
+        ("base", "supported"), [("someone/else", True), ("owner/model", False)]
+    )
+    def test_another_base_or_binding_gets_a_fresh_identity(self, base, supported):
+        early = _bound_identity("owner/model")
+        fresh = train_mod._base_identity_for_run(base, supported, early)
+        assert fresh is not early
+        assert (fresh.base, fresh.binding_supported) == (base, supported)
+        assert train_mod._base_identity_for_run("owner/model", True, None).revision is None
+
+    def test_a_single_process_run_gets_an_identity_to_measure_with(self, tiny_base, monkeypatch):
+        monkeypatch.delenv("WORLD_SIZE", raising=False)
+        identity = train_mod._held_back_base_identity(_config(tiny_base))
+        assert identity is not None and identity.base == tiny_base
+        assert identity.binding_supported is True
+
+    def test_a_distributed_launch_leaves_the_identity_to_rank_zero(self, tiny_base, monkeypatch):
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        assert train_mod._held_back_base_identity(_config(tiny_base)) is None
+        monkeypatch.setenv("WORLD_SIZE", "not a number")
+        assert train_mod._held_back_base_identity(_config(tiny_base)) is not None
+
+    def test_soup_train_measures_inside_the_identity_the_run_then_binds(
+        self, train_cli, monkeypatch
+    ):
+        from unittest import mock
+
+        import soup_cli.experiment.tracker as tracker_mod
+        import soup_cli.trainer.dispatch as dispatch
+        from soup_cli.utils.run_provenance import _ACTIVE_BASE
+
+        train_cli.write(3, 12, 5)
+        made, measured_in, run_in = [], [], []
+        real = train_mod._held_back_base_identity
+
+        def recording(cfg):
+            made.append(real(cfg))
+            return made[-1]
+
+        def fake_measure(cfg, dataset, **kwargs):
+            measured_in.append(_ACTIVE_BASE.get())
+            return LongestRow(tokens=79, rows=3)
+
+        def fake_build(cfg, **kwargs):
+            run_in.append(_ACTIVE_BASE.get())
+            raise _RegisteredError
+
+        monkeypatch.setattr(train_mod, "_held_back_base_identity", recording)
+        monkeypatch.setattr(realised_length, "longest_row_tokens", fake_measure)
+        monkeypatch.setattr(tracker_mod, "ExperimentTracker", mock.MagicMock)
+        monkeypatch.setattr(dispatch, "build_trainer", fake_build)
+        train_cli("--yes")
+        # Identity, not equality: a fresh unresolved BaseRevision compares equal to this one.
+        assert len(made) == 1
+        assert len(measured_in) == 1 and measured_in[0] is made[0]
+        assert len(run_in) == 1 and run_in[0] is made[0], "the run created its own identity"
+
+
 # --- which runs the measurement applies to ----------------------------------------------
 
 
@@ -610,6 +742,29 @@ class TestTheVerdict:
             available_vram_gb=decision.report.available_vram_gb,
         )
         assert f"Predicted peak VRAM {at_row.peak_vram_gb:.1f} GB" in screen()
+
+    def test_a_run_whose_peak_fits_the_card_but_not_with_the_margin_is_still_refused(
+        self, tiny_base, screen, monkeypatch
+    ):
+        # The lift needs the 10% margin, not the bare peak. 2,000 tokens, not 79: at 79 the tiny
+        # fixture is priced almost as at 64, so a card in the margin band there is refused at
+        # once by the hold-back and never reaches the verdict.
+        cfg = _config(tiny_base)
+        at_row = decide_hardware_fit(
+            _replace_seq(_input(cfg), 2000), available_vram_gb=1e6
+        )
+        card_gb = (at_row.peak_vram_gb + at_row.required_with_margin_gb) / 2
+        assert at_row.peak_vram_gb < card_gb < at_row.required_with_margin_gb
+        card = {"memory_total_bytes": int(card_gb * 1e9), "memory_total": "fake card"}
+        decision = _hardware_fit_preflight(
+            cfg, card, allow_oom_attempt=False, defer_refusal_to_data=True
+        )
+        assert decision is not None
+        _measure(monkeypatch, LongestRow(tokens=2000, rows=10))
+        with pytest.raises(typer.Exit) as raised:
+            _realised_length_verdict(cfg, decision, _dataset(3))
+        assert raised.value.exit_code == 1
+        assert "Hardware-fit gate" in screen()
 
     def test_a_longest_row_below_the_estimates_floor_is_priced_at_the_floor_and_says_so(
         self, tiny_base, screen, monkeypatch

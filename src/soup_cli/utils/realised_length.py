@@ -85,10 +85,23 @@ def unpriceable_reason(cfg: Any, *, remote_code: bool = False) -> Optional[str]:
 
 
 def _load_tokenizer(cfg: Any, *, trust_remote_code: bool) -> Any:
-    """The run's tokenizer, as ``SFTTrainerWrapper._setup_transformers`` loads it."""
+    """The run's tokenizer, as ``SFTTrainerWrapper._setup_transformers`` loads it.
+
+    At the base revision the run binds (``base_revision_kwargs``: the active
+    ``run_provenance.base_revision_scope``, which ``soup train`` enters around the
+    measurement with the identity the run then keeps), so the rows measured are the rows the
+    trainer will tokenise. With no scope active it is the repository's current revision, as
+    before.
+    """
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=bool(trust_remote_code))
+    from soup_cli.utils.run_provenance import base_revision_kwargs
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.base,
+        trust_remote_code=bool(trust_remote_code),
+        **base_revision_kwargs(cfg.base),
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
