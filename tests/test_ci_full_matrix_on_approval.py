@@ -432,9 +432,12 @@ def _push(
     }
 
 
-def _on_event(event_name: str, *, run_id: str = "800") -> dict[str, Any]:
-    """A ``schedule`` or ``workflow_dispatch`` context: both run on main's tip."""
-    return {
+def _on_event(
+    event_name: str, *, run_id: str = "800", inputs: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """A ``schedule`` or ``workflow_dispatch`` context: both run on main's tip. A dispatch that
+    names an input has an ``inputs`` context (GitHub fills the declared default for the rest)."""
+    context: dict[str, Any] = {
         "github": {
             "workflow": "CI",
             "event_name": event_name,
@@ -444,6 +447,9 @@ def _on_event(event_name: str, *, run_id: str = "800") -> dict[str, Any]:
             "event": {},
         }
     }
+    if inputs is not None:
+        context["inputs"] = inputs
+    return context
 
 
 def _pull_request(

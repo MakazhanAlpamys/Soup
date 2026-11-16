@@ -535,12 +535,13 @@ class TestTheRatchet:
         (not MoE-counted), so 112 bases; and MiniMax-M3 became flagless (its SFT
         recipe loads through the vision path without moe_lora, and its DPO recipe,
         restored after #1393, sets no moe_lora either), so 9 flagless. #275 added
-        the dense Qwen/Qwen3.5-9B-Base for qwen3.5-9b-pretrain: 113 bases."""
+        the dense Qwen/Qwen3.5-9B-Base for qwen3.5-9b-pretrain: 113 bases; and
+        the dense Qwen/Qwen3.5-2B-Base for qwen3.5-2b-pretrain: 114 bases."""
         moe = _moe_bases()
         flagged = _flagged_bases()
         flagless = [b for b in moe if b not in flagged]
 
-        assert len(_record()) == 113
+        assert len(_record()) == 114
         assert len(moe) == 23
         assert len(flagless) == 9, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 13
