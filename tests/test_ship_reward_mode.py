@@ -249,6 +249,25 @@ def test_the_interval_is_the_same_literal_on_every_python():
     assert _reference_interval(PIN_BASE, PIN_TUNED) == (summary.ci_low, summary.ci_high)
 
 
+# Twenty rows where the order statistics next to both ends of the interval are all different
+# values, so that an end taken one place off is a different number (the eight-row sets above have
+# equal neighbours at the ends).
+PIN20_BASE = [
+    0.238, 0.544, 0.37, 0.604, 0.626, 0.066, 0.013, 0.837, 0.259, 0.234,
+    0.996, 0.47, 0.836, 0.476, 0.639, 0.151, 0.635, 0.868, 0.523, 0.741,
+]
+PIN20_TUNED = [
+    0.408, 0.289, 0.601, 0.718, 0.537, 0.0, 0.319, 0.868, 0.462, 0.549,
+    1.0, 0.815, 0.812, 0.737, 0.65, 0.506, 0.95, 0.636, 0.318, 0.593,
+]
+
+
+def test_the_ends_are_the_2_5_and_97_5_percent_order_statistics_not_a_neighbour():
+    summary = build_paired_summary(PIN20_BASE, PIN20_TUNED)
+    assert (summary.ci_low, summary.ci_high) == (-0.006200000000000002, 0.16829999999999998)
+    assert _reference_interval(PIN20_BASE, PIN20_TUNED) == (summary.ci_low, summary.ci_high)
+
+
 def test_the_same_rows_in_any_order_give_the_same_summary():
     order = [5, 2, 7, 0, 3, 6, 1, 4]
     shuffled = build_paired_summary([PIN_BASE[i] for i in order], [PIN_TUNED[i] for i in order])
