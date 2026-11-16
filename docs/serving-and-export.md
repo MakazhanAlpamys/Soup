@@ -925,8 +925,9 @@ soup serve --model ./mole_out --mole ./mole_out --device cuda
 The base model comes from `--base` if set, otherwise the base recorded in the manifest. `--mole`
 requires `--backend transformers` and is mutually exclusive with `--bank` / `--steer` /
 `--adapters` / `--speculative-decoding`. The manifest + gate are cwd-contained, symlink-rejected,
-and size-capped, and the gate loads with `weights_only=True`. Concurrent requests under
-`--mole` are decoded sequentially via an internal lock, as each decode step switches the
+and size-capped, and the gate loads with `weights_only=True`. Because the blend recomputes the
+sequence each step (no KV cache), this path is best for small / demo models. Concurrent requests
+under `--mole` are decoded sequentially via an internal lock, as each decode step switches the
 active adapter on the shared PEFT model. (v0.71.17)
 
 ### Structured Output (JSON Schema / Regex)

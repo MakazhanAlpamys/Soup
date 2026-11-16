@@ -225,29 +225,41 @@ def test_mole_exception_releases_lock():
 
 
 def _run_switch_sensitive_race(supports_cache: bool):
-    """Run two concurrent requests with a switch-sensitive stand-in.
+    """Run two concurrent requests with a switch-sensitive stand-in (#2866).
 
-    Request 1 starts decoding task_0. During task forward, it pauses and waits
-    for a second concurrent request to run. On main without a lock, request 2
-    switches the active adapter to task_1 while request 1 is still inside its
-    decode loop, corrupting request 1's forward. With the lock, request 2 waits
-    until request 1 finishes completely, preserving adapter isolation.
+    Request 1 starts decoding task_1. In request 1's forward under task_1,
+    it records the expected adapter ('task_1') and signals request 2.
+    Request 2 calls generate, which immediately attempts to set_adapter('task_0').
+    With the lock: request 2 blocks until request 1 finishes; the wait times out
+    and request 1's observed adapter matches its expected adapter.
+    Without the lock: request 2 interleaves and switches the active adapter to
+    'task_0' while request 1 is still inside its forward, causing a mismatch.
     """
     mole = _build_loaded_mole(n_adapters=2, supports_cache=supports_cache)
-    observed_adapters_in_req1 = []
-    req1_in_forward = threading.Event()
-    req2_done = threading.Event()
+    mismatches = []
+    req1_in_adapter_forward = threading.Event()
+    req2_called_set_adapter = threading.Event()
 
+    orig_set_adapter = mole.model.set_adapter
     orig_forward = mole.model.forward
+
+    def spied_set_adapter(name: str):
+        orig_set_adapter(name)
+        if threading.current_thread().name == "req2_worker":
+            req2_called_set_adapter.set()
 
     def spied_forward(*args, **kwargs):
         if threading.current_thread().name == "req1_worker":
-            req1_in_forward.set()
-            # Wait briefly to give req2 an opportunity to interleave if unlocked
-            req2_done.wait(timeout=0.05)
-            observed_adapters_in_req1.append(mole.model._adapter)
+            if not getattr(mole.model, "_disabled", False) and mole.model._adapter == "task_1":
+                expected = mole.model._adapter
+                req1_in_adapter_forward.set()
+                req2_called_set_adapter.wait(timeout=0.05)
+                actual = mole.model._adapter
+                if actual != expected:
+                    mismatches.append((expected, actual))
         return orig_forward(*args, **kwargs)
 
+    mole.model.set_adapter = spied_set_adapter
     mole.model.forward = spied_forward
 
     ids1 = torch.tensor([[1, 2]])
@@ -259,9 +271,8 @@ def _run_switch_sensitive_race(supports_cache: bool):
         mole.generate(ids1, attn1, max_new_tokens=2, temperature=0.0)
 
     def worker2():
-        req1_in_forward.wait(timeout=0.5)
+        req1_in_adapter_forward.wait(timeout=0.5)
         mole.generate(ids2, attn2, max_new_tokens=2, temperature=0.0)
-        req2_done.set()
 
     t1 = threading.Thread(target=worker1, name="req1_worker")
     t2 = threading.Thread(target=worker2, name="req2_worker")
@@ -270,11 +281,8 @@ def _run_switch_sensitive_race(supports_cache: bool):
     t1.join(timeout=2.0)
     t2.join(timeout=2.0)
 
-    # When serialized by self._lock, request 1 forwards run only under request 1's
-    # active adapter context, and never under request 2's interleaved adapter.
     assert not mole._lock.locked()
-    assert len(observed_adapters_in_req1) > 0
-    assert all(a.startswith("task_") for a in observed_adapters_in_req1)
+    assert mismatches == []
 
 
 def test_mole_switch_sensitive_reforward_path():
@@ -288,32 +296,66 @@ def test_mole_switch_sensitive_kv_cached_path():
 
 
 def test_mole_streamed_branch_generate_text_lock_behavior():
-    """Streamed endpoint simulates streaming after full generation; lock is free."""
+    """Streamed MoLE branch runs generate_text to completion; lock is released (#2866)."""
     mole = _build_loaded_mole(n_adapters=2)
 
-    class _FakeTokenizer:
-        def decode(self, ids, skip_special_tokens=True):
-            return "sample generated response"
+    class _MockTokenizer:
+        eos_token_id = 1
 
-    mole.tokenizer = _FakeTokenizer()
+        def __call__(self, text, return_tensors=None, **kwargs):
+            ids = torch.tensor([[1, 2, 3]])
+            attn = torch.ones_like(ids)
+            if return_tensors == "pt":
+                return {"input_ids": ids, "attention_mask": attn}
+            return {"input_ids": ids.tolist(), "attention_mask": attn.tolist()}
 
-    # generate_text wraps generate; verify that lock is released once generation completes
-    ids = torch.tensor([[1, 2]])
-    attn = torch.ones_like(ids)
-    out = mole.generate(ids, attn, max_new_tokens=3, temperature=0.0)
-    assert out.shape == (1, 5)
+        def decode(self, token_ids, skip_special_tokens=True):
+            return "sample response text"
+
+    mole.tokenizer = _MockTokenizer()
+    messages = [{"role": "user", "content": "hello"}]
+    response, prompt_tokens, completion_tokens, finish_reason = mole.generate_text(
+        messages, max_tokens=3, temperature=0.0
+    )
+    assert response == "sample response text"
+    assert prompt_tokens == 3
+    assert completion_tokens == 1
+    assert finish_reason == "stop"
     assert not mole._lock.locked()
 
 
-@pytest.mark.parametrize("temperature", [0.0, 0.7])
-@pytest.mark.parametrize("max_tokens", [1, 2, 4])
-def test_mole_multi_item_positive_control(temperature: float, max_tokens: int):
-    """Positive control fixture: single requests produce deterministic valid sequences."""
+@pytest.mark.parametrize(
+    ("max_tokens", "expected_tokens"),
+    [
+        (1, [3, 4, 1]),
+        (2, [3, 4, 1, 1]),
+        (4, [3, 4, 1, 1, 1, 1]),
+    ],
+)
+def test_mole_positive_control_greedy_pinned_tokens(max_tokens: int, expected_tokens: list[int]):
+    """Greedy generation matches exact pinned token sequences on main (#2866)."""
     mole = _build_loaded_mole(n_adapters=2)
     ids = torch.tensor([[3, 4]])
     attn = torch.ones_like(ids)
-    out = mole.generate(ids, attn, max_new_tokens=max_tokens, temperature=temperature)
-    assert out.shape == (1, 2 + max_tokens)
-    assert out[0, 0].item() == 3
-    assert out[0, 1].item() == 4
+    out = mole.generate(ids, attn, max_new_tokens=max_tokens, temperature=0.0)
+    assert out.tolist()[0] == expected_tokens
+    assert not mole._lock.locked()
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "expected_tokens"),
+    [
+        (1, [3, 4, 4]),
+        (2, [3, 4, 4, 0]),
+        (4, [3, 4, 4, 0, 0, 2]),
+    ],
+)
+def test_mole_positive_control_sampled_pinned_tokens(max_tokens: int, expected_tokens: list[int]):
+    """Sampled generation under fixed seed matches exact pinned token sequences (#2866)."""
+    torch.manual_seed(42)
+    mole = _build_loaded_mole(n_adapters=2)
+    ids = torch.tensor([[3, 4]])
+    attn = torch.ones_like(ids)
+    out = mole.generate(ids, attn, max_new_tokens=max_tokens, temperature=0.7)
+    assert out.tolist()[0] == expected_tokens
     assert not mole._lock.locked()
