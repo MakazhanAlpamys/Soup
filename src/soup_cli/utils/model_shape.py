@@ -317,6 +317,34 @@ def guessed_arch(params_b: float) -> tuple[int, int, int]:
     return hidden, layers, hidden * 3
 
 
+#: How close, as a fraction of the embedding table, a checkpoint's count must be to the
+#: config's count plus one table for the head to be taken as stored twice.
+_TIED_HEAD_TOLERANCE = 0.02
+
+
+def _tied_head_stored_twice(
+    params: int, config: dict, text: dict, vocab: int, hidden: int
+) -> bool:
+    """Whether a tied model's checkpoint stores the output head as well as the embedding.
+
+    The model loads one tensor for both (``tie_word_embeddings``), but some checkpoints keep
+    ``lm_head.weight`` beside ``embed_tokens.weight`` (Qwen3-0.6B and 1.7B: 751,632,384 stored
+    against 596,049,920 loaded), so the safetensors count has the table twice. The config's
+    own count (:func:`params_from_config`, tied: the table once) is exact to a few thousand
+    parameters on these models, so a stored count that is that plus one table, within
+    ``_TIED_HEAD_TOLERANCE`` of a table, has stored the head. One that is equal to it (Qwen3-4B,
+    SmolLM2, Qwen2.5-0.5B) has not. Text-only, dense configs only: a multimodal or
+    mixture-of-experts config's count is not exact enough to tell, and is left as stored.
+    """
+    if text is not config or _is_moe(config):
+        return False
+    expected = params_from_config(text)
+    if expected is None:
+        return False
+    table = vocab * hidden
+    return abs(params - table - expected) <= _TIED_HEAD_TOLERANCE * table
+
+
 def shape_from_config(
     config: dict, *, params: Optional[int], params_source: str
 ) -> Optional[ModelShape]:
@@ -327,6 +355,10 @@ def shape_from_config(
     hidden, inter, layers, heads, kv, head_dim, vocab, tied = dims
     if params is None:
         params, params_source = params_from_config(text), "config.json"
+    elif tied and params_source in ("safetensors", "hub safetensors metadata"):
+        # The loaded model holds the table once, whatever the checkpoint stores.
+        if _tied_head_stored_twice(int(params), config, text, vocab, hidden):
+            params = int(params) - vocab * hidden
     if not params:
         return None
     return ModelShape(

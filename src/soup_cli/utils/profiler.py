@@ -385,12 +385,12 @@ def profile_from_config(
     ``vocab_size`` and ``params``, all required together (a parameter count alone is
     refused: it leaves the logits unpriced), and optionally ``num_attention_heads``,
     ``num_key_value_heads``, ``head_dim`` and ``tie_word_embeddings``. ``params`` is a raw
-    parameter count of at least ``vocab_size * hidden_size``. Pass the sum of the tensors the
-    checkpoint stores (its safetensors header sum, which is what this function reads for a
-    model it can see); whether a tied head is stored once or twice varies by checkpoint. With
-    only a loaded count of a tied model, add ``vocab_size * hidden_size``: never too small,
-    at most one head matrix too large. A wrong ``tie_word_embeddings: true`` under-prices
-    k-bit loading, so omit it when unsure.
+    parameter count of at least ``vocab_size * hidden_size``, taken as given. Pass the count the
+    loaded model holds (a tied head once): for a model it can see this function reads the
+    safetensors header sum and drops a tied head the checkpoint stores twice, so it uses the
+    loaded count too (Qwen3-0.6B stores 751,632,384 and loads 596,049,920). A header sum passed
+    for such a checkpoint is one embedding table too high. A wrong ``tie_word_embeddings: true``
+    under-prices k-bit loading, so omit it when unsure.
     The shape is used only when the model's own ``config.json`` cannot be read, which
     otherwise wins (a note says so); the result then has ``shape_source: "caller"``. Weights
     on disk without a ``config.json`` keep their measured parameter count over the caller's.

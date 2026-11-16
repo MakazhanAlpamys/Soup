@@ -574,14 +574,17 @@ _QWEN3_0_6B = {
     "num_key_value_heads": 8,
     "head_dim": 128,
 }
-#: What the evidence rows use: the safetensors header sums both ``embed_tokens`` and the tied
-#: ``lm_head`` that this checkpoint stores. transformers loads 596,049,920.
+#: The safetensors header sums both ``embed_tokens`` and the tied ``lm_head`` that this
+#: checkpoint stores. transformers loads 596,049,920, which the estimate now uses for a model
+#: it reads itself.
 _QWEN3_STORED, _QWEN3_LOADED = 751_632_384, 596_049_920
 
 
-def test_the_stored_and_the_loaded_count_of_a_tied_model_price_apart(unreadable):
-    # The docs say which to pass. The loaded count prices the tied head once, so it is lower by
-    # 2 bytes x vocab x hidden of weights, and 5% more of it through the allocator slack.
+def test_the_stored_and_the_loaded_count_of_a_tied_model_price_apart_by_the_table(unreadable):
+    # A supplied count is taken as given: the estimate corrects a stored-twice tied head only
+    # in a count it reads itself (test_vram_estimate_measured_overhead.py), so the docs say to
+    # pass the loaded count. The stored one is higher by the table, 2 bytes an element of
+    # weights; a bf16 LoRA run's overhead has no per-allocated-byte slack to add to that.
     stored = profile_from_config(
         unreadable, allow_network=False, shape={**_QWEN3_0_6B, "params": _QWEN3_STORED}
     )
@@ -590,7 +593,7 @@ def test_the_stored_and_the_loaded_count_of_a_tied_model_price_apart(unreadable)
     )
     assert _QWEN3_STORED - _QWEN3_LOADED == 151936 * 1024
     gap = stored["total_memory_bytes"] - loaded["total_memory_bytes"]
-    assert gap == pytest.approx(2 * 151936 * 1024 * 1.05, rel=1e-6)
+    assert gap == 2 * 151936 * 1024
 
 
 def test_tie_word_embeddings_changes_the_k_bit_weights(tiny, monkeypatch):

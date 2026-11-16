@@ -26,8 +26,13 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   bases). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
-- ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
-  does not see but the card's total does.
+- ``overhead``: what ``max_memory_allocated`` does not see but the card's total does. For a
+  bf16 LoRA SFT run with a vocabulary-sized loss (the runs the capped measurements of
+  ``benchmarks/evidence/vram-qwen3-0.6b-realised-length.json`` were taken on) it is the CUDA
+  context, the cuBLAS workspace, the temporaries of TRL's entropy metric and the cache the
+  allocator cannot hand back around the fp32 logits tensor, the largest single block
+  (:func:`measured_overhead_applies`); for every other run it is the fixed 0.5 GB and 5% of
+  the allocated terms it was before.
 
 The coefficients come from two-step ``soup train`` runs on an RTX 3060 Laptop
 (``benchmarks/gate-2049-resident-vram.md``), held to a stated band per kind of run by
@@ -188,9 +193,46 @@ DEQUANT_COPIES = 1.0
 # --- overhead ----------------------------------------------------------------------
 
 #: CUDA context and cuBLAS workspaces: on the card, never in ``max_memory_allocated``.
+#: Every run's overhead except a bf16 LoRA run's (``measured_overhead_applies``), and the
+#: context the unextrapolated floor charges (``hardware_fit.unextrapolated_floor``).
 OVERHEAD_FIXED_BYTES = 0.5e9
-#: Allocator slack as a fraction of the allocated peak (reserved over allocated).
+#: Allocator slack as a fraction of the allocated peak (reserved over allocated). The same
+#: runs as ``OVERHEAD_FIXED_BYTES``.
 OVERHEAD_SLACK = 0.05
+
+#: The overhead of a bf16 LoRA run, from the capped runs of Qwen3-0.6B on an RTX 5070 Laptop
+#: (``benchmarks/evidence/vram-qwen3-0.6b-realised-length.json``, ``capped_rows``): the
+#: allocator's cap was lowered until the run no longer trained, so these are what a run needs
+#: rather than what it takes when nothing presses on it. One model family, one card.
+#:
+#: The CUDA context outside torch: the card showed 162 MiB more than torch reserved in every
+#: ``soup bench train`` row.
+CUDA_CONTEXT_BYTES = 162 * 2**20
+#: cuBLAS's workspace: 64.3 MiB allocated after one matmul on this card (two handles of 32 MiB
+#: at compute capability 12.0; ``layer_stream.cublas_workspace_bytes`` charges it too).
+CUBLAS_WORKSPACE_BYTES = 64 * 2**20
+#: TRL's entropy metric (``entropy_from_logits``, trl 0.29.1) holds two fp32 ``[chunk, vocab]``
+#: temporaries at once, ``chunk`` being 128 rows. Fitted to one number (147 MiB against
+#: 2 x 128 x 151,936 x 4 B = 148.4 MiB); a run that failed at a cap of 2,200 MiB died inside
+#: that function.
+ENTROPY_CHUNK_ROWS = 128
+ENTROPY_TEMPORARIES = 2
+#: The cache the allocator cannot hand back around the largest block, as a multiple of the fp32
+#: logits tensor (``batch x seq x vocab x 4 B``). Measured as the need above the allocated peak:
+#: 0.96 to 1.04 of it for a micro-batch of 1,024 tokens (failed at 0.96, trained at 1.04), 1.0
+#: to 1.5 for one of 512 tokens (failed at 1.0, trained at 1.5), at most 0.5 for the two
+#: short-row recipes that trained at their smallest cap; the unusable cache in the failing runs
+#: was 1.045 of the block, and 1.12 in the one short-row run that failed at a cap (a failure
+#: that was not at a threshold: the same recipe trained at a lower cap). One constant fitted to
+#: four recipes of one model.
+FP32_LOGITS_BLOCK_FACTOR = 1.1
+#: Qwen3's QK-norm (``q_norm`` and ``k_norm``, RMSNorm with an fp32 upcast) keeps the fp32
+#: input of both for the backward pass: 4 bytes an element, per token per layer. Measured: the
+#: allocated peak grew by 3.836 MiB a token on this model where the estimate's other terms
+#: give 3.522, a miss of 0.3146 MiB = 11,780 B per token per layer against this term's 12,288
+#: (heads x head_dim 2,048 + kv_heads x head_dim 1,024, at 4 B). The same families without a
+#: QK-norm were within 1% to 6% without it. Other families with a QK-norm are not measured.
+QK_NORM_FP32_BYTES = 4.0
 
 TERM_NAMES = (
     "weights",
@@ -247,8 +289,14 @@ class RunSpec:
     #: a card without bf16 hardware, ``grpo_fp16``, or a run measured before #2609. False
     #: is the bf16 default (``KBIT_UNQUANTIZED_BYTES``).
     kbit_fp32: bool = False
+    #: The trainer's task (``soup.yaml``'s ``task``). The capped runs behind the bf16 LoRA
+    #: overhead and the QK-norm term were ``sft`` runs, so every other task keeps the old
+    #: overhead (``measured_overhead_applies``).
+    task: str = "sft"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.task, str):
+            raise TypeError(f"task must be str, got {type(self.task).__name__}")
         if not isinstance(self.kbit_fp32, bool):
             raise TypeError(f"kbit_fp32 must be bool, got {type(self.kbit_fp32).__name__}")
         if not isinstance(self.lm_head, bool):
@@ -368,6 +416,11 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
     )
     boundary = tokens * shape.hidden_size * BOUNDARY_BYTES[mode]
     layers = shape.num_layers
+    if measured_activations_apply(shape, run):
+        # Part of what a layer keeps, so it follows the checkpointing as the rest does.
+        per_layer += tokens * QK_NORM_FP32_BYTES * (
+            (shape.num_attention_heads + shape.num_kv_heads) * shape.head_dim
+        )
     if run.checkpointing == "full":
         total = layers * boundary + per_layer
     elif run.checkpointing == "medium":
@@ -376,6 +429,55 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
     else:
         total = layers * per_layer
     return math.ceil(total)
+
+
+def measured_activations_apply(shape: ModelShape, run: RunSpec) -> bool:
+    """Whether the QK-norm term is charged: a Qwen3 base under bf16 LoRA.
+
+    The runs it was measured on: SFT on the transformers backend. k-bit loading keeps its own
+    activation terms, which already price the 4-bit rows above their allocated peaks (by 3%
+    and 12%), a full fine-tune was not measured, and no other family with a QK-norm was.
+    """
+    return (
+        shape.model_type == "qwen3"
+        and run.peft in ("lora", "dora")
+        and run.quant == "none"
+        and run.task == "sft"
+        and run.backend == "transformers"
+    )
+
+
+def measured_overhead_applies(shape: ModelShape, run: RunSpec) -> bool:
+    """Whether the overhead is the measured one: bf16 LoRA on a vocabulary-sized loss.
+
+    Only these runs were capped to find what they need: SFT on the transformers backend, LoRA
+    on a bf16 base, the loss over the vocabulary built in one piece. The 4-bit runs, capped
+    too (Qwen3-0.6B, 158 and 1,024 tokens per micro-batch), trained at caps of 1,500 and
+    5,306 MiB, which is 1,662 and 5,468 MiB on the card, against estimates of about 1.9 and
+    5.9 GB: the estimate's allocated terms are already 3% and 12% above their allocated peaks,
+    so they keep today's overhead. A full fine-tune, 8-bit loading, the packed quantizations,
+    every other task and backend and a head-less or lossless task were not capped.
+    """
+    return (
+        run.peft in ("lora", "dora")
+        and run.quant == "none"
+        and run.task == "sft"
+        and run.backend == "transformers"
+        and run.lm_head
+        and run.logits_loss
+        and shape.vocab_size is not None
+    )
+
+
+def measured_overhead_bytes(shape: ModelShape, run: RunSpec) -> int:
+    """The overhead of a run ``measured_overhead_applies`` to, in bytes."""
+    vocab = shape.vocab_size or 0
+    tokens = run.batch_size * run.seq_len
+    entropy = ENTROPY_TEMPORARIES * min(ENTROPY_CHUNK_ROWS, tokens) * vocab * 4
+    block = tokens * vocab * 4
+    return math.ceil(
+        CUDA_CONTEXT_BYTES + CUBLAS_WORKSPACE_BYTES + entropy + FP32_LOGITS_BLOCK_FACTOR * block
+    )
 
 
 def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
@@ -463,7 +565,11 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
     )
     terms["optimizer_step"] = max(step - forward_backward, 0)
     allocated = sum(terms.values())
-    terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
+    terms["overhead"] = (
+        measured_overhead_bytes(shape, run)
+        if measured_overhead_applies(shape, run)
+        else math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
+    )
     notes = []
     if shape.vocab_size is None:
         notes.append(

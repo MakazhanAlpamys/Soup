@@ -123,6 +123,8 @@ class HardwareFitInput:
     #: A 4-bit or 8-bit run that keeps its embeddings, norms and untied head in fp32: a card
     #: without bf16 hardware, or ``grpo_fp16`` (``RunSpec.kbit_fp32``, #2609).
     kbit_fp32: bool = False
+    #: The trainer's task; only ``sft`` has the measured overhead (``RunSpec.task``).
+    task: str = "sft"
 
     def __post_init__(self) -> None:
         if not isinstance(self.kbit_fp32, bool):
@@ -647,6 +649,7 @@ def hardware_fit_input_or_reason(
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
             kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
+            task=str(task),
         )
     except (ValueError, TypeError, ArithmeticError):
         # Any other input the estimate refuses: no one field is known to be the cause.
@@ -679,6 +682,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             backend=inp.backend,
             activation_offloading=inp.activation_offloading,
             kbit_fp32=inp.kbit_fp32,
+            task=inp.task,
         ),
     )
     return breakdown_from_estimate(est)

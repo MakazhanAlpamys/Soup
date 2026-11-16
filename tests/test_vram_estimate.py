@@ -214,11 +214,24 @@ class TestDequant:
 
 
 def test_overhead_is_on_top_of_everything_allocated(qwen):
+    # 4-bit loading keeps the overhead it always had: 0.5 GB of CUDA context and workspaces,
+    # plus 5% of what is allocated. (A bf16 LoRA run's is measured: see the next test.)
+    est = estimate_vram(qwen, _run(quant="4bit", peft="qlora"))
+    allocated = sum(v for k, v in est.terms.items() if k != "overhead")
+    assert est.total_bytes == allocated + est.terms["overhead"]
+    assert est.terms["overhead"] == math.ceil(0.5e9 + 0.05 * allocated)
+
+
+def test_a_bf16_lora_overhead_is_the_context_the_workspace_the_chunks_and_the_block(qwen):
+    # test_vram_estimate_measured_overhead.py pins the arithmetic; this pins that the term is
+    # on top of the allocated ones and is not the old 0.5 GB + 5% (batch 1 x 1,024 tokens:
+    # 162 + 64 + 2 x 128 x 151,936 x 4 B + 1.1 x 1,024 x 151,936 x 4 B).
     est = estimate_vram(qwen, _run())
     allocated = sum(v for k, v in est.terms.items() if k != "overhead")
     assert est.total_bytes == allocated + est.terms["overhead"]
-    # 0.5 GB of CUDA context and workspaces, plus 5% of what is allocated.
-    assert est.terms["overhead"] == math.ceil(0.5e9 + 0.05 * allocated)
+    assert est.terms["overhead"] != math.ceil(0.5e9 + 0.05 * allocated)
+    expected = (226 << 20) + 2 * 128 * 151936 * 4 + 1.1 * 1024 * 151936 * 4
+    assert est.terms["overhead"] == pytest.approx(expected, abs=2)
 
 
 def test_every_term_is_reported(qwen):
