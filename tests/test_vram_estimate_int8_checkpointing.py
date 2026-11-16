@@ -31,6 +31,7 @@ from soup_cli.utils.model_shape import shape_from_config
 from soup_cli.utils.vram_estimate import RunSpec, estimate_vram
 
 EVIDENCE = Path(__file__).parents[1] / "benchmarks/evidence/vram-int8-checkpointing.json"
+EVIDENCE_2049 = Path(__file__).parents[1] / "benchmarks/evidence/vram-2049-resident.json"
 
 #: The bands of ``tests/test_vram_estimate_calibration.py``, per kind of run.
 BANDS = {
@@ -199,6 +200,35 @@ def test_the_controls_outside_the_band_are_not_moved_by_the_term(monkeypatch):
     before = {_ident(row): _ratio(row) for row in controls}
     _zero_term(monkeypatch)
     assert {_ident(row): _ratio(row) for row in controls} == before
+
+
+def test_the_term_leaves_every_2049_row_untouched(monkeypatch):
+    """#2049 measured no 8-bit run with checkpointing (its three 8-bit rows ran without
+    it), so the term moves none of its 42 estimates, on either setting, and
+    ``tests/test_vram_estimate_calibration.py`` holds them to its bands unchanged."""
+    rows = json.loads(EVIDENCE_2049.read_text(encoding="utf-8"))["rows"]
+    assert len(rows) == 42
+
+    def estimates() -> list[int]:
+        out = []
+        for row in rows:
+            config, run = row["config"], row["run"]
+            shape = shape_from_config(config, params=config["params"], params_source="safetensors")
+            quant = run["quantization"]
+            peft = "full" if run["lora_r"] == 0 else ("qlora" if quant == "4bit" else "lora")
+            for kbit_fp32 in (False, True):
+                spec = RunSpec(
+                    seq_len=run["seq"], batch_size=run["batch"], quant=quant, peft=peft,
+                    optimizer=run["optimizer"],
+                    gradient_checkpointing=run["gradient_checkpointing"], lora_r=run["lora_r"],
+                    target_modules=run["target_modules"], kbit_fp32=kbit_fp32,
+                )
+                out.append(estimate_vram(shape, spec).total_bytes)
+        return out
+
+    before = estimates()
+    _zero_term(monkeypatch)
+    assert estimates() == before
 
 
 @pytest.mark.parametrize(

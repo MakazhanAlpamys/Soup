@@ -187,7 +187,9 @@ All 42. The term applies only to 8-bit loading with gradient checkpointing (`ful
 `medium`), and the three 8-bit rows of
 [`evidence/vram-2049-resident.json`](evidence/vram-2049-resident.json) all ran without
 checkpointing; the other 39 are bf16 LoRA, 4-bit and full fine-tuning. So
-`tests/test_vram_estimate_calibration.py` passes unchanged. Outside the evidence, `soup
+`tests/test_vram_estimate_calibration.py` passes unchanged, and
+`test_the_term_leaves_every_2049_row_untouched` checks that all 42 estimates are the same
+with and without the term, on either setting. Outside the evidence, `soup
 train`'s pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` give a higher
 estimate for every 8-bit run with checkpointing, and the same for every other run.
 
