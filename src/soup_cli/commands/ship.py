@@ -662,6 +662,16 @@ def _resolve_generators(
     return base_gen, tuned_gen
 
 
+def _finite_number(value: object) -> bool:
+    """A real, finite number: a bool is not one, and an integer beyond float range is not finite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer too large for a float
+        return False
+
+
 def _metric_leg_score(results: "EvalResults") -> LegScore:
     """One side of the metric leg: its accuracy, with the per-row scores and flags behind it.
 
@@ -827,10 +837,7 @@ def _build_judge_scorer(
             if isinstance(scores, list) and len(scores) == len(tasks)
             else None
         )
-        if row_scores is not None and all(
-            isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
-            for raw in row_scores
-        ):
+        if row_scores is not None and all(_finite_number(raw) for raw in row_scores):
             # The rows are scored on the number's own scale, (score - min) / span, NOT clamped
             # (a score outside the scale stays a different row; the per-row file then cannot hold
             # it and is left out). The reported number stays the evaluator's own, exactly as

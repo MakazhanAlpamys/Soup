@@ -335,8 +335,9 @@ class LegScore(float):
     so ``truncated`` holds side A's flags and ``truncated_other`` side B's. ``failures`` counts
     the generations that raised and were swallowed. For the per-row file a leg also keeps the
     ``answers`` it was scored on, which of them ``failed_rows``, and the ``tasks`` behind them
-    (all in task order); ``value`` is then the ``row_mean`` of ``row_scores``, so the file's
-    mean is the reported number.
+    (all in task order). ``value`` is the number the leg reports: the ``row_mean`` of
+    ``row_scores`` exactly for ``metric``, and the evaluator's own number for ``judge_score``,
+    which the rows add up to within ``JUDGE_MEAN_TOLERANCE`` (it is never rebuilt from them).
     """
 
     row_scores: Optional[Tuple[float, ...]]

@@ -175,11 +175,13 @@ def task_rows_path(anchor: str) -> str:
     name = os.path.basename(path)
     if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in name):
         raise ValueError(
-            f"the task-rows file name for {quote_path(anchor)} has a control character"
+            f"the task-rows file name for {quote_path(anchor)} has a control character; "
+            "use a plain --output name"
         )
     if "\\" in name or "/" in name:
         raise ValueError(
-            f"the task-rows file name for {quote_path(anchor)} would contain a path separator"
+            f"the task-rows file name for {quote_path(anchor)} would contain a path separator; "
+            "use a plain --output name"
         )
     if os.name == "nt":
         size, unit = len(name.encode("utf-16-le", "surrogatepass")) // 2, "UTF-16 units"
@@ -188,7 +190,7 @@ def task_rows_path(anchor: str) -> str:
     if size > _MAX_NAME_UNITS:
         raise ValueError(
             f"the task-rows file name for {quote_path(anchor)} is too long "
-            f"({size} {unit}; at most {_MAX_NAME_UNITS} are allowed)"
+            f"({size} {unit}; at most {_MAX_NAME_UNITS} are allowed); use a shorter --output name"
         )
     reason = task_rows_pointer_error(name)
     if reason is not None:
