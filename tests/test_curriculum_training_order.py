@@ -37,7 +37,7 @@ def _no_wandb(monkeypatch):
 
 # A real, tiny checkpoint on disk. Duplicated from
 # test_issue1223_evaluate_val_split.py deliberately, as the suites around it do,
-# so this file stays runnable on its own.
+# so this file stays runnable on its own; it also records `architectures`.
 def _tiny_llama_dir(root: Path, vocab: int = 64, hidden: int = 64) -> str:
     import torch
     from safetensors.torch import save_file
@@ -56,6 +56,8 @@ def _tiny_llama_dir(root: Path, vocab: int = 64, hidden: int = 64) -> str:
         max_position_embeddings=128,
     )
     model = LlamaForCausalLM(config).to(torch.float32).eval()
+    # As a saved checkpoint records it; multipack's architecture check reads it.
+    config.architectures = ["LlamaForCausalLM"]
     weights = root / "model"
     weights.mkdir(parents=True, exist_ok=True)
     state = {k: v.contiguous() for k, v in model.state_dict().items()}
@@ -100,6 +102,23 @@ def _raft_rows() -> list[dict]:
         }
         for count in _WORD_COUNTS
     ]
+
+
+def _write_pretokenised_cache(path: Path) -> None:
+    """A ``soup data preprocess``-shaped cache without ``metadata.json`` (loaded as
+    trusted), one row per answer, in file order."""
+    from datasets import Dataset
+
+    Dataset.from_list(
+        [
+            {
+                "input_ids": [1, 6] + [4] * count + [2],
+                "attention_mask": [1] * (count + 3),
+                "labels": [-100, -100] + [4] * count + [2],
+            }
+            for count in _WORD_COUNTS
+        ]
+    ).save_to_disk(str(path))
 
 
 def _build(tmp_path, monkeypatch, *, curriculum: bool, data=None, training=None, rows=None):
@@ -205,13 +224,17 @@ class TestWhichPathsKeepTheOrder:
         }
         assert curriculum_keeps_sorted_order(**flags) is expected
 
-    def test_raft_epoch_shuffle_reads_the_sorted_rows_in_order(self, tmp_path, monkeypatch):
-        """The shuffle re-permutes the documents inside each row per epoch; the rows
-        themselves come in the sorted order, shortest answer first."""
+    @pytest.mark.parametrize(
+        "epoch_shuffle", [True, False], ids=["epoch-shuffle", "baked-order"]
+    )
+    def test_raft_reads_the_sorted_rows_in_order(self, tmp_path, monkeypatch, epoch_shuffle):
+        """Both RAFT builders keep the rows in the sorted order. ``raft_epoch_shuffle``
+        re-permutes the documents inside each row per epoch, not the rows, so with or
+        without it the rows come shortest answer first."""
         _requires_train_extra()
         wrapper = _build(
             tmp_path, monkeypatch, curriculum=True,
-            data={"format": "raft", "raft_epoch_shuffle": True, "max_length": 128},
+            data={"format": "raft", "raft_epoch_shuffle": epoch_shuffle, "max_length": 128},
             rows=_raft_rows(),
         )
 
@@ -224,10 +247,21 @@ class TestWhichPathsKeepTheOrder:
         assert lengths == sorted(lengths)
         assert len(set(lengths)) == len(lengths)
 
-    def test_packing_keeps_the_random_sampler(self, tmp_path, monkeypatch):
-        """``bfd`` packs the longest rows first, so a sequential read would run long to
-        short: the sampler stays random, as before."""
+    @pytest.mark.parametrize("path", ["packing", "multipack", "pretokenised"])
+    def test_a_path_left_as_it_is_keeps_the_random_sampler(self, tmp_path, monkeypatch, path):
+        """``packing`` (``bfd`` packs the longest rows first, so a sequential read would
+        run long to short), ``multipack`` (its FFD sampler owns the dataloader) and a
+        pre-tokenised dataset (the cached rows replace the sorted ones) keep the random
+        sampler, as before. Nothing is refused: each run still builds its trainer."""
         _requires_train_extra()
-        wrapper = _build(tmp_path, monkeypatch, curriculum=True, training={"packing": True})
+        data, training = {}, {}
+        if path == "pretokenised":
+            _write_pretokenised_cache(tmp_path / "tok")
+            data = {"format": "pre_tokenized", "tokenized_path": "tok"}
+        else:
+            training = {path: True}
+        wrapper = _build(
+            tmp_path, monkeypatch, curriculum=True, data=data, training=training
+        )
 
         assert wrapper.trainer.args.train_sampling_strategy == "random"
