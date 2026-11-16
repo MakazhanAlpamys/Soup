@@ -10,15 +10,14 @@
 > 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
 > every further 512 tokens costs about 1 GB more (see
 > [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
-> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
-> `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
-> `kto` still hold one copy of the output head per step) — see
-> [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
-> You can also select `dpo`, `orpo` or `simpo` with `task: preference` and
-> `training.preference_loss`. The same streaming restrictions apply: use a concrete
-> `batch_size`; `stream_vram_probe`, `stream_loss_chunk` and `stream_recompute` other than
-> `on` remain SFT-only. IPO, BCO and `preference_loss_weights` do not stream yet.
+> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, and `bco`. DPO
+> uses a frozen reference adapter on the streamed base. KTO and BCO also use the
+> same base for the reference pass. On untied checkpoints those three tasks hold
+> a private copy of the output head for backward. See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Select `dpo`, `orpo`, `simpo`, or `bco` with `task: preference` and
+> `training.preference_loss`, or use the loss as the task name. Use a concrete
+> `batch_size`. `stream_vram_probe`, `stream_loss_chunk`, and `stream_recompute`
+> other than `on` remain SFT-only. Streaming refuses IPO and `preference_loss_weights`.
 
 **Contents:**
 
@@ -1500,6 +1499,9 @@ frozen reference.
 
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
+
+The streamed BCO T4 checks use `batch_size: 2` with both labels and
+`gradient_accumulation_steps: 1`; other batch shapes have no CUDA measurement.
 
 **When the prompt is cut, for all six preference tasks (transformers
 backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`

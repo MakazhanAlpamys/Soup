@@ -288,6 +288,8 @@ class TestEveryConversationalTrainerIsWired:
         # #1391: PPO refuses a train set smaller than one rollout batch
         # (batch_size 2 x gradient_accumulation_steps 4) before loading anything.
         rows = [{"prompt": "hi"}] * 8 if task == "ppo" else []
+        if task == "bco":
+            rows = [{"prompt": "hi", "chosen": "good answer", "rejected": "bad answer"}]
         with pytest.raises(StopAfterTemplateError):
             wrapper.setup({"train": rows})
         assert wrapper.tokenizer.chat_template == marker, task

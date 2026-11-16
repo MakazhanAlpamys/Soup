@@ -1,0 +1,37 @@
+[
+  {
+    "mutation": "refill",
+    "changed": "_STREAM_REFILL_BEFORE_BACKWARD = True",
+    "test": "test_untied_streamed_loss_and_gradients_match_resident",
+    "exit_code": 1,
+    "caught": true
+  },
+  {
+    "mutation": "cleanup",
+    "changed": "with self._training_context(",
+    "test": "test_wrapper_closes_stream_runtime_when_training_raises",
+    "exit_code": 1,
+    "caught": true
+  },
+  {
+    "mutation": "checkpoint-save",
+    "changed": "self._attach_streamed_save_guard()",
+    "test": "test_wrapper_rejects_empty_streamed_adapter[checkpoint]",
+    "exit_code": 1,
+    "caught": true
+  },
+  {
+    "mutation": "final-save",
+    "changed": "self._assert_streamed_adapter_saved(self._output_dir)",
+    "test": "test_wrapper_rejects_empty_streamed_adapter[final]",
+    "exit_code": 1,
+    "caught": true
+  },
+  {
+    "mutation": "row-budget",
+    "changed": "_STREAM_REFILL_BEFORE_BACKWARD = True",
+    "test": "test_streamed_budget_counts_the_loss_batch_shape",
+    "exit_code": 1,
+    "caught": true
+  }
+]
