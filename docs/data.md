@@ -30,6 +30,7 @@
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
 - [Data Recipe DAG Runner (`soup data recipe --execute`)](#data-recipe-dag-runner-soup-data-recipe---execute)
+- [Train/evaluation leakage check](#trainevaluation-leakage-check)
 
 ---
 
@@ -153,6 +154,10 @@ taxonomy: "82% code" means 82% of rows landed in a cluster whose top terms look
 like code. Requires `[train]`.
 
 ## Canaries (`soup data canary insert|check`)
+
+The canary commands display paths, diagnostics and exposure-table secrets literally,
+with terminal controls and bidi marks removed from the display. Dataset/manifest/report
+contents, scoring inputs, verdicts and secret-file permissions remain unchanged.
 
 Prove whether a model memorized your data — for leak detection and provenance.
 
@@ -660,6 +665,10 @@ contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a t
 as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
 error is reported with its code cell and line.
 
+A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
+names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
+with a warning naming its keys, and the template is not carried over.
+
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
 The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
@@ -1100,9 +1109,17 @@ data:
 resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
 `orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
 vision and audio paths whatever the backend (they run their transformers setup before the
-backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
-`mlx`, and `training.stream_layers` never add them, so a config setting them there is
-refused at load, naming which of those applies (#1358).
+backend is read). On `backend: mlx`, text SFT supports native vocabulary expansion
+when `training.quantization: none` on dense causal models (`mlx_lm.models.llama` layout)
+whose base embedding row count matches the tokenizer vocabulary length (#1994). Special tokens
+are registered first to ensure semantic precedence, whereas `backend: transformers`
+(`apply_vocab_expansion`) registers ordinary tokens first. New rows are
+initialized with a normal distribution matching the base embedding's std and dtype.
+Saved adapters include separate `added_tokens.safetensors` and `added_tokens_info.json`
+sidecar artifacts, while downstream consumers (`soup infer`, `soup chat`, `soup merge`)
+explicitly refuse expanded vocabulary MLX adapters until unified loader support lands.
+Any other task on MLX, quantized MLX models, `backend: unsloth` (text SFT and every other task),
+and `training.stream_layers` refuse vocabulary expansion at config load, naming which applies (#1358).
 
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
@@ -1662,3 +1679,41 @@ synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.
+
+
+## Train/evaluation leakage check
+
+```bash
+soup data leakage --train train.jsonl --eval eval.jsonl --samples 5
+soup data leakage --train train.jsonl --eval eval.jsonl --json
+```
+
+This read-only check reports the number and percentage of **eval records** whose
+extracted input text exactly matches any train input. Each eval record counts
+once, even when several train records match. Inputs must be nonempty JSONL
+objects under the current directory; malformed records or unusable input text
+are refused instead of being silently skipped. Neither file is modified.
+Both files are loaded fully into memory, within the loader's per-file caps of
+1 GiB and 1,000,000 records.
+
+Matching uses the shared text extractor on input fields: `prompt` (including
+message-list prompts), Alpaca `instruction`/`input`/`system`, ChatML `messages`,
+ShareGPT `conversations`, preference conversation prefixes, and plain
+`text`/`content`/`query`. For complete conversations, only the final assistant
+answer is excluded; previous turns stay in the context. Preference conversations
+must agree on their input prefix. Thus the same question with different answers
+still matches. Prompt-only preference strings require an explicit `prompt` field.
+
+Only outer whitespace is stripped; case and internal whitespace remain exact.
+Roles and message boundaries are not part of the match: message texts are joined
+with newlines, so one message `a\nb` matches two messages `a` and `b`.
+This compares extracted textual inputs, not rendered chat-template tokens,
+images, semantic similarity, or near-duplicates. A clean result only describes
+this exact check on these two files.
+
+The JSON report includes counts, percentage and up to `--samples` example pairs
+(default 5, range 0–20), with 160-character prompt previews and the number of
+matching train records. Record numbers are one-based logical JSONL records,
+excluding blank lines. Examples use the first matching train record and follow
+eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
+There is no automatic training hook or dataset filtering.

@@ -10,6 +10,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from soup_cli.utils import stream_inference
+from soup_cli.utils.checkpoint_files import (
+    HUB_FALLBACK_ALLOW_PATTERNS,
+    HUB_FALLBACK_IGNORE_PATTERNS,
+)
+
 _ADAPTER_PREFIX = "base_model.model."
 _LORA_A = ".lora_A.weight"
 _LORA_B = ".lora_B.weight"
@@ -97,6 +103,20 @@ def load_adapter(adapter_dir: Path) -> Tuple[Dict[str, Any], Dict[str, Tuple[Any
             raise LowMemoryMergeError(
                 f"adapter_config.json sets {field!r}, which the low-memory merge does not support"
             )
+    # PiSSA, OLoRA, CorDA and similar initializations rewrite the base weight at
+    # init (W_res = W - scaling * B0 @ A0). An adapter saved without converting it
+    # back is only correct on that rewritten base: peft's regular merge re-runs the
+    # init when it loads, but adding scaling * B @ A to the original W here would
+    # silently write neither the base nor the trained model. Only initializations
+    # that leave the base weight alone are merged; everything else takes the regular
+    # merge (#2722). The rule is the function the streamed-inference adapter loader
+    # refuses on, called through its module so both loaders reach the same one.
+    init = config.get("init_lora_weights", True)
+    if not stream_inference.is_plain_lora_init(init):
+        raise LowMemoryMergeError(
+            f"adapter_config.json sets init_lora_weights={init!r}, which can rewrite the "
+            "base weights at initialization; the low-memory merge does not support it"
+        )
 
     lora_scaling(config)
     _flag(config, "fan_in_fan_out")
@@ -241,7 +261,11 @@ def _weight_files(
         return names, index
     if (base_dir / _SINGLE_NAME).is_file():
         return [_SINGLE_NAME], None
-    raise LowMemoryMergeError(f"no .safetensors weights found in {base_dir}")
+    raise LowMemoryMergeError(
+        f"no .safetensors weights found in {base_dir}: the merge reads {_SINGLE_NAME} or "
+        f"the shards {_INDEX_NAME} names; a consolidated*.safetensors copy is never read, "
+        "and is not downloaded from the Hub"
+    )
 
 
 def _preflight(
@@ -426,8 +450,35 @@ def merge_low_memory(
             shutil.rmtree(staging, ignore_errors=True)
 
 
+def _copied_suffixes(trust_remote_code: bool) -> Tuple[str, ...]:
+    """The suffixes a merge copies beside the weights.
+
+    ``.py`` only when the user trusts remote code: an untrusted model's code is
+    neither copied from a local base nor downloaded from the Hub. The one place
+    that rule is written, so :func:`hub_download_patterns` and
+    :func:`_support_files` cannot drift apart (#2235).
+    """
+    return _COPIED_SUFFIXES + ((".py",) if trust_remote_code else ())
+
+
+def hub_download_patterns(trust_remote_code: bool) -> Tuple[List[str], List[str]]:
+    """``allow_patterns`` and ``ignore_patterns`` for fetching a Hub base to merge.
+
+    Built from the same suffixes :func:`_support_files` copies, so the files a
+    Hub base downloads and the files a local base copies cannot drift apart
+    (#2235). The weights are the ``fallback`` rule's own Hub patterns from
+    :mod:`soup_cli.utils.checkpoint_files`: every ``*.safetensors`` except a
+    ``consolidated*`` copy at the top level or in a subdirectory, which is a
+    second copy of the weights that the merge never reads.
+    """
+    allow = list(HUB_FALLBACK_ALLOW_PATTERNS) + [
+        f"*{suffix}" for suffix in _copied_suffixes(trust_remote_code)
+    ]
+    return allow, list(HUB_FALLBACK_IGNORE_PATTERNS)
+
+
 def _support_files(base_dir: Path, roots: List[str], trust_remote_code: bool) -> List[Path]:
-    suffixes = _COPIED_SUFFIXES + ((".py",) if trust_remote_code else ())
+    suffixes = _copied_suffixes(trust_remote_code)
     found = []
     for entry in sorted(base_dir.iterdir()):
         if entry.name == _INDEX_NAME or not entry.name.endswith(suffixes):

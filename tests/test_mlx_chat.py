@@ -66,7 +66,12 @@ def test_native_chat_cancels_without_an_assistant_reply(tmp_path, monkeypatch, i
 
 @pytest.mark.parametrize('options,code,diagnostic', [
     (['--temperature', 'nan'], 1, 'temperature'), (['--device', 'cuda'], 1, 'device'),
-    (['--max-tokens', '0'], 1, 'max_tokens'), (['--hub', 'modelscope'], 1, 'hub'),
+    # #2756: the bound on --max-tokens is a parse-time one now, so 0 is
+    # refused before the MLX check ever runs.
+    (['--max-tokens', '0'], 2, '--max-tokens'), (['--hub', 'modelscope'], 1, 'hub'),
+    # The value above 16384 still reaches the MLX check, which owns that
+    # bound; without the max_tokens argument here the check would not see it.
+    (['--max-tokens', '16385'], 1, 'max_tokens'),
     (['--backend', 'unknown'], 2, 'must be transformers or mlx'),
 ])
 def test_native_chat_option_refusals_precede_loading(tmp_path, options, code, diagnostic):
