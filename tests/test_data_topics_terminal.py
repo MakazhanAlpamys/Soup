@@ -87,6 +87,40 @@ def test_missing_dataset_strips_controls_from_the_display():
     assert _not_shown(text)
 
 
+@pytest.mark.parametrize("kind", ["directory", "malformed-json"])
+def test_unreadable_dataset_reports_the_path_before_embedding(monkeypatch, kind):
+    path = Path("input[draft].json")
+    if kind == "directory":
+        path.mkdir()
+    else:
+        path.write_text("{", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "soup_cli.commands.data_topics.embed_texts",
+        lambda *a, **k: pytest.fail("an unreadable dataset cannot be embedded"),
+    )
+    result = _topics(str(path), "--output", "report.json")
+
+    assert result.exit_code == 1
+    assert "Cannot load dataset input[draft].json:" in _plain(result)
+    assert not Path("report.json").exists()
+
+
+def test_report_destination_directory_reports_write_failure(dataset, embeddings):
+    path = Path("report[draft].json")
+    path.mkdir()
+    child = path / "keep.json"
+    child.write_text("keep", encoding="utf-8")
+
+    result = _topics(dataset, "--output", str(path))
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Cannot write --output report[draft].json:" in text
+    assert "Report written:" not in text
+    assert child.read_text(encoding="utf-8") == "keep"
+
+
 @pytest.mark.parametrize("name", _NAMES)
 def test_output_outside_cwd_is_named_as_typed(dataset, name):
     result = _topics(dataset, "--output", f"../{name}")

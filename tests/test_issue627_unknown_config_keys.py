@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from soup_cli.config.unknown_keys import (
+    NO_SUGGESTION_REMEDY,
     UNKNOWN_KEY_REJECTION_VERSION,
     find_unknown_config_keys,
     format_unknown_keys,
@@ -1015,7 +1016,9 @@ class TestTheLoaderIsActuallyWiredUp:
         lines = buffer.getvalue().splitlines()
         assert lines[:2] == ["Config validation error:", ""], lines
         body = lines[2:]
-        assert len(body) == 3, lines
+        # the key with nothing to suggest adds one next-step line at the end (#1816)
+        assert len(body) == 4 and body[-1] == f"  {NO_SUGGESTION_REMEDY}", lines
+        body = body[:-1]
         assert all(line.startswith("  unknown config key '") for line in body), lines
         for key in ("data.formatt", "training.quantizaton", "training.zzqqxx_unrelated"):
             assert sum(f"'{key}'" in line for line in body) == 1, (key, lines)
@@ -1204,6 +1207,7 @@ class TestTheReportIsSafeForTheTerminal:
             "",
             "  unknown config key 'training.zzqq unknown config key 'training.ok' - "
             "refused. tail' - refused.",
+            f"  {NO_SUGGESTION_REMEDY}",
         ], lines
 
     def test_the_finding_itself_carries_no_line_break(self) -> None:

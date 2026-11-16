@@ -378,7 +378,8 @@ KNOWN_UNCONSUMED = {
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
-    "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
+    "training.warmup_auto": "#807 / #1814 -- warns at load from v0.78.0, refused as of "
+                            "v0.79.0; read only in autopilot.generate_config, "
                             "which nothing in src/ calls; and that line reads "
                             "the decisions dict and WRITES the value into a "
                             "config, so it is not a read of the field either",
@@ -400,8 +401,9 @@ KNOWN_UNCONSUMED = {
                                     "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                       "(catastrophic-forgetting probe staging)",
-    "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
-                                     "the same name in ship.py is unrelated",
+    "training.forgetting_threshold": "#799 / #1814 -- warns at load from v0.78.0, refused "
+                                     "as of v0.79.0 (staged catastrophic-forgetting "
+                                     "threshold); the same name in ship.py is unrelated",
     "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                      "(catastrophic-forgetting probe staging)",
     "training.forgetting_stop": "#808 -- warns at load from v0.76, refused as of v0.77 "
@@ -465,6 +467,13 @@ REFUSED_AT_LOAD = {
         "so a custom collator still sees the extra columns. The default is False, and "
         "an explicit true is refused at config load as of v0.77 (v0.76 ignored it with "
         "a warning, because Soup's own writers had put the old default into configs)",
+    ),
+    "training.vllm_sleep_mode": (
+        "SoupConfig._validate_vllm_sleep_mode",
+        "#2765 -- GRPO starts no vLLM server (use_vllm is never set), so there is no "
+        "engine to put to sleep and the key has no effect; `true` is refused at config "
+        "load as of v0.78.0 (it loaded on v0.77.2). The field is kept so the refusal "
+        "can name it",
     ),
 }
 
@@ -768,9 +777,9 @@ def test_the_allowlist_size_is_pinned_exactly():
 def test_the_named_categories_are_pinned_exactly():
     """The same two-way ratchet for the #1814 categories: an entry added to one of
     them is a reviewed decision, not a way around the KNOWN_UNCONSUMED pin."""
-    assert (len(REFUSED_AT_LOAD), len(VALIDATOR_ALIASES)) == (2, 3), (
+    assert (len(REFUSED_AT_LOAD), len(VALIDATOR_ALIASES)) == (3, 3), (
         f"REFUSED_AT_LOAD is {len(REFUSED_AT_LOAD)} and VALIDATOR_ALIASES is "
-        f"{len(VALIDATOR_ALIASES)}, pinned at 2 and 3; change the pin in the same commit."
+        f"{len(VALIDATOR_ALIASES)}, pinned at 3 and 3; change the pin in the same commit."
     )
     assert not (set(REFUSED_AT_LOAD) | set(VALIDATOR_ALIASES)) & set(KNOWN_UNCONSUMED)
     assert not set(REFUSED_AT_LOAD) & set(VALIDATOR_ALIASES)
@@ -807,6 +816,18 @@ class TestTheNamedCategoriesAreTrue:
             self._load("  remove_unused_columns: true\n")
         # Control: only true is refused; false (the default) loads.
         assert self._load("  remove_unused_columns: false\n").data.remove_unused_columns is False
+
+    def test_vllm_sleep_mode_true_is_refused_by_name_on_grpo(self):
+        """#2765 -- GRPO starts no vLLM server, so ``true`` is refused (the task gate
+        would also name the key on any other task, so this is written for grpo)."""
+        from soup_cli.config.loader import load_config_from_string
+
+        grpo = "base: org/m\ntask: grpo\ndata:\n  train: d.jsonl\ntraining:\n"
+        with pytest.raises(ValueError, match=r"training\.vllm_sleep_mode has no effect"):
+            load_config_from_string(grpo + "  vllm_sleep_mode: true\n")
+        # Control: only true is refused; false (the default) loads.
+        cfg = load_config_from_string(grpo + "  vllm_sleep_mode: false\n")
+        assert cfg.training.vllm_sleep_mode is False
 
     def test_load_in_16bit_rewrites_quantization(self):
         cfg = self._load("training:\n  quantization: 4bit\n  load_in_16bit: true\n")

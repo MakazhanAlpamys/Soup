@@ -159,6 +159,30 @@ class TestTrainingArgsCarriesTheConfiguredGradAccumulationSteps:
 
 
 class TestAdapterConfigJsonRecordsTheEffectiveValue:
+    def test_lora_metadata_keeps_adapter_parameters_and_outcome(self, tmp_path, monkeypatch):
+        _install_fake_mlx(monkeypatch)
+        wrapper = _mlx_wrapper(
+            tmp_path, train_row_count=4, epochs=1, batch_size=1,
+            gradient_accumulation_steps=2, loss_watchdog=True, loss_watchdog_threshold=1.0,
+            lora={"r": 4, "alpha": 8, "dropout": 0.1, "target_modules": ["self_attn.q_proj"]},
+        )
+        wrapper.train()
+
+        adapter_config = json.loads((tmp_path / "adapter_config.json").read_text())
+        expected = {
+            "fine_tune_type": "lora",
+            "adapter_path": str(tmp_path),
+            "lora_parameters": {
+                "rank": 4, "scale": 2.0, "dropout": 0.1, "keys": ["self_attn.q_proj"],
+            },
+            "training_outcome": "completed",
+            "stop_reason": "budget_completed",
+            "completed_iterations": 4,
+            "completed_updates": 2,
+            "watchdog_report_unit": "optimizer updates",
+        }
+        assert {key: adapter_config[key] for key in expected} == expected
+
     def test_written_metadata_matches_the_configured_value(self, tmp_path, monkeypatch):
         _install_fake_mlx(monkeypatch)
         wrapper = _mlx_wrapper(
