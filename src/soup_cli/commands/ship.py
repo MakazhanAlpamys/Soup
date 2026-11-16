@@ -1043,7 +1043,7 @@ def _run_reward_source(target: _RewardTarget) -> Callable[..., object]:
     module = types.ModuleType("custom_reward")
     module.__file__ = target.name
     code = compile(target.source, target.name, "exec", dont_inherit=True)
-    exec(code, module.__dict__)  # noqa: S102 - the point of --reward-fn: the user's own code
+    exec(code, module.__dict__)  # noqa: S102 - what --reward-fn is for: the user's own code
     if not hasattr(module, "reward_fn"):
         raise ValueError(
             f"Custom reward file {target.name} must define a 'reward_fn' callable "
