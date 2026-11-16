@@ -55,9 +55,11 @@ def test_noninteractive_autopilot_reports_the_missing_option(
 def test_ship_uses_config_defaults_but_preserves_explicit_flags(
     monkeypatch: pytest.MonkeyPatch, explicit: bool,
 ) -> None:
+    # the fields of the real ShipConfig: the command reads every one of them, so a field the
+    # schema gains belongs here too (``getattr(..., None)`` in the command would hide a drift)
     configured = SimpleNamespace(
-        task_eval=None, task_mode="metric", general_suite=None, judge_model=None,
-        baseline=None, forgetting_threshold=0.42, noise_floor=None,
+        task_eval=None, task_mode="metric", reward_fn=None, general_suite=None,
+        judge_model=None, baseline=None, forgetting_threshold=0.42, noise_floor=None,
     )
     monkeypatch.setattr(ship, "_parse_ship_config", lambda path: (None, configured))
     observed = []

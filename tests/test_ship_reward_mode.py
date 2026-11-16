@@ -193,13 +193,21 @@ def test_the_reward_line_is_made_safe_for_the_terminal_even_for_a_spec_built_in_
 # -- the paired summary: descriptive, deterministic, honest about its seed -------------------------
 
 
-def _reference_interval(base, tuned):
-    """An independent re-derivation of the interval (the documented algorithm, written out)."""
-    diffs = [t - b for b, t in zip(base, tuned)]
+def _plain_sum(values):
+    total = 0.0
+    for value in values:
+        total += value
+    return total
+
+
+def _reference_interval(base, tuned, total=math.fsum):
+    """An independent re-derivation of the interval (the documented algorithm, written out):
+    the per-row differences sorted, each resample summed exactly (``math.fsum``)."""
+    diffs = sorted(t - b for b, t in zip(base, tuned))
     size = len(diffs)
     rng = random.Random(PAIRED_BOOTSTRAP_SEED)
     means = sorted(
-        sum(diffs[int(rng.random() * size)] for _ in range(size)) / size
+        total([diffs[int(rng.random() * size)] for _ in range(size)]) / size
         for _ in range(PAIRED_BOOTSTRAP_RESAMPLES)
     )
     tail = 50  # 2.5 % of 2000 resamples
@@ -222,6 +230,33 @@ def test_the_paired_summary_is_the_documented_bootstrap_with_its_seed_recorded()
     ) / 12
     assert summary.mean_difference == float(exact)
     assert isinstance(summary.seed, int) and not isinstance(summary.seed, bool)
+
+
+# Eight rows chosen so that the interval differs between a plain left-to-right float sum (what
+# ``sum()`` does on Python 3.11) and an exactly rounded one: the pinned ends are what EVERY
+# supported Python must give, so the 3.11 and the 3.12 cells of the CI matrix enforce the claim.
+PIN_BASE = [0.98, 0.96, 0.65, 0.62, 0.16, 0.02, 0.53, 0.06]
+PIN_TUNED = [0.89, 0.91, 0.47, 0.7, 0.22, 0.33, 0.64, 0.24]
+
+
+def test_the_interval_is_the_same_literal_on_every_python():
+    summary = build_paired_summary(PIN_BASE, PIN_TUNED)
+    assert (summary.ci_low, summary.ci_high) == (-0.046250000000000006, 0.15875)
+    # a plain left-to-right sum of the same resamples ends the upper end one digit lower
+    assert _reference_interval(PIN_BASE, PIN_TUNED, total=_plain_sum) == (
+        -0.046250000000000006, 0.15874999999999997,
+    )
+    assert _reference_interval(PIN_BASE, PIN_TUNED) == (summary.ci_low, summary.ci_high)
+
+
+def test_the_same_rows_in_any_order_give_the_same_summary():
+    order = [5, 2, 7, 0, 3, 6, 1, 4]
+    shuffled = build_paired_summary([PIN_BASE[i] for i in order], [PIN_TUNED[i] for i in order])
+    assert shuffled == build_paired_summary(PIN_BASE, PIN_TUNED)
+    order = [11, 3, 8, 0, 5, 9, 1, 10, 4, 6, 2, 7]
+    assert build_paired_summary([BASE[i] for i in order], [TUNED[i] for i in order]) == (
+        build_paired_summary(BASE, TUNED)
+    )
 
 
 def test_the_same_rows_give_the_same_summary_every_time():
@@ -465,8 +500,6 @@ READER_REFUSALS = {
         _set(("task", "paired", "resamples"), 0), "evidence.task.paired.resamples"),
     "paired seed a bool": (_set(("task", "paired", "seed"), True), "evidence.task.paired.seed"),
     "paired seed negative": (_set(("task", "paired", "seed"), -1), "evidence.task.paired.seed"),
-    "paired underpowered contradicts n": (
-        _set(("task", "paired", "underpowered"), True), "underpowered"),
     "paired underpowered not a bool": (
         _set(("task", "paired", "underpowered"), 0), "evidence.task.paired.underpowered"),
     "paired under schema_version 1": (
@@ -499,6 +532,24 @@ def test_evidence_of_a_reward_mode_decides_on_its_two_numbers_only():
         e["task"]["paired"].update(mean_difference=0.9, ci_low=0.8, ci_high=0.95),
     ))
     assert verdict_from_evidence(evidence).decision == DECISION_DONT_SHIP
+
+
+def test_a_stored_underpowered_is_informational_and_is_recomputed_on_read():
+    # it is a heuristic whose definition may change: a file written with another definition (or
+    # edited) is not refused; the reader's own value is the one it reports and writes back
+    evidence = _evidence_of(_set(("task", "paired", "underpowered"), True))  # 12 rows
+    verdict = verdict_from_evidence(evidence)
+    assert verdict.task_win.detail.paired.underpowered is False
+    assert verdict_to_dict(verdict)["task_win"]["paired"]["underpowered"] is False
+    assert not any(line.startswith("Underpowered") for line, _ in detail_lines(verdict.task_win))
+    few = _evidence_of(lambda e: (
+        e["task"].update(rows={"better": 2, "worse": 1, "same": 1, "n": 4}),
+        e["task"].pop("truncated"),
+        e["task"].pop("generation_failures"),
+        e["task"]["paired"].update(n=4, better=2, worse=1, same=1, underpowered=False),
+    ))
+    again = verdict_from_evidence(few)
+    assert again.task_win.detail.paired.underpowered is True  # 4 rows, whatever the file says
 
 
 def test_an_evidence_of_a_reward_mode_without_a_summary_still_reads():
@@ -591,8 +642,10 @@ LIVE = ["--base", "base-model", "--adapter", "out/checkpoint-12", "--task-eval",
 
 
 def _run(tmp_path, monkeypatch, tasks, base_gen, tuned_gen, *extra, files=None,
-         output="out.json", evidence="ev.json", fn="reward.py", mode_flags=True):
-    _work(tmp_path, monkeypatch, tasks, files)
+         output="out.json", evidence="ev.json", fn="reward.py", mode_flags=True, before=None):
+    work = _work(tmp_path, monkeypatch, tasks, files)
+    if before is not None:
+        before(work)
 
     def _fake_resolve(base, tuned, adapter, device, quantization=None, **kwargs):
         return base_gen, tuned_gen
@@ -829,6 +882,8 @@ BAD_RETURNS = {
     "a string": ("['0.5']", "returned a str, not a number"),
     "None": ("[None]", "returned a NoneType, not a number"),
     "a huge integer": ("[10 ** 400]", "outside [0, 1]"),
+    "an integer above one": ("[2]", "returned 2, outside [0, 1]"),
+    "a negative integer": ("[-1]", "returned -1, outside [0, 1]"),
     "an empty list (one score short)": ("[]", "returned 0 scores"),
     "two scores (one too many)": ("[0.5, 0.5]", "returned 2 scores"),
     "a bare number": ("0.5", "returned a float, not a list"),
@@ -911,8 +966,8 @@ def test_a_file_that_cannot_be_loaded_is_a_usage_error_before_any_model_loads(
 def test_a_file_without_a_reward_fn_is_a_usage_error(tmp_path, monkeypatch):
     run = _refuse(tmp_path, monkeypatch, "--task-mode", "reward", "--reward-fn", "reward.py",
                   files={"reward.py": "x = 1\n"})
-    assert "could not load --reward-fn reward.py" in run.plain
-    assert "reward_fn" in run.plain
+    assert "could not load --reward-fn reward.py: ValueError" in run.plain
+    assert "must define a 'reward_fn' callable" in run.plain
 
 
 def test_a_reward_fn_that_is_not_callable_is_a_usage_error(tmp_path, monkeypatch):
@@ -921,21 +976,118 @@ def test_a_reward_fn_that_is_not_callable_is_a_usage_error(tmp_path, monkeypatch
     assert "--reward-fn reward.py: reward_fn is not callable" in run.plain
 
 
-def test_a_file_that_changes_while_it_is_loaded_is_refused(tmp_path, monkeypatch):
+BENIGN_REWARD = "def reward_fn(completions, **kwargs):\n    return [0.5]\n"
+MARKED_EVIL_REWARD = (
+    "open('ran.txt', 'w').write('x')\n"
+    "def reward_fn(completions, **kwargs):\n    return [0.99]\n"
+)
+
+
+def _plant_unchecked_pyc(work, name, source):
+    """A compiled copy of ``source`` where Python looks for the compiled form of ``name``: an
+    unchecked hash-based pyc (PEP 552), which the import system runs WITHOUT comparing it to the
+    source file."""
+    import importlib.util
+    import py_compile
+
+    staging = work / "staging_for_pyc.py"
+    staging.write_bytes(source.encode("utf-8"))
+    cache = Path(importlib.util.cache_from_source(str(work / name)))
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    py_compile.compile(
+        str(staging), cfile=str(cache), doraise=True,
+        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+    )
+    staging.unlink()
+
+
+def test_a_stale_compiled_copy_beside_the_file_does_not_run_and_the_hash_is_of_what_ran(
+    tmp_path, monkeypatch
+):
+    def plant(work):
+        _plant_unchecked_pyc(work, "reward.py", MARKED_EVIL_REWARD)
+
+    run = _run(tmp_path, monkeypatch, _tasks(4), _gen([1] * 4), _gen([2] * 4),
+               files={"reward.py": BENIGN_REWARD}, before=plant)
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    assert "ran.txt" not in run.files  # the planted code never ran
+    win = run.json("out.json")["task_win"]
+    assert win["base"] == win["tuned"] == 0.5  # the source scored, not the compiled copy (0.99)
+    digest = hashlib.sha256(BENIGN_REWARD.encode("utf-8")).hexdigest()
+    assert win["reward"] == {"fn": "reward.py", "sha256": digest}
+
+
+def test_the_planted_compiled_copy_would_have_run_through_the_import_system(
+    tmp_path, monkeypatch
+):
+    # the control of the test above: the plant is effective, so that test is not vacuous
+    from soup_cli.trainer.rewards import load_reward_fn
+
+    work = _work(tmp_path, monkeypatch, _tasks(1), {"reward.py": BENIGN_REWARD})
+    _plant_unchecked_pyc(work, "reward.py", MARKED_EVIL_REWARD)
+    function = load_reward_fn("reward.py")
+    assert function([[{"role": "assistant", "content": "x"}]]) == [0.99]
+    assert (work / "ran.txt").exists()
+
+
+def test_the_bytes_that_were_named_are_the_bytes_that_run(tmp_path, monkeypatch):
+    # the file is swapped for another right after it was read and hashed: the bytes that ran are
+    # the bytes that were hashed (there is no second read), and the swapped code never runs
+    original = ship_cmd._resolve_reward_target
+
+    def resolve_then_swap(value):
+        target = original(value)
+        Path(value).write_bytes(MARKED_EVIL_REWARD.encode("utf-8"))
+        return target
+
+    monkeypatch.setattr(ship_cmd, "_resolve_reward_target", resolve_then_swap)
+    run = _run(tmp_path, monkeypatch, _tasks(4), _gen([1, 2, 3, 4]), _gen([2, 3, 4, 5]),
+               files={"reward.py": LEN_REWARD}, evidence=None)
+    assert run.result.exit_code == 0, (run.result.output, repr(run.result.exception))
+    assert "ran.txt" not in run.files
+    win = run.json("out.json")["task_win"]
+    assert (win["base"], win["tuned"]) == (0.25, 0.35)  # LEN_REWARD scored, not 0.99
+    assert win["reward"]["sha256"] == hashlib.sha256(LEN_REWARD.encode("utf-8")).hexdigest()
+
+
+def test_a_reward_file_is_compiled_like_a_plain_module_not_with_the_commands_flags(
+    tmp_path, monkeypatch
+):
+    # ship.py runs with ``from __future__ import annotations``: a file compiled with the flags of
+    # its caller would load this undefined annotation, a plain import raises NameError
+    run = _refuse(tmp_path, monkeypatch, "--task-mode", "reward", "--reward-fn", "reward.py",
+                  files={"reward.py": "def reward_fn(completions, **kwargs) -> Undefined:\n"
+                                      "    return [0.5]\n"})
+    assert "could not load --reward-fn reward.py: NameError" in run.plain
+
+
+def test_the_file_sees_its_own_path_and_a_module_name(tmp_path, monkeypatch):
+    source = (
+        "def reward_fn(completions, **kwargs):\n"
+        "    ok = (__file__, __name__) == ('reward.py', 'custom_reward')\n"
+        "    return [0.7] if ok else [0.1]\n"
+    )
+    run = _run(tmp_path, monkeypatch, _tasks(3), _gen([1] * 3), _gen([2] * 3),
+               files={"reward.py": source})
+    assert run.result.exit_code == 2, (run.result.output, repr(run.result.exception))
+    assert run.json("out.json")["task_win"]["base"] == 0.7
+
+
+def test_the_training_loader_prints_a_markup_path_as_text(tmp_path, monkeypatch):
+    # soup ship runs a file itself now; the loader soup train uses keeps its own warning, which
+    # prints the path as text
+    import io
+
+    from rich.console import Console
+
     import soup_cli.trainer.rewards as rewards
 
-    original = rewards.load_reward_fn
-
-    def swap_then_load(spec, *args, **kwargs):
-        loaded = original(spec, *args, **kwargs)
-        Path(spec).write_text("def reward_fn(completions, **kwargs):\n    return [0.9]\n",
-                              encoding="utf-8")
-        return loaded
-
-    monkeypatch.setattr(rewards, "load_reward_fn", swap_then_load)
-    run = _refuse(tmp_path, monkeypatch, "--task-mode", "reward", "--reward-fn", "reward.py",
-                  files={"reward.py": LEN_REWARD})
-    assert "--reward-fn reward.py changed while it was loaded" in run.plain
+    name = "r[bold red]x.py"
+    _work(tmp_path, monkeypatch, _tasks(1), {name: LEN_REWARD})
+    buffer = io.StringIO()
+    monkeypatch.setattr(rewards, "console", Console(file=buffer, width=300, force_terminal=False))
+    assert callable(rewards.load_reward_fn(name))
+    assert name in buffer.getvalue()
 
 
 # -- failed generations ----------------------------------------------------------------------------
@@ -1186,12 +1338,10 @@ def test_an_oversized_file_is_refused_before_it_is_read_into_memory(tmp_path, mo
     assert "is larger than 1048576 bytes" in run.plain
 
 
+@pytest.mark.requires_symlink
 def test_a_symlinked_reward_file_is_refused_and_not_executed(tmp_path, monkeypatch):
     work = _work(tmp_path, monkeypatch, _tasks(3), {"real.py": "open('ran.txt','w').write('x')\n"})
-    try:
-        (work / "link.py").symlink_to(work / "real.py")
-    except (OSError, NotImplementedError):
-        pytest.skip("this platform cannot create a symlink here")
+    (work / "link.py").symlink_to(work / "real.py")
     result = runner.invoke(ship_cmd.app, [*LIVE, "--task-mode", "reward", "--reward-fn", "link.py"])
     assert result.exit_code == 3, (result.output, repr(result.exception))
     assert "must not be a symlink" in _plain(result.output)
