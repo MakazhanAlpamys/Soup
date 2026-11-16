@@ -163,14 +163,15 @@ of cuBLAS and cuBLASLt workspaces the first matmul allocates.
   prompts and `train_on_responses_only` holds less.
 - A sequence-level teacher's prompt is generated from in full, whatever `max_length` is; the
   estimate prices a prompt of `max_length` tokens.
-- Because of all that, a distillation run counts as outside the calibrated range: the
-  pre-flight warns when it does not fit, and refuses only when the student's floor (its
-  weights, the CUDA context and the trained parameters' state) is more than the card holds.
-  The teacher's weights stay out of the floor: it is frozen and loaded with
-  `device_map: auto`, which can keep part of it in CPU memory. This also changes what the
-  pre-flight does with a distillation run whose student alone `main` priced over the card
-  inside the calibrated range: `main` refused it (`commands/train.py`, with
-  `--allow-oom-attempt` to override); it now gets the warning and starts.
+- Because of all that, a distillation step counts as outside the calibrated range: a run
+  whose student fits the card but not with its teacher gets the estimate as a warning and
+  starts. The student's own estimate is judged as on `main`, since a teacher only adds to
+  it: a run whose student alone does not fit the card is still refused inside the
+  calibrated range (`commands/train.py`, with `--allow-oom-attempt` to override), and a run
+  whose student's floor (its weights, the CUDA context and the trained parameters' state)
+  is more than the card holds is refused either way. The teacher's weights stay out of the
+  floor: it is frozen and loaded with `device_map: auto`, which can keep part of it in CPU
+  memory.
 
 ## Reproduce
 
