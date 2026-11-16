@@ -593,8 +593,11 @@ def _hardware_fit_preflight(
         else:
             console.print(f"[yellow]Pre-flight skipped:[/] {markup_escape(inp.reason)}.")
         return
+    from dataclasses import replace
+
     from soup_cli.utils.hardware_fit import (
         CALIBRATED_RANGE,
+        DISTILLATION_STEP,
         VRAM_SAFETY_MARGIN,
         decide_hardware_fit,
         outside_calibrated_range,
@@ -622,7 +625,21 @@ def _hardware_fit_preflight(
         cfg, inp, b, sharding=sharding, num_processes=num_processes
     )
     floor_exceeds_card = floor_gb > report.available_vram_gb
-    refuse = not allow_oom_attempt and (not outside or floor_exceeds_card)
+    # #2909: a distillation step is outside the range, but the student's own estimate is
+    # not, and the teacher only adds to it: a run whose student alone does not fit the card
+    # is refused as it was before the teacher was priced.
+    student = (
+        decide_hardware_fit(
+            replace(inp, teacher_shape=None), available_vram_gb=report.available_vram_gb
+        )
+        if inp.teacher_shape is not None
+        else None
+    )
+    student_over_card = student is not None and not student.ok
+    deciding = (
+        tuple(r for r in outside if r != DISTILLATION_STEP) if student_over_card else outside
+    )
+    refuse = not allow_oom_attempt and (not deciding or floor_exceeds_card)
     # #1631: a "quantized" run priced like an unquantized one needs a word why.
     dequantized = _HW_FIT_DEQUANTIZED_ON_LOAD.get(inp.quant)
     note = (
@@ -674,10 +691,17 @@ def _hardware_fit_preflight(
             f"{', '.join(outside)}. Its {floor_names} alone take {floor_gb:.1f} GB, "
             "more than the card has; that part is not an extrapolation.[/]"
         )
-    elif outside:
+    elif deciding:
         footnote += (
             f"\n[dim]This run is outside the calibrated range ({CALIBRATED_RANGE}): "
             f"{', '.join(outside)}; the estimate may overstate the peak.[/]"
+        )
+    elif refuse and student is not None and not student.ok:
+        footnote += (
+            f"\n[dim]Its student alone needs {student.required_with_margin_gb:.1f} GB with "
+            "the margin, more than the card has. That estimate is inside the calibrated "
+            f"range ({CALIBRATED_RANGE}), and the teacher only adds to it; "
+            "--allow-oom-attempt launches it anyway.[/]"
         )
     elif refuse:
         footnote += (

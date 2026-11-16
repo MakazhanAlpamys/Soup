@@ -21,11 +21,11 @@ The estimate now charges:
   text during setup and is freed, so its weights, its cache and its prefill belong to
   that phase; the term is how far it exceeds training.
 
-A distillation step counts as outside the calibrated range, so the pre-flight warns
-instead of refusing unless the student's own floor exceeds the card. The teacher's weights
-stay out of the floor (``device_map: auto`` can keep part of a frozen teacher in CPU
-memory). That also turns a distill run whose student alone was priced over the card, which
-``main`` refused, into a warning.
+A distillation step counts as outside the calibrated range, so a run whose student fits
+the card but not with its teacher gets a warning that names the new terms, and launches.
+The student's own estimate is still inside the range: a run whose student alone does not
+fit the card is refused, as on ``main``. The teacher's weights stay out of the floor
+(``device_map: auto`` can keep part of a frozen teacher in CPU memory).
 """
 
 from __future__ import annotations
@@ -630,15 +630,18 @@ def _h200_cfg(tmp_path: Path, seq: int = 2048, batch: int = 2):
     }))
 
 
-def test_the_pre_flight_warns_where_main_passed_silently(tmp_path, monkeypatch, screen):
-    """The H200 run (34 GB measured) on a 24 GB card. ``main`` priced it at 9.8 GB and
-    printed nothing; it is now a warning, not a refusal: outside the calibrated range."""
+def test_a_run_whose_student_fits_but_not_its_teacher_is_warned(tmp_path, monkeypatch, screen):
+    """The H200 run (34 GB measured) on a 24 GB card. Its student alone is priced at 9.8 GB,
+    which fits, so ``main`` printed nothing. With the teacher and the divergence it does not
+    fit, and a distillation step is outside the calibrated range: a warning that names both
+    terms, and the run launches."""
     monkeypatch.chdir(_big(tmp_path))
     assert _preflight(_h200_cfg(tmp_path), 24) is None
     text = _plain(screen.getvalue())
     assert "Hardware-fit warning" in text
     assert "a distillation step" in text
     assert "teacher 3.1" in text
+    assert "distillation 23.6" in text
     assert "Warning only: launching anyway." in text
 
 
@@ -662,17 +665,23 @@ def test_the_teacher_stays_out_of_the_floor(tmp_path, monkeypatch, screen):
     assert "a distillation step" in text
 
 
-def test_a_run_main_refused_for_its_student_is_now_warned(tmp_path, monkeypatch, screen):
-    """The second effect of counting a distillation step outside the calibrated range
-    (``commands/train.py``): the H200 student alone is priced at 9.8 GB with the margin, so
-    ``main`` refused this run on a 4 GB card, inside the calibrated range. Its floor is
-    1.5 GB, so it is now a warning and launches."""
+def test_a_run_whose_student_alone_does_not_fit_is_refused(tmp_path, monkeypatch, screen):
+    """The same run on a 4 GB card. Its student alone needs 10.8 GB with the margin, so
+    ``main`` refused it inside the calibrated range, and a teacher only adds to that: it is
+    still refused, with ``--allow-oom-attempt`` to launch it anyway. Its floor fits the
+    card, so the refusal is the student's estimate, not the floor."""
     monkeypatch.chdir(_big(tmp_path))
-    assert _preflight(_h200_cfg(tmp_path), 4) is None
+    cfg = _h200_cfg(tmp_path)
+    inp = hardware_fit.hardware_fit_input_from_config(cfg, allow_network=False)
+    floor_gb, _ = hardware_fit.unextrapolated_floor(
+        cfg, inp, hardware_fit.estimate_peak_vram_gb(inp)
+    )
+    assert floor_gb < 4
+    assert _preflight(cfg, 4) == 1
     text = _plain(screen.getvalue())
-    assert "Hardware-fit warning" in text
-    assert "outside the calibrated range" in text
-    assert "a distillation step" in text
+    assert "Hardware-fit gate" in text
+    assert "--allow-oom-attempt" in text
+    assert "Its student alone needs 10.8 GB with the margin" in text
 
 
 def test_the_student_floor_still_refuses(tmp_path, monkeypatch, screen):

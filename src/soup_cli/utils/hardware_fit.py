@@ -335,6 +335,8 @@ CALIBRATED_RANGE = "dense models of 3B and below on one 6 GB card"
 #: The largest dense model counted as inside it: the measured rows stop at 3.2B
 #: (Llama-3.2-3B), so a "3B" model is in and the next size up (4B) is not.
 CALIBRATED_MAX_PARAMS_B = 3.5
+#: What :func:`outside_calibrated_range` names for a ``task: distill`` run (#2909).
+DISTILLATION_STEP = "a distillation step"
 
 
 def outside_calibrated_range(
@@ -362,10 +364,10 @@ def outside_calibrated_range(
         reasons.append("backend unsloth")
     if inp.teacher_shape is not None:
         # #2909: the teacher and divergence terms come from a few dozen rows measured on
-        # one card with one student, not from the fitted range above. This also turns a
-        # distill run that the student's own terms already price over the card from a
-        # refusal into a warning, unless its floor alone is more than the card holds.
-        reasons.append("a distillation step")
+        # one card with one student, not from the fitted range above. The student's own
+        # estimate is still inside it: the pre-flight refuses a run whose student alone
+        # does not fit the card, as it did before the teacher was priced.
+        reasons.append(DISTILLATION_STEP)
     return tuple(reasons)
 
 
