@@ -60,6 +60,8 @@ SUITE = "Run unit tests without coverage"
 COVERAGE_SUITE = "Run unit tests with coverage"
 #: The steps that are machinery of the reuse and never a reason to fail a required job.
 OPTIONAL = (LOOKUP, NOTICE, MARKER, SAVE)
+#: Steps that only print a fact about the runner; optional like the machinery, never a gate.
+DIAGNOSTICS = ("Print the host CPU",)
 HIT_GUARD = "steps.reuse.outputs.cache-hit != 'true'"
 SUITE_PASSED = "steps.suite.outcome == 'success'"
 MARKER_WRITTEN = "steps.marker.outcome == 'success'"
@@ -549,13 +551,17 @@ class TestTheSuiteIsNotMaskedAndTheMachineryIsNotFatal:
         assert not re.search(r"\|\|\s*(true|:|exit\s+0)\b", script), script
         assert "set +e" not in script and "|| echo" not in script, script
 
-    def test_only_the_four_machinery_steps_may_continue_on_error(self) -> None:
+    def test_only_the_machinery_and_the_diagnostic_steps_may_continue_on_error(self) -> None:
+        """The suite steps never carry it. The four machinery steps do, and so does the one
+        diagnostic (`tests/test_ci_windows_host_cpu_print.py`): it prints the host CPU of a
+        Windows cell and changes nothing. A step added to this list needs a reason written
+        beside it."""
         carrying = [
             str(step.get("name") or step.get("uses"))
             for step in _steps()
             if "continue-on-error" in step
         ]
-        assert sorted(carrying) == sorted(OPTIONAL)
+        assert sorted(carrying) == sorted([*OPTIONAL, *DIAGNOSTICS])
 
     @pytest.mark.parametrize("name", OPTIONAL)
     def test_each_machinery_step_is_optional_and_bounded(self, name: str) -> None:
