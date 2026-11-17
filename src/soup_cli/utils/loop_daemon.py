@@ -311,6 +311,12 @@ def run_once(
             if saved:
                 canary_notes.append(saved)
         _log_promotion(log, canary_before, state, reading, canary_notes, note)
+        if state.canary_active is not None:
+            # The server refused the promotion, so the canary is still the running canary. The
+            # cycle ends here: training on top of it would cost hours of card time for a candidate
+            # the deploy stage must refuse ("canary X is still running"), and the rows it read
+            # would be marked as used. The next poll asks the server again.
+            return _refused_promotion_cycle(state, canary_notes, note, canary_verdict, log)
     elif state.canary_active:
         # A canary is still collecting answers: no new iteration until it is decided.
         _log_waiting(log, state, reading)
@@ -624,6 +630,47 @@ def _log_promotion(
         served_as=before.canary_active, reason=reason, ts=now_iso,
     ))
     log.progress(progress_line(iteration_id, "promote", "end", message=note, ts=now_iso))
+
+
+def _refused_promotion_cycle(
+    state: LoopState,
+    canary_notes: "list[str]",
+    refusal: str,
+    canary_verdict: Optional[str],
+    log: LoopLog,
+) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
+    """The cycle of a promotion the server refused: recorded with its reason, nothing else runs.
+
+    No stage runs, no counter moves and no cursor advances (``proceed=False``: no manifest, as
+    for a canary that is still collecting answers). ``last_failure`` names the refusal for
+    ``soup loop status`` until a later cycle replaces it; ``_log_promotion`` already wrote the
+    ``promote_refused`` progress line.
+    """
+    record = IterationRecord(
+        iteration_id=new_iteration_id(),
+        started_at=_utc_iso(),
+        finished_at=_utc_iso(),
+        pairs_harvested=0,
+        run_id=None,
+        gate_verdict="SKIPPED",
+        canary_verdict=(
+            canary_verdict if canary_verdict in (None, "OK", "MAJOR", "UNKNOWN") else None
+        ),
+        shipped=False,
+        rolled_back=False,
+        estimated_cost_usd=0.0,
+        notes=" | ".join(canary_notes)[:4096],
+    )
+    return (
+        _state_with(state, last_failure=refusal[:500]),
+        _noted(record, log),
+        BudgetDecision(
+            proceed=False,
+            reason=refusal[:300],
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        ),
+    )
 
 
 def _log_waiting(log: LoopLog, state: LoopState, reading: "_CanaryReading") -> None:

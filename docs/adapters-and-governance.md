@@ -442,7 +442,10 @@ soup loop status
 # answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
 # it and it becomes the router's stable side), MAJOR withdraws it and production
 # never changed. A promotion is written in this order: the server switch (if the
-# server refuses, nothing is recorded as promoted), then .soup/loop.yaml (atomic, under
+# server refuses, nothing is recorded as promoted and the cycle ends there: nothing is
+# harvested or trained on top of the refused canary, no counter moves, no data cursor
+# advances, `soup loop status` shows the refusal as `last_failure` and the next poll asks
+# the server again), then .soup/loop.yaml (atomic, under
 # the lock, at the moment of the promotion, not when the cycle ends: the cycle goes on
 # into the next harvest, train and ship), then versions.jsonl and the iteration's
 # closing line. loop.yaml decides which version is production. A watch that was
