@@ -11,6 +11,7 @@ diagnostic, and the training-stage note is saved in the iteration record.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -87,7 +88,7 @@ def _run_loop(runner, harvest=ls.harvest_from_traces, train=ls.train_dpo_from_pa
     """One real ``watch`` iteration; returns (record, deploy_posts)."""
     from soup_cli.utils.loop_daemon import WatchConfig, watch
     from soup_cli.utils.loop_iteration import list_iterations, read_iteration
-    from soup_cli.utils.loop_state import write_state
+    from soup_cli.utils.loop_state import read_state, write_state
 
     write_state(_state(), "state.json")
     posts: list = []
@@ -104,6 +105,14 @@ def _run_loop(runner, harvest=ls.harvest_from_traces, train=ls.train_dpo_from_pa
         ls._TRAIN_RUNNER = None
         ls._DEPLOY_POSTER = None
     ids = list_iterations("iters")
+    if not ids:
+        # An idle poll writes no manifest (review 5b, N2): loop.yaml keeps its reason.
+        idle = read_state("state.json").last_idle
+        assert idle is not None, "no iteration and no idle poll was recorded"
+        stand_in = SimpleNamespace(
+            run_id=None, shipped=False, pairs_harvested=0, notes=idle["reason"]
+        )
+        return stand_in, posts
     assert len(ids) == 1, ids
     return read_iteration(ids[0], base_dir="iters"), posts
 
@@ -198,8 +207,8 @@ def test_the_training_note_sits_next_to_the_deploy_note(cwd, monkeypatch):
     harvest = lambda state: {"pairs_harvested": 0, "pairs_path": None}  # noqa: E731
     deploy = lambda state, ctx: {"deployed": False, "notes": "deploy-says-hi"}  # noqa: E731
     from soup_cli.utils.loop_daemon import WatchConfig, watch
-    from soup_cli.utils.loop_iteration import list_iterations, read_iteration
-    from soup_cli.utils.loop_state import write_state
+    from soup_cli.utils.loop_iteration import list_iterations
+    from soup_cli.utils.loop_state import read_state, write_state
 
     write_state(_state(), "state.json")
     watch(WatchConfig(
@@ -207,7 +216,9 @@ def test_the_training_note_sits_next_to_the_deploy_note(cwd, monkeypatch):
         iteration_dir="iters", harvest_fn=harvest, train_fn=ls.train_dpo_from_pairs,
         deploy_fn=deploy, cost_fn=lambda s: 0.0,
     ))
-    notes = read_iteration(list_iterations("iters")[0], base_dir="iters").notes
+    # An idle poll writes no manifest (review 5b, N2): the notes are in loop.yaml's last_idle.
+    assert list_iterations("iters") == ()
+    notes = read_state("state.json").last_idle["reason"]
     assert notes == (
         "no_preference_pairs: 0 valid pairs harvested, training skipped | deploy-says-hi"
     )
@@ -328,4 +339,5 @@ def test_a_very_long_missing_path_still_saves_a_valid_record(cwd):
     long_path = "d/" * 3000 + "pairs.jsonl"
     harvest = lambda state: {"pairs_harvested": 2, "pairs_path": long_path}  # noqa: E731
     record, _ = _run_loop(_Runner(), harvest=harvest)
-    assert "pairs_file_missing" in record.notes and len(record.notes) <= 4096
+    # the reason is cut to one short line in loop.yaml (an idle poll writes no manifest)
+    assert "pairs_file_missing" in record.notes and len(record.notes) <= 300

@@ -132,6 +132,14 @@ class TestIdlePollsWriteNothing:
         reason = state.last_idle["reason"]
         assert len(reason) == 300 and "\x1b" not in reason and "\n" not in reason
 
+    def test_the_notes_of_the_other_stages_are_kept_with_the_skip_reason(self, cwd):
+        """A skip note is not lost when the deploy stage also reports one (#1909)."""
+        config = _config(cwd, deploy_fn=lambda s, ctx: {"deployed": False, "notes": "deploy-hi"})
+
+        state, _, _ = run_once(_state(), config)
+
+        assert state.last_idle["reason"] == f"{IDLE_REASON} | deploy-hi"
+
     def test_no_reason_given_says_nothing_to_train(self, cwd):
         def train(state, harvested):
             return {"run_id": None, "skipped": True}

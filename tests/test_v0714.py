@@ -1474,9 +1474,14 @@ class TestPackIterationSafely:
 
         monkeypatch.setattr(li, "pack_iteration_as_can", boom)
 
+        # A cycle that trains something (an idle poll writes no manifest and packs nothing: N2).
         cfg = WatchConfig(
             poll_interval_sec=1.0, max_iterations=1, pack_iterations=True,
             served_model="mymodel",
+            harvest_fn=lambda state: {"pairs_harvested": 1},
+            train_fn=lambda state, harvested: {
+                "run_id": "run-1", "skipped": False, "adapter_path": "out/a",
+            },
         )
         final_state, n = watch(cfg)
         assert n == 1  # the daemon completed its single iteration

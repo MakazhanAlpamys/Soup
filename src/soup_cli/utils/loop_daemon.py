@@ -482,7 +482,7 @@ def run_once(
     ):
         # Nothing to train, nothing failed, no canary touched (review 5b, N2): no iteration line, no
         # manifest, no counter. loop.yaml keeps when and why, for `soup loop status`.
-        reason = _idle_reason(train_out)
+        reason = _idle_reason(record.notes)
         idle_state = _state_with(
             state,
             waiting_note=_safe_wait(waiting_note),
@@ -796,9 +796,12 @@ def _is_idle_poll(
     )
 
 
-def _idle_reason(train_out: Mapping[str, object]) -> str:
-    """Why nothing was trained, on one line of at most 300 characters (control characters out)."""
-    text = str(train_out.get("notes") or "nothing to train")
+def _idle_reason(notes: str) -> str:
+    """Why the cycle did nothing: the record's notes (a skip reason, a stage's note) on one line.
+
+    At most 300 characters, control characters out; "nothing to train" when no stage said anything.
+    """
+    text = notes or "nothing to train"
     text = "".join(char if ord(char) >= 0x20 and ord(char) != 0x7F else " " for char in text)
     return " ".join(text.split())[:300] or "nothing to train"
 
