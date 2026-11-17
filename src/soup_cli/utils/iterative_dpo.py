@@ -232,7 +232,7 @@ def _load_prompts(path: str) -> list[str]:
     real = enforce_under_cwd_and_no_symlink(path, "prompts_path")
     out: list[str] = []
     seen = 0
-    with open(real, encoding="utf-8") as fh:
+    with open(real, encoding="utf-8-sig") as fh:
         for line in fh:
             seen += 1
             if seen > _MAX_PROMPT_ROWS:
