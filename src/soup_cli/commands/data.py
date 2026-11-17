@@ -1201,23 +1201,22 @@ def _stratified_split(
         groups.setdefault(key, []).append(idx)
 
     rng = random.Random(seed)
-    total = len(data)
+    group_keys = list(groups)
+    group_capacities = [len(groups[key]) for key in group_keys]
+    holdout_counts = _largest_remainder_allocation(
+        val_count + test_count, group_capacities
+    )
+    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts)
 
     train_indices = []
     val_indices = []
     test_indices = []
 
-    for key, indices in groups.items():
+    for group_index, key in enumerate(group_keys):
+        indices = groups[key]
         rng.shuffle(indices)
-        group_size = len(indices)
-        group_frac = group_size / total
-
-        group_val = round(val_count * group_frac) if val_count else 0
-        group_test = round(test_count * group_frac) if test_count else 0
-
-        # Ensure we don't take more than available
-        group_val = min(group_val, group_size)
-        group_test = min(group_test, group_size - group_val)
+        group_test = group_test_counts[group_index]
+        group_val = holdout_counts[group_index] - group_test
 
         test_indices.extend(indices[:group_test])
         val_indices.extend(indices[group_test:group_test + group_val])
@@ -1228,6 +1227,40 @@ def _stratified_split(
     test_data = [data[idx] for idx in test_indices]
 
     return train_data, val_data, test_data
+
+
+def _largest_remainder_allocation(count: int, capacities: list[int]) -> list[int]:
+    """Allocate ``count`` proportionally to capacities with stable tie-breaking."""
+    allocation = [0] * len(capacities)
+    total_capacity = sum(capacities)
+    target = min(max(count, 0), total_capacity)
+    if target == 0 or total_capacity == 0:
+        return allocation
+
+    numerators = [target * capacity for capacity in capacities]
+    allocation = [
+        min(numerator // total_capacity, capacity)
+        for numerator, capacity in zip(numerators, capacities, strict=True)
+    ]
+    remaining = target - sum(allocation)
+    remainders = [numerator % total_capacity for numerator in numerators]
+    remainder_order = sorted(
+        range(len(capacities)),
+        key=lambda index: (-remainders[index], index),
+    )
+    while remaining:
+        progressed = False
+        for index in remainder_order:
+            if allocation[index] < capacities[index]:
+                allocation[index] += 1
+                remaining -= 1
+                progressed = True
+                if remaining == 0:
+                    break
+        if not progressed:
+            break
+
+    return allocation
 
 
 # ---------------------------------------------------------------------------
