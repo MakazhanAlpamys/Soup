@@ -2265,6 +2265,57 @@ def _check_task_rows_target(
         _fail(str(exc), _EXIT_USAGE)
 
 
+def _refuse_output_that_is_an_input(
+    *,
+    output: Optional[str],
+    emit_evidence: Optional[str],
+    evidence: Optional[str],
+    task_eval: Optional[str],
+    config: Optional[str],
+    corrections: Optional[str],
+    held_out: Optional[str],
+    baseline: Optional[str],
+    reward_fn: Optional[str],
+) -> None:
+    """Refuse an output path that is one of the run's input files, or the other output (exit 3).
+
+    ``--output`` and ``--emit-evidence`` are written when the run ends, with the atomic writer,
+    which replaces whatever is at the path: ``--output ev.json`` with ``--evidence ev.json``
+    would destroy the evidence it had just read, and a live run would evaluate both models and
+    then replace the user's task file or config. The check is by real path (``realpath`` and
+    ``normcase``, plus ``samefile``: a link, a hard link or a case difference on Windows is the
+    same file) and runs before anything is read, loaded or written. A ``--baseline`` or
+    ``--reward-fn`` that is not a file (a ``registry://`` id, a built-in reward name) is not a
+    path and is not compared.
+    """
+    if not output and not emit_evidence:
+        return
+    named = [
+        ("--evidence", evidence), ("--task-eval", task_eval), ("--config", config),
+        ("--corrections", corrections), ("--held-out", held_out),
+        ("--baseline", baseline), ("--reward-fn", reward_fn),
+    ]
+    inputs = [
+        (flag, value) for flag, value in named
+        if value and (flag not in ("--baseline", "--reward-fn") or _is_a_file(value))
+    ]
+    written = [(flag, value) for flag, value in (
+        ("--output", output), ("--emit-evidence", emit_evidence)) if value]
+    try:
+        ensure_distinct_paths(inputs, written)
+        if output and emit_evidence:
+            ensure_distinct_paths([("--output", output)], [("--emit-evidence", emit_evidence)])
+    except ValueError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
+def _is_a_file(value: str) -> bool:
+    try:
+        return os.path.isfile(value)
+    except (OSError, ValueError):
+        return False
+
+
 def _emit_and_exit(
     verdict: ShipVerdict,
     output: Optional[str],
@@ -2576,6 +2627,12 @@ def ship(
             )
     threshold = _validate_threshold_flag(forgetting_threshold)
     noise_floor = _validate_noise_floor_flag(noise_floor)
+    # Before anything is read, loaded or run: an output may not replace one of the inputs.
+    _refuse_output_that_is_an_input(
+        output=output, emit_evidence=emit_evidence, evidence=evidence, task_eval=task_eval,
+        config=config, corrections=corrections, held_out=held_out, baseline=baseline,
+        reward_fn=reward_fn,
+    )
 
     # Fail a mistyped --push target FAST (usage error) — before computing the
     # verdict — so a typo can't waste a live run; the actual POST later is
