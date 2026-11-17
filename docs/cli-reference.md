@@ -3605,7 +3605,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
 | `--base-adapter` | text |  |  | LoRA adapter applied to the base side (before = base + this adapter), e.g. the current production version. Live run with --adapter only. |
 | `--task-eval` | text |  |  | JSONL of leg-1 task-win eval tasks. |
-| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate). |
+| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs --reward-fn). |
+| `--reward-fn` | text |  |  | Reward function for --task-mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| path/to/file.py. A .py file is EXECUTED as Python code on this machine (it must sit under the working directory and not be a symlink): only use a file you trust. It is called once per row and returns one number in \[0, 1]; the verdict is decided on the mean. |
 | `--noise-floor` | integer |  |  | Re-run the BASE model N times (2-10) to measure what this instrument can resolve, print it beside the verdict, and refuse to call any delta smaller than the measured floor significant. Costs N extra base passes. The leg-1 task floor is measured in every --task-mode; in judge_score / pairwise each repeat is N extra JUDGE passes (N x the judge API calls), and the floor is labelled decode + judge. |
 | `--judge-model` | text |  |  | Judge model URL for --task-mode judge_score or pairwise. |
 | `--general-suite` | text |  |  | Comma list of leg-2 benchmarks (default: the bundled offline suite — MCQ/arithmetic + tool-call/JSON/safety; non-bundled names route through lm-eval). |

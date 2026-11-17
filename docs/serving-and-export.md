@@ -172,7 +172,8 @@ including indexed shards, and leaves the model/config unchanged. Actual MTP tens
 are preserved. Malformed or missing checkpoint metadata is refused rather than
 treated as absent weights. The selected converter must advertise `--no-mtp` in a
 successful `--help` probe; otherwise choose a compatible checkout with
-`--llama-cpp`. The default `b5270` pin does not support this flag.
+`--llama-cpp`. The default `b12423` pin advertises the flag (as the alias of
+`--no-nextn`); older pins do not support it.
 The shared safetensors header reader currently refuses unsupported dtypes such as
 `F8_E4M3`; this inspection can therefore refuse an FP8 checkpoint even when its MTP
 tensors are present.
@@ -180,7 +181,7 @@ tensors are present.
 ### Converter compatibility
 
 For a fresh default auto-clone, Soup checks the effective text architecture in
-`config.json` against capability data generated from the exact `b5270` converter.
+`config.json` against capability data generated from the exact `b12423` converter.
 `text_config.architectures`, when present, takes precedence over the root's
 architecture, as in that converter. Known unsupported architectures are refused
 before cloning, installing dependencies, converting or quantizing, with a
@@ -194,26 +195,36 @@ including stderr), with a 15-second timeout. A failed or unrecognized probe is
 inconclusive: conversion remains the final check, without applying the default
 pin's capability set to that checkout. No runtime network lookup is added.
 
-The shared pin remains `b5270`; this diagnostic does not enable Qwen3.5 export on
-that version. A compatible selected converter may need additional handling such
-as the MTP boundary tracked in [#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
+The shared pin `b12423` registers Qwen3.5 dense and MoE text models, so they pass
+this diagnostic on a fresh default checkout. An existing `~/.soup/llama.cpp`
+checkout is not updated automatically; remove it to have the next export clone the
+pinned tag, then rebuild the quantizer. Older or otherwise selected converters
+may still lack support, and the MTP boundary remains tracked in
+[#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
 
 To regenerate capabilities when changing the pin, obtain the unmodified
-`convert_hf_to_gguf.py` from its immutable upstream commit, then run:
+`convert_hf_to_gguf.py` and its `conversion/` package from the immutable
+upstream commit, then run:
 
 ```bash
 python scripts/gen_llama_cpp_capabilities.py --converter /path/to/convert_hf_to_gguf.py \
-  --tag b5270 --commit 3bf785f3efa89ed28294fbf73054558a2b034bfb
+  --package-dir /path/to/conversion \
+  --tag b12423 --commit f4d0673917c75493c73fc9b64ab42841600ba944
 ```
 
 The generated `src/soup_cli/utils/llama_cpp_capabilities.json` records the tag,
-commit, source URL, SHA-256 and Git blob identity. The generator parses registered
+commit, source URL, SHA-256 and Git blob identity for the entry script and each
+top-level `conversion/*.py` file used to derive the maps. The generator parses registered
 classes and inherited model kinds without importing or executing upstream code.
 The pin/data guard rejects a changed pin until its capabilities are regenerated.
+GGUF export needs `transformers`, which the converter imports at load. Soup now
+reports it missing before cloning for default GGUF export rather than letting the
+converter fail later; it does not install it automatically. Install the compatible
+training extra with `pip install "soup-cli[train]"`.
 
 ### Building llama.cpp (required for quantized GGUF)
 
-Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
+Soup auto-clones llama.cpp (pinned tag `b12423`) to `~/.soup/llama.cpp` on first use,
 but it does **not** build it. The conversion step (`f16` / `f32`) works from the
 Python script alone; every *quantized* type additionally needs the `llama-quantize`
 binary, so build it once:

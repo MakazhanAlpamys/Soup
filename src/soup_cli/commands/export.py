@@ -34,7 +34,7 @@ SUPPORTED_FORMATS = (
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
-LLAMA_CPP_TAG = "b5270"
+LLAMA_CPP_TAG = "b12423"
 
 
 def export(
@@ -277,7 +277,7 @@ def export(
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
         output_path = _export_torchao_cli(
-            model_path, output, quant_config, trust_remote_code,
+            model_path, output, quant_config, trust_remote_code, base=base,
         )
         if output_path is not None:
             _maybe_attach_export(
@@ -332,6 +332,17 @@ def export(
         console.print(
             f"[red]Unsupported quantization: {quant}[/]\n"
             f"Supported: {', '.join(GGUF_QUANT_TYPES)}"
+        )
+        raise typer.Exit(1)
+
+    # The converter imports transformers at load time. Refuse before adapter
+    # merging, dependency handling or toolchain cloning when it is absent.
+    if _transformers_missing():
+        console.print(
+            "[red]The pinned llama.cpp converter requires transformers, "
+            "which is not installed in this environment.[/]\n"
+            "Install it the supported way: "
+            + escape('pip install "soup-cli[train]"') + "."
         )
         raise typer.Exit(1)
 
@@ -596,7 +607,23 @@ def _merge_adapter(
 # 2.5.1+cu -> 2.2.2+cpu, transformers 4.57 -> 4.46). Soup's `[train]` extra
 # already provides torch / transformers / numpy, so install ONLY the extra
 # packages the convert script needs, unpinned, and never touch the rest.
+# The converter imports transformers at load time
+# (conversion/base.py: `from transformers import AutoConfig`) — but Soup never
+# auto-installs torch or transformers (an install of llama.cpp requirements
+# once replaced a user's CUDA torch, and transformers is part of the [train]
+# stack the same rule protects). Instead, when transformers is absent the gguf
+# export refuses before any clone/install and points at `[train]`.
 _CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
+
+
+def _transformers_missing() -> bool:
+    """Is transformers absent? The converter needs it at import."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("transformers") is None
+    except (ImportError, ValueError):
+        return True
 
 
 def _missing_convert_deps() -> list[str]:
@@ -839,7 +866,9 @@ def _run_quantize(
         console.print(
             "[red]llama-quantize binary not found.[/]\n"
             "Build llama.cpp first:\n"
-            f"  [bold]cd {llama_dir} && make llama-quantize[/]\n"
+            f"  [bold]cd {llama_dir} && cmake -B build -DGGML_NATIVE=OFF "
+            "-DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release && "
+            "cmake --build build --config Release --target llama-quantize -j 4[/]\n"
             "Or use [bold]--quant f16[/] to skip quantization."
         )
         raise typer.Exit(1)
@@ -1284,12 +1313,17 @@ def _export_torchao_cli(
     output: Optional[str],
     quant_config: Optional[str],
     trust_remote_code: bool,
+    base: Optional[str] = None,
 ) -> Optional[Path]:
     """Dispatch ``soup export --format torchao``.
 
     Per v0.53.0 ``validate_quant_config_path`` docstring contract:
     enforce cwd containment + ``os.lstat + S_ISLNK`` rejection at CLI
     dispatch time, not in the schema validator.
+
+    A LoRA adapter directory is merged into its base first, as every other format
+    does. Loaded as it is, transformers attaches the adapter to the base and
+    ``save_pretrained`` writes the adapter alone, so the "export" held no model.
     """
     if quant_config is None:
         console.print(
@@ -1329,31 +1363,61 @@ def _export_torchao_cli(
     else:
         output_path = Path(output)
 
-    console.print(Panel(
-        f"Model:  [bold]{model_path}[/]\n"
-        f"Scheme: [bold]{scheme}[/]\n"
-        f"Output: [bold]{output_path}[/]",
-        title="TorchAO PTQ Export",
-    ))
+    adapter_config_path = model_path / "adapter_config.json"
+    merge_dir = None
+    if adapter_config_path.exists():
+        console.print("[yellow]LoRA adapter detected — merging first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print("[red]Cannot detect base model. Pass --base.[/]")
+            raise typer.Exit(2)
+        merge_dir = _merge_dir_for(model_path)
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
+    # An export error is reported after the cleanup: while the exception is live, its
+    # traceback keeps the loaded model, which maps the merged weights file, and Windows
+    # does not delete a mapped file.
+    failure: Optional[tuple[int, str]] = None
     try:
-        export_torchao(
-            model_dir=str(model_path),
-            output_dir=str(output_path),
-            scheme=scheme,
-            quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
-            trust_remote_code=trust_remote_code,
-        )
-    except (ImportError, RuntimeError) as exc:
-        console.print(f"[red]TorchAO export failed: {exc}[/]")
-        console.print(
-            "Try: [bold]pip install torchao[/] "
-            f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
-        )
-        raise typer.Exit(1)
-    except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(2)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        console.print(Panel(
+            f"Model:  [bold]{source_model_dir}[/]\n"
+            f"Scheme: [bold]{scheme}[/]\n"
+            f"Output: [bold]{output_path}[/]",
+            title="TorchAO PTQ Export",
+        ))
+
+        try:
+            export_torchao(
+                model_dir=str(source_model_dir),
+                output_dir=str(output_path),
+                scheme=scheme,
+                quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
+                trust_remote_code=trust_remote_code,
+            )
+        except (ImportError, RuntimeError) as exc:
+            failure = (1, f"TorchAO export failed: {exc}")
+        except (TypeError, ValueError, FileNotFoundError) as exc:
+            failure = (2, str(exc))
+    finally:
+        _remove_merge_dir(merge_dir, announce=False)
+
+    if failure is not None:
+        code, message = failure
+        console.print(f"[red]{message}[/]")
+        if code == 1:
+            console.print(
+                "Try: [bold]pip install torchao[/] "
+                f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
+            )
+        raise typer.Exit(code)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"

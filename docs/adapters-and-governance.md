@@ -806,6 +806,8 @@ soup adapters branches
 | `dare` | Random drop with `density` + rescale `1/density`, then average | Sparse-merge; reduces parameter interference (Yu et al. 2024) |
 | `svd` | Linear-merge → low-rank reconstruction via SVD (`--rank`) | Constrain effective rank of the merged delta |
 
+The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` truncates the merged result and does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
+
 **Defaults & safety:**
 
 - Output paths are containment-checked under cwd and reject pre-placed symlinks (TOCTOU defence).
@@ -818,7 +820,7 @@ soup adapters branches
 
 **v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
 
-**v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override) and rank (mixed ranks are refused, not silently approximated). Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
+**v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override). Mixed-rank inputs, and any run with `--rank N`, take the exact concatenation path (#305); same-rank inputs keep the element-wise path. Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
 
 
 ## Soup Cans (Shareable Recipes)

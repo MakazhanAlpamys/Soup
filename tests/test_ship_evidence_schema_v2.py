@@ -320,7 +320,7 @@ def test_the_registry_adds_exactly_the_v2_fields_to_the_0_77_sets():
         "schema_version", "judged", "task_rows",
     }
     assert EVIDENCE_SCHEMA_FIELDS["task"] == _OLD_FIELDS["task"] | {
-        "rows", "truncated", "generation_failures",
+        "rows", "truncated", "generation_failures", "reward", "paired",
     }
     assert EVIDENCE_SCHEMA_FIELDS["benchmark"] == _OLD_FIELDS["benchmark"]
     assert EVIDENCE_SCHEMA_FIELDS["noise_floor"] == _OLD_FIELDS["noise_floor"]
@@ -329,6 +329,12 @@ def test_the_registry_adds_exactly_the_v2_fields_to_the_0_77_sets():
     assert EVIDENCE_SCHEMA_FIELDS["generation_failures"] == {"base", "tuned", "n"}
     assert EVIDENCE_SCHEMA_FIELDS["judged"] == {
         "base", "adapter", "tuned", "base_adapter", "checkpoint_step",
+    }
+    # the reward mode (see tests/test_ship_reward_mode.py)
+    assert EVIDENCE_SCHEMA_FIELDS["reward"] == {"fn", "sha256"}
+    assert EVIDENCE_SCHEMA_FIELDS["paired"] == {
+        "n", "better", "worse", "same", "mean_difference", "ci_low", "ci_high", "confidence",
+        "resamples", "seed", "underpowered",
     }
 
 

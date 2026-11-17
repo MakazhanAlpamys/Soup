@@ -319,7 +319,7 @@ Sections:
 | `training.lisa_interval_steps` | `int` | `20` | `>= 1`, `<= 1000000` | LISA: re-sample the active decoder layers every N global steps. |
 | `training.lisa_reset_optimizer` | `bool` | `true` |  | Clear optimizer state for decoder layers that LISA re-freezes on each interval (avoids stale Adam moments). Mirrors relora_reset_optimizer. |
 | `training.lisa_train_embeddings` | `bool` | `true` |  | Keep the always-on group (input embeddings + LM head + final norm) trainable every LISA interval. Default true is LISA as published (#267). Set false to freeze that group so only the sampled lisa_num_layers decoder layers train — the always-on set is the majority of LISA's memory, so this is the knob that buys the memory saving (#377). It is a real trade: the always-on set may be load-bearing for quality, so measure both ways. |
-| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto and bco, including task='preference' with a single preference_loss of dpo, orpo, simpo or bco. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. IPO and preference_loss_weights do not stream yet. |
+| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto, bco and ipo, including task='preference' with a single preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. Weighted preference_loss_weights do not stream yet. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
 | `training.stream_buffers` | `int` | `2` | `>= 2`, `<= 8` | Pre-allocated VRAM layer buffers. 2 = double buffering, which is what lets the next layer load while the current one computes. A single buffer cannot overlap load with compute. |
@@ -400,14 +400,15 @@ Sections:
 | `eval.benchmarks` | `list[str] \| null` | `null` |  | lm-evaluation-harness benchmark names to run |
 | `eval.custom_tasks` | `str \| null` | `null` |  | Path to custom eval JSONL file |
 | `eval.judge` | `dict \| null` | `null` |  | LLM-as-a-judge config: model, rubric, provider |
-| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
+| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / reward_fn / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
 
 ## `eval.ship`
 
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `eval.ship.task_eval` | `str \| null` | `null` |  | JSONL of leg-1 task-win eval tasks |
-| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) |
+| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"`, `"reward"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs reward_fn or --reward-fn) |
+| `eval.ship.reward_fn` | `str \| null` | `null` |  | Reward function for task_mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| the path of a .py file, which soup ship EXECUTES as Python code (under the working directory, never a symlink): only name a file you trust. Only meaningful with task_mode reward; it is read by soup ship, never by soup train. |
 | `eval.ship.general_suite` | `str \| null` | `null` |  | Comma list of leg-2 benchmarks (default: bundled offline suite) |
 | `eval.ship.forgetting_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max allowed leg-2 drop in absolute points before DON'T SHIP |
 | `eval.ship.judge_model` | `str \| null` | `null` |  | Judge model URL for task_mode judge_score / pairwise |

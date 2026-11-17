@@ -10,14 +10,14 @@
 > 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
 > every further 512 tokens costs about 1 GB more (see
 > [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
-> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, and `bco`. DPO
-> uses a frozen reference adapter on the streamed base. KTO and BCO also use the
-> same base for the reference pass. On untied checkpoints those three tasks hold
-> a private copy of the output head for backward. See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
-> Select `dpo`, `orpo`, `simpo`, or `bco` with `task: preference` and
+> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, `bco`, and `ipo`.
+> DPO and IPO use a frozen reference adapter on the streamed base. KTO and BCO
+> use that base with adapters disabled for the reference pass. On untied
+> checkpoints these four tasks hold a private copy of the output head for backward. See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Select `dpo`, `orpo`, `simpo`, `bco`, or `ipo` with `task: preference` and
 > `training.preference_loss`, or use the loss as the task name. Use a concrete
 > `batch_size`. `stream_vram_probe`, `stream_loss_chunk`, and `stream_recompute`
-> other than `on` remain SFT-only. Streaming refuses IPO and `preference_loss_weights`.
+> other than `on` remain SFT-only. Streaming refuses `preference_loss_weights`.
 
 **Contents:**
 
@@ -645,6 +645,10 @@ reads HACK as before. For two-valued rewards use
 inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
 later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
 files from runs before this version are not comparable.
+
+### Mid-epoch RL checkpoints
+
+`training.rl_checkpoint_save_every_steps` saves the adapter, the optimizer state and a manifest under `<output>/rl-checkpoints/step-N/`; the `pid_lagrangian` rollback below restores from them. The optimizer state (`optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory (the adapter is loaded under the same containment). A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
@@ -2146,6 +2150,10 @@ On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; se
 
 
 ## IPO Training (Regularized Preference)
+
+On an FP16 card, the gradient scaler can skip the first IPO updates and lower
+its scale until gradients are finite. This can happen with resident IPO too.
+See the [one-step and backoff checks on a Tesla T4](../benchmarks/ipo-streaming-t4.md).
 
 IPO is a theoretically grounded DPO variant with stronger regularization:
 
