@@ -3,8 +3,9 @@
 Lifts the v0.48.0 Part B synthetic-only proxy: ``proxy_run_for_weights``
 renders a temp ``soup.yaml`` that splices the candidate weights into a base
 recipe, invokes ``python -m soup_cli.cli train --config <tmp> --yes`` via a
-list-argv ``subprocess.run`` (no shell), and reads the final ``eval_loss``
-back from the SQLite tracker.
+list-argv ``subprocess.run`` (no shell), and reads that candidate's measured
+final-step validation loss from the SQLite tracker. Training loss and other
+runs' measurements are never substitutes for a missing evaluation.
 
 The synthetic proxy in ``commands/data_mix.py`` remains the default; this
 module is wired through the new ``--live`` flag with mandatory
@@ -12,9 +13,9 @@ module is wired through the new ``--live`` flag with mandatory
 
 Security:
 - ``base_yaml_path`` must stay under cwd (``utils.paths.is_under_cwd``).
-- Per-candidate temp dir lives under ``tempfile.gettempdir()``; cleaned up
-  via ``try/finally`` (matches v0.43.0 Part D ``copy_bundle_to`` atomic-write
-  policy).
+- Each candidate has its own run ID, output directory and (by default) database
+  under a temporary directory in cwd. Temporary artifacts are cleaned up after
+  reading the score; the base recipe's output is never overwritten.
 - Subprocess invocation uses ``sys.executable + ['-m', 'soup_cli.cli', ...]``
   (no shell, list argv — matches v0.33.0 #34 / v0.40.4 ``execvp`` pattern).
 - ``timeout_seconds`` capped to ``[60, 30*60]``; ``TimeoutExpired`` raises
@@ -25,6 +26,7 @@ Security:
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import shutil
@@ -32,6 +34,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
+from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 _MIN_TIMEOUT_S = 60
@@ -42,6 +46,7 @@ _FLOAT_TOL = 1e-6
 
 __all__ = [
     "proxy_run_for_weights",
+    "validate_proxy_config",
 ]
 
 
@@ -167,6 +172,8 @@ def _render_overlay_yaml(
     base_yaml_text: str,
     datasets: Tuple[str, ...],
     weights: Tuple[float, ...],
+    *,
+    output_dir: Optional[str] = None,
 ) -> str:
     """Splice ``data.interleave`` + ``data.train`` into a base YAML.
 
@@ -201,6 +208,11 @@ def _render_overlay_yaml(
         "strategy": "probs",
         "probs": [float(w) for w in weights],
     }
+    if output_dir is not None:
+        raw["output"] = output_dir
+        # SFT appends experiment_name to output. A proxy must not inherit a
+        # name that redirects its artifact outside the isolated candidate path.
+        raw["experiment_name"] = None
     dumped = yaml.safe_dump(raw, sort_keys=False)
 
     # Insert an explanatory comment directly above the `train:` line inside
@@ -228,35 +240,86 @@ def _render_overlay_yaml(
     return dumped
 
 
-def _read_final_eval_loss(
-    tracker_db_path: Optional[str], started_at: float
-) -> float:
-    """Read the most-recent finished run's final eval_loss / final_loss.
+def _validate_proxy_text(base_text: str) -> None:
+    """Require the loader/trainer path with a comparable validation objective."""
+    from soup_cli.config.loader import load_config_from_string
 
-    Looks for runs created at or after ``started_at`` (epoch seconds) so a
-    concurrent unrelated training run cannot poison the proxy reading.
+    cfg = load_config_from_string(base_text)
+    if cfg.task != "sft" or cfg.backend != "transformers" or cfg.modality != "text":
+        raise ValueError("live mix requires task=sft, backend=transformers and modality=text")
+    if cfg.data.streaming:
+        raise ValueError("live mix requires data.streaming=false for fixed per-source validation")
+    if cfg.data.format == "pre_tokenized":
+        raise ValueError(
+            "live mix requires raw datasets; pre_tokenized caches bypass mixture loading"
+        )
+    if not math.isfinite(cfg.data.val_split) or cfg.data.val_split <= 0:
+        raise ValueError("live mix requires data.val_split > 0 to measure validation loss")
+
+
+def _read_base_text(base_yaml_path: str) -> str:
+    yaml_real = _validate_path_under_cwd("base_yaml_path", base_yaml_path)
+    with open(yaml_real, "r", encoding="utf-8") as handle:
+        base_text = handle.read(256 * 1024 + 1)
+    if len(base_text) > 256 * 1024:
+        raise ValueError("base YAML exceeds 256KB cap")
+    return base_text
+
+
+def validate_proxy_config(base_yaml_path: str) -> None:
+    """Reject unsupported live objectives before any training is launched.
+
+    Eager local probability mixtures hold validation rows out of each source
+    before applying weights. Other tasks/backends and streaming mixtures need
+    their own measured-objective contracts before live optimization can use them.
     """
+    _validate_proxy_text(_read_base_text(base_yaml_path))
+
+
+def _read_final_eval_loss(tracker_db_path: str, run_id: str, expected_output: str) -> float:
+    """Read only a completed candidate's explicit final-step validation loss."""
     from soup_cli.experiment.tracker import ExperimentTracker  # noqa: PLC0415
 
-    if tracker_db_path is not None:
-        os.environ["SOUP_DB_PATH"] = tracker_db_path
-    tracker = ExperimentTracker()
-    rows = tracker.list_runs(limit=10)
-    for row in rows:
-        # finish_run sets `status='completed'` + `final_loss`.
-        status = row.get("status")
-        final_loss = row.get("final_loss")
-        if status != "completed" or final_loss is None:
-            continue
-        if not isinstance(final_loss, (int, float)):
-            continue
-        fv = float(final_loss)
-        if not math.isfinite(fv):
-            continue
-        return fv
-    raise RuntimeError(
-        "no completed run found in tracker — proxy training failed"
-    )
+    if not os.path.isfile(tracker_db_path):
+        raise RuntimeError("proxy training did not create its candidate tracker")
+    tracker = ExperimentTracker(db_path=Path(tracker_db_path))
+    try:
+        run = tracker.get_run(run_id)
+        # get_run accepts unique prefixes for interactive use; evidence may not.
+        if not run or run.get("run_id") != run_id or run.get("status") != "completed":
+            raise RuntimeError("proxy candidate has no exact completed run in tracker")
+        try:
+            config = json.loads(run.get("config_json", ""))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("proxy candidate has invalid recorded configuration") from exc
+        output = os.path.realpath(expected_output)
+        declared = config.get("output") if isinstance(config, dict) else None
+        for path in (declared, run.get("output_dir")):
+            if not isinstance(path, str) or not path or os.path.realpath(path) != output:
+                raise RuntimeError("proxy candidate output does not match its recorded run")
+        final_step = run.get("total_steps")
+        if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step <= 0:
+            raise RuntimeError("proxy candidate has no completed optimizer steps")
+        evaluations = [row for row in tracker.get_metrics(run_id) if row.get("kind") == "eval"]
+        if not evaluations:
+            raise RuntimeError("proxy candidate has no measured validation loss")
+        # get_metrics sorts by step, not arrival. A later invalid evaluation must
+        # not fall back to an older finite one, including one at a higher step.
+        latest = max(evaluations, key=lambda row: row["id"])
+        if latest.get("step") != final_step:
+            raise RuntimeError(
+                "proxy candidate has no evaluation at its final optimizer step; "
+                "remove training.eval_steps to evaluate each epoch"
+            )
+        value = latest.get("val_loss")
+        if (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0
+        ):
+            raise RuntimeError("proxy candidate's final validation loss is not a finite loss")
+        return float(value)
+    finally:
+        tracker.close()
 
 
 def proxy_run_for_weights(
@@ -273,36 +336,34 @@ def proxy_run_for_weights(
         weights: Per-dataset interleave probabilities (simplex).
         datasets: Dataset paths in the same order as ``weights``.
         base_yaml_path: A real ``soup.yaml`` under cwd that supplies all the
-            non-data fields (base, task, training, output). The proxy
-            overlays only ``data.train`` + ``data.interleave``.
+            model and training settings. Text SFT on transformers with eager
+            data loading and a positive validation split is supported. Output
+            and experiment_name are isolated for each temporary candidate.
         timeout_seconds: Hard cap on the subprocess (60s..30m).
         tracker_db_path: Optional override of the SQLite DB location (used
-            in tests). Honoured via ``SOUP_DB_PATH``.
+            in tests). Passed only to the child; the default is a private DB.
 
     Returns:
-        The observed ``final_loss`` from the most recent completed run.
+        The candidate's measured ``val_loss`` at its final optimizer step.
 
     Raises:
         TypeError / ValueError: Input validation failures.
         RuntimeError: Training subprocess failed or no completed run found.
     """
-    import time  # noqa: PLC0415
-
     ds = _validate_datasets(datasets)
     w = _validate_weights(weights, len(ds))
-    yaml_real = _validate_path_under_cwd("base_yaml_path", base_yaml_path)
     timeout = _validate_timeout(timeout_seconds)
+    base_text = _read_base_text(base_yaml_path)
+    _validate_proxy_text(base_text)
 
-    with open(yaml_real, "r", encoding="utf-8") as fh:
-        base_text = fh.read()
-    if len(base_text) > 256 * 1024:
-        raise ValueError(
-            f"base YAML exceeds 256KB cap (got {len(base_text)} bytes)"
-        )
-    overlay = _render_overlay_yaml(base_text, ds, w)
-
-    tmp_dir = tempfile.mkdtemp(prefix=".soup_mix_proxy.")
+    tmp_dir = tempfile.mkdtemp(prefix=".soup_mix_proxy.", dir=os.getcwd())
     try:
+        output_dir = os.path.join(tmp_dir, "output")
+        run_id = f"mix_{uuid.uuid4().hex}"
+        db_path = os.path.abspath(tracker_db_path) if tracker_db_path else os.path.join(
+            tmp_dir, "experiments.db"
+        )
+        overlay = _render_overlay_yaml(base_text, ds, w, output_dir=output_dir)
         tmp_yaml = os.path.join(tmp_dir, "soup.yaml")
         with open(tmp_yaml, "w", encoding="utf-8") as fh:
             fh.write(overlay)
@@ -316,9 +377,10 @@ def proxy_run_for_weights(
             "--yes",
         ]
         env = os.environ.copy()
-        if tracker_db_path is not None:
-            env["SOUP_DB_PATH"] = tracker_db_path
-        started_at = time.time()
+        env["SOUP_DB_PATH"] = db_path
+        # The train command already accepts an exact run identity through this
+        # variable. Never inherit an outer MCP job's ID and overwrite its row.
+        env["SOUP_MCP_RUN_ID"] = run_id
         try:
             result = subprocess.run(  # noqa: S603 — argv list, no shell.
                 argv,
@@ -336,6 +398,6 @@ def proxy_run_for_weights(
                 "proxy training subprocess failed "
                 f"(rc={result.returncode})"
             )
-        return _read_final_eval_loss(tracker_db_path, started_at)
+        return _read_final_eval_loss(db_path, run_id, output_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

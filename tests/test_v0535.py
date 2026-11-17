@@ -583,28 +583,30 @@ def test_overlay_yaml_rendered_config_actually_loads_via_load_dataset(tmp_path):
 
 
 def test_proxy_happy_path_reads_tracker(tmp_path, monkeypatch):
+    from soup_cli.experiment.tracker import ExperimentTracker
+
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
-    fake_result = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
-    fake_tracker = MagicMock()
-    fake_tracker.list_runs.return_value = [
-        {"status": "completed", "final_loss": 1.234},
-    ]
-    with patch.object(subprocess, "run", return_value=fake_result), \
-            patch(
-                "soup_cli.utils.mix_proxy.ExperimentTracker",
-                return_value=fake_tracker,
-                create=True,
-            ):
-        # We need to patch the lazy import inside `_read_final_eval_loss`:
-        import soup_cli.experiment.tracker as tracker_mod
 
-        with patch.object(
-            tracker_mod, "ExperimentTracker", return_value=fake_tracker
-        ):
-            loss = proxy_run_for_weights(
-                [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base)
+    def train_candidate(argv, *, env, **kwargs):
+        config = yaml.safe_load(Path(argv[argv.index("--config") + 1]).read_text())
+        tracker = ExperimentTracker(db_path=Path(env["SOUP_DB_PATH"]))
+        run_id = env["SOUP_MCP_RUN_ID"]
+        try:
+            tracker.start_run(config, "cpu", "CPU", {}, run_id=run_id)
+            tracker.log_metrics(run_id, step=5, val_loss=1.234, kind="eval")
+            tracker.finish_run(
+                run_id, initial_loss=9.0, final_loss=0.01, total_steps=5,
+                duration_secs=1.0, output_dir=config["output"],
             )
+        finally:
+            tracker.close()
+        return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
+
+    with patch.object(subprocess, "run", side_effect=train_candidate):
+        loss = proxy_run_for_weights(
+            [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base)
+        )
     assert loss == pytest.approx(1.234)
 
 

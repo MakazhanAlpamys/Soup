@@ -1,15 +1,15 @@
 """soup data mix — Data Mixing Optimizer CLI (v0.48.0 Part B — BETA).
 
-Two modes:
+Modes:
 
-* ``--optimize`` runs N short proxy training runs and writes a recipe.
+* ``--optimize --live --base-yaml soup.yaml`` runs short proxy training runs
+  and writes a recipe only when at least one candidate has a measured loss.
+* ``--optimize`` without ``--live`` uses a synthetic offline loss; it exercises
+  the search and recipe writer without training or evaluating a model.
 * ``--apply <recipe.yaml>`` re-loads a previously written recipe and prints
   the spliceable ``data:`` block.
 
-Live wiring of the proxy training loop into ``soup train`` is deferred to
-v0.48.1 (matches the project's stub-then-live pattern). The CLI ships a
-synthetic offline proxy so users can exercise the budget tracker, the
-optimiser surface, and the recipe writer end-to-end without GPUs.
+Offline synthetic results do not establish which mixture improves a model.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _offline_proxy(weights: Tuple[float, ...]) -> float:
 
     Penalises mixtures that concentrate too much weight on a single dataset
     so the budget tracker / writer exercises a non-trivial search landscape.
-    Live wiring (short ``soup train`` proxy run) lands in v0.48.1.
+    This loss does not measure model quality or read dataset contents.
     """
     # Minimum at uniform mixture; quadratic penalty away from uniform.
     if not weights:
@@ -46,7 +46,7 @@ def _offline_proxy(weights: Tuple[float, ...]) -> float:
 def mix(
     optimize: bool = typer.Option(
         False, "--optimize",
-        help="Run Bayesian search over dataset mixture weights.",
+        help="Search mixture weights; synthetic offline results unless --live is set.",
     ),
     apply_recipe: Optional[str] = typer.Option(
         None, "--apply",
@@ -81,7 +81,7 @@ def mix(
     live: bool = typer.Option(
         False, "--live",
         help=(
-            "v0.53.5 #116 — run live short `soup train` proxy runs per "
+            "Run live short `soup train` proxy runs per "
             "candidate (requires --base-yaml). Defaults to the offline "
             "synthetic proxy."
         ),
@@ -94,7 +94,7 @@ def mix(
         ),
     ),
 ) -> None:
-    """BETA: optimise per-dataset mixture weights against a proxy run."""
+    """BETA: search mixtures with a synthetic offline proxy, or measured --live runs."""
     from soup_cli.utils.data_mix import (
         build_optimization_plan,
         load_mix_recipe,
@@ -193,9 +193,11 @@ def mix(
         )
         raise typer.Exit(code=2) from exc
 
+    mode = "live training/evaluation" if live else "offline synthetic (no training or evaluation)"
     console.print(
         Panel.fit(
             f"[bold]Mix Optimizer[/bold]  (BETA)\n"
+            f"mode: {mode}\n"
             f"datasets: {len(plan.datasets)} | "
             f"probes: {plan.num_probes} | "
             f"budget: {plan.budget_seconds}s"
@@ -208,7 +210,15 @@ def mix(
                 "[red]--live requires --base-yaml <path/to/soup.yaml>.[/red]"
             )
             raise typer.Exit(code=2)
-        from soup_cli.utils.mix_proxy import proxy_run_for_weights
+        from soup_cli.utils.mix_proxy import proxy_run_for_weights, validate_proxy_config
+
+        try:
+            validate_proxy_config(base_yaml)
+        except (ValueError, TypeError, OSError) as exc:
+            console.print(
+                f"[red]live proxy validation failed: {for_terminal(exc)}[/red]", emoji=False
+            )
+            raise typer.Exit(code=2) from exc
 
         per_candidate_timeout = max(
             60, min(plan.budget_seconds // max(plan.num_probes, 1), 30 * 60)
@@ -226,17 +236,28 @@ def mix(
     else:
         proxy_callable = _offline_proxy
 
-    report = run_mix_optimizer(plan, proxy_callable)
+    try:
+        report = run_mix_optimizer(plan, proxy_callable)
+    except (ValueError, TypeError, OSError) as exc:
+        console.print(f"[red]optimization failed: {for_terminal(exc)}[/red]", emoji=False)
+        raise typer.Exit(code=2) from exc
+    if not report.candidates or not math.isfinite(report.best_eval_loss):
+        advice = (
+            "Check the base config and training/evaluation errors, then retry."
+            if live else "Check the synthetic proxy outputs, then retry."
+        )
+        console.print(
+            f"[red]No valid proxy measurements. No recipe written. {advice}[/red]",
+            emoji=False,
+        )
+        raise typer.Exit(code=2)
     try:
         path = write_mix_recipe(report, output, overwrite=overwrite)
     except (ValueError, OSError) as exc:
         console.print(f"[red]write failed: {escape(str(exc))}[/red]", emoji=False)
         raise typer.Exit(code=2) from exc
 
-    if math.isfinite(report.best_eval_loss):
-        loss_str = f"{report.best_eval_loss:.6f}"
-    else:
-        loss_str = "n/a"
+    loss_str = f"{report.best_eval_loss:.6f}"
     console.print(
         f"[green]wrote recipe:[/green] {for_terminal(path)}  "
         f"(best_loss={loss_str}, partial={report.partial})",

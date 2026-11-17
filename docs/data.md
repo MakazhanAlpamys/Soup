@@ -1462,15 +1462,46 @@ Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator`
 
 ## Data Mixing Optimizer (BETA)
 
-Search for the dataset mixture weights that minimise eval loss on a short proxy run.
+Search for dataset mixture weights using validation loss from proxy training runs.
+Without `--live`, the command instead uses an **offline synthetic loss**: a quadratic
+penalty around uniform weights. That mode runs no training or evaluation and does not
+measure dataset quality or model improvement.
 
 ```bash
-soup data mix --optimize --budget 1h \
+soup data mix --optimize --live --base-yaml soup.yaml --budget 1h \
     --datasets dolma.jsonl,wikipedia.jsonl,arxiv.jsonl \
     --num-probes 8 --output mix_recipe.yaml
 ```
 
-Writes a YAML recipe you can splice into your `soup.yaml`: `data.train` renders as the full ranked dataset list (index-aligned with `data.interleave.probs`), and `data.interleave` carries the searched mixture weights — as of #443, `data.interleave` is fully wired into training-time dataset loading, so `soup train` consumes the real N-dataset mixture this search found rather than collapsing to one path. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
+Live mode requires `task: sft`, `backend: transformers`, `modality: text`,
+`data.streaming: false` (eager loading), and a positive `data.val_split` in the base
+config. Unsupported configurations fail before training starts. Live mode consumes
+raw local datasets; `data.format: pre_tokenized` caches are unsupported because that
+path bypasses raw mixture loading. For supported probability mixtures, the loader
+holds out each source's tail **before** applying mixture weights, keeping the
+validation rows fixed across candidates. This is not
+cross-source deduplication: remove duplicate or overlapping examples across sources
+before searching.
+
+Each candidate gets a unique run ID, a private tracker database and temporary output
+directory; its inherited `experiment_name` is cleared. A valid score must come from
+that exact completed run, with matching output identity: the latest `kind=eval`
+metric must contain a finite `val_loss` at the run's final `total_steps`. Training
+loss, stale runs and earlier evaluations are not fallback scores. If the final
+evaluation is missing, remove `training.eval_steps` to use default epoch evaluation.
+
+Candidate failures are isolated, so one failed run does not discard other measured
+candidates. If no candidate has a valid measurement, the command exits nonzero and
+writes no recipe. A successful search writes a spliceable `data:` block with the full
+dataset list in `data.train`, aligned with the weights in `data.interleave.probs`;
+`soup train` consumes that mixture. A lower proxy validation loss is not evidence of
+higher task accuracy; evaluate the chosen mixture separately on held-out task tests.
+
+`--budget` accepts `60s` / `5m` / `1h` / `24h`; candidates also have subprocess timeouts,
+and `partial=True` indicates the search stopped at its budget. Model and training
+settings are inherited from `--base-yaml`, so choose a suitably small model and short
+training schedule yourself. Live compute and storage costs depend on those settings
+and the number of attempted training runs.
 
 Re-apply a previously written recipe:
 
@@ -1478,7 +1509,8 @@ Re-apply a previously written recipe:
 soup data mix --apply mix_recipe.yaml
 ```
 
-Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup train` proxy run. Without `--live`, Soup uses a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
+The default search uses a deterministic Dirichlet sampler. Library callers can supply
+`scikit-optimize` through `OptimizerProtocol`.
 
 
 ## AOT Tokenization with `soup data preprocess`
