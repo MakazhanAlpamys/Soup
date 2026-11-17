@@ -319,7 +319,7 @@ class LoopState:
             v = self.canary_traffic_pct
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ValueError("canary_traffic_pct must be numeric or None")
-            if not (0.0 <= float(v) <= 100.0):
+            if not (0 <= v <= 100):  # no float(): a huge int would overflow (false for NaN)
                 raise ValueError("canary_traffic_pct must be in [0, 100]")
         if self.monthly_budget_usd is not None:
             v = self.monthly_budget_usd
@@ -354,7 +354,7 @@ class LoopState:
         if (
             isinstance(v, bool)
             or not isinstance(v, (int, float))
-            or not (0.0 < float(v) <= 100.0)
+            or not (0 < v <= 100)  # no float(): a huge int would overflow (false for NaN)
         ):
             raise ValueError("deploy_traffic_pct must be in (0, 100]")
         for fname in (
