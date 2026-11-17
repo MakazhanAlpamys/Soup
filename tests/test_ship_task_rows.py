@@ -1219,6 +1219,93 @@ def test_cli_a_failed_generation_is_flagged_in_its_row(monkeypatch):
         "generation_failures"]["tuned"]
 
 
+@pytest.mark.parametrize(("filename", "key"), [("out.json", "task_win"), ("ev.json", "task")])
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("base flag", r"generation_failures\.base: recorded 1, task-rows file has 0"),
+        ("tuned flag", r"generation_failures\.tuned: recorded 2, task-rows file has 1"),
+        ("both flags", r"generation_failures\.base: recorded 1, task-rows file has 0"),
+        ("high", r"generation_failures\.base: recorded 2, task-rows file has 1"),
+        ("low", r"generation_failures\.tuned: recorded 1, task-rows file has 2"),
+        ("n", r"generation_failures\.n: recorded 9, task-rows file has 8"),
+        ("bool", r"generation_failures\.base must be an integer"),
+        ("float", r"generation_failures\.base must be an integer"),
+        ("missing", r"generation_failures\.tuned must be an integer"),
+        ("malformed", "generation_failures must be an object"),
+    ],
+)
+def test_cli_task_rows_reject_inconsistent_failure_counts(
+    monkeypatch, tmp_path, filename, key, change, message
+):
+    base = _scripted(_answers(correct={0}), fail={"q2"})
+    tuned = _scripted(_answers(correct={0, 1, 2}), fail={"q3", "q4"})
+    run = _run(monkeypatch, _tasks(), base, tuned)
+    assert run.result.exit_code == 0, run.result.output
+    summary = run.json(filename)
+    failures = summary[key]["generation_failures"]
+    assert failures == {"base": 1, "tuned": 2, "n": 8}
+
+    summary_path = tmp_path / filename
+    rows_path = tmp_path / "out.task-rows.jsonl"
+    summary_path.write_bytes(run.files[filename])
+    rows_path.write_bytes(run.files[rows_path.name])
+    assert len(load_task_rows_for(str(summary_path)).rows) == 8
+
+    if change in ("base flag", "tuned flag", "both flags"):
+        rows = run.rows()
+        sides = ("base", "tuned") if change == "both flags" else (change.split()[0],)
+        for side in sides:
+            flag = f"{side}_failed"
+            next(row for row in rows if row[flag])[flag] = False
+        rows_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    elif change == "high":
+        failures["base"] += 1
+    elif change == "low":
+        failures["tuned"] -= 1
+    elif change == "n":
+        failures["n"] += 1
+    elif change == "bool":
+        failures["base"] = True
+    elif change == "float":
+        failures["base"] = 1.0
+    elif change == "missing":
+        del failures["tuned"]
+    else:
+        summary[key]["generation_failures"] = []
+
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_task_rows_for(str(summary_path))
+
+
+def test_null_failure_counts_do_not_require_a_measurement(tmp_path):
+    path = Path(_write_pair(tmp_path, mode="judge_score"))
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    summary["task_win"]["generation_failures"] = None
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
+@pytest.mark.parametrize("mode", ["metric", "judge_score", "pairwise", "reward"])
+def test_supplied_failure_counts_are_checked_in_every_mode(tmp_path, key, mode):
+    path = Path(_write_pair(tmp_path, key=key, mode=mode))
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+    counts = {"base": 0, "tuned": 0, "n": 3}
+    summary[key]["generation_failures"] = counts
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+    counts["tuned"] = 1
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    message = r"generation_failures\.tuned: recorded 1, task-rows file has 0"
+    with pytest.raises(ValueError, match=message):
+        load_task_rows_for(str(path))
+
+
 def test_cli_a_semantic_row_is_scored_by_matched_not_by_similarity(monkeypatch):
     tasks = [{"prompt": f"r{i}", "expected": "alpha beta gamma delta", "scoring": "semantic"}
              for i in range(3)]
