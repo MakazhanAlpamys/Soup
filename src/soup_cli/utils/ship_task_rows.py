@@ -3,8 +3,9 @@
 A SHIP is one number against another. This file is what the numbers are made of, so a reader can
 audit a verdict row by row: ``<stem>.task-rows.jsonl`` for ``--output <stem>.<ext>``, and ONLY
 with ``--output`` (``--emit-evidence`` alone writes nothing new). It is written by a live
-``--task-mode metric`` or ``judge_score`` run; a replay of evidence, ``--task-mode pairwise``
-and an adapter that changes nothing write none (``null`` in the verdict's ``task_rows``).
+``--task-mode metric``, ``judge_score`` or ``reward`` run; a replay of evidence,
+``--task-mode pairwise`` and an adapter that changes nothing write none (``null`` in the
+verdict's ``task_rows``).
 
 One line (compact JSON, ASCII only, ``\\n`` ends it, keys in this order, ``ROW_KEYS``)::
 
@@ -17,11 +18,14 @@ One line (compact JSON, ASCII only, ``\\n`` ends it, keys in this order, ``ROW_K
 * ``index``: the row's 0-based place in the task file; the row id (unique in a file).
 * ``prompt_hash``: the first 12 hex digits of ``sha256(prompt.strip().casefold())``, the key the
   loop's holdout split uses. Of the WHOLE prompt, also when ``text_cut``.
-* ``scoring``: the task's scoring rule; ``null`` for ``judge_score`` (a judge scores, not a rule).
+* ``scoring``: the task's scoring rule; ``null`` for ``judge_score`` (a judge scores, not a rule)
+  and for ``reward`` (a reward function scores).
 * ``base_score`` / ``tuned_score``: in [0, 1]. ``metric``: 1.0 when the answer matched, else 0.0
   (never the fractional similarity of ``semantic``). ``judge_score``: the judge's per-row score
   rescaled to [0, 1] on its rubric scale, ``(score - min) / (max - min)``, never clamped (a score
-  outside the scale makes the file impossible, and it is then left out).
+  outside the scale makes the file impossible, and it is then left out). ``reward``: what the
+  reward function returned for that answer, a finite number in [0, 1]; a row whose generation
+  failed is 0.0 and the function is not called for it (``base_failed`` / ``tuned_failed``).
 * ``change``: ``better`` / ``worse`` / ``same`` (``row_change``: tuned against base, 1e-9).
 * ``base_truncated`` / ``tuned_truncated``: the answer stopped at the new-token cap, from the
   generator's token ids; ``null`` when not measured (a plain-text generator, a failed generation).
@@ -35,7 +39,11 @@ of the verdict and the same for ``tuned_score`` / ``task_win.tuned``: EXACTLY (b
 ``judge_score``, whose reported number is the evaluator's own (the rescaled mean of its raw scores,
 as 0.77.x reported it) and may differ from the mean of the rescaled rows by a rounding. The
 reported number is NEVER rebuilt from the rows: that moved it by one rounding and turned a
-mathematical tie into a win. ``row_mean`` is a plain left-to-right sum divided by the count (no
+mathematical tie into a win. For ``reward`` the reported number is made FROM the rows: the exact
+mean of the decimal numbers in the file (``decimal_mean``: the shortest-repr decimals added in exact
+arithmetic, divided, rounded once), so it is the same float for the same numbers in any order and
+the check is exact; a plain loop over the column agrees to about 1e-15. ``row_mean`` is a plain
+left-to-right sum divided by the count (no
 ``sum()``, whose float result changed in Python 3.12, and no ``fsum``), so a reader in any language
 gets the same double. Scores are written with their shortest round-trip ``repr``.
 ``build_task_rows`` refuses legs where the rows do not add up to the reported number, so a file is
@@ -72,9 +80,11 @@ from soup_cli.utils.ship_verdict import (
     CHANGE_SAME,
     CHANGE_WORSE,
     MAX_TASK_ROWS,
+    MODE_REWARD,
     ROW_CHANGES,
     TASK_ROWS_SUFFIX,
     LegScore,
+    decimal_mean,
     row_change,
     task_rows_pointer_error,
 )
@@ -255,15 +265,17 @@ def _columns(leg: LegScore, side: str) -> Tuple[tuple, tuple, tuple, tuple, tupl
 
 
 def build_task_rows(
-    base_leg: object, tuned_leg: object, *, scoring_applies: bool
+    base_leg: object, tuned_leg: object, *, scoring_applies: bool, decimal: bool = False
 ) -> Tuple[TaskRow, ...]:
     """The rows of a task leg from its two ``LegScore`` s; refuses legs that cannot be audited.
 
-    ``scoring_applies`` is True when a rule scored the rows (``metric``) and False for a judge.
-    The reported number of each leg must be ``row_mean`` of its rows: exactly for a rule, within
-    ``JUDGE_MEAN_TOLERANCE`` for a judge (whose number is the evaluator's own). When it is not
-    (an evaluator whose overall score is not the mean of its rows) nothing is built, so a file
-    is never written that does not add up to the verdict it sits next to.
+    ``scoring_applies`` is True when a rule scored the rows (``metric``) and False for a judge or
+    a reward function. The reported number of each leg must be ``row_mean`` of its rows: exactly
+    for a rule, within ``JUDGE_MEAN_TOLERANCE`` for a judge (whose number is the evaluator's own).
+    With ``decimal`` (the ``reward`` mode) it must be ``decimal_mean`` of its rows, EXACTLY: that
+    mode makes its number from the rows itself. When it is not (an evaluator whose overall score
+    is not the mean of its rows) nothing is built, so a file is never written that does not add
+    up to the verdict it sits next to.
     """
     if not isinstance(base_leg, LegScore) or not isinstance(tuned_leg, LegScore):
         raise TypeError("both legs need LegScore objects carrying their rows")
@@ -279,9 +291,10 @@ def build_task_rows(
 
     base_unit = [_unit_score(v, f"base row score[{i}]") for i, v in enumerate(base_scores)]
     tuned_unit = [_unit_score(v, f"tuned row score[{i}]") for i, v in enumerate(tuned_scores)]
-    tolerance = 0.0 if scoring_applies else JUDGE_MEAN_TOLERANCE
+    tolerance = 0.0 if scoring_applies or decimal else JUDGE_MEAN_TOLERANCE
+    mean_of = decimal_mean if decimal else row_mean
     for side, unit, leg in (("base", base_unit, base_leg), ("tuned", tuned_unit, tuned_leg)):
-        mean = row_mean(unit)
+        mean = mean_of(unit)
         if not abs(mean - float(leg)) <= tolerance:  # written so that a NaN is refused too
             raise ValueError(
                 f"the {side} row scores average {mean!r}, not the reported {float(leg)!r}"
@@ -575,6 +588,7 @@ def load_task_rows(
     tuned: Optional[float] = None,
     counts: Optional[Mapping[str, int]] = None,
     mean_tolerance: float = 0.0,
+    decimal: bool = False,
 ) -> LoadedTaskRows:
     """Read a rows file strictly; raises ``ValueError`` naming the first defect.
 
@@ -586,8 +600,10 @@ def load_task_rows(
     ``MAX_FILE_BYTES``. Given the numbers of the verdict or evidence that names the file: a row
     count that is not ``n``, a column mean that is not ``base`` / ``tuned`` (EXACTLY, or within
     ``mean_tolerance``: pass ``JUDGE_MEAN_TOLERANCE`` for a ``judge_score`` verdict), class counts
-    that are not ``counts`` (``better`` / ``worse`` / ``same``). A message names the defect and
-    the line; it echoes no value of the file, only at most five key names for unsupported fields.
+    that are not ``counts`` (``better`` / ``worse`` / ``same``). With ``decimal`` (a ``reward``
+    verdict) the column means are ``decimal_mean``, the exact mean of the decimals in the file.
+    A message names the defect and the line; it echoes no value of the file, only at most five key
+    names for unsupported fields.
     """
     try:
         info = os.stat(path)
@@ -635,8 +651,9 @@ def load_task_rows(
     if n is not None and count != n:
         raise ValueError(f"task-rows has {count} rows but the evidence says n = {n}")
     rows = tuple(sorted((entry for _, entry in entries), key=lambda entry: entry["index"]))
-    base_mean = row_mean(row["base_score"] for row in rows)
-    tuned_mean = row_mean(row["tuned_score"] for row in rows)
+    mean_of = decimal_mean if decimal else row_mean
+    base_mean = mean_of([row["base_score"] for row in rows])
+    tuned_mean = mean_of([row["tuned_score"] for row in rows])
     if base is not None and not abs(base_mean - base) <= mean_tolerance:
         raise ValueError(f"the base_score mean {base_mean!r} is not the reported base {base!r}")
     if tuned is not None and not abs(tuned_mean - tuned) <= mean_tolerance:
@@ -741,6 +758,7 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
         tuned=_reported(block, "tuned"),
         counts=rows,
         mean_tolerance=JUDGE_MEAN_TOLERANCE if block.get("mode") == "judge_score" else 0.0,
+        decimal=block.get("mode") == MODE_REWARD,
     )
 
 

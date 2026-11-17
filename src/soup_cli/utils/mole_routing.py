@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, quote_path
 
 # torch is imported lazily inside every function that needs it (CLI-startup hot
 # path stays torch-free); tensor params/returns are left unannotated to keep the
@@ -293,6 +293,26 @@ def build_gating_kernel(config: MoleGatingConfig):
 _MANIFEST_FILENAME = "mole_manifest.json"
 _GATE_FILENAME = "mole_gate.pt"
 _MAX_MANIFEST_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the manifest file
+
+
+def load_gate_state(path: str) -> dict:
+    """Read a MoLE ``mole_gate.pt`` with ``weights_only=True``, or refuse it by name.
+
+    Shared by ``load_mole_for_serve`` and the MoLE trainer's resume. A file the strict
+    loader cannot read (truncated, corrupt, or needing more than tensors and plain
+    containers to load) raises ``ValueError`` naming the file and what to do, instead of
+    a raw pickle / torch traceback. Never retries with a less strict load.
+    """
+    import torch
+
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:  # noqa: BLE001 — any loader failure becomes a named refusal
+        raise ValueError(
+            f"mole gate {quote_path(str(path))} was refused: it is truncated or corrupt, or "
+            f"holds more than tensors and plain containers ({type(exc).__name__}). Delete "
+            "this file, or restore a gate written by soup; nothing was loaded from it."
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -814,7 +834,7 @@ def load_mole_for_serve(
             top_k=manifest.top_k,
         )
     )
-    state = torch.load(real_gate, map_location="cpu", weights_only=True)
+    state = load_gate_state(real_gate)
     gate.load_state_dict(state)
     gate.eval()
     if device == "cuda":

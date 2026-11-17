@@ -401,15 +401,21 @@ def tool_recipes_show(args: dict) -> dict:
 def tool_runs_list(args: dict) -> dict:
     """`soup runs` — recent experiment runs."""
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.paths import sanitize_run_row
 
     limit = _opt_int(args, "limit", 50, lo=1, hi=500)
-    runs = ExperimentTracker().list_runs(limit=limit)
-    return {"runs": runs, "count": len(runs)}
+    tracker = ExperimentTracker()
+    try:
+        runs = tracker.list_runs(limit=limit)
+    finally:
+        tracker.close()
+    return {"runs": [sanitize_run_row(run) for run in runs], "count": len(runs)}
 
 
 def tool_runs_show(args: dict) -> dict:
     """`soup runs show` — one run's full record."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+    from soup_cli.utils.paths import sanitize_run_row
 
     run_id = _require_str(args, "run_id")
     tracker = ExperimentTracker()
@@ -420,9 +426,9 @@ def tool_runs_show(args: dict) -> dict:
             if tracker.count_run_id_matches(run_id) > 1:
                 raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
             raise McpToolError("run not found")
+        return sanitize_run_row(run)
     finally:
         tracker.close()
-    return run
 
 
 def tool_registry_list(args: dict) -> dict:
@@ -696,6 +702,9 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
     "eval.ship.general_suite": "read by soup ship, not soup train",
     "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
     "eval.ship.baseline": "read by soup ship, not soup train",
+    "eval.ship.reward_fn": (
+        "a reward name or a .py path read (and executed) by soup ship, not soup train"
+    ),
 }
 
 # ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
