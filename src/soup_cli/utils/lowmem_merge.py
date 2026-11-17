@@ -14,6 +14,9 @@ from soup_cli.utils import stream_inference
 from soup_cli.utils.checkpoint_files import (
     HUB_FALLBACK_ALLOW_PATTERNS,
     HUB_FALLBACK_IGNORE_PATTERNS,
+    hub_second_call,
+    read_index_weight_map,
+    select_checkpoint_files,
 )
 
 _ADAPTER_PREFIX = "base_model.model."
@@ -56,6 +59,7 @@ _UNSUPPORTED_CONFIG = (
 )
 _COPIED_SUFFIXES = (".json", ".model", ".txt", ".tiktoken", ".jinja")
 _SHARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.safetensors")
+_HUB_COMMIT = re.compile(r"[0-9a-f]{40}")
 _WINDOWS_DEVICES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{number}" for number in range(1, 10)}
@@ -244,21 +248,24 @@ def _checked_shard_name(name: Any) -> str:
     return name
 
 
+def _indexed_shards(base_dir: Path, roots: List[str]) -> Tuple[List[str], Dict[str, Any]]:
+    _checked_source(base_dir, _INDEX_NAME, roots)
+    with open(base_dir / _INDEX_NAME, encoding="utf-8") as handle:
+        index = json.load(handle)
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise LowMemoryMergeError(f"{_INDEX_NAME} has no weight_map")
+    names = sorted({_checked_shard_name(name) for name in weight_map.values()})
+    if len({name.lower() for name in names}) != len(names):
+        raise LowMemoryMergeError(f"{_INDEX_NAME} lists shard names that differ only by case")
+    return names, index
+
+
 def _weight_files(
     base_dir: Path, roots: List[str]
 ) -> Tuple[List[str], Optional[Dict[str, Any]]]:
-    index_path = base_dir / _INDEX_NAME
-    if index_path.is_file():
-        _checked_source(base_dir, _INDEX_NAME, roots)
-        with open(index_path, encoding="utf-8") as handle:
-            index = json.load(handle)
-        weight_map = index.get("weight_map") if isinstance(index, dict) else None
-        if not isinstance(weight_map, dict) or not weight_map:
-            raise LowMemoryMergeError(f"{_INDEX_NAME} has no weight_map")
-        names = sorted({_checked_shard_name(name) for name in weight_map.values()})
-        if len({name.lower() for name in names}) != len(names):
-            raise LowMemoryMergeError(f"{_INDEX_NAME} lists shard names that differ only by case")
-        return names, index
+    if (base_dir / _INDEX_NAME).is_file():
+        return _indexed_shards(base_dir, roots)
     if (base_dir / _SINGLE_NAME).is_file():
         return [_SINGLE_NAME], None
     raise LowMemoryMergeError(
@@ -455,26 +462,60 @@ def _copied_suffixes(trust_remote_code: bool) -> Tuple[str, ...]:
 
     ``.py`` only when the user trusts remote code: an untrusted model's code is
     neither copied from a local base nor downloaded from the Hub. The one place
-    that rule is written, so :func:`hub_download_patterns` and
+    that rule is written, so :func:`hub_support_patterns` and
     :func:`_support_files` cannot drift apart (#2235).
     """
     return _COPIED_SUFFIXES + ((".py",) if trust_remote_code else ())
 
 
-def hub_download_patterns(trust_remote_code: bool) -> Tuple[List[str], List[str]]:
-    """``allow_patterns`` and ``ignore_patterns`` for fetching a Hub base to merge.
+def hub_support_patterns(trust_remote_code: bool) -> List[str]:
+    """``allow_patterns`` for the first call of a Hub base download: no weights.
 
     Built from the same suffixes :func:`_support_files` copies, so the files a
     Hub base downloads and the files a local base copies cannot drift apart
-    (#2235). The weights are the ``fallback`` rule's own Hub patterns from
-    :mod:`soup_cli.utils.checkpoint_files`: every ``*.safetensors`` except a
-    ``consolidated*`` copy at the top level or in a subdirectory, which is a
-    second copy of the weights that the merge never reads.
+    (#2235). ``*.json`` brings the index, which decides the weights
+    (:func:`hub_weight_patterns`).
     """
-    allow = list(HUB_FALLBACK_ALLOW_PATTERNS) + [
-        f"*{suffix}" for suffix in _copied_suffixes(trust_remote_code)
-    ]
-    return allow, list(HUB_FALLBACK_IGNORE_PATTERNS)
+    return [f"*{suffix}" for suffix in _copied_suffixes(trust_remote_code)]
+
+
+def hub_weight_patterns(snapshot: Path) -> Optional[Tuple[List[str], List[str]]]:
+    """``(allow_patterns, ignore_patterns)`` for the weights, from what the first call fetched.
+
+    The local rule of :mod:`soup_cli.utils.checkpoint_files` decides, so a Hub
+    base and a local base read the same files (#2856): with an index, the shards
+    it names, by name and with no ignore pattern; without one, every
+    ``*.safetensors`` except a ``consolidated*`` copy, which is a second copy of
+    the weights that the merge never reads (#2267). ``None`` when the snapshot
+    already holds them. The index's names pass the merge's own checks before
+    any of them becomes a download pattern, as a glob character would act as one.
+    Without an index the merge reads only ``model.safetensors``, so a cached
+    unindexed shard does not count as holding the weights.
+    """
+    names = os.listdir(snapshot)
+    weight_map = None
+    if (snapshot / _INDEX_NAME).is_file():
+        _indexed_shards(snapshot, _source_roots(snapshot))
+        try:
+            weight_map = read_index_weight_map(str(snapshot))
+        except ValueError as exc:
+            raise LowMemoryMergeError(str(exc)) from exc
+    if weight_map is None and _SINGLE_NAME not in names:
+        return list(HUB_FALLBACK_ALLOW_PATTERNS), list(HUB_FALLBACK_IGNORE_PATTERNS)
+    return hub_second_call(select_checkpoint_files(names, weight_map))
+
+
+def hub_snapshot_revision(snapshot: Path) -> Optional[str]:
+    """The commit of a canonical ``snapshots/<commit>`` cache directory, else ``None``.
+
+    The weight call asks for this commit when the run recorded no revision, so a
+    default branch that moves between the two calls cannot split the base
+    across two snapshots (#2856).
+    """
+    path = Path(os.path.abspath(snapshot))
+    if path.parent.name == "snapshots" and _HUB_COMMIT.fullmatch(path.name):
+        return path.name
+    return None
 
 
 def _support_files(base_dir: Path, roots: List[str], trust_remote_code: bool) -> List[Path]:
