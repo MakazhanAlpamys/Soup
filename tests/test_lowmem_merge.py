@@ -507,6 +507,48 @@ class TestCli:
         assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
         assert not (base.parent / "merged_out").exists()
 
+    def test_a_cached_unindexed_shard_still_fetches_model_safetensors(
+        self, checkpoints, monkeypatch, tmp_path
+    ):
+        """#2900 review: with no index the merge reads only ``model.safetensors``, so a
+        snapshot that already holds an unindexed shard still needs the second call."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        single = _tiny_base(tmp_path / "single", shard_size="10MB")
+        repo = base.parent / "repo"
+        repo.mkdir()
+        shutil.copyfile(single / "config.json", repo / "config.json")
+        shutil.copyfile(single / "model.safetensors", repo / "model.safetensors")
+        shard = "model-00001-of-00002.safetensors"
+        shutil.copyfile(sorted(base.glob("model-*-of-*.safetensors"))[0], repo / shard)
+        snapshot = base.parent / "snapshot"
+        snapshot.mkdir()
+        shutil.copyfile(repo / shard, snapshot / shard)
+        calls = []
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(repo, snapshot, calls)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/single-and-shards",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert len(calls) == 2, calls
+        assert (snapshot / "model.safetensors").is_file()
+        expected = _regular_merge(single, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
     def test_a_hub_base_gets_the_consolidated_shards_its_index_names(
         self, checkpoints, monkeypatch
     ):

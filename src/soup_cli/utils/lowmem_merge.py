@@ -12,6 +12,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from soup_cli.utils import stream_inference
 from soup_cli.utils.checkpoint_files import (
+    HUB_FALLBACK_ALLOW_PATTERNS,
+    HUB_FALLBACK_IGNORE_PATTERNS,
     hub_second_call,
     read_index_weight_map,
     select_checkpoint_files,
@@ -487,6 +489,8 @@ def hub_weight_patterns(snapshot: Path) -> Optional[Tuple[List[str], List[str]]]
     the weights that the merge never reads (#2267). ``None`` when the snapshot
     already holds them. The index's names pass the merge's own checks before
     any of them becomes a download pattern, as a glob character would act as one.
+    Without an index the merge reads only ``model.safetensors``, so a cached
+    unindexed shard does not count as holding the weights.
     """
     names = os.listdir(snapshot)
     weight_map = None
@@ -496,6 +500,8 @@ def hub_weight_patterns(snapshot: Path) -> Optional[Tuple[List[str], List[str]]]
             weight_map = read_index_weight_map(str(snapshot))
         except ValueError as exc:
             raise LowMemoryMergeError(str(exc)) from exc
+    if weight_map is None and _SINGLE_NAME not in names:
+        return list(HUB_FALLBACK_ALLOW_PATTERNS), list(HUB_FALLBACK_IGNORE_PATTERNS)
     return hub_second_call(select_checkpoint_files(names, weight_map))
 
 
