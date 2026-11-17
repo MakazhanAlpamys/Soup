@@ -6,9 +6,12 @@ a real model served by the soup serve app, real thumbs, the real ``soup train``
 (DPO) and ``soup ship`` subprocesses, a real PEFT load through
 ``POST /v1/adapters/load``, real canary generations, promotion and rollback.
 
-Run with: ``pytest -m smoke tests/test_loop_end_to_end_smoke.py`` (it is also a ``gpu`` test:
-skipped without a CUDA device, selected by ``pytest -m gpu``). It downloads
-the model on first use and takes minutes. ``soup ship`` decides on its own; a
+Run with: ``python -m pytest -m smoke tests/test_loop_end_to_end_smoke.py -q --no-cov
+-p no:cacheprovider`` (``-m smoke`` is required: the repo default ``-m 'not smoke'`` in
+``pyproject.toml`` deselects the file, so the same command without it exits 5 with ``1 deselected``
+and runs nothing; ``tests/test_loop_smoke_command.py`` pins that). It is also a ``gpu`` test:
+skipped without a CUDA device, selected by ``pytest -m gpu``. It downloads the model on first use
+and takes minutes. ``soup ship`` decides on its own; a
 one-pair DPO run is not expected to win, so the test checks that a real verdict
 was reached (never SKIPPED) and then canaries the trained adapter directly to
 exercise the rollout on the real model.

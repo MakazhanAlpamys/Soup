@@ -9,7 +9,8 @@ Real pieces: the soup serve FastAPI app (routes, auth, canary router, outcome
 counters, trace log, thumbs database, POST /v1/adapters/load), the loop daemon
 and its pre-wired stages, loop.yaml, soup loop init / rollback. Stubbed: text
 generation, the soup train and soup ship subprocesses, and PEFT itself. The
-same cycle on a real model is ``tests/test_loop_end_to_end_smoke.py``.
+same cycle on a real model is ``tests/test_loop_end_to_end_smoke.py`` (CUDA; run it with
+``pytest -m smoke tests/test_loop_end_to_end_smoke.py``: the repo default deselects it).
 """
 
 from __future__ import annotations

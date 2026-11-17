@@ -470,6 +470,8 @@ soup loop replay iter-20260515T120000-abcdef01
 
 The data formats the cycle passes between serving, feedback, training and rollout are defined in [Loop data formats](loop-formats.md).
 
+The whole cycle on a real model (a CUDA card, SmolLM2-135M, DPO, real `soup train` and `soup ship`, a real adapter load, canary, promotion and rollback; minutes) is `tests/test_loop_end_to_end_smoke.py`. Run it with `python -m pytest -m smoke tests/test_loop_end_to_end_smoke.py -q --no-cov -p no:cacheprovider`: `-m smoke` is required, because the repository's default `-m 'not smoke'` deselects the file and the same command without it exits 5 with `1 deselected`.
+
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
 
 **What the loop writes.** Besides the manifests, `soup loop` appends to three logs in
