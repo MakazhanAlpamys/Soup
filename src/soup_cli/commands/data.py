@@ -723,16 +723,11 @@ def stats(
 
 def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
     """Show image statistics if dataset contains image fields."""
-    if not data:
+    if not any("image" in row for row in data):
         return
 
     if image_dir is None:
         image_dir = Path.cwd()
-
-    # Check if this is a vision dataset
-    sample = data[0]
-    if "image" not in sample:
-        return
 
     total = len(data)
     has_image = sum(1 for row in data if row.get("image"))
