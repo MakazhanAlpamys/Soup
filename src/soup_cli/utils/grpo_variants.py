@@ -194,6 +194,8 @@ def apply_variant_loss(
     delta: float | None = None,
     completion_mask=None,
     reference_logp=None,
+    global_token_count=None,
+    num_processes: int = 1,
 ):
     """Compute the per-batch loss tensor for a GRPO variant (v0.53.11 #123).
 
@@ -215,6 +217,10 @@ def apply_variant_loss(
     - ``reference_logp``: the frozen reference policy's per-token log-probs,
       shape ``[B, T]`` (trl's ``ref_per_token_logps``). Required when
       ``beta > 0``; not read at all when ``beta == 0``.
+    - ``global_token_count``: optional completion-token count for the full
+      generation batch. Used by DAPO when supplied.
+    - ``num_processes``: process count used to convert the global count to a
+      per-process denominator, as in TRL.
 
     Returns a scalar torch tensor (or ``None`` for the standard variant —
     callers should fall through to the existing TRL ``GRPOTrainer.compute_loss``,
@@ -387,7 +393,18 @@ def apply_variant_loss(
         # PPO surrogate: min(ratio * A, clipped * A).
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
         token_loss = _with_kl(token_loss, per_token_kl, beta_f)
-        loss = _masked_mean(token_loss, completion_mask)
+        if global_token_count is None:
+            loss = _masked_mean(token_loss, completion_mask)
+        else:
+            if isinstance(num_processes, bool) or not isinstance(num_processes, int):
+                raise TypeError("num_processes must be a positive integer")
+            if num_processes < 1:
+                raise ValueError("num_processes must be a positive integer")
+            if completion_mask is not None:
+                token_loss = torch.where(
+                    completion_mask.bool(), token_loss, torch.zeros_like(token_loss)
+                )
+            loss = token_loss.sum() / (global_token_count / num_processes)
 
     elif normalised == "dr_grpo":
         # No length normalisation — sum across tokens then mean across batch.
