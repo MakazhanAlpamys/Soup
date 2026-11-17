@@ -2752,13 +2752,14 @@ def train(
         raise
 
     # Report
+    backend_hint = " --backend mlx" if cfg.backend == "mlx" else ""
     merge_hint = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
+        else f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
     )
 
     console.print(
@@ -2767,7 +2768,7 @@ def train(
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
+            f"Quick test:  [bold]soup chat{backend_hint} --model {result['output_dir']}[/]\n"
             f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
             f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
