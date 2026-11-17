@@ -1,0 +1,63 @@
+{
+  "review_url": "https://github.com/MakazhanAlpamys/Soup/pull/2915#issuecomment-6918994030",
+  "previous_pr_head": "c5ac634f8579408d13e45022d7759bd29f88efc9",
+  "source_correspondence": {
+    "ipo_wrapper": "byte-identical to previously qualified wrapper",
+    "production_executable_ast": "unchanged; schema comment corrected",
+    "cuda_test_body_and_decorators": "unchanged",
+    "cuda_fixture_functions": "unchanged",
+    "test_helper": "batch_size and gradient_accumulation_steps arguments added, both default 1; forwarded to existing config helper",
+    "only_added_test": "test_streamed_cpu_update_with_batch_and_accumulation_two, parametrized for both task spellings",
+    "historical_evidence_files": "all existing manifest entries and bytes unchanged"
+  },
+  "source_sha256": {
+    "src/soup_cli/trainer/ipo.py": "f4ba84524251e1b42cabefd29a8fa674a9f260e07823590c3d175fd6d73e1ddf",
+    "src/soup_cli/config/schema.py": "3aa1c1ac56c8093661770866dafa5a5aed834a7ccebb9385ceaa5b9e2843b5b4",
+    "tests/test_ipo_streaming.py": "5e94f2d450f201650b91579b0f8349eb6f0fb5ac1be9af4acae346007580c309",
+    "tests/test_v07204.py": "d6283809895b76f89577237a5d490d1521ed527737e7d1f579aa80cacce16388"
+  },
+  "verification": {
+    "targeted": {
+      "passed": 178,
+      "skipped": 28
+    },
+    "ipo_dependency_floor": {
+      "passed": 8,
+      "skipped": 10
+    },
+    "changelog_docs_license_gpu_marker_snapshots": {
+      "passed": 459,
+      "skipped": 1
+    },
+    "negative_controls": [
+      {
+        "case": "positive-copy",
+        "expected_result_observed": true,
+        "outcomes": 2,
+        "assertion": null
+      },
+      {
+        "case": "zero-learning-rate",
+        "expected_result_observed": true,
+        "outcomes": 2,
+        "assertion": "assert any(not before[name].equal(after[name]) for name in before)"
+      },
+      {
+        "case": "ignored-batch-size",
+        "expected_result_observed": true,
+        "outcomes": 2,
+        "assertion": "assert trainer.args.per_device_train_batch_size == 2"
+      },
+      {
+        "case": "ignored-accumulation",
+        "expected_result_observed": true,
+        "outcomes": 2,
+        "assertion": "assert trainer.args.gradient_accumulation_steps == 2"
+      }
+    ],
+    "ruff_src_tests_scripts_benchmarks": "passed",
+    "git_diff_check": "passed"
+  },
+  "cuda": "No new run; the ten recorded cells use the original qualification patch and batch 1 / accumulation 1.",
+  "limits": "CPU batch 2 / accumulation 2 only. Full local suite not rerun. Allocator figures are not peak VRAM or cross-card comparisons."
+}

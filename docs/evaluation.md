@@ -217,6 +217,12 @@ Git-for-Windows' bundled bash on Windows.
 
 Halt training automatically if a declarative eval suite regresses beyond a threshold vs a baseline. The gate runs at epoch boundaries — no wasted compute on runs that are already worse.
 
+Eval-gated training requires a live training callback. `soup train` refuses an
+enabled gate on `backend: mlx` and on `task: prm`, `unlearn` or
+`moe_lora_routing`, whether enabled in YAML or through `--gate`. It names the
+unsupported backend or task and exits 1 before building a model. Omit or disable
+`training.eval_gate` and remove `--gate` to train on those paths.
+
 **Configure in `soup.yaml`:**
 
 ```yaml
@@ -257,7 +263,7 @@ tasks:
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
 
-`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` stops with the error and exits 3, and `soup train --gate` and `soup train` with the suite named in `training.eval_gate` stop with it and exit 1, before `--dry-run` returns. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
 An eval gate must contain at least one task. Empty or missing `tasks` lists,
 including a misspelled key that leaves the list empty, are refused with a
@@ -290,7 +296,7 @@ task and file. It has no measured score, fails the gate even at threshold zero,
 and cannot create or replace a baseline when no other task was scored.
 
 Judge JSONL rows must be objects and an explicitly present `prompt` must be a
-string; invalid rows are refused before that row reaches generation, naming the
+string; invalid rows are refused before any row reaches generation, naming the
 task, file, physical line and field or row shape. Missing and empty-string
 prompts keep their existing behavior, as does the CLI's failed-gate exit (#1949).
 
@@ -361,7 +367,7 @@ soup drift-alarm --reference ft-time.jsonl --live yesterday.jsonl --threshold 0.
 
 Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks are SSRF-validated (loopback HTTP only, RFC1918 / 169.254.x / `100.64.0.0/10` / `fec0::/10` / 0.0.0.0 rejected). On drift the CLI exits with code 3 — cron-friendly automation.
 
-Each JSONL row's text is read from `output`, `response` or `text`. A file in which no row carries one of those keys (a live log keyed `completion`, an empty file, all-malformed JSON) is not a passing gate: nothing was compared, so the command exits 1 naming the file and the keys instead of printing OK with `n_live: 0` (#1808).
+Each JSONL row's text is read from `output`, `response` or `text`. A file in which no row carries one of those keys (a live log keyed `completion`, an empty file, all-malformed JSON) is not a passing gate: nothing was compared, so the command exits 1 naming the file and the keys instead of printing OK with `n_live: 0` (#1808). If a file has readable rows but no tokens, the command likewise exits 1, naming the affected input and file without issuing a verdict.
 
 
 ## Diagnose (Post-Training Report Card)
@@ -383,6 +389,9 @@ soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M --adapter ./raft
 
 # Compute scores from a pre-built evidence JSON
 soup diagnose my-run-id --evidence evidence.json --output diag.json
+
+# Same, but a mode missing from the file is NOT_RUN (exit 3) instead of a neutral OK
+soup diagnose my-run-id --evidence evidence.json --require-all-modes
 
 # Twitter-shareable SVG badge embeddable in a model card
 soup diagnose my-run-id --badge diag.svg
@@ -427,11 +436,13 @@ directly comparable. Unspaced scripts (like Lao, Khmer, Myanmar, and halfwidth k
 
 **Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR - wire into CI to fail the build on regression - and exits 3 when a requested probe did not run (see `NOT_RUN` below).
 
-**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` or `--holdout` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `-` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads.
+**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` or `--holdout` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `-` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated (unless `--require-all-modes`, see below); a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads.
 
 **Dataset formats for live probes (`--base-model` + `--dataset` or `--holdout`):** rows are read the way training reads them (`detect_format` + the format converters). ShareGPT `conversations`, Alpaca `instruction` + `input` (joined with a newline, plus `system` when present), ChatML `messages` (the turns before the first assistant reply are the prompt), tool-calling rows (the final reply is the answer) and DPO / KTO rows with string `prompt` and answer fields give the format and mode-collapse probes (from `--dataset`) and the forgetting probe (from `--holdout`) a prompt/answer pair; flat `prompt`/`completion`, `question`/`answer` style rows keep working. Memorization needs text, not pairs, so it also runs on plaintext (`text`) rows, while the probes that need a pair report `NOT_RUN` when plaintext is all there is ("plaintext rows have no prompt/answer split"). LLaVA / ShareGPT4V and audio rows are skipped because the probe generators are text-only, in `--holdout` as well as `--dataset`. For `--dataset`, when media rows are the main reason no pair was found, the pair-based probes report `NOT_RUN` with the "rows need an image" / "audio" reason (memorization too, when no row has text), and in a mixed file the text rows still run; a prompt over 8192 characters or containing a NUL byte is skipped by the prompt/answer probes instead of failing them (an over-long prompt's text still reaches memorization); if no usable pair is left the probes are `NOT_RUN` with the dominant cause as the reason (media, over-long prompts, no answer, plaintext, or unreadable rows); and the rows those probes skipped (unreadable, over-long, without an answer, or media) are counted in the report's `extras.rows_skipped` and printed as `Rows skipped: ...`. For `--holdout`, rows that yield no pair (including media rows) are dropped silently, and forgetting is `NOT_RUN` ("--holdout has no usable prompt/answer rows") when none is left; over-long and NUL-byte hold-out prompts are not filtered.
 
 **Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR (exit 2) or `NOT_RUN` (exit 3). Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
+
+**Requiring full coverage (`--require-all-modes`):** by default a mode you leave out of the evidence file reads as a neutral OK, so an evidence file with no scores at all passes. Pass `--require-all-modes` to `soup diagnose --evidence` (or `--diagnose-gate-require-all-modes` together with `--diagnose-gate` on `soup train`, or `"require_all_modes": true` on the MCP `diagnose_evidence` tool) and every absent mode becomes `NOT_RUN` ("no evidence supplied"): the run exits 3 unless `--allow-not-run`, and MAJOR still exits 2. The flag only applies to evidence runs; `soup diagnose --require-all-modes` without `--evidence` exits 3, and `--diagnose-gate-require-all-modes` without `--diagnose-gate` is rejected before training starts.
 
 
 ## Ship Verdict (`soup ship`)
@@ -462,7 +473,7 @@ skipped without a message. Weights the reader refuses (`adapter_model.bin`, a sy
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).
 
-`--base-adapter <path>` swaps the *before* side from the bare base to `base + that LoRA adapter`,
+`--base-adapter <path>` (and `--adapter`) must not hold pickle weights (`adapter_model.bin`, `.pt`): `soup ship` refuses them before PEFT reads the directory (exit 3, `unsafe weight file (pickle / PyTorch-classic)`), so use safetensors; a safetensors file that is merely unreadable is not refused, only warned about. It swaps the *before* side from the bare base to `base + that LoRA adapter`,
 so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
 already in production (`base + --base-adapter`), both trained from the same base. It is a live
 run with `--adapter` only. `soup ship` refuses it, with exit code 3 and a message naming both
@@ -474,6 +485,80 @@ The `adapter_noop` check above is skipped: an all-zero `--adapter` equals the ba
 no longer the before side. The `--output` JSON gains a `base_adapter` key (the path, or `null`), the
 terminal panel prints a `Base adapter:` line, and `--noise-floor` repeats run on the
 `base + --base-adapter` model.
+
+#### `--gate loop-v2`: did the new version learn the corrections?
+
+`--gate loop-v2` is the verdict for a continual-learning loop, where a person corrects answers and
+the next version must have learned them without losing the edits kept aside. It is a live run: the
+old version is the base (or `base + --base-adapter`, the version in production) and the new
+version is the candidate. Without `--gate` nothing changes. `soup ship` refuses, with exit code 3
+and a message naming both flags, `--corrections` or `--held-out` without the gate, any other
+`--gate` value, and the gate together with `--evidence`, `--emit-evidence` or
+`--require-provenance` (evidence holds scores only and would replay as the plain verdict).
+
+| Option | File (JSONL, one object per line) |
+|---|---|
+| `--corrections FILE` | `{"edit_id": str, "expected": str, "original": str, "paraphrases": [str, ...]}`: the corrected text, the answer that was corrected, and 1 to 20 rewordings of the question |
+| `--held-out FILE` | `{"edit_id": str, "prompt": str, "expected": str, "original": str}`: an edit kept out of training |
+
+Both files are read under the working directory (no symlink, at most 16 MiB, at most 10,000 rows,
+text fields at most 20,000 characters, `edit_id` unique per file). A bad row is exit code 3 and the
+message names the file, the line and the problem, for example
+``--corrections 'c.jsonl' line 7: "paraphrases" must be a list of 1 to 20 non-empty strings``. A
+missing or empty file is "no rows", not an error.
+
+**Scoring, `added_recall`.** The *added words* of a correction are its content words (lowercased,
+punctuation stripped, stop words removed; negations and numbers are content) that the answer it
+corrected lacked; with fewer than two of them, all of its content words. An answer is a *hit* when
+at least half of the added words are in it, with its `<think>` block removed first. The tokenizer,
+the stop list and the threshold are those of the consuming application's reference
+implementation, word for word.
+
+**Generation.** Both versions answer the corrections and held-out questions greedily with up to
+512 new tokens, as the consuming application does: the 256 that `--task-eval` and the suites use can cut a verbose
+answer before it reaches the corrected fact and score a miss the model did not earn. `--task-eval`
+and the suites keep their 256. The gate rebuilds its generators on the models already loaded for
+the verdict (nothing is loaded twice), so `--base-adapter` and `--chat-template-kwargs` apply to
+its questions too.
+
+**Check 1, corrections learned** (`--corrections`). Per edit, both versions answer every paraphrase
+and the hits are counted: more hits for the new version is *fixed*, fewer is *broken*, equal is a
+tie. `p_value` is the one-sided exact sign test `P(X >= fixed)`, `X ~ Binomial(fixed + broken,
+1/2)`. Outcome: `not_applicable` (no rows), `insufficient` (`fixed + broken < 5`), `pass` (`p <
+0.05`), else `fail`.
+
+**Check 2, held-out edits** (`--held-out`), non-inferiority. Both versions answer the original
+prompt and the number of added words each answer holds is compared (the recall, not the hit):
+*better*, *worse* or a tie. `p_value` is `P(X >= worse)`, `X ~ Binomial(worse + better, 1/2)`.
+Outcome: `not_measured` (fewer than 5 edits), `fail` (`p < 0.05`), `weak` (fewer than 10 edits),
+else `pass`. With `--task-mode pairwise` a judge also rates the held-out answers; that is recorded
+as `held_out.style` and never decides.
+
+**The decision.** SHIP only if check 1 is `pass`, check 2 is not `fail`, and the general suites
+hold. The suites always run, with or without held-out rows: `--task-eval` and the leg-2 suite are
+measured exactly as without the gate, and their two rules keep deciding (`missing_baseline`: nothing
+was measured; `regression`: a benchmark dropped past the threshold or the measured noise floor).
+The leg-1 task win stops deciding and stays in the output as information. Otherwise exit code 2,
+with the most decisive reason: the suites, then `held_out` (significantly worse), then
+`corrections` (not learned), then `corrections_insufficient` (`not enough corrections yet (k/5)`,
+`k = fixed + broken`), then `no_corrections` (`no corrections to check - the canary's ratings
+decide`).
+
+`--output` gains `gate` (`"loop-v2"`), `corrections` and `held_out` (the loop iteration format's
+`verdict.corrections` and `verdict.held_out`, with `scoring: {"method": "added_recall",
+"threshold": 0.5, "template": null}`), `reason` (null on SHIP), `held_out_note` (in words: `held-out edits not checked: 2 of 5 needed;
+this verdict says nothing about them`, or `checked on few edits` below 10; null when the check
+ran on enough edits) and `canary_decides`, which is
+`true` only for `no_corrections` when nothing else is wrong, so the canary's ratings, not this
+gate, settle the rollout. Known limits: the stop list is English only (a Russian answer's "в"
+counts as a content word); the gate emits no extra `--progress jsonl` phases, but it prints a console line at least every 5 answers, and one when the last answer is in (`Gate loop-v2: 35/140 answers asked (12 min 4 s elapsed)`; counts and a clock reading only); an answer that takes longer than 30 s prints when it returns, not while it runs (a line is only printed when an answer comes back), so a gate of tens of minutes can be told from a hang; `--emit-evidence` is
+refused because the evidence cannot carry the two checks.
+
+```bash
+soup ship --base <base> --base-adapter ./adapters/v1 --adapter ./adapters/v2 \
+  --task-eval tasks.jsonl --gate loop-v2 \
+  --corrections corrections.jsonl --held-out held_out.jsonl --output verdict.json
+```
 
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
@@ -501,6 +586,11 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
 # that answers "tie" still scores 0.5. The error says how many pairs were not judged (#1522).
 
+# Leg-1 via a reward function (a number from 0 to 1 per row; the mean decides). A `.py` file
+# named by --reward-fn is EXECUTED as Python code: see "Reward mode" below.
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode reward --reward-fn accuracy
+
 # Reference-guided judging (#2520): the judge also sees each task row's `expected`
 # answer, in both judge modes. Off by default; without it the prompts are unchanged.
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
@@ -527,7 +617,7 @@ substance with that reference. It applies to `--task-mode judge_score` and
   names the field and the file's line number, and it is found before any model
   loads. A `scoring: "regex"` row is refused too: its `expected` is a pattern,
   not an answer.
-- `--judge-reference` with `--task-mode metric` (from the flag or
+- `--judge-reference` with `--task-mode metric` or `reward` (from the flag or
   `eval.ship.task_mode`) or with `--evidence` is a usage error.
 - The reference is shown fenced as data, not as instructions to the judge. In
   pairwise mode both swap orders get the same reference, and a disagreement
@@ -538,8 +628,9 @@ The judge prompts are versioned templates in `soup_cli.eval.judge_templates`:
 `judge_score.preference`, `judge_score.reference`, `pairwise.preference` and
 `pairwise.reference`, each with an integer version. In the `--output` verdict
 JSON, a judge-mode `task_win` carries `judge_mode` (`preference` or `reference`)
-and `judge_template` (`{"id", "version"}`); a metric `task_win` carries neither.
-`--emit-evidence` writes the two fields only for a reference-judged leg, so
+and `judge_template` (`{"id", "version"}`); a metric or reward `task_win` carries
+neither. `--emit-evidence` writes the two fields only for a reference-judged leg,
+as `schema_version` 2 fields (a version-1 file that carries them is refused), so
 evidence from a default run is unchanged and older evidence still reads as
 preference judging.
 
@@ -830,8 +921,10 @@ soup ship --evidence ship_evidence.json --config soup.yaml --adapter ./adapter \
 `--task-eval` and suite/judge settings come from `eval.ship` or explicit CLI flags,
 with the usual CLI precedence. The strict gate (exit 3 on missing/mismatched
 identity) compares adapter and task bytes, current local training-source bytes,
-suite version, policy and the evidence's actual task mode/benchmark set. Unknown
-adapter/task identities are refused. Store emitted evidence outside the adapter
+suite version, policy and the evidence's actual task mode/benchmark set (in reward mode
+also that the evidence's `task.reward`, the function and hash its scores name, is the one in
+the binding's policy, so a hand-edited `task.reward.fn` or `task.reward.sha256` is refused).
+Unknown adapter/task identities are refused. Store emitted evidence outside the adapter
 directory: the manifest covers its files. A changed input during a live emitted
 run is refused on the before/after comparison; this is not a filesystem snapshot.
 
@@ -892,6 +985,403 @@ Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
 
+### Adapter update size, and what it does not tell you (#2762)
+
+A `soup ship --adapter ./out` run prints one more line beside the verdict: how much of
+the base the adapter's merged update actually changes.
+
+```text
+Adapter update: changes 8,534,916 of 1,310,195,712 elements of its 196 target modules
+in the base dtype (bfloat16), fraction 6.514e-03.
+Warning: the adapter changes fewer than 1% of the elements of its target modules
+(6.514e-03 < 1e-02). Adapters trained with a near-zero learning rate sit in this range,
+and so can an early checkpoint of a real run. This line does not change the verdict.
+```
+
+The number is the share of the elements of the adapter's **target modules** whose value
+differs from the base weight once the LoRA update is added in the **base's own dtype**,
+with the same arithmetic `soup merge --low-memory` writes. Values are compared, not bits:
+adding a zero contribution turns `-0.0` into `+0.0`, which is not a change, and a `NaN`
+that stays `NaN` is not one either. Only the base tensors the adapter targets are read,
+one at a time (memory-mapped); the model itself is not loaded, so the count adds roughly
+the time it takes to read those tensors and nothing else — **about 14 s** for the
+Qwen2.5-1.5B / 196-module case above, 0.1–17 s across the table below by module count.
+A 7B-class base and the peak memory are **not measured**: the count streams the base, reading
+one target tensor at a time and forming each update in float32 (the arithmetic
+`lowmem_merge.merged_tensor` uses), so the peak is one tensor's float32 copy on top of that
+tensor, not the model.
+
+The line is **display only**. It never changes the verdict, `failed_rule` or the exit
+code, and it is not part of the `--evidence` schema, so a verdict still replays as input
+exactly as before. An adapter the low-memory reader refuses to parse — DoRA, `bias`
+other than `none`, `modules_to_save`, embedding or `lm_head` targets, a non-LoRA PEFT
+type — prints `Adapter update: not measured (<reason>)` instead, so "no number" is never
+shown as "0 %". The warning line is added only when the fraction is **below `1e-2`**.
+
+**Why a warning and not a rule.** The instrument was calibrated by training seven runs
+with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
+checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
+fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
+interleave:
+
+| adapter | kind | changed fraction (base dtype) | fp16 merge |
+|---|---|---|---|
+| control r16 lr 1e-8, step 10 | control | 3.56e-05 … 6.52e-04 | 0 … 4.74e-03 |
+| control r16 lr 1e-7, step 10/50/190 | control | 4.66e-04 … **6.51e-03** | 3.13e-03 … 5.17e-02 |
+| lowlr r16 lr 2e-6, step 5 | real, lr/100 | **2.47e-03** … 1.03e-01 | 1.96e-02 … 5.37e-01 |
+| lowlr r16 lr 2e-5, step 5 … 190 | real, lr/10 | 2.46e-02 … 2.81e-01 | 1.85e-01 … 8.01e-01 |
+| real r16 lr 2e-4, step 2 … 190 | real | 2.66e-02 … 7.25e-01 | 1.99e-01 … 9.61e-01 |
+| low-rank r1 q / r2 v, lr 2e-4 | real, low rank | 8.45e-02 … 7.79e-01 | 4.84e-01 … 9.67e-01 |
+| 9 public LoRA adapters, 7 bases | public | 5.07e-01 … 9.88e-01 | 9.12e-01 … 9.85e-01 |
+
+The highest control (**6.51e-03**, lr 1e-7 at step 190) sits *above* the lowest real
+adapter (**2.47e-03**, lr 2e-6 at step 5) by less than a factor of three, and the real
+family spans 2.5e-3 → 0.99. **No fraction separates "changes nothing" from "changes
+something"**, so the number cannot be a pass/fail rule and the threshold is chosen as a
+round warning bound rather than calibrated. A short follow-up on the same rows found the
+same thing for behaviour: the NLL gain (and the fraction of greedy tokens whose argmax
+moves) stays near zero and its 95 % CI straddles 0 across the whole control band *and*
+the lowest real band, only becoming clearly positive past ~0.06 — which is itself inside
+the real family, not a boundary. The fp16 column is the fraction when the same update is
+merged in fp16 instead of the base dtype; it is much larger for the same adapter, which
+is why the printed number is always the base dtype's, and why a control that changes
+"0" weights in fp16 still changes weights in bf16.
+
+**Read it as a smell, not a verdict.** A fraction below `1e-2` says the adapter is an
+early checkpoint, or was trained with a near-zero learning rate, or targets very few
+modules — worth a second look before shipping. The existing `adapter_noop` rule (every
+`lora_B` zero, no other saved tensor non-zero) still runs first and still gives
+DON'T SHIP; this line only ever *adds* information beside whatever verdict those rules
+produced.
+
+**In the verdict JSON.** A live `--adapter` run adds one field to the `--output` object:
+
+```json
+"adapter_change": {
+  "measured": true, "fraction": 9e-3, "changed": 9, "elements": 1000, "modules": 1,
+  "base_dtypes": ["bfloat16"], "warn_below": 0.01, "warning": true, "reason": null
+}
+```
+
+`fraction` is `null` when the count cannot be made (`measured` is `false` and `reason`
+says why), and `warning` is `fraction < warn_below`. A live run **without** `--adapter`,
+and an offline `--evidence` run, emit `adapter_change: null`. The field is not read back by
+`verdict_to_evidence`, so a verdict still replays as input exactly as before.
+
+The table above is the calibration record; the raw per-adapter JSON is not shipped in this
+repository.
+
+
+### Reading the task leg: rows, truncation and what was judged
+
+A SHIP is one number against another. These blocks say what the task-leg number is made of, so a
+reader can tell a clean win from a win bought with cut-off answers. None of it is part of the
+decision: the verdict, `failed_rule` and the exit code are the same with and without it (one
+exception, below: a side whose every generation failed is refused).
+
+```
+Rows (tuned vs base): better 0, worse 5, same 3 of 8
+Truncated answers: base 0, tuned 1 of 8 (cap 256 new tokens)
+Generation failures: base 0, tuned 0 of 8
+Judged: base Qwen/Qwen3-0.6B, adapter out/checkpoint-12 (checkpoint step 12)
+```
+
+The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is removed or renamed.
+
+| key | meaning |
+|-----|---------|
+| `schema_version` | `2`. Absent in 0.77.x output, which is version 1. |
+| `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score rescaled to [0, 1] on its rubric scale (not clamped). |
+| `task_win.truncated` | `{"base", "tuned", "n", "max_new_tokens", "warning"}`, or `null`. A count is the number of answers that hit the new-token cap and did not stop on their own, read from the generator's token ids, never from the length of the text. A count is `null`, never `0`, when it was not measured: the generator returned plain text with no token information, or a row's generation failed. `max_new_tokens` is the cap the built-in generator uses for the task leg (`BEHAVIOURAL_MAX_NEW_TOKENS`, 256). It is a constant written into the verdict, not read back from the generator, so a generator you supply yourself may use another cap. |
+| `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
+| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is reserved and always `null` in this release. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
+| `task_rows` | The bare name of the per-row file written next to `--output` (see "The per-row file" below), or `null` when this run wrote none (`--task-mode pairwise`, an adapter that changes nothing, a replay of evidence, or no `--output`). |
+
+**A side whose every generation failed is refused** (exit 1): that is a failed measurement, not a
+score of 0. The message is `Error: live ship verdict failed: RuntimeError: every task generation
+failed on the base side (8 of 8); a model that fails on every row is not a score of 0, so no
+verdict is given. Check that the model loads and generates`. The only variable parts are the side
+(`base` or `tuned`) and the two row counts, which are equal; a program can match the regular
+expression `every task generation failed on the (base|tuned) side \(([0-9]+) of \2\)`. Before
+this check a base that failed on every row read as 0.0 and any tuned model beat it, a SHIP no model earned. A side with
+some failed rows is still judged; the count is shown and printed in yellow. A replay of an evidence file that records such
+a side is refused the same way by the shared reader (`--evidence` and the MCP `ship_evidence` tool), with exit 3 and the
+first part of the message — `every task generation failed on the base side (8 of 8)` — without the "Check that the model
+loads and generates" tail; the regular expression above still matches it.
+
+**The `truncation_growth` warning.** When both counts are measured and
+`tuned - base >= max(3, ceil(0.10 * n))`, the panel prints a yellow
+`Warning truncation_growth: truncated 5 -> 14 of 64 (rise 9, threshold 7)` and
+`task_win.truncated.warning` is `"truncation_growth"`. It is a warning only. One or two rows never
+fire (greedy decoding on a GPU is not bit-stable); a fall never fires; at 11 rows a rise of 3 is
+needed. The two constants (`TRUNCATION_GROWTH_MIN_ROWS = 3`, `TRUNCATION_GROWTH_MIN_SHARE = 0.10`)
+are display constants and are **not calibrated**: there is no table of real runs yet, so the
+warning stays a warning and decides nothing until there is one.
+
+**Evidence schema version 2.** `--emit-evidence` writes `"schema_version": 2` whenever it has
+version-2 content to write: `task.rows`, `task.truncated` (the counts, without `warning`: it is
+recomputed on every read), `task.generation_failures` and `judged`, and `task_rows` (the name of the
+per-row file, see below) when one was written next to it by `--output`. A replay prints the same lines
+and the same warning. A file with none of it (a replayed version-1 file) stays a version-1 file:
+the stamp says what the file carries, it is not a property of the command. This is a deliberate
+reading, confirmed by a downstream application that consumes the file; stamping version 2 on every
+emitted file is a one-line change if a reader needs it. `schema_version` is always an integer at the
+top level of the `--output` JSON and of the evidence file (the evidence's `provenance.binding`
+block has a `schema_version` of its own: a different key).
+
+```json
+{
+  "schema_version": 2,
+  "task": {
+    "mode": "metric", "base": 0.75, "tuned": 0.125,
+    "rows": {"better": 0, "worse": 5, "same": 3, "n": 8},
+    "truncated": {"base": 0, "tuned": 1, "n": 8, "max_new_tokens": 256},
+    "generation_failures": {"base": 0, "tuned": 0, "n": 8}
+  },
+  "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+  "judged": {"base": "Qwen/Qwen3-0.6B", "adapter": "out/checkpoint-12", "tuned": null,
+             "base_adapter": null, "checkpoint_step": 12}
+}
+```
+
+The reader takes an absent `schema_version` as 1 and reads such a file exactly as before; `1` and
+`2` are accepted; any other value, a boolean, a number that is not an integer, or version-2 keys
+under version 1 are refused (exit 3, the message names `schema_version` or the key). Inside a block
+every key is required (`null` says not measured), counts are integers in range, `better + worse +
+same == n`, every block of one file has the same `n`, and `judged.checkpoint_step` must be what the
+adapter path says. A `generation_failures` block whose `base` or `tuned` equals `n` is refused the
+same way as the live path refuses such a side (exit 3, the first part of the live message). **soup-cli 0.77.x refuses a version-2 file** with `evidence has unsupported
+field(s): 'schema_version'` (exit 3): upgrade whatever reads the evidence, such as the CI gate or
+the MCP `ship_evidence` tool, to 0.78.0 or later before it meets a file written by 0.78.
+
+### The per-row file: `<stem>.task-rows.jsonl`
+
+The counts above say how many rows moved; the per-row file says which ones, and lets a reader
+check the leg's number. A live `--task-mode metric`, `judge_score` or `reward` run that is given
+`--output` writes it next to that file (`--output verdict.json` writes `verdict.task-rows.jsonl`). **Only
+`--output` does this**: with `--emit-evidence` alone nothing new is written and the evidence has
+no pointer. `--task-mode pairwise`, an adapter that changes nothing and a replay of evidence
+write none (`task_rows` is `null`). The verdict JSON gains `task_rows` (the file's bare name, or
+`null`); the evidence names it in a `task_rows` key when it sits in the same directory as
+`--output`. A pointer is always a bare file name, resolved next to the file that holds it.
+
+One line per task, compact JSON, ASCII only, LF line ends on every platform, keys in this order:
+
+```json
+{"schema_version":1,"leg":"task","index":2,"prompt_hash":"61a3385003d9","prompt":"What is 2+2?","expected":"4","category":"default","scoring":"exact","base_answer":"3","tuned_answer":"4","base_score":0.0,"tuned_score":1.0,"change":"better","base_truncated":false,"tuned_truncated":null,"base_failed":false,"tuned_failed":false,"text_cut":false}
+```
+
+| key | meaning |
+|-----|---------|
+| `schema_version`, `leg` | `1` and `"task"`, on every line (the file has no header line). |
+| `index` | The row's 0-based place in the task file: its row id, unique in the file. |
+| `prompt_hash` | The first 12 hex digits of `sha256(prompt.strip().casefold())`, the key the loop's held-out split uses. Always of the whole prompt. |
+| `prompt`, `expected`, `category`, `scoring` | From the task file. `scoring` is `null` for `judge_score` and `reward`. |
+| `base_answer`, `tuned_answer` | What each model answered (`""` when the generation failed). |
+| `base_score`, `tuned_score` | In [0, 1]. `metric`: `1.0` when the answer matched, else `0.0` (never the fractional similarity of `semantic`). `judge_score`: the judge's per-row score rescaled to [0, 1], `(score - min) / (max - min)` on its rubric scale, never clamped. `reward`: what the reward function returned, `0.0` for a row whose generation failed. |
+| `change` | `better`, `worse` or `same`: the same rule and the same scores as the `rows` counts, so the counts of the file are `task_win.rows` for the same run. |
+| `base_truncated`, `tuned_truncated` | The answer stopped at the new-token cap, from the generator's token ids; `null` (never `false`) when not measured. |
+| `base_failed`, `tuned_failed` | The generation raised and the row was scored as wrong (`reward`: 0.0, the function is not called). Always `false` for `judge_score`, where a failed generation ends the run. |
+| `text_cut` | A text field was cut to 20,000 characters (a category to 256). The scores, flags and hash never are. |
+
+**Checking the number.** The mean of `base_score` over the rows, added up left to right in `index`
+order and divided by the row count, is `task_win.base`; the same for `tuned_score` and
+`task_win.tuned`. For `metric` it is exact, bit for bit (the number is `correct / total`). For
+`judge_score` the number is the judge's own, exactly as 0.77.x reported it (the rescaled mean of
+its raw scores), and the mean of the rescaled rows agrees with it **within 1e-12**, not exactly:
+the two are computed in a different order and can differ by one rounding. The reported number is
+never rebuilt from the rows, because that moved it by a rounding and could turn a tie into a win
+(a tie is still DON'T SHIP). Scores are written with their shortest round-trip `repr`. Add the
+column up with a plain loop (`total += score`), not with `sum()` (Python 3.12 made its float
+result compensated) and not with `math.fsum`; the library function is
+`soup_cli.utils.ship_task_rows.row_mean`. A leg whose rows do not add up to its reported number
+(an evaluator whose overall score is not the mean of its rows, or a score outside the rubric's
+scale, which a row cannot hold) writes no file: one dim line, `task_rows: null`, same verdict.
+For `reward` the number is made from the rows and the check is exact, with a different mean (see
+"Reward mode"): the exact mean of the decimal numbers in the file, `decimal_mean`.
+For `judge_score`, `task_win.rows` and the file classify the same rescaled scores; with the
+built-in judge, whose criteria scores are clamped to the scale, that is the classification of
+the raw scores, except that, on the default 1-5 scale, a raw difference between 1e-9 and 4e-9 counts as the
+same row.
+
+**Privacy.** The file holds your prompts and both models' answers in full, so it is local data. It
+is never part of the verdict JSON, the evidence, the terminal output or the `--push` comment (none
+of them carries any text from a row), and the terminal line says so: `Wrote task rows
+verdict.task-rows.jsonl (8 rows; it holds your prompts and the answers)`. On POSIX the file is
+created with mode 0600; **on Windows it inherits the permissions of its folder**, so keep the
+output folder private. A run that is killed while it writes can leave a `.soup.*.tmp` file with
+partial rows next to it (the temp files of every command are named alike, so `soup ship` does not
+remove them): delete it by hand.
+
+**Writing it.** The file is written before the verdict, atomically (a temp file in the same
+directory, then a rename), under the working directory, never through a symlink. An existing file
+at that path is replaced only by this command's own next run: it must be empty or its first line
+must have exactly the keys of a row of ours (a BOM and CRLF line ends are fine), otherwise it is
+left alone. These are refused with exit 3 **before any model loads**, once the run is known to
+evaluate (an adapter that changes nothing writes no file, so it is not asked): a name that cannot
+be a bare file name (a control character, a path separator inside the name), a derived name that
+cannot exist (the file system limit is 255 bytes on POSIX and 255 UTF-16 code units on Windows,
+counted on the name with `.task-rows.jsonl`, 16 more than the `--output` stem has), a network share
+or device, a file of yours the rows would replace (the task file, the config, `--emit-evidence`),
+a foreign file at the path, and a path that cannot be looked at (`... cannot be checked`). A
+`--output` name that is within the limit by itself but not once the suffix is added, which worked
+before, is refused for that reason.
+To fix a refused name use a shorter or plainer `--output` name: the stem plus
+`.task-rows.jsonl` must fit in 255 bytes on POSIX or 255 UTF-16 code units on Windows (a stem
+of more than 239 ASCII characters no longer works), with no control character in it and, on
+POSIX, no backslash. If the write fails, the verdict, the evidence and the PR
+comment are written first, then `cannot write the task rows next to --output: ...` is printed:
+a SHIP exits 1, a DON'T SHIP keeps exit 2 (a pipeline that retries on exit 1 must not run a
+finished verdict again). The file is part of the evidence, and the verdict JSON never names a file
+that was not written.
+
+**Reading it back, strictly.** `soup_cli.utils.ship_task_rows.load_task_rows(path, n=, base=,
+tuned=, counts=, mean_tolerance=)` refuses, naming the defect: a blank, over-long or malformed
+line (nested past the parser's depth included), a line that is not an object, a repeated or
+unknown or missing key, a `NaN` / `Infinity` token, a boolean or string or oversized integer
+where a number belongs, a score outside [0, 1], a `change` the scores contradict, a `prompt_hash`
+that is not the prompt's, a repeated or out-of-range `index`, more than 10,000 rows or a file over
+256 MiB, and, given the numbers of the JSON that names the file, a row count that is not `n`, a
+column mean that is not `base` / `tuned` (exactly, or within `mean_tolerance`), and class counts
+that are not the `rows` block. A message names the defect and the line number; it echoes no value
+from the file, only at most five key names (of at most 64 characters) for unsupported fields.
+`load_task_rows_for(path)` does that for a verdict or an evidence file: it follows `task_rows`
+next to it, takes 1e-12 for a `judge_score` verdict, the exact decimal mean for a `reward`
+verdict (`load_task_rows(..., decimal=True)`) and exactness otherwise, and checks the file
+against the same JSON (whose `rows` numbers must be integers in range).
+
+### Reward mode (`--task-mode reward`)
+
+Leg 1 can be scored by a reward function instead of a match or a judge. Each task is generated by
+both models, the generated text of every row is handed to the function, which returns a number
+from 0 to 1, and the verdict is decided on the **mean** of those numbers with the same strict rule
+as every other mode: SHIP needs `tuned mean > base mean` (plus the measured noise floor, when one
+was asked for), and a tie is DON'T SHIP.
+
+```bash
+# the built-in accuracy reward: 1.0 when the final answer matches `expected`, else 0.0
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode reward --reward-fn accuracy
+
+# your own function (a Python file under the working directory: it is EXECUTED, see below)
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode reward --reward-fn rewards/score.py
+```
+
+| `--reward-fn` | what scores a row |
+|---------------|-------------------|
+| `accuracy` | 1.0 when the answer's final answer equals the task's `expected`, else 0.0 (the parser of `scoring: "answer"`) |
+| `format` | 0.5 for a `<think>...</think>` block plus 0.5 for text after it |
+| `verifiable:math` | 1.0 for a numeric answer within tolerance of `expected`, 0.6 for a near one, else 0.0 |
+| `verifiable:json_schema` | how much of the JSON schema in the task row's `schema` column the answer satisfies |
+| `path/to/file.py` | your own `reward_fn` |
+
+`verifiable:code` is refused (it would run the model's output as code) and so is `judge_rank` (it is
+built from a GRPO config), as is a list of functions and a bare `verifiable`; all of these, and
+`--reward-fn` without `--task-mode reward` or the other way round, are usage errors (exit 3) before
+any model loads.
+
+**A `.py` reward file is code, and `soup ship` executes it.** It runs with your permissions, with
+no sandbox: it can read your files, use your network and end the process. The hash below tells you
+which file scored a verdict and protects against accidents; it is not a defence against a hostile
+file. A reward file is code you trust.
+
+- It runs only when you name it, with `--reward-fn` or `eval.ship.reward_fn`. A `reward.py` lying
+  in the working directory is never picked up, and a config from somewhere else can only run a
+  file when you hand that config to `soup ship` yourself (`--config`). A flag that overrides the
+  mode (`--task-mode metric`) leaves a config's `reward_fn` unread.
+- It must be a file under the working directory, not a symlink, not on a network share or a
+  device, at most 1 MiB, named without a control character or a comma. Anything else is refused
+  before it is opened.
+- The terminal says so before it runs: `--reward-fn reward.py is a Python file and soup ship
+  EXECUTES it (sha256 abcdef123456). Only use a reward file you trust.`
+- It runs once the run is known to evaluate and before any model loads, so a file that cannot load
+  costs no GPU time, and an adapter that changes nothing runs none. A file that raises
+  `SystemExit` (`sys.exit(0)` must never read as a SHIP) is a usage error (exit 3) while it loads
+  and a runtime error (exit 1) when a call does it. That handling protects against accidents, not
+  against a hostile file: a file that calls `os._exit(0)` ends `soup ship` with exit 0 and no
+  verdict. A run that ends without a verdict line or a verdict file is not a verdict, whatever its
+  exit code. There is no time limit on a call: a file that hangs hangs the run.
+- An offline `--evidence` replay never loads or runs it: `--reward-fn` is refused there (with
+  `--require-provenance` it is only hashed, never run).
+- The evidence records its name and the sha256 of its source bytes. The file is read once; those
+  bytes are hashed, compiled and run (no `__pycache__` is consulted and the file is not read a
+  second time), so the hash is of the source bytes that were compiled and run. The modules the file
+  imports are not hashed, and nothing prevents the file from doing anything else. With
+  `--emit-evidence` the stamped provenance binding names the same function and hash (the verdict's,
+  not a second read of the file).
+- The file runs in a fresh module named `custom_reward`, with `__file__` set to its absolute real
+  path, that is not registered in `sys.modules` (the loader `soup train` uses does the same). So
+  `@dataclass` together with `from __future__ import annotations`, and pickling of an object whose
+  class is defined in the file, fail; and a sibling module is importable only if its directory is
+  on `sys.path`, which the working directory is not when you start `soup` through its console
+  script (it is under `python -m soup_cli`).
+
+**What the function is handed, and what it may return.** It is called once per row, for each model:
+
+```python
+def reward_fn(completions, **kwargs):
+    # completions == [[{"role": "assistant", "content": "<the generated text>"}]]
+    # kwargs["answer"] == [<the row's expected>], kwargs["prompt"] == [<the row's prompt>],
+    # and every other column of the task row as a one-element list: kwargs["schema"] == [...]
+    return [0.7]   # exactly one finite number from 0 to 1
+```
+
+A column named `answer`, `prompt` or `completions` does not replace the argument of that name. A
+row whose generation failed scores 0.0 and the function is not called for it (the row is flagged
+`base_failed` / `tuned_failed`, and a side whose every generation failed is refused, as in every
+mode). Anything the function returns that is not a list of exactly one finite number in [0, 1]
+(a different count, a bool, `NaN`, `inf`, a string, `None`, a number outside the range), and any
+exception or process exit it raises, is a runtime error (exit 1) that names the row and the side,
+for example `reward function returned 1.5, outside [0, 1] for row 3 (base)`: no verdict, no file. An
+integer 0 or 1 is accepted.
+
+**The number, and ties.** The reported `task_win.base` / `task_win.tuned` is the **exact mean of the
+decimal numbers** in the per-row file: each score is read as its shortest round-trip decimal
+(`repr`), the decimals are added in exact arithmetic, divided by the row count and rounded to a
+float once (`soup_cli.utils.ship_verdict.decimal_mean`). The same scores in another order, or
+scores that add up to the same decimal (`0.3 + 0.0` and `0.1 + 0.2`), therefore give the same float
+and a tie stays DON'T SHIP; a plain left-to-right float sum differs by one rounding in both cases
+and would turn them into a win. The per-row file holds the same floats, so the check is exact:
+`load_task_rows_for` accepts a reward verdict only when `decimal_mean` of each score column is the
+reported number, and a plain loop over the column agrees to about 1e-15. `scoring` is `null` in the
+rows.
+
+**The paired summary (descriptive, decides nothing).** `task_win.paired` (and `task.paired` in the
+evidence) is a summary of tuned minus base, row by row, in a reward run:
+
+```
+Paired difference (tuned - base per row): mean +0.0917, 95% interval [+0.0167, +0.1667] (bootstrap, 2000 resamples, seed 20261114; descriptive, decides nothing)
+```
+
+| key | meaning |
+|-----|---------|
+| `n`, `better`, `worse`, `same` | The rows and the `rows` counts (the same rule, `1e-9`); `better + worse + same == n`. |
+| `mean_difference` | The exact mean of `tuned - base` over the rows, in exact arithmetic: positive when tuned's exact decimal mean is higher. The verdict compares the two means after rounding each to a float, so a difference smaller than half a float step is a tie (DON'T SHIP) where this can still show a tiny positive number. |
+| `ci_low`, `ci_high`, `confidence` | The percentile bootstrap interval of the mean difference at `confidence` (0.95). |
+| `resamples`, `seed` | 2000 resamples drawn with `random.Random(seed)` (seed `20261114`) over the per-row differences in sorted order, each resample summed with `math.fsum`: the same seed and rows give the same interval on every Python and every machine, and the same rows in any order give the same interval. Pure Python: about 10 s at the 10,000-row cap (5 to 10 s, depending on the machine), once per live run. |
+| `underpowered` | A sign-test heuristic: `true` when `n` is below the rows a two-sided sign test needs to reach `confidence` even if every row got better (`2 / 2**n <= 1 - confidence`: 6 rows at 95%; 5 rows give 6.25%). `false` does NOT mean the comparison is well powered (6 rows is the floor, not a target). The panel prints a yellow `Underpowered: 4 rows; ... (at least 6 rows are needed)` line. It is informational: its definition may change, so a reader recomputes it from `n` and `confidence` and does not refuse a file whose stored value differs; it never changes a verdict. |
+
+None of it is a rule: the verdict, `failed_rule` and the exit code are decided by the two means
+alone, so an interval that contains zero still ships a mean that is higher, and one that excludes
+zero never rescues a tie. The interval is a description of how much the rows disagree with the
+mean, not a significance test, and `underpowered` says only that too few rows were run to claim
+the confidence the interval names. The summary exists for reward runs only: other modes carry
+`null`.
+
+**Config.** `eval.ship.task_mode: reward` and `eval.ship.reward_fn: <the same values>`. `reward_fn`
+set while `task_mode` is not `reward` is refused when the config loads, naming both keys. The flag
+beats the config.
+
+**Noise floor.** `--noise-floor N` measures a reward run's base side N times (decode-only: the
+function scores the text, it is not a judge, so the floor is not labelled `decode + judge`). A gain
+inside the floor is not a win. Note that each repeat runs your function again.
+
+**Evidence.** `task.mode: "reward"` requires `task.reward` (`{"fn", "sha256"}`: the flag's text and
+the hash of the file, `null` for a built-in) and refuses it under any other mode; `task.paired` is
+optional. Both are schema version 2 keys, so a 0.77.x reader refuses such a file. `--require-provenance`
+puts the reward function (name and hash) into the policy it compares: pass `--task-mode reward
+--reward-fn <the file>` with `--evidence`, and it is hashed, never run.
 
 ## Retention across versions: `soup eval retention`
 
@@ -1126,6 +1616,8 @@ print(report.delta_status, report.mean_kl)
 The kernel is pure-math, evaluates stable log-probabilities using log-softmax
 without artificial probability flooring, and is capped at 10 000 prompts to
 defend against accidental OOM. `CalibrationReport` is a frozen dataclass.
+SDK logits and mean-KL inputs that cannot be represented as finite floats,
+including oversized Python integers, raise a field-specific `ValueError`.
 
 
 ## Model Arena (Elo Tournament)
@@ -1323,6 +1815,53 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
+#### Compare generation performance in the same report
+
+Use `--performance` to add latency, generated tokens/s and CUDA allocated peak
+alongside the existing quality verdict, with before/after percentage changes:
+
+```bash
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --device cuda:0 --format json
+
+# Defaults: one unscored warm-up, three measured generations of every task prompt.
+soup eval quant-check --before ./output/base --after ./output/quantized \
+  --tasks ./evals/sanity.jsonl --performance --performance-warmup 1 \
+  --performance-repeats 5 --device cpu --format markdown
+```
+
+This path loads, warms, measures and releases the first model before loading
+the second. It pins one device: `auto` selects CUDA when available, otherwise
+CPU; explicit `cpu`, `cuda`, `cuda:<index>` and `mps` are supported. It uses the
+same inference dtype policy as `soup infer` (FP32 on CPU, FP16 on CUDA/MPS),
+and records the actual model dtype/device. The quality-only command keeps its
+existing loading behavior. Both sides use greedy decoding, at most 256 new
+tokens per call, and the same task prompts. Only the first measured answer per
+task contributes to quality; the other repeats measure performance. The first
+task prompt supplies the unscored warm-ups. `--allow-stub` is incompatible with
+`--performance` because stubs cannot supply model performance measurements.
+
+Latency includes tokenization, input transfer, generation and text decoding,
+with the selected accelerator synchronized at both boundaries. Loading is
+outside that timer. Generated token/s uses the actual new token IDs, including
+EOS, divided by total measured generation time; different answer lengths can
+therefore change both latency and throughput. CUDA memory is this process's
+allocated peak across measured generations after warm-up, including resident
+weights and generation buffers. It excludes loading/warm-up transients and
+allocator-reserved bytes. CPU/MPS memory is reported as `null` in JSON and
+`N/A` in tables, rather than a zero-byte footprint.
+
+The optional JSON `performance` object includes the raw per-task latency/token
+samples and the mean suite latency for each repeat. The report labels overlap
+between the two observed repeat ranges; small differences inside that spread
+may be noise. This is a descriptive within-model repeat check, not a confidence
+interval or a comparison of independent model-loading runs. With one repeat,
+noise cannot be estimated (`latency_ranges_overlap: null`). Use several
+representative prompts and additional independent runs for conclusions about
+speed. Performance remains informational: **quality alone determines exit 2**.
+The table, JSON and markdown all include this additional result only when
+`--performance` is enabled.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.
@@ -1357,6 +1896,13 @@ boolean compared with `==` against a number would be equal in Python (`True == 1
 |---|---|---|---|
 | `tool_call_match` | the parsed `arguments` objects must be equal, JSON types included; the function name must match too | match | no match |
 | `tool_call_args_subset` | `0.5` for the function name plus `0.5` for the fraction of expected arguments present with a matching value | `1.0` | `0.5` — the name matched, the argument did not |
+
+A `tool_call_args_subset` row counts as Correct in `soup eval custom`'s Accuracy only at full
+credit (`1.0`): the right function with every expected argument present and matching. Extra
+arguments are allowed when the gold has arguments; when it has none, the call must have none.
+A partial score such as `0.5` or `0.75` is not Correct, but `score` keeps it, and the eval
+gate, `soup eval quant-check` and the other callers that average `score` see the partial
+credit.
 
 Numbers still compare equal across forms, so gold `{"n": 1}` matches `{"n": 1.0}`; that is
 existing behaviour and not a rounding of the policy. The rule applies inside nested objects
@@ -1444,7 +1990,11 @@ The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
 integers beyond float range) with a named `ValueError` after existing report
 errors; finite custom limits and equality boundaries are unchanged (#2467).
 
-The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
+The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent. A report claiming `calibrated=True` must have `num_pairs >= 1`; a zero-pair calibrated report is refused with a `ValueError` (#2496).
+
+Conformal scores, `alpha`, and the report's three floating fields also reject
+integers beyond float range with a named `ValueError`, including when a persisted
+report is loaded; representable values keep the existing range checks.
 
 Persist a calibration once and reuse it across runs (v0.71.1): `write_judge_calibration(report, "calib.json")` writes a cwd-contained JSON, and `load_judge_calibration("calib.json")` re-validates it on load (a corrupt or out-of-range field on disk is rejected, since it's the production-gate safety net). The artifact attaches to the registry under the new `judge_calibration` kind.
 

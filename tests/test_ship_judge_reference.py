@@ -28,6 +28,7 @@ from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from soup_cli.utils.ship_verdict import (
     EVIDENCE_SCHEMA_FIELDS,
     FAILED_ADAPTER_NOOP,
+    V2_ONLY_FIELDS,
     build_task_win,
     compute_benchmark_deltas,
     decide_ship,
@@ -395,7 +396,8 @@ def test_default_run_sends_the_legacy_prompts(monkeypatch, mode):
     assert out["task_win"]["judge_mode"] == "preference"
     assert out["task_win"]["judge_template"] == {"id": template.id, "version": template.version}
     # Legacy evidence: no judge keys for a preference run.
-    assert set(evidence["task"]) == {"mode", "base", "tuned"}
+    assert "judge_mode" not in evidence["task"]
+    assert "judge_template" not in evidence["task"]
 
 
 def test_metric_output_has_no_judge_fields(monkeypatch):
@@ -431,7 +433,9 @@ def test_reference_evidence_round_trips(monkeypatch, mode):
     replay = verdict_from_evidence(evidence, forgetting_threshold=out["forgetting_threshold"])
     assert replay.task_win.judge_mode == "reference"
     assert replay.task_win.judge_template == (template.id, template.version)
-    assert verdict_to_evidence(replay, provenance=evidence.get("provenance")) == evidence
+    assert verdict_to_evidence(
+        replay, provenance=evidence.get("provenance"), task_rows=evidence.get("task_rows")
+    ) == evidence
 
 
 # ------------------------------------------------- usage errors, before loads
@@ -441,6 +445,8 @@ def test_reference_evidence_round_trips(monkeypatch, mode):
     ("tasks", "args", "needle"),
     (
         (_TASKS, ("--tuned", "t"), "only to --task-mode judge_score or pairwise, not metric"),
+        (_TASKS, ("--tuned", "t", "--task-mode", "reward", "--reward-fn", "accuracy"),
+         "only to --task-mode judge_score or pairwise, not reward"),
         (_TASKS, ("--evidence", "ev.json"), "only to a live run, not --evidence"),
         ([_row(expected="ok"), "", json.dumps({"prompt": "q"})],
          ("--tuned", "t", "--task-mode", "pairwise", "--judge-model", JUDGE_URL),
@@ -449,7 +455,7 @@ def test_reference_evidence_round_trips(monkeypatch, mode):
          ("--tuned", "t", "--task-mode", "judge_score", "--judge-model", JUDGE_URL),
          "task-eval line 1: field 'expected' of a 'scoring: regex' row is a pattern"),
     ),
-    ids=("metric", "evidence", "missing-expected", "regex"),
+    ids=("metric", "reward", "evidence", "missing-expected", "regex"),
 )
 def test_invalid_use_is_a_usage_error_before_any_model_load(monkeypatch, tasks, args, needle):
     def _files():
@@ -555,9 +561,20 @@ def test_builders_recheck_the_rows(tmp_path, monkeypatch, mode):
 
 
 def test_task_evidence_schema_names_the_judge_fields():
-    assert EVIDENCE_SCHEMA_FIELDS["task"] == frozenset(
-        {"mode", "base", "tuned", "judge_mode", "judge_template"}
-    )
+    assert {"judge_mode", "judge_template"} <= EVIDENCE_SCHEMA_FIELDS["task"]
+    # New in soup-cli 0.78 with schema version 2, so a version-1 file cannot carry them.
+    assert {("task", "judge_mode"), ("task", "judge_template")} <= set(V2_ONLY_FIELDS)
+
+
+@pytest.mark.parametrize("schema", ({}, {"schema_version": 1}), ids=("absent", "v1"))
+def test_judge_evidence_under_schema_version_1_is_refused(schema):
+    with pytest.raises(ValueError, match="evidence.task.judge_mode is a schema_version 2 field"):
+        verdict_from_evidence({
+            **schema,
+            "task": {"mode": "pairwise", "base": 0.5, "tuned": 0.6, "judge_mode": "reference",
+                     "judge_template": {"id": "pairwise.reference", "version": 1}},
+            "benchmarks": {},
+        })
 
 
 def test_build_task_win_refuses_judge_fields_on_metric():
@@ -623,6 +640,7 @@ def test_legacy_evidence_reads_as_preference(mode):
 def test_malformed_judge_evidence_is_refused(task_extra):
     with pytest.raises((TypeError, ValueError)):
         verdict_from_evidence({
+            "schema_version": 2,
             "task": {"mode": "pairwise", "base": 0.5, "tuned": 0.6, **task_extra},
             "benchmarks": {},
         })
@@ -644,7 +662,7 @@ def test_malformed_judge_evidence_is_refused(task_extra):
 def test_judge_evidence_is_refused_by_its_own_check(task, needle):
     with pytest.raises(ValueError, match=needle):
         verdict_from_evidence(
-            {"task": {"base": 0.5, "tuned": 0.6, **task}, "benchmarks": {}}
+            {"schema_version": 2, "task": {"base": 0.5, "tuned": 0.6, **task}, "benchmarks": {}}
         )
 
 
@@ -653,6 +671,7 @@ def test_mcp_ship_evidence_reports_the_judge_fields(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     Path("ev.json").write_text(json.dumps({
+        "schema_version": 2,
         "task": {"mode": "judge_score", "base": 0.4, "tuned": 0.6, "judge_mode": "reference",
                  "judge_template": {"id": "judge_score.reference", "version": 1}},
         "benchmarks": {"mini_mmlu": {"base": 0.7, "tuned": 0.7}},

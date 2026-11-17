@@ -272,7 +272,13 @@ def test_console_verdict_emission_and_replay_agree(
         "--evidence", "evidence.json", "--config", "soup.yaml", "--output", "replayed.json",
     ])
     assert replay.exit_code == result.exit_code, (replay.output, replay.exception)
-    assert json.loads(Path("replayed.json").read_text(encoding="utf-8")) == verdict
+    # one verdict, written twice; task_rows names the per-row file only a live run writes (a
+    # replay has no answers to write), so it is the one key that differs
+    replayed = json.loads(Path("replayed.json").read_text(encoding="utf-8"))
+    assert verdict["task_rows"] == "verdict.task-rows.jsonl" and replayed["task_rows"] is None
+    assert {k: v for k, v in replayed.items() if k != "task_rows"} == {
+        k: v for k, v in verdict.items() if k != "task_rows"
+    }
     assert len(calls) == 2  # replay never loads either model
     assert cuda.current == 0
 

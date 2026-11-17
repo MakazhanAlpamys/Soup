@@ -7,6 +7,7 @@ enable MLX training paths without hard-depending on the ``mlx`` package.
 
 from __future__ import annotations
 
+import os
 import platform
 from typing import Any, Optional
 
@@ -161,21 +162,59 @@ def estimate_mlx_batch_size(
     return max(1, min(batch, 32))
 
 
+def mlx_revision_binding_reason() -> str | None:
+    """Return why native train cannot bind HF identity, or None when qualified.
+
+    Inspect the provider already imported by mlx-lm, not MLXLM_USE_MODELSCOPE:
+    changing that variable later does not change its download receiver. Do not
+    initialize a process group merely to qualify optional run metadata.
+    """
+    from soup_cli.utils.launcher import is_in_distributed
+
+    if is_in_distributed() or any(key in os.environ for key in (
+        "LOCAL_RANK", "MLX_RANK", "MLX_HOSTFILE", "OMPI_COMM_WORLD_RANK",
+        "PMI_RANK", "PMIX_RANK",
+    )):
+        return "MLX distributed launcher is not qualified for revision binding"
+    for key in ("WORLD_SIZE", "LOCAL_WORLD_SIZE", "MLX_WORLD_SIZE",
+                "OMPI_COMM_WORLD_SIZE", "PMI_SIZE"):
+        try:
+            if int(os.environ.get(key, "1")) != 1:
+                return "MLX distributed launcher is not qualified for revision binding"
+        except ValueError:
+            return "MLX launcher size is not qualified for revision binding"
+    try:
+        from huggingface_hub import snapshot_download
+        from mlx_lm import load, utils
+
+        if load is utils.load and utils.snapshot_download is snapshot_download:
+            return None
+    except (ImportError, AttributeError):
+        pass
+    return "MLX loader provider is not qualified as Hugging Face Hub"
+
+
 def load_mlx_model(
     model_path: str,
     quantization: str = "4bit",
     model_config: Optional[dict[str, Any]] = None,
-) -> tuple[Any, Any]:
+    return_config: bool = False,
+) -> tuple[Any, ...]:
     """Thin wrapper around ``mlx_lm.load`` (lazy import).
 
     ``quantization`` is informational: MLX models are typically already
     quantized at build time (e.g. ``mlx-community/...-4bit``), so this
     parameter is currently advisory and is not forwarded to ``mlx_lm.load``.
+    ``return_config`` also returns the effective loaded model config for standalone saves.
     """
     del quantization  # advisory only — MLX models are pre-quantized
     from mlx_lm import load
 
-    kwargs: dict[str, Any] = {}
+    from soup_cli.utils.run_provenance import base_revision_kwargs
+
+    kwargs: dict[str, Any] = dict(base_revision_kwargs(model_path))
     if model_config is not None:
         kwargs["model_config"] = model_config
+    if return_config:
+        kwargs["return_config"] = True
     return load(model_path, **kwargs)

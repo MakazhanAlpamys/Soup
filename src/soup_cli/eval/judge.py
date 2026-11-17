@@ -22,6 +22,7 @@ from soup_cli.eval.judge_templates import (
     PAIRWISE_REFERENCE,
     reference_fence,
 )
+from soup_cli.utils.redaction import redact_url
 
 if TYPE_CHECKING:
     from trl import BasePairwiseJudge
@@ -40,15 +41,8 @@ _sleep = time.sleep  # patched by tests
 
 def _redact_url(url: str) -> str:
     """``url`` without userinfo, query or fragment, safe to print and log."""
-    from urllib.parse import urlsplit, urlunsplit
-
     try:
-        parts = urlsplit(str(url))
-        host = parts.hostname or ""
-        if ":" in host:
-            host = f"[{host}]"
-        netloc = host + (f":{parts.port}" if parts.port else "")
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+        return redact_url(url)
     except ValueError:
         return "<unparseable judge url>"
 

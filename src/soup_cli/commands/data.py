@@ -788,6 +788,8 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
     """Random sampling without replacement."""
+    if num <= 0:
+        return []
     rng = random.Random(seed)
     num = min(num, len(data))
     return rng.sample(data, num)
@@ -800,6 +802,8 @@ def _sample_diverse(
 
     Falls back to random sampling if sklearn is not available.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -870,6 +874,8 @@ def _sample_hard(data: list[dict], num: int) -> list[dict]:
 
     Longer texts tend to be more complex / challenging.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -894,11 +900,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
@@ -919,6 +925,17 @@ def sample_data(
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
         raise typer.Exit(1)
+
+    if num is not None and num <= 0:
+        console.print("[red]--n must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if pct is not None:
+        import math as _math
+
+        if not _math.isfinite(pct) or not (0.0 < pct <= 100.0):
+            console.print("[red]--pct must be a finite number in (0, 100].[/]")
+            raise typer.Exit(1)
 
     if strategy not in ("random", "diverse", "hard"):
         console.print(
@@ -4613,3 +4630,47 @@ def brain_rot_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{_escape(str(exc))}[/]")
             raise typer.Exit(3) from exc
+
+
+@app.command(name="leakage", cls=GateCommand)
+def leakage(
+    train: str = typer.Option(..., "--train", help="Training JSONL under cwd."),
+    evaluation: str = typer.Option(..., "--eval", help="Evaluation JSONL under cwd."),
+    samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
+    as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
+):
+    """Check input-text overlap without writing datasets.
+
+    Exit 0 when clean, 2 on overlap and 3 on unusable input.
+    """
+    from soup_cli.utils.data_leakage import check_leakage
+    from soup_cli.utils.data_score import load_jsonl_rows
+
+    try:
+        report = check_leakage(
+            load_jsonl_rows(train, strict=True),
+            load_jsonl_rows(evaluation, strict=True),
+            samples=samples,
+        )
+    except (TypeError, ValueError, OSError) as error:
+        console.print(f"[red]Leakage input error: {for_terminal(error)}[/]", emoji=False)
+        raise typer.Exit(EXIT_USAGE_ERROR) from error
+
+    if as_json:
+        typer.echo(json.dumps(report, ensure_ascii=False))
+    else:
+        table = Table(title="Train/eval input-text overlap")
+        table.add_column("Metric")
+        table.add_column("Value")
+        table.add_row("Train records", str(report["train_rows"]))
+        table.add_row("Eval records", str(report["eval_rows"]))
+        table.add_row("Matched eval records", str(report["overlap_eval_rows"]))
+        table.add_row("Overlap", f"{report['overlap_percent']:.2f}%")
+        console.print(table)
+        for pair in report["samples"]:
+            console.print(
+                f"Train record {pair['train_row']} / eval record {pair['eval_row']}: "
+                f"{for_terminal(pair['prompt_preview'])}", emoji=False,
+            )
+    if report["overlap_eval_rows"]:
+        raise typer.Exit(EXIT_GATE_FAILED)

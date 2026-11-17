@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -18,7 +19,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -861,14 +862,14 @@ def compare(
     for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
+            console.print(terminal_text(run_lookup_failure(tracker, rid, markup=False), "red"))
             raise typer.Exit(1)
         resolved_ids.append(run_data["run_id"])
 
     try:
         comparison = compare_runs(tracker, *resolved_ids)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
@@ -877,7 +878,9 @@ def compare(
         raise typer.Exit(1)
 
     # Display comparison table
-    table = Table(title=f"Eval Comparison: {run1} vs {run2}")
+    table = Table(title=Text.assemble(
+        "Eval Comparison: ", terminal_text(run1), " vs ", terminal_text(run2),
+    ))
     table.add_column("Benchmark", style="bold")
     table.add_column("Run 1", justify="right")
     table.add_column("Run 2", justify="right")
@@ -903,15 +906,15 @@ def compare(
         else:
             delta_str = "-"
 
-        table.add_row(comp["benchmark"], score_a, score_b, delta_str)
+        table.add_row(terminal_text(comp["benchmark"]), score_a, score_b, delta_str)
 
     console.print(table)
 
     if comparison["has_regressions"]:
-        console.print(
-            f"\n[red bold]Regressions detected:[/] "
-            f"{', '.join(comparison['regressions'])}"
-        )
+        console.print(Text.assemble(
+            "\n", ("Regressions detected:", "red bold"), " ",
+            terminal_text(", ".join(comparison["regressions"])),
+        ))
 
 
 # ─── soup eval leaderboard ───
@@ -939,7 +942,7 @@ def leaderboard(
     try:
         lb = build_leaderboard_from_tracker(tracker)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from None
 
     if not lb.entries:
@@ -970,11 +973,13 @@ def leaderboard(
     table.add_column("#", style="dim", width=3)
     table.add_column("Model", style="bold")
     for bench in benchmarks:
-        table.add_column(bench, justify="right")
+        table.add_column(terminal_text(bench), justify="right")
     table.add_column("Avg", justify="right", style="green")
 
     for rank, (model_name, scores, avg) in enumerate(sorted_models, 1):
-        row = [str(rank), _short_model_name(model_name)]
+        row: list[str | Text] = [
+            str(rank), terminal_text(_short_model_name(model_name, markup=False)),
+        ]
         for bench in benchmarks:
             if bench in scores:
                 row.append(f"{scores[bench]:.4f}")
@@ -1294,12 +1299,11 @@ def _display_elo_ratings(results: object) -> None:
     console.print(table)
 
 
-def _short_model_name(path: str) -> str:
-    """Shorten model path for display."""
+def _short_model_name(path: str, *, markup: bool = True) -> str:
+    """Shorten model path, optionally preparing it for Rich markup."""
     parts = Path(path).parts
-    if len(parts) > 2:
-        return for_terminal("/".join(parts[-2:]))
-    return for_terminal(path)
+    name = "/".join(parts[-2:]) if len(parts) > 2 else path
+    return for_terminal(name) if markup else name
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
@@ -1446,6 +1450,7 @@ def gate_cmd(
 
 @app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
+    ctx: typer.Context,
     before: str = typer.Option(
         ..., "--before",
         help="Before-quantization model path or registry://<id>",
@@ -1465,6 +1470,22 @@ def quant_check_cmd(
     allow_stub: bool = typer.Option(
         False, "--allow-stub",
         help="Allow deterministic stub generators if live model loading fails.",
+    ),
+    performance: bool = typer.Option(
+        False, "--performance",
+        help="Also measure generation latency, tokens/s and CUDA memory sequentially.",
+    ),
+    performance_warmup: int = typer.Option(
+        1, "--performance-warmup", min=0,
+        help="Unscored first-prompt warm-ups per model (requires --performance).",
+    ),
+    performance_repeats: int = typer.Option(
+        3, "--performance-repeats", min=1,
+        help="Measured greedy generations per task (requires --performance).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="Device for --performance: auto (default), cpu, cuda, cuda:<index> or mps.",
     ),
 ) -> None:
     """Compare accuracy before vs after quantization on the same eval suite.
@@ -1488,6 +1509,19 @@ def quant_check_cmd(
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if performance and allow_stub:
+        console.print("[red]--performance cannot measure deterministic --allow-stub generators.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    performance_options_supplied = any(
+        ctx.get_parameter_source(name) not in (None, ParameterSource.DEFAULT)
+        for name in ("device", "performance_warmup", "performance_repeats")
+    )
+    if not performance and performance_options_supplied:
+        console.print("[red]--device and performance budgets require --performance.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     resolved: dict[str, Optional[str]] = {}
     for label, ref in (("--before", before), ("--after", after)):
@@ -1558,46 +1592,68 @@ def quant_check_cmd(
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
 
-    is_stub = False
+    if performance:
+        from soup_cli.eval.quant_check import run_performance_quant_check
+        from soup_cli.eval.quant_performance import resolve_performance_device
 
-    try:
-        before_gen = make_model_generator(resolved_before)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --before model ({resolved_before}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
+        try:
+            measured_device = resolve_performance_device(device or "auto")
+        except (ValueError, ImportError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        try:
+            result = run_performance_quant_check(
+                before_factory=lambda: make_model_generator(
+                    resolved_before, device=measured_device,
+                ),
+                after_factory=lambda: make_model_generator(resolved_after, device=measured_device),
+                tasks=pre_tasks, device=measured_device,
+                warmup=performance_warmup, repeats=performance_repeats,
             )
+        except (OSError, ValueError, ImportError, RuntimeError) as exc:
+            console.print(f"[red]Performance comparison failed: {for_terminal(str(exc))}[/]")
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
-            )
-        before_gen = stub_generator("before")
-        is_stub = True
+    else:
+        is_stub = False
 
-    try:
-        after_gen = make_model_generator(resolved_after)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --after model ({resolved_after}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
-            )
-            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
-            )
-        after_gen = stub_generator("after")
-        is_stub = True
+        try:
+            before_gen = make_model_generator(resolved_before)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --before model ({resolved_before}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
+                )
+            before_gen = stub_generator("before")
+            is_stub = True
 
-    result = run_quant_check(
-        before_gen=before_gen,
-        after_gen=after_gen,
-        tasks=pre_tasks,
-        stub=is_stub,
-    )
+        try:
+            after_gen = make_model_generator(resolved_after)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --after model ({resolved_after}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
+                )
+            after_gen = stub_generator("after")
+            is_stub = True
+
+        result = run_quant_check(
+            before_gen=before_gen,
+            after_gen=after_gen,
+            tasks=pre_tasks,
+            stub=is_stub,
+        )
     rendered = render(result, fmt=fmt)
     if fmt == "table":
         console.print(rendered)
@@ -1605,7 +1661,10 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags, and disable
         # highlighting so JSON output is not polluted with ANSI escape codes.
-        console.print(rendered, markup=False, highlight=False)
+        if performance:
+            console.print(rendered, markup=False, highlight=False, soft_wrap=True)
+        else:
+            console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)

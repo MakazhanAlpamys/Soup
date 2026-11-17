@@ -1,9 +1,15 @@
 """Recipe catalog — ready-made configs for popular models."""
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import (
+    KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
+    resident_kimi_k2_quantization_refusal,
+)
+
+_SIZE_TOKEN_PATTERN = re.compile(r"^\d+(?:\.\d+)?[bmtk]$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -34,13 +40,25 @@ def search_recipes(
     task: Optional[str] = None,
     size: Optional[str] = None,
 ) -> List[RecipeMeta]:
-    """Search recipes by keyword, task, or model."""
+    """Search recipes by keyword, task, size, or model."""
     results = []
+    size_token = size.strip() if size else None
+    is_size_token = bool(size_token and _SIZE_TOKEN_PATTERN.match(size_token))
     for name, recipe in RECIPES.items():
         if task and recipe.task != task:
             continue
-        if size and size.lower() not in name.lower() and size.lower() not in recipe.model.lower():
-            continue
+        if size_token:
+            if is_size_token:
+                if recipe.size.strip().lower() != size_token.lower():
+                    continue
+            else:
+                s_lower = size_token.lower()
+                if (
+                    s_lower not in name.lower()
+                    and s_lower not in recipe.model.lower()
+                    and s_lower not in recipe.description.lower()
+                ):
+                    continue
         if query:
             searchable = f"{name} {recipe.model} {recipe.task} {recipe.description} "
             searchable += " ".join(recipe.tags)
@@ -51,7 +69,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (179 recipes)
+# Recipe catalog (181 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2813,7 +2831,7 @@ output: ./output
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
-        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
+        unavailable_reason=resident_kimi_k2_quantization_refusal("4bit"),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -3812,6 +3830,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-2b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-2B-Base",
+        task="pretrain",
+        size="2B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 2B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
     "qwen3.5-4b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-4B",
         task="sft",
@@ -4024,6 +4072,36 @@ training:
     target_modules: auto
   quantization: 4bit
   dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "qwen3.5-9b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-9B-Base",
+        task="pretrain",
+        size="9B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 9B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
 
 output: ./output
 """,
