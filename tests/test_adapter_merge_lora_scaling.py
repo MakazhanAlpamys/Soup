@@ -170,27 +170,40 @@ class TestMerge:
         got = _effective_delta(tmp_path / "out", 4 / 2)
         np.testing.assert_allclose(got, _diag(0.0, 1.0), atol=1e-6)
 
-    def test_equal_scaling_merge_is_unchanged(self, tmp_path):
-        # Same lora_alpha: nothing to fold, so the output is the plain average.
+    def test_equal_scaling_merge_is_unchanged(self, tmp_path, monkeypatch):
+        """Same lora_alpha: nothing to fold, so the output is byte-identical to the same
+        merge with the fold switched off, and each input enters at its weight (#2908's
+        split, 0.5 of each delta at equal weights)."""
+        from safetensors.numpy import load_file
+
         _make_adapter(tmp_path / "a", r=2, alpha=8, slot=0, value=3.0)
         _make_adapter(tmp_path / "b", r=2, alpha=8, slot=1, value=5.0)
         res = _run(["merge", "a", "b", "-o", "out", "--allow-unscanned"], tmp_path)
         assert res.exit_code == 0, res.output
-        from safetensors.numpy import load_file
+        np.testing.assert_allclose(
+            _effective_delta(tmp_path / "out", 8 / 2), _diag(6.0, 10.0), atol=1e-5
+        )
 
+        monkeypatch.setattr(
+            "soup_cli.utils.adapter_merge.fold_lora_scaling", lambda w, _dirs: list(w)
+        )
+        res = _run(["merge", "a", "b", "-o", "unfolded", "--allow-unscanned"], tmp_path)
+        assert res.exit_code == 0, res.output
         got = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
-        expected_b = np.zeros((_DIM, 2), dtype=np.float32)
-        expected_b[0, 0], expected_b[1, 1] = 1.5, 2.5
-        assert np.array_equal(got[_B], expected_b)
+        ref = load_file(str(tmp_path / "unfolded" / "adapter_model.safetensors"))
+        assert got.keys() == ref.keys()
+        assert all(np.array_equal(got[k], ref[k]) for k in got)
 
 
 class TestEveryStrategy:
     """The fold runs before the strategy, so linear, ties, dare and svd all see it.
 
-    ``a`` and ``b`` hold the SAME effective delta, ``4 e1 e1^T``, under two scalings:
-    ``a`` as ``B = 4`` at scaling 1, ``b`` as ``B = 1`` at scaling 4. Any of the four
-    strategies merging two equal deltas must give that delta back. Without the fold the
-    raw ``B`` tensors average to 2.5, decoded at ``a``'s scaling 1.
+    ``b`` holds the effective delta ``4 e1 e1^T`` as ``B = 1`` at scaling 4, and ``c`` holds
+    the same delta as ``B = 4`` at scaling 1, the scaling of the template ``a``. Folded, ``b``
+    is ``c``, so merging ``a`` with ``b`` must give exactly what merging ``a`` with ``c``
+    gives, whatever each strategy then does with two equal deltas (since #2908 the
+    factor-wise strategies add the cross terms of two inputs that share a rank slot). Without
+    the fold ``b`` enters with ``B = 1``, a quarter of its delta.
     """
 
     @pytest.mark.parametrize(
@@ -207,11 +220,15 @@ class TestEveryStrategy:
     def test_equal_deltas_under_two_scalings_merge_to_that_delta(self, tmp_path, extra):
         _make_adapter(tmp_path / "a", r=2, alpha=2, slot=1, value=4.0)
         _make_adapter(tmp_path / "b", r=2, alpha=8, slot=1, value=1.0)
+        _make_adapter(tmp_path / "c", r=2, alpha=2, slot=1, value=4.0)
         res = _run(["merge", "a", "b", "-o", "out", "--allow-unscanned", *extra], tmp_path)
         assert res.exit_code == 0, res.output
-        out = tmp_path / "out"
-        got = _effective_delta(out, _written_scaling(out))
-        np.testing.assert_allclose(got, _diag(0.0, 4.0), atol=1e-5)
+        ref = _run(["merge", "a", "c", "-o", "ref", "--allow-unscanned", *extra], tmp_path)
+        assert ref.exit_code == 0, ref.output
+        got = _effective_delta(tmp_path / "out", _written_scaling(tmp_path / "out"))
+        want = _effective_delta(tmp_path / "ref", _written_scaling(tmp_path / "ref"))
+        assert want[1, 1] > 0
+        np.testing.assert_allclose(got, want, atol=1e-5)
 
 
 class TestZeroScaling:
