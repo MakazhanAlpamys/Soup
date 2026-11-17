@@ -803,8 +803,15 @@ from your `soup.yaml`. The **effective** config — the loaded object with every
 already applied — is base64-embedded as **data**; credentials are read from the environment only
 when a live submission starts.
 
-`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
-local HF repo, so a cloud run would silently ignore them.
+The provider uses the chosen `--gpu` and runs `soup train --config <yaml> --yes` with the
+effective config. `--name` fills in its experiment name when the config has none.
+Cloud training exits 2 before writing a stub for `--push-as`, `--gate`, `--resume`,
+`--hf-resume`, `--wandb`, `--tensorboard`, `--tracker`, `--deepspeed`, `--fsdp`, `--gpus`,
+`--trust-remote-code`, `--profile`, `--allow-oom-attempt`, `--diagnose-gate`,
+`--diagnose-gate-require-all-modes`, `--annex-xi`, `--repro-receipt`,
+`--capture-activations`, `--track-energy`, `--energy-out` and `--find-lr`.
+Use the local `soup train` command for those options. `--dry-run` is accepted for
+plan-only cloud runs. Combining it with `--cloud-submit` exits 2 before a submission.
 
 A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
 id (every built-in template sets one, so users hit this first). The same applies to local model
