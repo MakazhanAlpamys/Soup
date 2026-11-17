@@ -751,6 +751,63 @@ def test_soup_profile_reports_a_sequence_teacher_s_generation(workdir):
     assert "Teacher generation (over training)" in _plain(text.output)
 
 
+def _oversize_teacher(workdir: Path, monkeypatch) -> None:
+    real = model_shape_mod.read_model_shape
+    teacher = str(workdir / "teacher")
+
+    def read(base, **kwargs):
+        shape = real(base, **kwargs)
+        if base == teacher:
+            return ModelShape(**{**shape.__dict__, "params": 2 * 10**12})
+        return shape
+
+    monkeypatch.setattr(model_shape_mod, "read_model_shape", read)
+
+
+def test_soup_profile_prices_the_student_alone_when_the_teacher_is_too_large(
+    workdir, monkeypatch
+):
+    """A teacher over 1,000B parameters is not priced. ``soup profile`` (and the MCP
+    ``profile`` tool, through the same ``profile_from_config``) then reports the student's
+    own estimate with a note, and exits 0 as on ``main``, instead of "Cannot estimate"."""
+    _oversize_teacher(workdir, monkeypatch)
+    (workdir / "soup.yaml").write_text(_yaml(workdir), encoding="utf-8")
+    result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    report = json.loads(result.stdout)
+    terms = report["memory_terms_bytes"]
+    assert terms["teacher"] == terms["distill"] == terms["teacher_generation"] == 0
+    student = hardware_fit.estimate_peak_vram_gb(
+        hardware_fit.hardware_fit_input_or_reason(
+            load_config_from_string(_yaml(workdir)),
+            allow_network=False,
+            profile_defaults=True,
+            price_teacher=False,
+        )
+    )
+    assert report["total_memory_bytes"] == student.estimate.total_bytes
+    assert any("The teacher is not priced" in note for note in report["notes"])
+
+
+def test_soup_plan_peak_carries_the_teacher_and_the_divergence(workdir):
+    """``soup plan`` records the pre-flight's own peak (``estimate_peak_vram``), so a
+    ``task: distill`` plan carries the two new terms: it equals the full estimate and is
+    larger than the student's alone."""
+    from soup_cli.utils.terraform_plan import estimate_peak_vram
+
+    cfg = load_config_from_string(_yaml(workdir))
+    peak, reason = estimate_peak_vram(cfg)
+    assert reason is None
+    inp = hardware_fit.hardware_fit_input_or_reason(cfg, allow_network=False)
+    full = hardware_fit.estimate_peak_vram_gb(inp)
+    assert full.teacher_gb > 0 and full.distill_gb > 0
+    assert peak == round(full.total_gb, 3)
+    student = hardware_fit.estimate_peak_vram_gb(
+        hardware_fit.hardware_fit_input_or_reason(cfg, allow_network=False, price_teacher=False)
+    )
+    assert peak > round(student.total_gb, 3)
+
+
 # --- a real step on a CUDA card -----------------------------------------------------
 
 

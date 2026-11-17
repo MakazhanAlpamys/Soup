@@ -416,9 +416,24 @@ def profile_from_config(
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=on_hub_request,
     )
+    notes: list[str] = []
+    if isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model":
+        # #2909: a teacher the estimate cannot price; the student still can be, as in the
+        # train pre-flight, so the estimate is the student's alone and a note says why.
+        notes.append(
+            f"The teacher is not priced: {inp.reason}. The estimate is the student's alone, "
+            "so it understates the run's peak."
+        )
+        inp = hardware_fit_input_or_reason(
+            cfg,
+            allow_network=allow_network,
+            profile_defaults=True,
+            gpu_memory_gb=gpu_memory_gb,
+            on_hub_request=on_hub_request,
+            price_teacher=False,
+        )
     if isinstance(inp, FitUnavailable):
         return inp
-    notes: list[str] = []
     if caller_shape is not None:
         if not inp.shape.guessed:
             notes.append(
