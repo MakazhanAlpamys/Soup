@@ -23,19 +23,23 @@ MIN_STREAM_LOSS_CHUNK = 16
 MAX_STREAM_LOSS_CHUNK = 8192
 
 # --- layer streaming: tasks ------------------------------------------------
-#: Tasks whose trainers can run against a streamed base (v0.72.4).
-#:
-#: DPO and KTO take their reference model from the SAME streamed base with the
-#: adapters disabled (TRL's ``null_ref_context``), so the reference costs no
-#: extra weights at all — measured 0.914x the SFT peak, where forcing a real
-#: second instance cost 9.92x. ORPO and SimPO are reference-free.
-SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto")
+#: Trainers that can run against a streamed base. DPO and IPO use a frozen
+#: reference adapter on that base. KTO and BCO use the shared base for their
+#: reference pass. ORPO and SimPO are reference-free.
+SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto", "bco", "ipo")
 
 #: Tasks PERMANENTLY excluded, not merely unimplemented. Generation rollouts
 #: re-read every layer once per generated token, which destroys the whole
 #: premise: streaming amortises one weight read over a training step, not over a
 #: single decoded token (plan §3.2).
 ROLLOUT_STREAM_TASKS = ("grpo", "ppo")
+
+# --- text that names something (a reward function, a path) -------------------
+def has_control_character(text: str) -> bool:
+    """True when ``text`` holds a C0 control character (TAB, LF and CR included), DEL or a C1
+    control: what a name or a path that is printed, recorded or run must not contain."""
+    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
+
 
 # --- ship verdict: noise floor (utils/ship_verdict.py) ---------------------
 #: A floor needs a spread, and a spread needs at least two samples.

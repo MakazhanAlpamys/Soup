@@ -354,7 +354,7 @@ def decide_performance_flags(
     gpu_name: str,
     compute_capability: float,
     max_length: int = 2048,
-    vram_headroom_gb: float = 0.0,
+    vram_headroom_gb: float | None = None,
 ) -> dict:
     """Return perf flags for FlashAttention / Liger / gradient_checkpointing.
 
@@ -365,8 +365,10 @@ def decide_performance_flags(
       blind wrote configs that ``soup train`` then refused. The probes are
       the same ones ``soup train`` validates with, so the two cannot disagree.
     - ``gradient_checkpointing`` enabled when the sequence is long (>8k tokens)
-      or VRAM headroom is tight (<4GB), to avoid OOM. Otherwise left off so we
-      don't pay the recompute cost when there's plenty of headroom.
+      or VRAM headroom is tight (<4GB), to avoid OOM. A deficit (negative value)
+      or zero headroom counts as tight; None represents unknown headroom and is
+      left off. Otherwise left off so we don't pay the recompute cost when
+      there's plenty of headroom.
     """
     del gpu_name  # reserved for future GPU-specific overrides
     is_ampere_or_newer = compute_capability >= 8.0
@@ -375,7 +377,7 @@ def decide_performance_flags(
     liger_available = is_ampere_or_newer and check_liger_available()
     flash_attn_available = is_ampere_or_newer and check_flash_attn_available() is not None
     long_sequence = max_length > 8192
-    tight_vram = 0.0 < vram_headroom_gb < 4.0
+    tight_vram = vram_headroom_gb is not None and vram_headroom_gb < 4.0
     return {
         "use_flash_attn": bool(is_ampere_or_newer and flash_attn_available),
         "use_liger": bool(is_ampere_or_newer and liger_available),

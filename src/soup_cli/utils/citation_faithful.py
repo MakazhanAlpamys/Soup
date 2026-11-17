@@ -24,6 +24,8 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 SUPPORTED_CITATION_STYLES: frozenset[str] = frozenset(
     {"bracket", "inline", "footnote"}
 )
@@ -114,7 +116,7 @@ def validate_citation_threshold(value: object) -> float:
             f"citation_recall_threshold must be a number, "
             f"got {type(value).__name__}"
         )
-    fval = float(value)
+    fval = float_with_overflow_check(value, "citation_recall_threshold")
     if not math.isfinite(fval):
         raise ValueError(
             "citation_recall_threshold must be finite (no NaN / Inf)"

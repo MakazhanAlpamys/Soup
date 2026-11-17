@@ -1,0 +1,19 @@
+{
+  "devices": [
+    "Tesla T4, 580.178.04, 7.5",
+    "Tesla T4, 580.178.04, 7.5"
+  ],
+  "visible_devices": "0",
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "commit": "693a928f838c147e412cacf74c7bdb00cdb8f6fc",
+  "source": "https://github.com/MakazhanAlpamys/Soup.git",
+  "patch_sha256": "4334662f352b1ed43cece34b10b426fdd1f07b2b03989602a796524c12a8e638",
+  "source_file_hashes": {
+    "src/soup_cli/trainer/ipo.py": "f4ba84524251e1b42cabefd29a8fa674a9f260e07823590c3d175fd6d73e1ddf",
+    "src/soup_cli/config/schema.py": "1548b51dd906d868904565fee896235db8e8ae5022c867cecaf53884d9494af8",
+    "src/soup_cli/utils/config_bounds.py": "45da13e7abc282c3a763b9a9f5bfcce07f9dafb66c8e3acfe5d5a96c8a72331e",
+    "tests/test_ipo_streaming.py": "8cf8cdb802f1ee10681510048c21ea6558f611a27f8d4373112e565c2ab8ebf5",
+    "tests/test_v07204.py": "08ac75cdfc3c13c95e088cc2dd420716c82f14a08cb75069587c905f44303dab"
+  },
+  "torch_cuda": "2.11.0+cu130 13.0"
+}

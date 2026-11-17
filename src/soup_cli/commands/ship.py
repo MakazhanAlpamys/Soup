@@ -22,19 +22,24 @@ the unified taxonomy (EXIT_USAGE_ERROR = 3, EXIT_GATE_FAILED = 2). Offline
 ``--evidence`` read/parse errors exit ``3``.
 
 Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy),
-``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), and ``pairwise`` (true
-judge win-rate, v0.71.31). Leg 2 (general suite) defaults to the bundled offline
-suite (``eval/gate_suites`` — MCQ/arithmetic + tool-call/JSON/safety, scored by
-the pure diagnose/custom scorers, v0.71.38); ``--general-suite`` with any
-non-bundled name routes through the existing lm-eval runner.
+``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), ``pairwise`` (true
+judge win-rate, v0.71.31) and ``reward`` (a reward function scores each generated answer, a
+float in [0, 1], and the mean decides; ``--reward-fn``, a ``.py`` file is EXECUTED). Leg 2
+(general suite) defaults to the bundled offline suite (``eval/gate_suites`` — MCQ/arithmetic +
+tool-call/JSON/safety, scored by the pure diagnose/custom scorers, v0.71.38);
+``--general-suite`` with any non-bundled name routes through the existing lm-eval runner.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import numbers
 import os
 import re
-from dataclasses import replace
+import stat
+from dataclasses import dataclass, field, replace
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -44,6 +49,7 @@ from typing import (
     NoReturn,
     Optional,
     Tuple,
+    TypeVar,
 )
 
 import typer
@@ -51,6 +57,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from soup_cli import __version__
+from soup_cli.utils.config_bounds import has_control_character
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
 )
@@ -63,8 +70,21 @@ from soup_cli.utils.exit_codes import (
 from soup_cli.utils.exit_codes import (
     GateGroup,
 )
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    ensure_distinct_paths,
+    is_network_or_device_path,
+    open_no_follow,
+    quote_path,
+)
 from soup_cli.utils.ship_progress import group, jsonl_command
+from soup_cli.utils.ship_task_rows import (
+    build_task_rows,
+    ensure_replaceable,
+    task_rows_path,
+    write_task_rows,
+)
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
@@ -76,12 +96,15 @@ from soup_cli.utils.ship_verdict import (
     FAILED_ADAPTER_NOOP,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
+    MODE_REWARD,
     NUMERICS_FAMILY_FULL,
+    REWARD_FN_MAX_CHARS,
     TASK_AXIS,
     TASK_MODES,
     AdapterChange,
     LegScore,
     NoiseFloor,
+    RewardSpec,
     ShipVerdict,
     TaskDetail,
     TaskWin,
@@ -92,6 +115,7 @@ from soup_cli.utils.ship_verdict import (
     compute_benchmark_deltas,
     compute_noise_floor,
     decide_ship,
+    decimal_mean,
     floor_exceeds_threshold,
     for_terminal,
     numerics_family,
@@ -103,6 +127,8 @@ from soup_cli.utils.ship_verdict import (
 )
 
 console = Console()
+
+_T = TypeVar("_T")
 
 app = typer.Typer(cls=GateGroup, no_args_is_help=False)
 
@@ -424,12 +450,38 @@ def _check_evidence_staleness(payload: dict, expected_sha: str) -> None:
         )
 
 
+def _bind_reward(
+    binding: Dict[str, object], reward: Optional[RewardSpec]
+) -> Dict[str, object]:
+    """``binding`` with the reward function added to its policy (its hash made again).
+
+    The same result as building the binding with ``reward`` (``_compute_ship_binding``) without
+    hashing the adapter and the task file once more. A live run uses it with the function the
+    VERDICT records, the bytes that were hashed, compiled and run: the file is not read a second
+    time for the binding, so what the evidence's ``task.reward.sha256`` says ran and what the
+    stamped binding names cannot differ. A binding of another mode, or no function, is returned
+    as it is.
+    """
+    policy = binding["policy"]
+    if reward is None or not isinstance(policy, dict) or policy.get("task_mode") != MODE_REWARD:
+        return binding
+    from soup_cli.utils.ship_provenance import policy_hash
+
+    with_reward = {**policy, "reward": {"fn": reward.fn, "sha256": reward.sha256}}
+    return {**binding, "policy": with_reward, "policy_sha256": policy_hash(with_reward)}
+
+
 def _compute_ship_binding(
     cfg: Optional["SoupConfig"], *, adapter: Optional[str], task_eval: Optional[str],
     suite_names: List[str], task_mode: str, judge_model: Optional[str],
     threshold: float, noise_floor_runs: Optional[int], data_sha256: Optional[str],
+    reward: Optional[RewardSpec] = None,
 ) -> Dict[str, object]:
-    """Capture source bytes and the effective verdict policy separately from config_sha."""
+    """Capture source bytes and the effective verdict policy separately from config_sha.
+
+    ``reward`` (the ``reward`` mode only) is the function that scores leg 1: it is part of the
+    policy, so a changed reward file is a changed policy. Every other mode's policy is unchanged.
+    """
     from soup_cli.utils.ship_provenance import judge_identity, make_binding
 
     source_sha = None
@@ -448,6 +500,8 @@ def _compute_ship_binding(
         if task_mode in {"judge_score", "pairwise"} else None,
         "noise_floor_runs": noise_floor_runs,
     }
+    if task_mode == MODE_REWARD and reward is not None:
+        policy["reward"] = {"fn": reward.fn, "sha256": reward.sha256}
     return make_binding(
         adapter=adapter,
         task_eval_sha256=_safe_hash_file(task_eval, _MAX_EVIDENCE_BYTES) if task_eval else None,
@@ -648,6 +702,16 @@ def _resolve_generators(
     return base_gen, tuned_gen
 
 
+def _finite_number(value: object) -> bool:
+    """A real, finite number: a bool is not one, and an integer beyond float range is not finite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer too large for a float
+        return False
+
+
 def _metric_leg_score(results: "EvalResults") -> LegScore:
     """One side of the metric leg: its accuracy, with the per-row scores and flags behind it.
 
@@ -664,28 +728,54 @@ def _metric_leg_score(results: "EvalResults") -> LegScore:
         row_scores=tuple(1.0 if row.matched else 0.0 for row in rows),
         truncated=tuple(truncation_of(row.output) for row in rows),
         failures=sum(1 for row in rows if row.failed),
+        # what the per-row file keeps: the answer each row was scored on (``""`` for a failed
+        # generation), which rows failed, and the tasks behind them
+        answers=tuple(row.output for row in rows),
+        failed_rows=tuple(row.failed for row in rows),
+        tasks=tuple(row.task for row in rows),
     )
 
 
 def _task_detail_or_none(
-    build: Callable[[], Optional[TaskDetail]],
-) -> Optional[TaskDetail]:
-    """The task detail, or ``None`` and one dim line when it cannot be built.
+    build: Callable[[], Optional[_T]], label: str = "Task detail (rows, truncation)",
+) -> Optional[_T]:
+    """What ``build`` makes, or ``None`` and one dim line when it cannot be built.
 
     Display only (the pattern of #2762): the detail decides nothing, so a failure to build it (a
     per-row judge score that is None or not finite, a flag of the wrong type) must not end a run
     that has its verdict. Only the type of the error is printed, its text may carry model output.
     The refusal of a side whose every generation failed is NOT built in here: it is raised by
     ``_refuse_a_dead_side`` before the detail is built, so this wrapper cannot swallow it.
+    ``label`` names what was left out (the per-row records use it too).
     """
     try:
         return build()
     except Exception as exc:  # display only: no failure here may end the run
         console.print(
-            "[dim]Task detail (rows, truncation) could not be built and is left out: "
-            f"{type(exc).__name__}[/]"
+            f"[dim]{label} could not be built and is left out: {type(exc).__name__}[/]"
         )
         return None
+
+
+def _with_task_rows(
+    detail: Optional[TaskDetail], base_leg: object, tuned_leg: object, *, scoring_applies: bool,
+    decimal: bool = False,
+) -> Optional[TaskDetail]:
+    """The detail with the per-row records for the file next to ``--output``, when it can.
+
+    Display only like the detail itself: a leg whose rows do not add up to its reported number,
+    or whose records cannot be built, leaves the file out (and says so in one dim line); the
+    verdict, its counts and the exit code are the same.
+    """
+    if detail is None or detail.rows is None:
+        return detail
+    records = _task_detail_or_none(
+        lambda: build_task_rows(
+            base_leg, tuned_leg, scoring_applies=scoring_applies, decimal=decimal
+        ),
+        label="Task rows file (per-row results)",
+    )
+    return detail if records is None else replace(detail, records=records)
 
 
 def _refuse_a_dead_side(side: str, leg: LegScore) -> None:
@@ -728,6 +818,7 @@ def _leg1_metric(
             base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
         )
     )
+    detail = _with_task_rows(detail, base_leg, tuned_leg, scoring_applies=True)
     return build_task_win("metric", base_leg, tuned_leg, detail=detail)
 
 
@@ -789,9 +880,18 @@ def _build_judge_scorer(
             if isinstance(scores, list) and len(scores) == len(tasks)
             else None
         )
+        if row_scores is not None and all(_finite_number(raw) for raw in row_scores):
+            # The rows are scored on the number's own scale, (score - min) / span, NOT clamped
+            # (a score outside the scale stays a different row; the per-row file then cannot hold
+            # it and is left out). The reported number stays the evaluator's own, exactly as
+            # 0.77.x reported it: it is never rebuilt from the rows, which moved it by one
+            # rounding and turned a mathematical tie into a win. A per-row file adds up to it
+            # within 1e-12 (``JUDGE_MEAN_TOLERANCE``), and is left out when it does not.
+            row_scores = tuple((raw - scale_min) / span for raw in row_scores)
         return LegScore(
             value, row_scores=row_scores,
             truncated=tuple(truncation_of(answer) for answer in answers),
+            answers=tuple(answers), failed_rows=(False,) * len(answers), tasks=tuple(tasks),
         )
 
     return _score
@@ -815,7 +915,337 @@ def _leg1_judge(
             base_score, tuned_score, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
         )
     )
+    detail = _with_task_rows(detail, base_score, tuned_score, scoring_applies=False)
     return build_task_win("judge_score", base_score, tuned_score, detail=detail)
+
+
+# ---------------------------------------------------------------------------
+# Reward mode (--task-mode reward): leg 1 scored by a reward function
+# ---------------------------------------------------------------------------
+
+_REWARD_BUILTINS = ("accuracy", "format")
+_REWARD_VERIFIABLE_DOMAINS = ("math", "json_schema")
+_REWARD_FN_CHOICES = (
+    "accuracy, format, verifiable:math, verifiable:json_schema or the path of a .py file"
+)
+
+#: A reward file is read whole to be hashed: a bigger one is refused (they are small).
+_MAX_REWARD_FILE_BYTES = 1 << 20
+
+#: What the reward function is called with; a task column of the same name does not replace them.
+_REWARD_CALL_ARGUMENTS = frozenset({"answer", "prompt", "completions"})
+
+
+@dataclass(frozen=True)
+class _RewardTarget:
+    """What ``--reward-fn`` names, checked: a built-in, a verifiable domain or a ``.py`` file."""
+
+    label: str  # what the verdict names (``RewardSpec.fn``): the text of the flag
+    kind: str  # "builtin" | "verifiable" | "file"
+    name: str  # the built-in name, the verifiable domain or the file path
+    sha256: Optional[str] = None  # of the file's bytes, read once, which are the bytes that run
+    #: The bytes that were hashed: the ones that are compiled and run (never read a second time).
+    source: Optional[bytes] = field(default=None, repr=False, compare=False)
+
+    @property
+    def spec(self) -> RewardSpec:
+        return RewardSpec(fn=self.label, sha256=self.sha256)
+
+
+def _read_reward_file(path: str) -> bytes:
+    """The bytes of a reward file: no symlink, a regular file, at most 1 MiB.
+
+    Read to hash it, never to run it here. Raises ``ValueError`` naming the reason (the path as
+    typed, control characters escaped).
+    """
+    where = f"--reward-fn path {quote_path(path)}"
+    if not os.path.isfile(path):
+        raise ValueError(f"{where} is not a file")
+    try:
+        descriptor = open_no_follow(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except OSError as exc:
+        raise ValueError(f"{where} cannot be read ({type(exc).__name__})") from None
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{where} is not a file")
+        if info.st_size > _MAX_REWARD_FILE_BYTES:
+            raise ValueError(f"{where} is larger than {_MAX_REWARD_FILE_BYTES} bytes")
+        data = handle.read(_MAX_REWARD_FILE_BYTES + 1)
+    if len(data) > _MAX_REWARD_FILE_BYTES:
+        raise ValueError(f"{where} is larger than {_MAX_REWARD_FILE_BYTES} bytes")
+    return data
+
+
+def _parse_reward_fn(value: object) -> _RewardTarget:
+    """Check ``--reward-fn`` and name what it names; raises ``ValueError`` (a usage error).
+
+    Nothing is executed. A ``.py`` file must sit under the working directory, not be a symlink
+    and not be on a network share or a device; its bytes are read once to take their sha256.
+    ``verifiable:code`` runs the model's output as code and ``judge_rank`` is built from a GRPO
+    config: neither can score a ship run. A comma-separated list is a training feature.
+    """
+    if not isinstance(value, str):
+        raise ValueError("--reward-fn must be text")
+    if not value:
+        raise ValueError("--reward-fn must not be empty")
+    if "\x00" in value or has_control_character(value):
+        raise ValueError("--reward-fn must not contain a control character")
+    if value != value.strip():
+        raise ValueError("--reward-fn must not start or end with whitespace")
+    if len(value) > REWARD_FN_MAX_CHARS:
+        raise ValueError(f"--reward-fn must be at most {REWARD_FN_MAX_CHARS} characters")
+    if "," in value:
+        raise ValueError(
+            "--reward-fn takes one reward function, not a list (a list is a training feature; "
+            "a path with a comma in it is refused)"
+        )
+    if value.endswith(".py"):
+        if is_network_or_device_path(value):
+            raise ValueError(
+                f"--reward-fn path {quote_path(value)} names a network share or a device; a "
+                "reward file must be a local file under the working directory"
+            )
+        try:
+            enforce_under_cwd_and_no_symlink(value, "--reward-fn path")
+        except (ValueError, TypeError) as exc:
+            raise ValueError(str(exc)) from None
+        source = _read_reward_file(value)
+        return _RewardTarget(value, "file", value, hashlib.sha256(source).hexdigest(), source)
+    if value == "judge_rank":
+        raise ValueError(
+            "--reward-fn judge_rank is built from a GRPO config (training.grpo_judge) and "
+            "cannot score a ship run"
+        )
+    if value in _REWARD_BUILTINS:
+        return _RewardTarget(value, "builtin", value)
+    if value == "verifiable" or value.startswith("verifiable:"):
+        domain = value.partition(":")[2]
+        if domain == "code":
+            raise ValueError(
+                "--reward-fn verifiable:code is not supported: it runs the model's output as code"
+            )
+        if domain not in _REWARD_VERIFIABLE_DOMAINS:
+            raise ValueError(
+                "--reward-fn verifiable needs a domain: verifiable:math or verifiable:json_schema"
+            )
+        return _RewardTarget(value, "verifiable", domain)
+    raise ValueError(f"--reward-fn must be {_REWARD_FN_CHOICES}")
+
+
+def _resolve_reward_target(value: object) -> _RewardTarget:
+    try:
+        return _parse_reward_fn(value)
+    except ValueError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
+def _short(text: object, limit: int = 200) -> str:
+    """One bounded line of a message that may carry user or model text (the caller makes it
+    terminal-safe)."""
+    return " ".join(str(text).split())[:limit]
+
+
+def _run_reward_source(target: _RewardTarget) -> Callable[..., object]:
+    """Compile and run the bytes that were hashed; return the file's ``reward_fn``.
+
+    The bytes were read ONCE, in ``_parse_reward_fn``, and hashed there: those same bytes are
+    compiled here and run in a fresh module, so the recorded sha256 is that of the source that was
+    compiled and run, no ``__pycache__`` is ever consulted (a stale or planted compiled copy
+    cannot run in place of the source) and the file is not read a second time (a swap, or a swap
+    and restore, cannot change what runs). It is the shared loader's behaviour otherwise:
+    a module named ``custom_reward`` that knows its absolute real ``__file__``, not registered in
+    ``sys.modules``, and a ``reward_fn`` attribute that must exist. Modules the file imports are
+    not hashed. ``dont_inherit``: a file is compiled like a plain module, not with this module's
+    ``from __future__`` flags.
+    """
+    import types
+
+    module = types.ModuleType("custom_reward")
+    module.__file__ = os.path.realpath(target.name)
+    code = compile(target.source, target.name, "exec", dont_inherit=True)
+    exec(code, module.__dict__)  # noqa: S102 - what --reward-fn is for: the user's own code
+    if not hasattr(module, "reward_fn"):
+        raise ValueError(
+            f"Custom reward file {target.name} must define a 'reward_fn' callable "
+            "(def reward_fn(completions, **kwargs): return [1.0] * len(completions))"
+        )
+    return module.reward_fn
+
+
+def _load_reward_callable(target: _RewardTarget) -> Callable[..., object]:
+    """The reward function itself (exit 3 on failure).
+
+    A built-in or a ``verifiable`` domain goes through the loader ``soup train`` uses. A ``.py``
+    file is EXECUTED here, from the bytes that were hashed (``_run_reward_source``), so the line
+    saying so is printed first. It runs before any model loads, so a file that cannot load costs
+    no GPU time; ``SystemExit`` from it (a ``sys.exit(0)`` must not read as a SHIP) and any other
+    error are usage errors. A file can still end the process (``os._exit``): it is code the user
+    trusts, and a run that ends without a verdict is not a verdict whatever its exit code.
+    """
+    label = escape(for_terminal(target.label))
+    if target.kind == "file":
+        console.print(
+            f"[yellow]Warning:[/] --reward-fn {label} is a Python file and soup ship "
+            f"EXECUTES it (sha256 {target.sha256[:12]}). Only use a reward file you trust."
+        )
+    try:
+        if target.kind == "file":
+            function = _run_reward_source(target)
+        else:
+            from soup_cli.trainer.rewards import load_reward_fn
+
+            if target.kind == "verifiable":
+                function = load_reward_fn("verifiable", verifiable_domain=target.name)
+            else:
+                function = load_reward_fn(target.name)
+    except SystemExit:
+        _fail("--reward-fn file called sys.exit while it was loaded", _EXIT_USAGE)
+    except Exception as exc:  # noqa: BLE001 - the file ran arbitrary code
+        _fail(
+            f"could not load --reward-fn {target.label}: {type(exc).__name__}: {_short(exc)}",
+            _EXIT_USAGE,
+        )
+    if not callable(function):
+        _fail(f"--reward-fn {target.label}: reward_fn is not callable", _EXIT_USAGE)
+    return function
+
+
+def _reward_for_row(
+    reward_fn: Callable[..., object], task: object, answer: str, index: int, side: str,
+) -> float:
+    """One row's reward: the function is handed one completion, and must return one number.
+
+    ``fn([[{"role": "assistant", "content": answer}]], answer=[expected], prompt=[prompt],
+    **{column: [value]})``. It must return a list of exactly one finite number in [0, 1]; anything
+    else (a different count, a bool, NaN, a string, a number outside the range, an exception, an
+    exit of the process) is a runtime error that names the row and the side: a verdict is never
+    built on a score nobody could read.
+    """
+    where = f"for row {index} ({side})"
+    extra = {
+        key: [value] for key, value in getattr(task, "metadata", {}).items()
+        if key not in _REWARD_CALL_ARGUMENTS
+    }
+    try:
+        result = reward_fn(
+            [[{"role": "assistant", "content": str(answer)}]],
+            answer=[getattr(task, "expected", "")], prompt=[getattr(task, "prompt", "")], **extra,
+        )
+    except SystemExit:
+        raise RuntimeError(f"reward function called sys.exit {where}") from None
+    except Exception as exc:  # noqa: BLE001 - the function is the user's code
+        raise RuntimeError(
+            f"reward function raised {type(exc).__name__} {where}: {_short(exc)}"
+        ) from None
+    if not isinstance(result, (list, tuple)):
+        raise RuntimeError(
+            f"reward function returned a {type(result).__name__}, not a list {where}; it must "
+            "return a list with exactly one score"
+        )
+    if len(result) != 1:
+        raise RuntimeError(
+            f"reward function returned {len(result)} scores {where}; it must return a list "
+            "with exactly one score"
+        )
+    value = result[0]
+    if isinstance(value, bool):
+        raise RuntimeError(
+            f"reward function returned a boolean {where}; a score is a number from 0 to 1"
+        )
+    if isinstance(value, int):  # an integer of any size compares without overflowing
+        if not 0 <= value <= 1:
+            shown = repr(value) if len(repr(value)) <= 24 else "a number"
+            raise RuntimeError(f"reward function returned {shown}, outside [0, 1] {where}")
+        return float(value)
+    if not isinstance(value, numbers.Real):
+        raise RuntimeError(
+            f"reward function returned a {type(value).__name__}, not a number {where}"
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise RuntimeError(
+            f"reward function returned a {type(value).__name__}, not a number {where}"
+        ) from None
+    if not math.isfinite(number):
+        raise RuntimeError(
+            f"reward function returned a score that is not finite ({number!r}) {where}"
+        )
+    if not 0.0 <= number <= 1.0:
+        raise RuntimeError(f"reward function returned {number!r}, outside [0, 1] {where}")
+    return number
+
+
+def _build_reward_scorer(
+    task_eval: str, reward_fn: Callable[..., object]
+) -> Callable[[Callable[[str], str], str], LegScore]:
+    """A ``score(gen, side) -> LegScore`` for one side of a reward leg.
+
+    Every task is generated, then scored by the reward function, one row per call. The number of
+    the leg is the exact mean of the rows (``decimal_mean``), carried with the rows themselves. A
+    row whose generation failed is 0.0 without a call: the function never sees a completion that
+    does not exist.
+    """
+    from soup_cli.eval.custom import load_eval_tasks
+
+    tasks = load_eval_tasks(task_eval)
+    if not tasks:
+        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+
+    def _score(gen: Callable[[str], str], side: str) -> LegScore:
+        from soup_cli.eval.generation import iter_outputs
+        from soup_cli.utils.live_eval import truncation_of
+        from soup_cli.utils.ship_progress import track
+
+        scores: List[float] = []
+        answers: List[str] = []
+        failed: List[bool] = []
+        flags: List[Optional[bool]] = []
+        outputs = iter_outputs(gen, [task.prompt for task in tasks])
+        for index, (task, output) in enumerate(track(zip(tasks, outputs), len(tasks))):
+            if output is None:
+                scores.append(0.0)
+                answers.append("")
+                failed.append(True)
+                flags.append(None)
+                continue
+            scores.append(_reward_for_row(reward_fn, task, output, index, side))
+            answers.append(output)
+            failed.append(False)
+            flags.append(truncation_of(output))
+        return LegScore(
+            decimal_mean(scores), row_scores=scores, truncated=flags, failures=sum(failed),
+            answers=answers, failed_rows=failed, tasks=tasks,
+        )
+
+    return _score
+
+
+def _leg1_reward(
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    task_eval: str,
+    reward_fn: Callable[..., object],
+    spec: RewardSpec,
+) -> TaskWin:
+    """Leg 1 scored by a reward function: the mean of the per-row rewards, strict ``>``."""
+    from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
+
+    score = _build_reward_scorer(task_eval, reward_fn)
+    with group("task_eval", side="base", countable=True):
+        base_leg = score(base_gen, "base")
+    _refuse_a_dead_side("base", base_leg)
+    with group("task_eval", side="tuned", countable=True):
+        tuned_leg = score(tuned_gen, "tuned")
+    _refuse_a_dead_side("tuned", tuned_leg)
+    detail = _task_detail_or_none(
+        lambda: build_task_detail(
+            base_leg, tuned_leg, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS, paired=True
+        )
+    )
+    detail = _with_task_rows(detail, base_leg, tuned_leg, scoring_applies=False, decimal=True)
+    return build_task_win(MODE_REWARD, base_leg, tuned_leg, detail=detail, reward=spec)
 
 
 def _build_pairwise_scorer(
@@ -1026,6 +1456,7 @@ def _build_task_floor_scorer(
     base_id: str,
     task_eval: str,
     judge_model: Optional[str],
+    reward_fn: Optional[Callable[..., object]] = None,
 ) -> Callable[[], float]:
     """A ``() -> float`` closure scoring the BASE side's leg-1 task axis once.
 
@@ -1045,6 +1476,17 @@ def _build_task_floor_scorer(
             return run_eval(base_id, tasks, generate_fn=base_gen).accuracy
 
         return _metric_score
+
+    if task_mode == MODE_REWARD:
+        # decode-only noise: the reward function is a pure scorer of the generated text
+        if reward_fn is None:
+            raise ValueError("--task-mode reward needs a reward function to measure its floor")
+        reward_scorer = _build_reward_scorer(task_eval, reward_fn)
+
+        def _reward_score() -> float:
+            return float(reward_scorer(base_gen, "base"))
+
+        return _reward_score
 
     if not judge_model:
         raise ValueError(f"--task-mode {task_mode} needs a judge model")
@@ -1080,6 +1522,7 @@ def _measure_noise_floor(
     task_eval: str,
     judge_model: Optional[str],
     forgetting_threshold: float,
+    reward_fn: Optional[Callable[..., object]] = None,
 ) -> NoiseFloor:
     """Re-run the BASE model ``runs`` times and return the measured spread.
 
@@ -1097,6 +1540,8 @@ def _measure_noise_floor(
     - ``pairwise``: the base model judged against ITSELF, whose expected
       win-rate is 0.5 by construction, so the spread is a directly measured
       quantity, not an inference.
+    - ``reward``: the base's generated text scored by the reward function, re-run:
+      decode-only noise (the function is a scorer of the text, not a judge).
 
     In the two judge modes the spread folds the judge's own sampling noise into
     the number, so the returned floor is stamped ``judge_inclusive`` and never
@@ -1124,6 +1569,7 @@ def _measure_noise_floor(
         base_id=base_id,
         task_eval=task_eval,
         judge_model=judge_model,
+        reward_fn=reward_fn,
     )
 
     samples: List[Dict[str, float]] = []
@@ -1261,8 +1707,15 @@ def _verdict_live(
     noise_floor_runs: Optional[int] = None,
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    before_models: Optional[Callable[[], None]] = None,
+    reward_fn: Optional[str] = None,
 ) -> ShipVerdict:
-    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
+    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1).
+
+    ``before_models`` runs once the run is known to evaluate (an adapter that changes nothing
+    returns before it) and before any model loads: ``ship`` uses it for the checks of the file
+    its results are written next to.
+    """
     if not base:
         _fail("live run needs --base <model>", _EXIT_USAGE)
     if adapter and tuned:
@@ -1326,6 +1779,22 @@ def _verdict_live(
             _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
         _validate_judge_model_url(judge_model)
 
+    # The reward mode needs its function, and no other mode takes one. The flag is checked (and a
+    # file hashed, never run) BEFORE any model loads; the file is only RUN after the run is known
+    # to evaluate (an adapter that changes nothing never reaches it).
+    reward_target: Optional[_RewardTarget] = None
+    if task_mode == MODE_REWARD:
+        if reward_fn is None:
+            _fail(
+                f"--task-mode reward needs --reward-fn <{_REWARD_FN_CHOICES}>", _EXIT_USAGE
+            )
+        reward_target = _resolve_reward_target(reward_fn)
+    elif reward_fn is not None:
+        _fail(
+            f"--reward-fn applies only with --task-mode reward (got --task-mode {task_mode})",
+            _EXIT_USAGE,
+        )
+
     # Read the adapter before either model loads: an all-zero lora_B adds
     # nothing, and the live eval would only reach "task did not improve" (#2410).
     # An empty --adapter / --tuned is absent (the checks above treat "" as not given), so it is
@@ -1334,7 +1803,10 @@ def _verdict_live(
     if adapter and _adapter_is_noop(adapter):
         return ShipVerdict(
             decision=DECISION_DONT_SHIP,
-            task_win=TaskWin(mode=task_mode, base=0.0, tuned=0.0, won=False),
+            task_win=TaskWin(
+                mode=task_mode, base=0.0, tuned=0.0, won=False,
+                reward=None if reward_target is None else reward_target.spec,
+            ),
             benchmark_deltas=(),
             failed_rule=FAILED_ADAPTER_NOOP,
             forgetting_threshold=forgetting_threshold,
@@ -1342,6 +1814,10 @@ def _verdict_live(
             judged=judged,
         )
 
+    if before_models is not None:
+        before_models()
+    # the file is run HERE: after the run is known to evaluate, before any model loads
+    reward_callable = _load_reward_callable(reward_target) if reward_target is not None else None
     tuned_id = tuned if tuned else base
     try:
         template_options = (
@@ -1363,11 +1839,16 @@ def _verdict_live(
                 task_eval=task_eval,
                 judge_model=judge_model,
                 forgetting_threshold=forgetting_threshold,
+                reward_fn=reward_callable,
             )
         if task_mode == "judge_score":
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
         elif task_mode == "pairwise":
             task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
+        elif task_mode == MODE_REWARD:
+            task_win = _leg1_reward(
+                base_gen, tuned_gen, task_eval, reward_callable, reward_target.spec
+            )
         else:
             task_win = _leg1_metric(base_gen, tuned_gen, base, tuned_id, task_eval)
         base_scores, tuned_scores = _leg2_scores(
@@ -1440,6 +1921,51 @@ def _push_pr_comment(verdict: ShipVerdict, target: str) -> None:
     )
 
 
+# The task modes that write a per-row file: a rule, a judge or a reward function scores each row
+# on its own. ``pairwise`` keeps its verdicts in the judge rows, not here.
+_TASK_ROWS_MODES = ("metric", "judge_score", MODE_REWARD)
+
+
+def _same_directory(first: str, second: str) -> bool:
+    def directory(path: str) -> str:
+        return os.path.normcase(os.path.dirname(os.path.realpath(path)))
+
+    return directory(first) == directory(second)
+
+
+def _check_task_rows_target(
+    *,
+    output: Optional[str],
+    emit_evidence: Optional[str],
+    task_eval: Optional[str],
+    config: Optional[str],
+    task_mode: str,
+) -> None:
+    """Refuse before any model loads a file name the per-row file cannot go under (exit 3).
+
+    The file sits next to ``--output`` and only there: a name it cannot be written under, a file
+    of the user's own that it would replace (the task file, the config, the other outputs), or a
+    file at its path that soup ship did not write. A run that would write none (``pairwise``,
+    an adapter that changes nothing: ``_verdict_live`` calls this after that is known) is not
+    asked.
+    """
+    if not output or task_mode not in _TASK_ROWS_MODES:
+        return
+    try:
+        path = task_rows_path(output)
+        named = (
+            ("--output", output), ("--emit-evidence", emit_evidence),
+            ("--task-eval", task_eval), ("--config", config),
+        )
+        ensure_distinct_paths(
+            [(field, value) for field, value in named if value],
+            [("task-rows file", path)],
+        )
+        ensure_replaceable(path)
+    except ValueError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
 def _emit_and_exit(
     verdict: ShipVerdict,
     output: Optional[str],
@@ -1449,10 +1975,27 @@ def _emit_and_exit(
     push: Optional[str] = None,
 ) -> None:
     console.print(render_ship_panel(verdict))
+    # The per-row file goes first so the verdict can name it only when it exists. A failure to
+    # write it is reported after the verdict, the evidence and the PR comment are out (exit 1):
+    # it is part of the evidence, and nothing here claims a file that was not written.
+    records = verdict.task_win.detail.records if verdict.task_win.detail is not None else None
+    rows_pointer: Optional[str] = None
+    rows_error: Optional[Exception] = None
+    if output and records:
+        try:
+            rows_path = write_task_rows(records, output)
+            rows_pointer = os.path.basename(task_rows_path(output))
+            console.print(
+                f"[green]Wrote task rows[/] {escape(for_terminal(rows_path))} "
+                f"({len(records)} rows; it holds your prompts and the answers)"
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            rows_error = exc
     if output:
         try:
             atomic_write_text(
-                json.dumps(verdict_to_dict(verdict), indent=2), output, field="output"
+                json.dumps(verdict_to_dict(verdict, task_rows=rows_pointer), indent=2),
+                output, field="output",
             )
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
@@ -1462,7 +2005,17 @@ def _emit_and_exit(
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
     elif emit_evidence:
         try:
-            payload = verdict_to_evidence(verdict, provenance=provenance)
+            # The evidence names the file only when it sits in the evidence's own directory (the
+            # pointer is a bare name, resolved next to the file that holds it).
+            payload = verdict_to_evidence(
+                verdict,
+                provenance=provenance,
+                task_rows=(
+                    rows_pointer
+                    if rows_pointer is not None and _same_directory(emit_evidence, output)
+                    else None
+                ),
+            )
             atomic_write_text(
                 json.dumps(payload, indent=2), emit_evidence, field="emit-evidence"
             )
@@ -1476,6 +2029,16 @@ def _emit_and_exit(
     # announced on the PR (the gate then blocks with exit 2).
     if push:
         _push_pr_comment(verdict, push)
+    if rows_error is not None:
+        message = (
+            f"cannot write the task rows next to --output: {type(rows_error).__name__}: "
+            f"{rows_error}"
+        )
+        if verdict.decision == DECISION_SHIP:
+            _fail(message, _EXIT_RUNTIME)
+        # a DON'T SHIP keeps its own exit code (2): a pipeline that retries on exit 1 must not
+        # run a finished verdict again; the error is printed all the same
+        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 
@@ -1506,7 +2069,17 @@ def ship(
     task_mode: str = typer.Option(
         "metric",
         "--task-mode",
-        help="Leg-1 mode: metric | judge_score | pairwise (judge win-rate).",
+        help="Leg-1 mode: metric | judge_score | pairwise (judge win-rate) | reward (a "
+        "reward function scores each answer; needs --reward-fn).",
+    ),
+    reward_fn: Optional[str] = typer.Option(
+        None,
+        "--reward-fn",
+        help="Reward function for --task-mode reward: accuracy | format | verifiable:math | "
+        "verifiable:json_schema | path/to/file.py. A .py file is EXECUTED as Python code on "
+        "this machine (it must sit under the working directory and not be a symlink): only use "
+        "a file you trust. It is called once per row and returns one number in [0, 1]; the "
+        "verdict is decided on the mean.",
     ),
     noise_floor: Optional[int] = typer.Option(
         None,
@@ -1616,6 +2189,15 @@ def ship(
                 task_eval = ship_cfg.task_eval
             if _flag_is_default(ctx, "task_mode"):
                 task_mode = ship_cfg.task_mode
+            if (
+                _flag_is_default(ctx, "reward_fn") and ship_cfg.reward_fn is not None
+                and task_mode == MODE_REWARD and (not evidence or require_provenance)
+            ):
+                # inherited only by a run that uses it: the mode is the effective one (a flag
+                # that overrides the mode leaves a dormant config function unread and never run)
+                # and the run is live, or an offline one that only hashes the file to compare it
+                # (--require-provenance); a plain replay never reads or runs the config's file
+                reward_fn = ship_cfg.reward_fn
             if _flag_is_default(ctx, "general_suite") and ship_cfg.general_suite is not None:
                 general_suite = ship_cfg.general_suite
             if _flag_is_default(ctx, "judge_model") and ship_cfg.judge_model is not None:
@@ -1633,6 +2215,19 @@ def ship(
                 noise_floor = ship_cfg.noise_floor
 
     _validate_task_mode_flag(task_mode)
+    if reward_fn is not None and evidence:
+        # an offline run: the live path checks the pair in _verdict_live, before any model loads
+        if task_mode != MODE_REWARD:
+            _fail(
+                f"--reward-fn applies only with --task-mode reward (got --task-mode {task_mode})",
+                _EXIT_USAGE,
+            )
+        if not require_provenance:
+            _fail(
+                "--reward-fn applies only to a live run (the evidence names the reward function "
+                "it was scored with, and an offline replay never runs a file)",
+                _EXIT_USAGE,
+            )
     threshold = _validate_threshold_flag(forgetting_threshold)
     noise_floor = _validate_noise_floor_flag(noise_floor)
 
@@ -1653,13 +2248,21 @@ def ship(
     config_sha = _config_sha_of(soup_config) if soup_config is not None else None
     binding: Optional[Dict[str, object]] = None
 
+    def current_reward() -> Optional[RewardSpec]:
+        # the reward function as it is on disk NOW (named and hashed, never run): what an offline
+        # gate compares with the evidence (a live run takes it from its verdict instead)
+        if task_mode != MODE_REWARD or reward_fn is None:
+            return None
+        return _resolve_reward_target(reward_fn).spec
+
     def capture_binding(
         mode: str, names: List[str], floor_runs: Optional[int],
+        reward: Optional[RewardSpec] = None,
     ) -> Dict[str, object]:
         return _compute_ship_binding(
             soup_config, adapter=adapter, task_eval=task_eval, suite_names=names,
             task_mode=mode, judge_model=judge_model, threshold=threshold,
-            noise_floor_runs=floor_runs, data_sha256=data_sha256,
+            noise_floor_runs=floor_runs, data_sha256=data_sha256, reward=reward,
         )
 
     if evidence:
@@ -1695,20 +2298,31 @@ def ship(
         verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
         recorded_runs = verdict.noise_floor.runs if verdict.noise_floor is not None else None
         if require_provenance:
-            binding = capture_binding(task_mode, _parse_suite(general_suite), recorded_runs)
+            if task_mode == MODE_REWARD and reward_fn is None:
+                _fail(
+                    "--require-provenance with --task-mode reward needs --reward-fn (the file "
+                    "the evidence was scored with is compared; it is hashed, never run)",
+                    _EXIT_USAGE,
+                )
+            binding = capture_binding(
+                task_mode, _parse_suite(general_suite), recorded_runs, current_reward(),
+            )
             try:
                 check_binding(payload, binding)
             except ValueError as exc:
                 _fail(str(exc), _EXIT_USAGE)
         if emit_evidence and binding is None:
             # External scores are explicitly caller-trusted, not a claim that this
-            # command evaluated a model. Bind the actual supplied axes/mode.
+            # command evaluated a model. Bind the actual supplied axes/mode (and the reward
+            # function the evidence names: nothing was run here).
             binding = capture_binding(
                 verdict.task_win.mode, [item.name for item in verdict.benchmark_deltas],
-                recorded_runs,
+                recorded_runs, verdict.task_win.reward,
             )
     elif base or tuned or adapter or task_eval:
         if emit_evidence:
+            # without the reward function: that is added from the verdict below, so the file is
+            # read once by the run and not again for the binding
             binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
         verdict = _verdict_live(
             base=base,
@@ -1723,15 +2337,21 @@ def ship(
             forgetting_threshold=threshold,
             noise_floor_runs=noise_floor,
             quantization=_live_eval_quantization_from_config(soup_config),
+            reward_fn=reward_fn,
+            before_models=lambda: _check_task_rows_target(
+                output=output, emit_evidence=emit_evidence, task_eval=task_eval, config=config,
+                task_mode=task_mode,
+            ),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
         )
-        if emit_evidence and binding != capture_binding(
-            task_mode, _parse_suite(general_suite), noise_floor,
-        ):
-            _fail(
-                "provenance input changed during live evaluation; re-run before emitting",
-                _EXIT_USAGE,
-            )
+        if emit_evidence:
+            if binding != capture_binding(task_mode, _parse_suite(general_suite), noise_floor):
+                _fail(
+                    "provenance input changed during live evaluation; re-run before emitting",
+                    _EXIT_USAGE,
+                )
+            # the function the verdict records is the one the binding names (one source of truth)
+            binding = _bind_reward(binding, verdict.task_win.reward)
     else:
         _fail(
             "provide --evidence <json> for an offline verdict, or "
