@@ -75,8 +75,13 @@ _SECRET_RE = re.compile(
     r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
     # Slack tokens (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`).
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"
-    # JSON Web Tokens: three base64url parts, the first two starting `eyJ` ({"...).
-    r"|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    # JSON Web Tokens: three base64url parts, the first two starting `eyJ` ({"...). A match may
+    # only start at the left edge of a base64url run (the look-behind): without it a text made of
+    # `eyJ` repeated made every `eyJ` a start, and each start consumed the rest of the run and
+    # backtracked, which is quadratic (240,000 characters took 36 s, and `re` holds the GIL, so
+    # the whole server stalled). With it each run is scanned from one start per part, so the
+    # work is linear. A token glued to a word character (`xeyJ...`) is therefore not matched.
+    r"|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
     # PEM private keys: the block, or from the header on when the footer is missing. The
     # body is capped so a header without a footer cannot make the scan quadratic.
     r"|-----BEGIN [A-Z ]{0,24}PRIVATE KEY-----[A-Za-z0-9+/=\s]{0,16384}"
