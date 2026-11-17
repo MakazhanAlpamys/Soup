@@ -379,28 +379,32 @@ class TestSampler:
         assert list(first) == epoch_0
 
     def test_a_thousand_nested_beginnings_do_not_recurse(self):
-        """Prefix ``k`` is the first ``16 * k`` tokens of one stream (a trace cut
-        after each step, only the last answer trained): every example opens a
-        level of grouping, 1,200 levels in all, past Python's recursion limit
-        of 1,000. Grouping and flattening are walks over an explicit stack."""
+        """Prefix ``k`` is the first ``k`` tokens of one stream (a trace cut after
+        each step, only the last answer trained): with ``min_group_tokens=1``
+        every example opens a level of grouping, 1,200 levels in all, past
+        Python's recursion limit of 1,000. The default threshold of 16 nests the
+        same way with prefixes of ``16 * k`` tokens, 16 times the tokens for the
+        same depth. Grouping and flattening are walks over an explicit stack."""
         import sys
 
         count = 1200
         assert count > sys.getrecursionlimit()
-        stream = array("i", (3 + (k * 7919) % 90 for k in range(16 * count)))
+        stream = array("i", (3 + (k * 7919) % 90 for k in range(count)))
         examples = [
-            (stream[: 16 * k] + array("i", [1, 2]), array("i", [X] * (16 * k) + [1, 2]))
+            (stream[:k] + array("i", [1, 2]), array("i", [X] * k + [1, 2]))
             for k in range(1, count + 1)
         ]
         tree = group_by_shared_prefix(
-            [shareable_prefix(ids, labels, X) for ids, labels in examples]
+            [shareable_prefix(ids, labels, X) for ids, labels in examples], min_group_tokens=1
         )
         depth, node = 0, tree
         while any(isinstance(child, list) for child in node):
             node = next(child for child in node if isinstance(child, list))
             depth += 1
         assert depth >= count - 1, "the nesting this test exists for"
-        sampler = PrefixTreeBatchSampler(examples, max_tokens=512, batch_size=2, seed=1)
+        sampler = PrefixTreeBatchSampler(
+            examples, max_tokens=512, batch_size=2, seed=1, min_group_tokens=1
+        )
         assert sampler.stats.examples == count
         for _ in range(2):
             seen = [index for batch in sampler for index in batch]
