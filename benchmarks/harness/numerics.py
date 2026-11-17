@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """STEP 13, first attempt — the VACUOUS numerics answer (kept on purpose).
 
-This is a per-layer reconstruction, for #379, of the historical
-``benchmarks/harness/numerics.py`` whose result is recorded in
-``benchmarks/gate-h100-validation.md`` STEP 13. It reproduces the RESULT and,
-more importantly, the REASON it was vacuous; it does not re-run a model.
+This is a per-layer reconstruction, for #379, of the historical scratch script
+``numerics.py`` whose result is recorded in
+``benchmarks/gate-h100-validation.md`` STEP 13. The original was never in this
+repository (#379). The recorded result was measured on an H100 sm90 with torch
+2.13.0+cu130 and bitsandbytes 0.50.0; this harness reconstructs the METHOD, the
+RESULT and, more importantly, the REASON it was vacuous, without re-running a
+model. A re-run on another card or stack is a new baseline, not a comparison
+with the recorded numbers.
 
 The question STEP 13 asked was whether Soup's "variant 2" repair
 (dequantise the streamed NF4 weight with ``dequantize_4bit`` and multiply with a
@@ -48,7 +52,7 @@ Exit codes (default invocation):
   2  fused kernel ran at M = 2048 — vacuity absent, agreement cannot be read as clean
   3  invalid control (the perturbed weight did not change the result)
   4  gradient or forward differed where the fallback was taken
-  5  CUDA / bitsandbytes unavailable for the default sweep (SKIP, exits 0)
+  SKIP (0) when CUDA or bitsandbytes is unavailable
 """
 
 from __future__ import annotations
@@ -340,6 +344,10 @@ def run_sweep(args) -> dict:
 
     if not torch.cuda.is_available():
         return {"skipped": "CUDA is required", "exit_code": EXIT_SKIP}
+    try:
+        import bitsandbytes  # noqa: F401 - availability probe only
+    except ImportError:
+        return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
     shapes = [tuple(int(p) for p in s.split("x")) for s in args.shapes.split(",")]
     seeds = [int(s) for s in args.seeds.split(",")]

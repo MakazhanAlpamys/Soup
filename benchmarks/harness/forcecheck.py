@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """STEP 13 — count ``_dequant_linear_fallback`` directly (the path control).
 
-Reconstruction for #379 of the historical ``benchmarks/harness/forcecheck.py``,
+Reconstruction for #379 of the historical scratch script ``forcecheck.py``,
 used in ``benchmarks/gate-h100-validation.md`` STEP 13 to answer a narrow
 question: how do you tell a fused-kernel run that genuinely agreed with
 dequantise + linear from a run where the forcing silently failed and everything
-took the fallback anyway?
+took the fallback anyway? The original was never in this repository (#379); the
+recorded result was measured on an H100 sm90 with torch 2.13.0+cu130 and
+bitsandbytes 0.50.0. A re-run on another card or stack is a new baseline, not a
+comparison with that result.
 
 The first attempt's control counted calls to
 ``bitsandbytes.functional.dequantize_4bit`` and read zero in the forward as
@@ -25,7 +28,8 @@ The demonstration is structural, not a speed or quality claim:
 
   * at large M the fallback is counted while the wrapper stays at zero — the
     proxy cannot see the path, the counter can;
-  * at small M the fused kernel is counted;
+  * at small M under DEFAULT dispatch the fused kernel is counted (forced rows
+    alone cannot show this);
   * at large M with forcing on, the fallback count is zero and the kernel count
     is positive — the forcing engaged, so an agreement there is a real one.
 
@@ -36,8 +40,8 @@ Exit codes (default invocation):
   0  counter reproduced the path switch and the forcing (mechanism present)
   2  no fallback was ever counted (the M-dispatch cannot be demonstrated)
   3  the invalid proxy was not distinguishable from the real counter
-  4  the fused kernel was never counted
-  5  forcing failed (a forced row still called the fallback) or missed the kernel
+  4  no default-dispatch row counted the fused kernel at small M
+  5  forcing failed (a forced row still called the fallback or missed the kernel)
   SKIP (0) when CUDA / bitsandbytes is unavailable
 """
 
@@ -243,13 +247,13 @@ def evaluate(rows: list[dict]) -> dict:
                 "cannot be demonstrated"
             ),
         }
-    if not any(r["kernel_calls"] > 0 for r in rows):
+    if not any(r["set"] == "default" and r["kernel_calls"] > 0 for r in rows):
         return {
             "verdict": "no_kernel_observed",
             "exit_code": EXIT_NO_KERNEL,
             "reason": (
-                "the fused kernel was never counted; the switch between paths "
-                "cannot be demonstrated"
+                "no default-dispatch row counted the fused kernel at small M; "
+                "forced rows alone cannot demonstrate the switch between paths"
             ),
         }
     forced = [r for r in rows if r["set"] == "forced"]
@@ -269,8 +273,8 @@ def evaluate(rows: list[dict]) -> dict:
         "exit_code": EXIT_OK,
         "reason": (
             "the fallback is counted at large M while the proxy stays at zero, "
-            "the kernel is counted at small M, and forcing at large M moves every "
-            "row to the kernel with 0 fallback calls"
+            "the kernel is counted at small M under default dispatch, and forcing "
+            "at large M moves every row to the kernel with 0 fallback calls"
         ),
     }
 
@@ -280,6 +284,10 @@ def run_sweep(args) -> dict:
 
     if not torch.cuda.is_available():
         return {"skipped": "CUDA is required", "exit_code": EXIT_SKIP}
+    try:
+        import bitsandbytes  # noqa: F401 - availability probe only
+    except ImportError:
+        return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
     dtype = getattr(torch, args.dtype)
     shapes = [tuple(int(p) for p in s.split("x")) for s in args.shapes.split(",")]
@@ -350,8 +358,13 @@ def run_self_test() -> None:
     assert evaluate([small, forced])["exit_code"] == EXIT_NO_FALLBACK
     blind = row(fallback_calls=1, kernel_calls=0, dequant_wrapper_calls=2)
     assert evaluate([blind, small, forced])["exit_code"] == EXIT_PROXY_NOT_DISTINGUISHABLE
+    # Forced rows alone must not satisfy the "kernel counted at small M" gate.
+    assert evaluate([large, forced])["exit_code"] == EXIT_NO_KERNEL
     assert evaluate([large])["exit_code"] == EXIT_NO_KERNEL
     assert evaluate([large, small, row(set="forced", fallback_calls=1, kernel_calls=0)])[
+        "exit_code"
+    ] == EXIT_FORCING_FAILED
+    assert evaluate([large, small, row(set="forced", fallback_calls=0, kernel_calls=0)])[
         "exit_code"
     ] == EXIT_FORCING_FAILED
     print("forcecheck.py --self-test: OK")

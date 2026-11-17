@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """STEP 13, second answer — per-M dispatch sweep with the fused kernel forced on.
 
-Reconstruction for #379 of the historical ``benchmarks/harness/numerics2.py``
-whose table is in ``benchmarks/gate-h100-validation.md`` STEP 13. Per layer, no
-model: the two resident arms are
+Reconstruction for #379 of the historical scratch script ``numerics2.py`` whose
+table is in ``benchmarks/gate-h100-validation.md`` STEP 13. The original was
+never in this repository (#379). Per layer, no model: the two resident arms are
 
     variant 2:  F.linear(x, dequantize_4bit(packed, state).to(x.dtype))
     resident:   bnb.matmul_4bit(x, packed.t(), quant_state=state)
@@ -13,20 +13,24 @@ on the same NF4 weight and quant_state (blocksize 64, nf4, double quant). Unlike
 assuming it, FORCES the fused kernel on at training-shaped M by patching the two
 module globals bitsandbytes reads at call time, and COUNTS
 ``_dequant_linear_fallback`` directly so a forcing that silently failed is
-distinguishable from a kernel that genuinely agreed.
+distinguishable from a kernel that genuinely agreed. The dispatcher's per-M
+decision is recorded, but every fail-closed gate below reads the counted kernel
+calls, not that decision: a forced row only counts as fused when the kernel call
+was actually observed.
 
 Sets measured here (all forward and gradient reported separately, never averaged):
-  * default dispatch: M in 1..4096 x 6 shapes x 5 seeds = 300 rows;
+  * default dispatch: 10 M values in 8..2048 x 6 shapes x 5 seeds = 300 rows;
   * fused forced on:  M = 512 and 2048 x 6 shapes x 5 seeds = 60 rows;
   * fallback cross-check: M in 8..2048 x 6 shapes x 1 seed = 48 rows;
-  * shipped CI fixture shapes 64x64 and 256x64, M in 8..512 = 15 rows.
+  * shipped CI fixture shapes 64x64 and 256x64, M in 8..512 = 14 rows.
 
 Historical result (H100 sm90, torch 2.13.0+cu130, bitsandbytes 0.50.0, bf16):
 gradient bit-exact in 423/423 rows; forward differs only where the fused kernel
-genuinely runs, and then by about one bf16 ulp; forcing verified with 0 fallback
-calls on all 60 forced rows. This harness reproduces the METHOD and applies its
-fail-closed gate to whatever this host actually does; it does not re-claim those
-numbers on another card or dtype.
+genuinely runs, and then by about one bf16 ulp; the record reports forcing
+verified with 0 fallback calls on 24/24 forced rows. The defaults here run 60
+forced rows. This harness reproduces the METHOD and applies its fail-closed gate
+to whatever this host actually does. A re-run on another card or stack is a new
+baseline, not a comparison with the recorded numbers.
 
 CPU self-test
 -------------
@@ -35,7 +39,7 @@ forcing patch on a fake module, the counter, and the gate on synthetic rows.
 
 Exit codes (default invocation):
   0  mechanism reproduced: fused ran, forcing verified, gradient exact everywhere
-  2  fused kernel never ran anywhere (mechanism absent — cannot show the difference)
+  2  no fused kernel call was counted anywhere (mechanism absent — cannot show the difference)
   3  invalid negative control
   4  forcing silently failed (a forced row still called the fallback)
   5  gradient not bit-exact on some row
@@ -279,14 +283,16 @@ def measure_row(seed, in_features, out_features, rows, dtype, *, force=False):
 
 
 def evaluate(rows: list[dict]) -> dict:
-    fused = [r for r in rows if r["bnb_selected_custom_kernel"] is True]
+    # Read the path actually taken, not the dispatcher decision: forcing makes
+    # the decision True for every forced row whether or not a kernel ran.
+    fused = [r for r in rows if r["resident_kernel_calls"] > 0]
     if not fused:
         return {
             "verdict": "no_fused_kernel",
             "exit_code": EXIT_NO_FUSED,
             "reason": (
-                "the fused 4-bit kernel never ran; the fused-vs-fallback "
-                "difference cannot be demonstrated on this host/dtype"
+                "no fused 4-bit kernel call was counted anywhere; the "
+                "fused-vs-fallback difference cannot be demonstrated on this host/dtype"
             ),
         }
     if any(not r["control_detected"] for r in rows):
@@ -296,12 +302,14 @@ def evaluate(rows: list[dict]) -> dict:
             "reason": "the sign-flip-plus-unit negative control rounded away on at least one row",
         }
     forced = [r for r in rows if r["set"] == "forced"]
-    if not forced or any(r["resident_fallback_calls"] for r in forced):
+    if not forced or any(
+        r["resident_fallback_calls"] > 0 or r["resident_kernel_calls"] == 0 for r in forced
+    ):
         return {
             "verdict": "forcing_failed",
             "exit_code": EXIT_FORCING_FAILED,
             "reason": (
-                "a forced row still called _dequant_linear_fallback; "
+                "a forced row still called the fallback or no kernel call was counted; "
                 "forcing cannot be verified"
             ),
         }
@@ -316,17 +324,17 @@ def evaluate(rows: list[dict]) -> dict:
             "verdict": "forward_effect_absent",
             "exit_code": EXIT_FORWARD_EFFECT_ABSENT,
             "reason": (
-                "no fused row showed the forward difference; the numerical "
-                "effect cannot be demonstrated"
+                "no row with a counted kernel call showed the forward difference; "
+                "the numerical effect cannot be demonstrated"
             ),
         }
     return {
         "verdict": "mechanism_reproduced",
         "exit_code": EXIT_OK,
         "reason": (
-            "the fused kernel ran, forcing engaged with 0 fallback calls on every forced row, "
-            "the gradient is bit-exact on all rows, and the forward difference appears only on "
-            "fused rows"
+            "a fused kernel call was counted, forcing engaged with 0 fallback calls "
+            "and a counted kernel call on every forced row, the gradient is bit-exact "
+            "on all rows, and the forward difference appears only on fused rows"
         ),
     }
 
@@ -336,6 +344,10 @@ def run_sweep(args) -> dict:
 
     if not torch.cuda.is_available():
         return {"skipped": "CUDA is required", "exit_code": EXIT_SKIP}
+    try:
+        import bitsandbytes  # noqa: F401 - availability probe only
+    except ImportError:
+        return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
     dtype = getattr(torch, args.dtype)
     shapes = [tuple(int(p) for p in s.split("x")) for s in args.shapes.split(",")]
@@ -380,11 +392,11 @@ def run_sweep(args) -> dict:
         },
         "rows": rows,
         "n_rows": len(rows),
-        "n_fused": sum(r["bnb_selected_custom_kernel"] is True for r in rows),
+        "n_fused": sum(r["resident_kernel_calls"] > 0 for r in rows),
         "n_forced": sum(r["set"] == "forced" for r in rows),
         "n_gradient_exact": sum(r["gradient"]["exact"] for r in rows),
         "n_forward_diff_on_fused": sum(
-            r["bnb_selected_custom_kernel"] is True and r["forward"]["exact"] is False
+            r["resident_kernel_calls"] > 0 and r["forward"]["exact"] is False
             for r in rows
         ),
         **verdict,
@@ -421,7 +433,8 @@ def run_self_test() -> None:
     def row(**updates):
         base = {
             "set": "default", "bnb_selected_custom_kernel": True,
-            "resident_fallback_calls": 0, "control_detected": True,
+            "resident_kernel_calls": 1, "resident_fallback_calls": 0,
+            "control_detected": True,
             "gradient": {"exact": True}, "forward": {"exact": False},
         }
         base.update(updates)
@@ -429,9 +442,16 @@ def run_self_test() -> None:
 
     forced_ok = row(set="forced", resident_fallback_calls=0)
     assert evaluate([row(), forced_ok])["exit_code"] == EXIT_OK
-    assert evaluate([row(bnb_selected_custom_kernel=False)])["exit_code"] == EXIT_NO_FUSED
+    # A forced row's dispatcher decision is True under force_fused even when no
+    # kernel ran; the gate must read the counted kernel call, not the decision.
+    assert evaluate([row(bnb_selected_custom_kernel=True, resident_kernel_calls=0)])[
+        "exit_code"
+    ] == EXIT_NO_FUSED
     assert evaluate([row(control_detected=False), forced_ok])["exit_code"] == EXIT_CONTROL_FAILED
     assert evaluate([row(), row(set="forced", resident_fallback_calls=1)])[
+        "exit_code"
+    ] == EXIT_FORCING_FAILED
+    assert evaluate([row(), row(set="forced", resident_kernel_calls=0)])[
         "exit_code"
     ] == EXIT_FORCING_FAILED
     assert evaluate([row(gradient={"exact": False}), forced_ok])["exit_code"] == EXIT_GRADIENT_DIFF

@@ -22,12 +22,16 @@ _HARNESS = Path(__file__).resolve().parents[1] / "benchmarks" / "harness"
 
 
 def _load(name):
+    private = f"_{name}_step13_test_module"
     path = _HARNESS / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
+    spec = importlib.util.spec_from_file_location(private, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.modules[private] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(private, None)
     return module
 
 
@@ -117,6 +121,26 @@ class TestGates:
         assert numerics.evaluate([dict(good, control_detected=False)])["exit_code"] == 3
         assert numerics.evaluate([dict(good, gradient={"exact": False})])["exit_code"] == 4
 
+    def test_numerics2_gate_reads_counted_kernel_calls_not_the_dispatch_decision(self):
+        def row(**updates):
+            base = {
+                "set": "default", "bnb_selected_custom_kernel": True,
+                "resident_kernel_calls": 1, "resident_fallback_calls": 0,
+                "control_detected": True,
+                "gradient": {"exact": True}, "forward": {"exact": False},
+            }
+            base.update(updates)
+            return base
+
+        forced_ok = row(set="forced", resident_fallback_calls=0)
+        assert numerics2.evaluate([row(), forced_ok])["exit_code"] == 0
+        # forcing sets the decision True on every forced row; a row with that
+        # decision but no counted kernel call must not make the gate pass.
+        assert numerics2.evaluate([row(resident_kernel_calls=0)])["exit_code"] == 2
+        assert numerics2.evaluate([row(), row(set="forced", resident_kernel_calls=0)])[
+            "exit_code"
+        ] == 4
+
     def test_forcecheck_path_control_gate(self):
         large = {
             "set": "default", "fallback_calls": 1, "kernel_calls": 0, "dequant_wrapper_calls": 0
@@ -131,8 +155,11 @@ class TestGates:
         assert forcecheck.evaluate([small, forced])["exit_code"] == 2
         blind = dict(large, dequant_wrapper_calls=2)
         assert forcecheck.evaluate([blind, small, forced])["exit_code"] == 3
+        # a forced row alone must not satisfy "kernel counted at small M"
+        assert forcecheck.evaluate([large, forced])["exit_code"] == 4
         assert forcecheck.evaluate([large])["exit_code"] == 4
         assert forcecheck.evaluate([large, small, dict(forced, fallback_calls=1)])["exit_code"] == 5
+        assert forcecheck.evaluate([large, small, dict(forced, kernel_calls=0)])["exit_code"] == 5
 
 
 class TestSelfTestAndNoCuda:
