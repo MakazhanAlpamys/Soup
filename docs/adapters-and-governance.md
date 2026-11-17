@@ -393,7 +393,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
 # daemon itself at each watch cycle, without stopping. A foreground watch rotates
 # nothing. The PID file is created exclusively before the daemon is spawned, so two --detach started at once cannot both win. While the PID file names a live process a second --detach is
-# refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
+# refused (exit 2, naming the pid and the file), and so is a foreground `soup loop watch`
+# (it only reads the file and never writes it, so two foreground watches in two terminals are
+# not guarded against each other); a stale file, whose process is gone or
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
 # when it exits normally, but only if the file still holds its own pid; a killed child
