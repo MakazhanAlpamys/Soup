@@ -227,8 +227,15 @@ class TestEveryStrategy:
         assert ref.exit_code == 0, ref.output
         got = _effective_delta(tmp_path / "out", _written_scaling(tmp_path / "out"))
         want = _effective_delta(tmp_path / "ref", _written_scaling(tmp_path / "ref"))
-        assert want[1, 1] > 0
         np.testing.assert_allclose(got, want, atol=1e-5)
+        # By hand, at the template's scaling 1 and equal weights c = 0.5: folded, both inputs
+        # are A = e1 e1^T (slot 1) and B = 4 e1 e1^T. linear (and dare at density 1) puts
+        # sqrt(c) on each factor (#2908): A = 2 sqrt(0.5) = sqrt(2) and B = 4 sqrt(2), so
+        # B @ A = 8, each input's own term 0.5 * 4 = 2 plus the two cross terms 2 + 2 of
+        # inputs that share a rank slot. svd at rank 1 reconstructs that rank-1 delta. ties
+        # takes the disjoint mean of the agreeing entries, 4.
+        expected = 4.0 if "ties" in extra else 8.0
+        np.testing.assert_allclose(got, _diag(0.0, expected), atol=1e-5)
 
 
 class TestZeroScaling:
@@ -310,6 +317,28 @@ class TestOtherLoraTensors:
 
         np.testing.assert_array_equal(folded[1][_B], b * 4.0)
         np.testing.assert_array_equal(folded[1][f"{_STEM}.lora_B.bias"], bias * 4.0)
+
+    def test_lora_b_bias_carries_its_ratio_once_and_its_weight_once(self, tmp_path):
+        """Through a real merge at unequal weights: the fold multiplies ``b``'s bias by its
+        scaling ratio, and #2927's ``_factor_coeff`` then gives a bias its weight ``c``
+        (not ``sqrt(c)``), once each. By hand: ``a`` at scaling 2/2 = 1 is the template,
+        ``b`` at 8/2 = 4 gets ratio 4, so the merged bias is 0.7 * 1.0 + 0.3 * 4 * 2.0 = 3.1."""
+        from safetensors.numpy import load_file, save_file
+
+        bias = f"{_STEM}.lora_B.bias"
+        for name, alpha, value in (("a", 2, 1.0), ("b", 8, 2.0)):
+            _make_adapter(tmp_path / name, r=2, alpha=alpha, slot=1, value=1.0, lora_bias=True)
+            path = tmp_path / name / "adapter_model.safetensors"
+            tensors = load_file(str(path))
+            tensors[bias] = np.full((_DIM,), value, dtype=np.float32)
+            save_file(tensors, str(path))
+        res = _run(
+            ["merge", "a", "b", "-o", "out", "--weights", "0.7,0.3", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, res.output
+        got = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))[bias]
+        np.testing.assert_allclose(got, np.full((_DIM,), 3.1), atol=1e-6)
 
     def test_dora_magnitude_vector_is_left_as_it_is(self, tmp_path, monkeypatch):
         """DoRA's ``lora_magnitude_vector`` is not multiplied by the LoRA scaling in PEFT's
