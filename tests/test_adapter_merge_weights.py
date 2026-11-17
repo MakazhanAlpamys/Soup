@@ -1,4 +1,4 @@
-"""#2908 — ``soup adapters merge`` scales each input's delta by its weight, not its square.
+"""How ``soup adapters merge`` applies ``--weights`` to each tensor (#2908).
 
 A LoRA's delta is ``B @ A``. ``merge_linear`` and ``merge_dare`` multiplied
 both factors by the normalised weight ``c``, so an input's own term came out as
