@@ -101,13 +101,13 @@ def expect_cmd(
 
     try:
         spec = load_suite_yaml(suite)
-    except (FileNotFoundError, TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         rows = _load_jsonl_rows(data)
-    except (FileNotFoundError, TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 

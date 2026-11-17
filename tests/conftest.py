@@ -206,6 +206,39 @@ def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``quantization: auto`` off the GPU: no CUDA device is visible.
+
+    The sft recipe's ``auto`` measures free VRAM when the train stage renders its config
+    (``utils/loop_quantization.py``). Left alone it would answer differently on a machine
+    with a card, and create a CUDA context on it. A test of the rule patches
+    ``free_vram_bytes`` itself.
+    """
+    from soup_cli.utils import loop_quantization
+
+    monkeypatch.setattr(loop_quantization, "free_vram_bytes", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_loop_tokenizer_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``data.max_length`` measurement from starting a tokenizer child.
+
+    The sft / dpo / kto train stage measures the longest row of the dataset it built with the
+    base model's tokenizer, in a short-lived child that imports transformers (and torch) and
+    may reach the Hub (``utils/loop_max_length.py``). Left alone every test that renders the
+    recipe would pay seconds for it and depend on the network. The measurement answers "could
+    not measure" here, which leaves the schema default in the recipe; a test of the
+    measurement patches ``_measure_in_child`` itself.
+    """
+    from soup_cli.utils import loop_max_length
+
+    def refuse(base: str, data_path: str, method: str):
+        raise loop_max_length.MeasureFailedError("no tokenizer is loaded in a test")
+
+    monkeypatch.setattr(loop_max_length, "_measure_in_child", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_windows_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep layer streaming's Windows commit pre-flight off this machine's real counters.
 

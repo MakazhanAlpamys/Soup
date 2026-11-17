@@ -23,11 +23,13 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
+from soup_cli.utils.loop_gate import GATE, check_corrections, check_held_out
 from soup_cli.utils.paths import is_under_cwd
 
 _DEFAULT_DIR = ".soup-loops"
 _MAX_MANIFEST_BYTES = 1 * 1024 * 1024  # 1 MiB
 _MAX_ID_LEN = 128
+_MAX_CANARY_QUALITY_BYTES = 4096  # the evidence is a dozen numbers
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,25 @@ class IterationRecord:
     rolled_back: bool
     estimated_cost_usd: float
     notes: str = ""
+    # The evidence behind the canary's quality verdict this cycle (counts, shares, z, p; the
+    # ``canary.quality`` object of the iteration format, see ``QualityStats.evidence``), or
+    # None when no quality verdict took part. Last, so older manifests load without it.
+    canary_quality: Optional[dict] = None
+    # The evidence of the verdict, when it was ``soup ship --gate loop-v2`` (the ``verdict.gate``,
+    # ``verdict.corrections``, ``verdict.held_out`` and ``verdict.reason`` of the iteration
+    # format; ``utils/loop_gate.py``) and the edits that graduated into training in this
+    # iteration (``dataset.graduated``). Last, so older manifests load without them; the
+    # iterations.jsonl line is built from these same fields (``loop_log.iteration_from_record``).
+    verdict_gate: Optional[str] = None
+    verdict_corrections: Optional[dict] = None
+    verdict_held_out: Optional[dict] = None
+    verdict_reason: Optional[str] = None
+    graduated: Optional[int] = None
+    # Where the train child and the check (``soup ship``) wrote their full output: files next to
+    # the run (``.soup-loops/adapters/<run>.train.log``, ``.soup-loops/verdicts/<run>.ship.log``),
+    # never held in memory. None = the stage did not run a child. Last, so older manifests load.
+    train_log: Optional[str] = None
+    verify_log: Optional[str] = None
 
     def __post_init__(self) -> None:
         _check_id(self.iteration_id)
@@ -86,6 +107,39 @@ class IterationRecord:
             raise ValueError("notes must not contain NUL")
         if len(self.notes) > 4096:
             raise ValueError("notes exceeds 4096 chars")
+        if self.canary_quality is not None:
+            if not isinstance(self.canary_quality, dict):
+                raise ValueError("canary_quality must be a dict or None")
+            try:
+                body = json.dumps(self.canary_quality, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "canary_quality must hold plain finite JSON values with string keys"
+                ) from exc
+            if json.loads(body) != self.canary_quality:  # an int key, a tuple: not plain JSON
+                raise ValueError(
+                    "canary_quality must hold plain finite JSON values with string keys"
+                )
+            if len(body) > _MAX_CANARY_QUALITY_BYTES:
+                raise ValueError(
+                    f"canary_quality exceeds {_MAX_CANARY_QUALITY_BYTES} characters"
+                )
+        if self.verdict_gate is not None and self.verdict_gate != GATE:
+            raise ValueError(f"verdict_gate must be {GATE!r} or None")
+        if self.verdict_corrections is not None:
+            check_corrections(self.verdict_corrections)
+        if self.verdict_held_out is not None:
+            check_held_out(self.verdict_held_out)
+        if self.verdict_reason is not None:
+            reason = self.verdict_reason
+            if not isinstance(reason, str) or "\x00" in reason or len(reason) > 4096:
+                raise ValueError("verdict_reason must be a NUL-free string of at most 4096 chars")
+        if self.graduated is not None and (
+            isinstance(self.graduated, bool)
+            or not isinstance(self.graduated, int)
+            or self.graduated < 0
+        ):
+            raise ValueError("graduated must be a non-negative int or None")
 
     def to_dict(self) -> Mapping[str, Any]:
         return MappingProxyType(asdict(self))
@@ -157,6 +211,8 @@ def write_iteration(
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, target)
     except Exception:
         try:

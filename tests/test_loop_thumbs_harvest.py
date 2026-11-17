@@ -20,6 +20,7 @@ import sqlite3
 import pytest
 from typer.testing import CliRunner
 
+from soup_cli.utils.loop_iteration import list_iterations
 from tests.conftest import strip_ansi
 
 
@@ -54,6 +55,8 @@ def cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SOUP_LOOP_TRACE_DIR", raising=False)
     monkeypatch.delenv("SOUP_LOOP_THUMBS_DB", raising=False)
+    # A pre-wired loop checks its --eval file at init (the soup ship task eval).
+    (tmp_path / "tasks.jsonl").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
     return tmp_path
 
 
@@ -241,7 +244,8 @@ def test_loop_init_persists_thumbs_db_and_an_old_state_file_still_loads(cwd):
 
     runner = CliRunner()
     result = runner.invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "thumbs.db",
     ])
     assert result.exit_code == 0, strip_ansi(result.output)
@@ -261,7 +265,8 @@ def test_loop_init_refuses_a_thumbs_db_outside_the_project(cwd, tmp_path_factory
 
     outside = tmp_path_factory.mktemp("elsewhere") / "thumbs.db"
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", str(outside),
     ])
     text = " ".join(strip_ansi(result.output).split())
@@ -279,7 +284,8 @@ def test_thumbs_db_is_the_last_field_so_positional_fields_keep_their_meaning():
     from soup_cli.utils.loop_state import LoopState
 
     names = [f.name for f in dataclasses.fields(LoopState)]
-    assert names[-1] == "thumbs_db", names
+    # Fields added later (base_model, ...) go after it, never before.
+    assert names.index("thumbs_db") == names.index("updated_at") + 1, names
     state = LoopState("m", "e", "b", "stopped", False, 7)
     assert state.traces_collected == 7
     assert state.thumbs_db is None
@@ -347,10 +353,11 @@ def test_a_sqlite_failure_mid_harvest_names_the_field(cwd, monkeypatch, via):
     else:
         state, field = _state(thumbs_db="thumbs.db"), "thumbs_db"
 
-    def _boom(_path):
+    def _boom(_path, _since):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(local_rl, "harvest_dpo_pairs", _boom)
+    # The loop harvest reads through the cursor-aware variant (harvest_dpo_pairs_since).
+    monkeypatch.setattr(local_rl, "harvest_dpo_pairs_since", _boom)
 
     with pytest.raises(
         ValueError,
@@ -408,7 +415,10 @@ def test_an_empty_environment_variable_is_treated_as_unset(cwd, monkeypatch):
 def _init_loop(pre_wired: bool, *extra: str) -> None:
     from soup_cli.cli import app
 
-    args = ["loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b"]
+    args = [
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
+        "--base-model", "org/m",
+    ]
     if pre_wired:
         args.append("--pre-wired")
     result = CliRunner().invoke(app, args + list(extra))
@@ -437,7 +447,7 @@ def test_watch_refuses_a_missing_database_before_any_iteration(cwd, monkeypatch,
     assert "invalid thumbs database" in text, text
     assert "SOUP_LOOP_THUMBS_DB: no database file at 'not-yet.db'" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
     assert read_state().status == "stopped"
 
 
@@ -516,7 +526,7 @@ def test_watch_refuses_a_file_that_is_not_a_thumbs_database(cwd, monkeypatch, ki
     assert "invalid thumbs database" in text, text
     assert "SOUP_LOOP_THUMBS_DB: 'thumbs.db' is not a readable thumbs database" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
     assert read_state().status == "stopped"
 
 
@@ -557,7 +567,7 @@ def test_watch_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypat
     assert result.exit_code == 2, text
     assert "is not a readable thumbs database" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
 
 
 def test_watch_detach_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypatch):
@@ -605,7 +615,8 @@ def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd
     from soup_cli.cli import app
 
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "../a\x1b[2Jb.db",
     ])
 
@@ -648,7 +659,8 @@ def test_init_refusal_keeps_rich_tags_in_the_path_literal(cwd):
     from soup_cli.cli import app
 
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "../db[bold]x.db",
     ])
     plain = " ".join(strip_ansi(result.output).split())

@@ -623,7 +623,8 @@ class TestIterativeDPO:
         assert build_pairs_from_scored([("a", 1.0)]) is None
         assert build_pairs_from_scored([("a", 2.0), ("b", 2.0)]) is None
 
-    def test_run_iterative_dpo_with_fakes(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_run_iterative_dpo_with_fakes(self, tmp_path, monkeypatch, encoding):
         from soup_cli.utils.iterative_dpo import (
             IterativeDPOResult,
             build_iterative_dpo_plan,
@@ -632,9 +633,11 @@ class TestIterativeDPO:
 
         monkeypatch.chdir(tmp_path)
         prompts = tmp_path / "prompts.jsonl"
-        prompts.write_text(
-            "\n".join(json.dumps({"prompt": f"q{i}"}) for i in range(3))
-        )
+        prompt_texts = ["first", "part\ufeffof the prompt", "last"]
+        original = "".join(
+            json.dumps({"prompt": text}, ensure_ascii=False) + "\r\n" for text in prompt_texts
+        ).encode(encoding)
+        prompts.write_bytes(original)
 
         plan = build_iterative_dpo_plan(
             base_model="tiny",
@@ -654,7 +657,7 @@ class TestIterativeDPO:
 
         def fake_score(*, reward_model, prompt, completions, device):
             calls["score"] += 1
-            return [float(len(c)) for c in completions]
+            return [0.0, 1.0]
 
         def fake_train(*, base_model, pairs_path, adapter_path):
             calls["train"].append((base_model, adapter_path))
@@ -673,8 +676,12 @@ class TestIterativeDPO:
         # Round 0 samples from base (None adapter); round 1 from round-0 adapter.
         assert calls["sample_adapters"][0] is None
         assert calls["sample_adapters"][1].endswith("round-00/adapter")
-        # pairs written
-        assert (tmp_path / "out" / "round-00" / "pairs.jsonl").is_file()
+        assert result.per_round_pairs == (3, 3)
+        for index in range(2):
+            pairs = tmp_path / "out" / f"round-{index:02d}" / "pairs.jsonl"
+            rows = [json.loads(line) for line in pairs.read_text(encoding="utf-8").splitlines()]
+            assert [row["prompt"] for row in rows] == prompt_texts
+        assert prompts.read_bytes() == original
 
     def test_run_rejects_non_plan(self):
         from soup_cli.utils.iterative_dpo import run_iterative_dpo

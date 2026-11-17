@@ -107,8 +107,18 @@ The full *production traces → preference pairs → Eval-Gated DPO → canary d
 
 ```bash
 # One-time setup
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --monthly-budget 50usd --max-runs-per-day 3
+
+# The check before rollout (--verify, default ship) is a soup ship verdict of
+# the newly trained adapter against the production version: the base model, or
+# base + the production adapter when the served model is one. --eval is then a
+# soup ship task-eval JSONL (one {"prompt", "expected"} object per line);
+# with --verify eval-gate it is an eval-gate suite YAML (suite + tasks).
+# init --pre-wired and watch --pre-wired refuse an --eval file the check cannot
+# run, a `soup eval lock` design file included. A verdict that could not be
+# reached is SKIPPED: nothing rolls out, and the reason is saved in the
+# iteration record (soup loop replay <iteration-id>).
 
 # Inspect counters + status
 soup loop status
@@ -116,12 +126,27 @@ soup loop status
 # Run the daemon (foreground)
 soup loop watch --poll-interval 300
 
-# Pre-wired production stages (v0.71.4): real traces → DPO → eval-gate → canary,
+# Pre-wired production stages (v0.71.4): real traces → training → eval-gate → canary,
 # instead of the v0.58 no-op stubs. Opt in once via `loop init --pre-wired` or
 # per-run via --pre-wired. Pack each iteration as a shareable Soup Can with
 # Registry lineage via --pack-cans.
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
+
+# The train stage starts from --base-model, the registry entry's base model
+# (registry://<id>), the base_model_name_or_path of a served LoRA adapter
+# directory, or the served model itself. When none is known,
+# `init --pre-wired` and `watch --pre-wired` refuse instead of training a stand-in.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --base-model Qwen/Qwen2.5-0.5B-Instruct
+
+# The harvest reads conversation logs from SOUP_LOOP_TRACE_DIR, else --trace-dir
+# (saved in loop.yaml), else .soup-loops/traces. The served model path is never
+# read as a trace directory. `soup loop init` prints which one applies.
+# A pair needs a thumbs-up and a thumbs-down answer to one prompt; serve trace lines
+# carry no feedback yet, so today the pairs come from --thumbs-db.
+soup serve --model ./base --trace-log .soup-loops/traces/serve.jsonl
+soup loop init ./base --eval evals/tasks.jsonl --baseline registry://prod --pre-wired
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
@@ -130,32 +155,327 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db
 # or per run, overriding loop.yaml:
 SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 
+# Train only on news: loop.yaml keeps a data cursor (`soup loop status` shows it as
+# new_data_since), the newest feedback the version in PRODUCTION was trained on. A pair is
+# new when the newer of its thumbs-up and thumbs-down is later than the cursor. An iteration
+# trains once at least --min-new-pairs (default 1) pairs are new, else it is skipped
+# (not_enough_new_data in its record; an sft loop with a feedback log counts new edits and
+# new rated answers instead, see below); it then trains on ALL pairs, since every run starts
+# a fresh LoRA from the base model. The cursor follows production: it moves when the canary
+# that used the rows is PROMOTED, and `soup loop rollback` returns it to the previous
+# production's; the rows of a candidate that was thrown away (DON'T SHIP, a withdrawn or
+# rolled-back canary, a canary that never started) are new again. What triggers training
+# counts feedback newer than the later of that cursor and the newest feedback a training run
+# read, promoted or not (attempt_cursor_ts in loop.yaml), so a rejected run is not repeated on
+# its own rows every poll, and never after a skipped or failed one. Without the cursor the
+# cycle after a promotion would retrain on the same feedback and start another canary.
+# A loop.yaml from before takes its cursor as production's.
+# A serve log line without a usable "ts" counts as new only until the cursor is first set.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db --min-new-pairs 20
+
+# Learn from feedback, with any method. An application writes one conversation record per
+# answer to the trace directory (id, ts, messages, response, adapter, ...) and one feedback
+# record per action to .soup-loops/feedback.jsonl (response_id = the answer's id; kind thumb,
+# rating, edit or comment). --feedback-log (saved in loop.yaml) or SOUP_LOOP_FEEDBACK_LOG
+# names another file. For thumb, rating and edit the latest line per answer wins; a null
+# value or a null edited_text clears it; comments accumulate; feedback about an answer that
+# is not logged is ignored (and counted); a line with an unknown schema_version is skipped.
+# One harvest builds three datasets, and --train-method picks the one the loop trains on:
+# sft for a NEW loop (a loop.yaml that has no train_method, or says dpo, keeps training dpo).
+# --min-new-pairs then counts new rows of that dataset, except for an sft loop with a
+# feedback log (below).
+#   sft  the edited text as the answer to the prompt, and every answer without a real edit
+#        whose newest label is good: a thumb up or a rating of 4-5 in the feedback log, an
+#        `up` thumb in the --thumbs-db database (the newest thumb per prompt and answer), a
+#        `thumbs_up` serve trace. An answer that was only rated bad gives no training row. The
+#        same prompt and answer count once. It trains with the recipe below (lr 2e-4, 8 epochs,
+#        LoRA r 64 / alpha 128 on all linear modules, micro-batch 2 x accumulation 4, seed 42);
+#   dpo  an edit is a pair (chosen = the edited text, rejected = the answer), next to the
+#        pairs from serve traces and the thumbs database;
+#   kto  the answer as given, labelled by thumbs (+1 good, -1 bad) and ratings (4-5 good,
+#        1-2 bad, 3 nothing), the newest of them deciding, and an edit's text as a good row
+#        next to the original as a bad one.
+# An edit wins, for every method: for an answer with a real edit (one that differs from the
+# answer after trimming) the latest edit decides, whatever thumbs or ratings say before or
+# after it. sft trains on the edit and not on the original, dpo takes the edit as chosen and
+# the original as rejected, kto labels the edit good and the original bad; a later thumbs-up
+# never makes the original good, and an answer a person corrected is not trained on as it was
+# when a thumbs database or a serve trace liked it. Thumbs and ratings decide only for an
+# answer without a real edit, by the newest of them in file order. A prompt is the logged
+# conversation without the answer (a thumbs-database or serve-trace prompt is one user turn).
+# A row is new when the newest feedback line it came from is later than the data cursor. The
+# kto config trains with batch_size 2: soup train refuses a KTO batch of 1 (#1420).
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --feedback-log ./app-data/feedback.jsonl --train-method kto
+
+# When an sft loop has a feedback log (the file exists), training starts at --min-new-edits
+# (default 8) NEW edits or --min-new-rated (default 30) NEW rated answers, whichever comes
+# first; --min-new-pairs does not apply to it. A new edit is a real edit whose feedback is
+# later than the data cursor; a rated answer is one with any thumb, rating (a 3 too) or real
+# edit, in force. An answer with a real edit counts by its edit alone: a thumb added to it
+# later is not news. Both counts are in the harvest result as new_edits and new_rated. A
+# skipped iteration says: not_enough_new_data: 3 new edits (needs 8) and 12 new rated answers
+# (needs 30) since the last training run. A run consumes every rated answer, also the ones
+# that gave no sft row (a thumb down), so the cursor moves past them. `soup loop status` shows
+# both thresholds. Without a feedback log, and for dpo and kto, --min-new-pairs applies.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --feedback-log ./app-data/feedback.jsonl --min-new-edits 4 --min-new-rated 20
+
+# The sft training recipe is configurable. The pre-wired train stage renders it into the
+# soup.yaml it trains with (training.lora.target_modules, .r, .alpha, training.lr, .epochs,
+# .batch_size, .gradient_accumulation_steps, .seed, .quantization); dpo and kto keep their own
+# fixed settings. Nine keys, each set by a flag at init and stored in .soup/loop.yaml under
+# "sft_recipe" only when given:
+#   --sft-target-modules  all-linear, auto (the config schema's default: no target_modules
+#                         is written) or a comma-separated list of module names, for example
+#                         q_proj,v_proj (loop.yaml: "all-linear" or a list; null = auto)
+#   --sft-lora-r          LoRA rank, 1 to 1024            (loop.yaml: lora_r)
+#   --sft-lora-alpha      LoRA alpha, 1 to 4096           (loop.yaml: lora_alpha)
+#   --sft-lr              learning rate, above 0 and at most 1, for example 2e-4 (loop.yaml: lr)
+#   --sft-epochs          epochs, 1 to 100                (loop.yaml: epochs)
+#   --sft-batch-size      per-device micro-batch, 1 to 1024 (loop.yaml: batch_size)
+#   --sft-grad-accum      gradient accumulation steps, 1 to 1024
+#                         (loop.yaml: gradient_accumulation_steps)
+#   --sft-seed            training seed, 0 to 4294967295  (loop.yaml: seed)
+#                         The last three are always written into the config, so a run
+#                         inherits none of them from the schema (batch "auto", no seed): the
+#                         built-in recipe is micro-batch 2 x accumulation 4 (8 rows per
+#                         optimizer step) and seed 42. A run that inherited batch 1 trained
+#                         the same rows for 152 optimizer steps instead of 80 at lr 5e-4, and
+#                         its quality fell (format_json 1.00 to 0.775).
+#   --sft-quantization    4bit, none or auto              (loop.yaml: quantization)
+#                         4bit and none are written as they are and never overridden. auto
+#                         is decided when training starts, right before the soup.yaml is
+#                         written: need = parameter count x 2 bytes x 5 (a bf16 base plus
+#                         its adapter, optimizer state, gradients and activations); free =
+#                         free VRAM of the CUDA device, asked of torch (mem_get_info) in a
+#                         short-lived subprocess with a 60 s timeout, so the loop process
+#                         itself never imports torch or holds a CUDA context. With CUDA and
+#                         need <= free the config says quantization: none, otherwise 4bit.
+#                         So auto picks none only when the model fits, and with none soup
+#                         train loads the frozen base in the checkpoint's own dtype.
+#                         The parameter count is read without loading weights: the
+#                         safetensors headers of a local model directory (a symlink is
+#                         refused), else the Hub's header-only metadata for a repo id (not
+#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device,
+#                         no torch, or a probe that fails or times out also gives 4bit. The
+#                         iteration's notes say which, for example "sft quantization auto:
+#                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
+#                         (parameter count unknown)".
+# The recipe also writes data.max_length from the rows it just built, so that soup train's
+# hardware-fit gate prices the run that will happen and not 2048 tokens per row: the longest row
+# of the dataset in tokens of the BASE model's tokenizer (the chat template applied for sft), plus
+# 16, rounded up to a multiple of 64, never below 64 and never above the schema default (2048;
+# a longer row is cut by the trainer as before). The tokenizer is loaded in a short-lived child,
+# not in the daemon. The iteration's notes say which value and why ("max_length: 64 (longest of
+# 26 rows is 25 tokens, +16, rounded up to a multiple of 64, ceiling 2048)"), or that the
+# default stayed because the tokenizer could not be loaded ("max_length: 2048 kept, the longest
+# row could not be measured (...)"). The gate is not bypassed, and the loop never passes
+# --allow-oom-attempt. On an 8 GB card the unmeasured default is refused by the gate: a 0.6B
+# model on 26 rows of 25 tokens was predicted at 21.7 GB there and peaks at 1.2 GB.
+# A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
+# what it names, and a loop.yaml from before the field loads with the built-in recipe. The
+# built-in recipe is the one the fit runs of 2026-11-06 chose (candidate B in bf16):
+# all-linear, LoRA r 64 / alpha 128, lr 2e-4, 8 epochs, micro-batch 2 x accumulation 4, seed
+# 42, quantization auto, where the loop used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16
+# on the schema's default modules. The learning rate is 2e-4, not the fit runs' 5e-4: in a study
+# on one project (13 harvested rows, one seed, a 0.6B model), both runs at 5e-4 regressed a format
+# suite by 0.10 to 0.175 with and without replay, and all five runs at 2e-4 or 1e-4 kept both
+# quick suites within 0.05; whether the lower rate still learns the corrections as well was not
+# measured. A loop.yaml that stores its own lr keeps it, and --sft-lr overrides. A loop that must not move if a later release changes the
+# built-in recipe names every key. A value out of range, a bool where a number goes, or a key
+# that is not one of the nine is refused (init exits 2 naming the flag; reading a loop.yaml
+# with a bad "sft_recipe" fails the command with the reason). The flags are refused for a
+# loop that does not train sft: they would change nothing. `soup loop status` shows the
+# effective recipe in one sft_recipe row and which keys come from loop.yaml.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --sft-target-modules all-linear --sft-lora-r 16 --sft-lora-alpha 32 \
+    --sft-lr 2e-4 --sft-epochs 5 --sft-batch-size 2 --sft-grad-accum 4 --sft-seed 42 \
+    --sft-quantization none
+
+# Paraphrases of the corrections (for the loop's verdict). Before it trains, the pre-wired
+# train stage asks a chat model for two paraphrases of the prompt (the last user message) of
+# every edit it trains on that has none yet, and appends them to
+# .soup-loops/paraphrases.jsonl (docs/loop-formats.md, paraphrase). A later check asks the NEW
+# version the paraphrases instead of the original prompt, to see whether it learned the
+# correction. An edit is asked once: its line is reused by every later iteration, so every
+# version is checked against the same questions (only an edit whose prompt changed is asked
+# again). They are never training data: no dataset reads that file. A paraphrase is dropped
+# when it is the prompt again apart from case, punctuation and spacing (same_as_prompt) or
+# holds at least half of the words the correction added (leaks_answer: the content words of
+# the edit that the answer it corrected lacked, all of its content words when that is fewer
+# than two). When fewer than two survive, the model is asked once more; an edit with none
+# left gets no line. The iteration's notes say what happened, for example
+#   paraphrases: 12 new for 6 edits, 3 dropped (same_as_prompt 1, leaks_answer 2)
+# and, when more than half of the paraphrases asked for were dropped,
+#   paraphrases mostly dropped: a small served model paraphrases poorly; set soup loop init
+#   --paraphraser-model
+# Who writes them:
+#   --paraphraser-endpoint <url> --paraphraser-model <name>
+#       an OpenAI-compatible chat endpoint (a base URL, with or without /v1) and the model
+#       name sent to it; both or neither, stored in loop.yaml. The URL is checked like
+#       SOUP_LOOP_SERVE_ENDPOINT: http on this machine, https on the LAN, no credentials, no
+#       query. It is sent no token. Name a larger model than the served one here: a small
+#       served model paraphrases poorly.
+#   neither flag
+#       the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT), with the tool token
+#       (SOUP_TOOL_AUTH_TOKEN) and the header "X-Soup-Internal: loop-check". soup serve then
+#       answers as it answers unkeyed traffic (the stable side), writes no conversation record, writes no
+#       thumbs, never routes the request to a canary bucket and does not count it in the
+#       canary statistics (docs/serving-and-export.md). Without the header the questions the
+#       loop asks would be logged like a user's and could come back as training data.
+#       Naming the loop's own server as --paraphraser-endpoint is the same: the call is made
+#       the internal way. The response must echo the header: a soup serve older than the
+#       header ignores it and would record the call, so without the echo the step stops and
+#       the note says to restart soup serve from the same version.
+# With neither reachable (no endpoint, or no token), no paraphrases are written and the
+# note says so and names the flags. The step never stops training: an endpoint that does not
+# answer ends the step (the first failure is the note) and training goes on. Every request
+# reads at most 64 KiB of the reply and times out after 120 s.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --paraphraser-endpoint http://127.0.0.1:11434 --paraphraser-model qwen2.5:7b
+
+# The loop's verdict (--verify ship, the default for a new loop) is `soup ship --gate loop-v2
+# --corrections FILE --held-out FILE`: did the new version learn the corrections people made,
+# and did it keep the edits held out of training? Both files are built from the iteration's
+# edits and written atomically under .soup-loops/verdicts/ (<run>.corrections.jsonl,
+# <run>.held-out.jsonl; both are passed even when empty); the evidence soup ship measures goes
+# into the iteration line (verdict.gate, .corrections, .held_out; docs/loop-formats.md). The
+# rules are shared with the consuming application, so both programs split the same
+# edits:
+#   the holdout split  the key of a corrected answer is the content of the last user message of
+#                      its conversation, text.strip().casefold(); the edit is held out iff
+#                      int(sha256(key), 16) % 100 < 30 ("How do I reset my password?" is 87,
+#                      "Straße öffnen – wie?" 12). Thumbs and ratings are never held out.
+#   one iteration      a held-out edit is kept out of training in exactly ONE iteration, the
+#   aside, then        first one that trains (one that trains nothing, or whose training
+#   graduation         failed, does not use it up) and is that iteration's held-out check.
+#                      From the next iteration on it trains, counts in the corrections check
+#                      and is never kept aside again, whatever the verdict was
+#                      (dataset.graduated counts them). The held-out check is `not_measured`
+#                      below 5 edits and `weak` below 10, and it fails only on a significant
+#                      worsening, so at the default trigger it is often not measured at all:
+#                      the verdict then says `held-out edits not checked: N of 5 needed` and a
+#                      SHIP must not be read as "the held-out edits passed".
+#                      .soup-loops/holdout.jsonl records which
+#                      edit was kept aside or graduated in which iteration (append only).
+#   the plan-time wait the edits that would train in a cycle are the new ones (newer than the
+#                      lineage cursor above) left after the keep-aside, plus the graduated ones.
+#                      None: nothing to check, the usual trigger (30 rated answers) decides.
+#                      One to four: nothing is trained and no GPU is spent, the iteration's
+#                      note, a progress line and the `waiting` row of `soup loop status` say
+#                         Waiting: 4/5 trainable corrections (2 more kept aside for checking) · 41 new ratings
+#                      and the edits keep accumulating. Five or more: it trains, if the usual
+#                      trigger allows it.
+#   canary_decides     with no corrections to check and the general suites holding, soup ship
+#                      says DON'T SHIP with canary_decides: true. The loop still deploys the
+#                      candidate to a canary and its ratings decide ("No corrections to check -
+#                      the canary's ratings decide"). Any other DON'T SHIP stops. A loop without
+#                      a feedback log has no ratings, so such a canary is judged by request
+#                      errors alone.
+# A loop on --verify eval-gate keeps nothing aside and does not wait for corrections.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --verify ship
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
-# Background subprocess (writes PID, no shell)
+# Background subprocess (no shell). It writes .soup/loop.pid, next to loop.yaml, as JSON:
+# {"pid": N, "started_at": "<UTC ISO 8601>", "log": ".soup/loop.log"}; read it with
+# `jq .pid .soup/loop.pid`. The child's stdout and stderr are appended to .soup/loop.log
+# (never truncated). The log is rotated at 10 MB, and one old file is kept as
+# .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
+# daemon itself at each watch cycle, without stopping. A foreground watch rotates
+# nothing. The PID file is created exclusively before the daemon is spawned, so two --detach started at once cannot both win. While the PID file names a live process a second --detach is
+# refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
+# that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
+# the pid in the file is not a loop daemon, delete the file. The child removes the file
+# when it exits normally, but only if the file still holds its own pid; a killed child
+# leaves a stale file, which the next --detach replaces. The child runs in its own session
+# (POSIX) or process group without a console (Windows), with stdin on the null device, so
+# closing the terminal or Ctrl+C there does not reach it. There is no `stop` command yet.
+# A loop.yaml that is gone or invalid stops the daemon with a reason in its log and exit 1; a
+# permission denial or a locked file is retried next cycle. The commands that write loop.yaml
+# (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
+# is invalid (exit 2). The train and ship children write their output to
+# .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
+# train_log, verify_log); only the last lines go into a failure note. On Windows every child
+# the loop starts (train, ship, and the short probes for free VRAM and for the tokenizer) gets
+# CREATE_NO_WINDOW: a detached daemon has no console, and a child that got a console window of its
+# own died with exit 3221225786 (0xC000013A, STATUS_CONTROL_C_EXIT) and no message. A child that
+# ends by a signal or an NTSTATUS is named in last_failure (for example "train failed (exit code
+# 3221225786 (STATUS_CONTROL_C_EXIT 0xC000013A: ...)"); POSIX is unchanged.
+# A training run that failed is not started again on every poll: the same inputs (the dataset,
+# the method, the base model and the recipe) wait 5 minutes after the first failure, 30 minutes
+# after the second, and after the third the loop holds. A held loop trains again when the inputs
+# change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
+# of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
+# train_retry row.
 soup loop watch --detach
 
-# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
-# started with --tool-auth-token requires that token on the adapter routes, so
-# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
-# it out of the shell history. A --detach child gets it through its environment
-# (so does the train stage's `soup train` child, which ignores it). soup serve has
-# no TLS and the loop refuses plain http off-loopback, so run the loop on the
-# serving box against loopback, or put a TLS-terminating proxy in front.
-soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
+# A poll that finds nothing to train (not enough new feedback, a wait, a hold) writes no
+# iteration line and no iter-* directory and bumps no counter, so it does not use up
+# --max-runs-per-day: .soup/loop.yaml keeps the time and the reason of the latest one,
+# and `soup loop status` shows it as last_idle_poll. A failed train, a DON'T SHIP verdict
+# and a deploy retry did something: each is an iteration and keeps its line.
+# `soup loop status` has a daemon row: "running (pid N), log .soup/loop.log",
+# "not running", or "not running (stale pid file)". It only reads the file. When loop.yaml
+# names a production adapter it also has a server row: it asks SOUP_LOOP_SERVE_ENDPOINT's /health
+# which adapter is active and says "serving production NAME", "NOT serving production NAME" (a
+# restarted server answers with the base model; the row names how to go on), "serving OTHER",
+# "not reachable", or "not checked" (no endpoint in that shell).
+soup loop status
+
+# The deploy stage loads a SHIP-verdict adapter into the running server
+# (POST /v1/adapters/load on SOUP_LOOP_SERVE_ENDPOINT, which needs soup serve
+# --adapter-dir and its --tool-auth-token) and starts a canary: the adapter gets
+# --canary-traffic (default 5%) of keyed traffic; unkeyed traffic stays on
+# production. While the canary runs, watch starts no new iteration. At 30 canary
+# answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
+# it and it becomes the router's stable side), MAJOR withdraws it and production
+# never changed. A promotion is written in this order: the server switch (if the
+# server refuses, nothing is recorded as promoted), then .soup/loop.yaml (atomic, under
+# the lock, at the moment of the promotion, not when the cycle ends: the cycle goes on
+# into the next harvest, train and ship), then versions.jsonl and the iteration's
+# closing line. loop.yaml decides which version is production. A watch that was
+# stopped between two of those writes finishes the promotion when it starts (the version
+# line and the closing line are written from loop.yaml, or loop.yaml is promoted
+# from a version line it lacks, if nothing moved meanwhile) and says so in progress.jsonl;
+# a mismatch it cannot finish is reported, not touched. `soup loop status` has a
+# `promotion` row that names the mismatch (it writes nothing), and its `server` row names a
+# server that serves a canary loop.yaml has not promoted. Give the loop the server's token: --tool-auth-token, or
+# SOUP_TOOL_AUTH_TOKEN to keep it out of the shell history. A --detach child gets
+# it through its environment (so does the train stage's `soup train` child, which
+# ignores it). soup serve has no TLS and the loop refuses plain http off-loopback,
+# so run the loop on the serving box against loopback, or put a TLS-terminating
+# proxy in front.
+soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "$TOKEN" &
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
 
-# Start serve with the candidate loaded, then promote it at 5% traffic.
+# Go back to the version that was production before the last promotion (points
+# unkeyed traffic back and withdraws a running canary). With nothing promoted yet it
+# withdraws a running canary and the served model keeps all traffic; with no canary
+# either, it is refused.
+SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop rollback
+
+# Start serve with the candidate loaded, then promote it at 5% traffic. The command refuses an
+# adapter whose last verdict was DON'T SHIP (the latest line of the iteration that trained it in
+# iterations.jsonl, or a verdict file .soup-loops/verdicts/<adapter>.json) and exits 2 naming the
+# adapter; --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
+# (canary_override), in the canary start line of progress.jsonl and, if the canary is promoted,
+# in the promotion's note and its line in versions.jsonl. An adapter the loop has no verdict for
+# (trained by hand, verified by a hand-run soup ship with another file name) is not checked.
 soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
 
-# Pause/resume the daemon between iterations (atomic state flip)
+# Pause/resume the daemon between iterations (atomic state flip). resume also clears a
+# failed-train hold (the train_retry row of status), paused or not.
 soup loop pause
 soup loop resume
 
@@ -163,10 +483,40 @@ soup loop resume
 soup loop replay iter-20260515T120000-abcdef01
 ```
 
+The data formats the cycle passes between serving, feedback, training and rollout are defined in [Loop data formats](loop-formats.md).
+
+The whole cycle on a real model (a CUDA card, SmolLM2-135M, DPO, real `soup train` and `soup ship`, a real adapter load, canary, promotion and rollback; minutes) is `tests/test_loop_end_to_end_smoke.py`. Run it with `python -m pytest -m smoke tests/test_loop_end_to_end_smoke.py -q --no-cov -p no:cacheprovider`: `-m smoke` is required, because the repository's default `-m 'not smoke'` deselects the file and the same command without it exits 5 with `1 deselected`.
+
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
 
+**What the loop writes.** Besides the manifests, `soup loop` appends to three logs in
+`.soup-loops/`, in the formats of [Loop data formats](loop-formats.md):
+
+- `iterations.jsonl`: one line when an iteration is recorded, and another for the same
+  `iteration_id` whenever its outcome changes later (canary, promoted, rolled back); the
+  latest line wins. The line and the manifest are built from the same record.
+- `versions.jsonl`: one line per change of the active version. `soup loop init --pre-wired`
+  (or the first `soup loop watch` cycle) writes the `initial` line; a promotion by the
+  watch daemon is `promote`, actor `loop`; `soup loop rollback` back to an earlier version
+  is `rollback`, actor `user`. A canary that is withdrawn, or started with `soup loop
+  canary`, changes no version and adds no line. The version number lives in `loop.yaml`
+  (`production_version`, `latest_version`).
+- `progress.jsonl`: stage events (`harvest`, `train`, `verdict`, `deploy`, `canary`,
+  `promote`, `rollback`). While a canary waits for ratings, each watch cycle adds one
+  `canary` line whose `done` is the rated canary answers and `total` the 30 the verdict
+  needs. An iteration with nothing to train adds no stage lines.
+
+The files are append only, each line written by one `write` call, so another program
+(a desktop application) can append to the same files. **Run one loop per project:** two
+`soup loop watch` processes on one `.soup/loop.yaml` would race on the version counter, and
+the loop takes no lock. A log that cannot be written (disk full, a symlink in the way) is a
+warning and a note on the iteration, and never stops the loop. Do not run two `soup`
+versions against one project: an older one drops the version counter when it saves
+`loop.yaml`. See [Loop data formats](loop-formats.md#what-soup-loop-writes) for how each
+file is filled.
+
 Canary routing is available on the transformers backend when the candidate name was
-loaded with `soup serve --adapters`. Send a stable key as the
+loaded with `soup serve --adapters` or `POST /v1/adapters/load`. Send a stable key as the
 `conversation_id` field or `X-Conversation-Id` header on
 `POST /v1/chat/completions`; requests without a key keep the normal active-adapter
 behavior. The router hashes the key, so every request in one conversation stays in
@@ -177,13 +527,68 @@ buckets in `.soup/canary-stats.json`. `soup loop watch` evaluates those observat
 after at least 30 canary samples. If the canary success rate trails the stable rate by
 more than five percentage points, the verdict is `MAJOR`; with
 `--autoroll-on-regress`, the watcher atomically clears the canary and its traffic share
-from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover for
-requests without a conversation key and does not change the canary policy. Keyed
-requests still follow the canary split; their stable bucket uses the served base
-model, even when another adapter was activated manually. Start `soup serve` from the
+from `loop.yaml`. With 30 canary answers and no regression the verdict is `OK`, and
+`soup loop watch` promotes the canary. `/v1/adapters/activate/<name>` remains an
+explicit 100% cutover for requests without a conversation key and does not change the
+canary policy. Keyed requests still follow the canary split; their stable bucket uses
+the promoted production adapter, or the served base model before any promotion, even
+when another adapter was activated manually. Start `soup serve` from the
 directory containing `.soup/`, because the loop state and canary statistics paths are
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.
+
+Failed requests are not the only way a canary can be worse: its answers can all arrive
+and still be bad. When the loop has a feedback log (`.soup-loops/feedback.jsonl`, or
+`--feedback-log` / `SOUP_LOOP_FEEDBACK_LOG`; see the feedback datasets above) and the canary
+recorded its start (`canary_started_ts` in `loop.yaml`, written when the deploy stage or
+`soup loop canary` starts it), `soup loop watch` also reads what people said about the
+rollout's answers. It takes the conversation records whose `canary_bucket` is `stable` or
+`canary`, whose `adapter` is that side's adapter (the base model has none while nothing
+is promoted) and that were answered after the rollout started, and counts per bucket the
+rated answers (a thumb, a rating or an edit) and the share of them with negative feedback:
+a thumb down, a rating of 1-2, or an edit. Once 30 answers are rated in EACH bucket, the
+quality verdict is `MAJOR` when the canary's negative share exceeds stable's by more than
+five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
+false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
+`OK` at the minimum means no significant regression was found, not that the canary is
+proven equal, and a gap of five points on a few dozen ratings is often chance. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
+ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
+canary against). The two verdicts
+combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is
+withdrawn although every request succeeded), `OK` only when both are `OK`, `UNKNOWN`
+otherwise. The iteration record notes both verdicts: `canary errors: OK` and
+`canary quality: 3/31 negative vs 2/40 stable (OK)`, or, while it is still `UNKNOWN`, how
+far each side is: `canary quality: 12/30 canary, 40/30 stable rated (UNKNOWN)`.
+
+So once a feedback log exists, a canary waits for ratings: it is promoted only after 30
+canary and 30 stable answers were rated, and `soup loop watch` starts no new iteration
+until then, but not for ever. `soup loop init --canary-max-wait` (default `24h`; `<int>m`,
+`<int>h`, `<int>d` or plain seconds, at most `30d`) says how long after the rollout started
+the ratings may stay short; past it the quality verdict is `INSUFFICIENT` (not `UNKNOWN`)
+and `--canary-on-timeout` (default `errors-only`) decides:
+
+- `errors-only`: the request-error verdict decides alone. A canary whose requests succeeded
+  is promoted, and the iteration notes say so: `promoted on errors only - quality
+  unverified: 7/30 canary rated in 24h`. One whose requests failed is withdrawn as ever,
+  and one with too few answers for the error verdict keeps waiting. **A canary that got no
+  answers at all** (serve restarted without it, a wrong rollout id, too little traffic for the
+  share) is not promoted on a timeout: it is withdrawn, the reason is `timeout_no_answers`, and
+  the notes say `withdrawn on timeout: 0 canary answers`. Only `--canary-on-timeout errors-only`
+  given explicitly on `soup loop init` promotes it with no evidence.
+- `rollback`: the canary is withdrawn and production is untouched, even without
+  `--autoroll-on-regress`. The notes name the timeout and `--canary-on-timeout rollback`.
+- `wait`: no time limit; the quality verdict stays `UNKNOWN`.
+
+Both settings are in `loop.yaml` and `soup loop status`. The time counts from the rollout
+start (`canary_started_ts`); a rollout without one is never timed out. The iteration
+record (`.soup-loops/<iteration-id>/iteration.json`) keeps the numbers behind the quality
+verdict in `canary_quality`: the rated and negative counts and shares per bucket, the
+difference, `z`, `p_value`, `min_rated`, `threshold`, `timed_out` and `decided_on`.
+`soup loop rollback` ends a wait at once: it withdraws the running
+canary, and after a promotion it also returns to the previous version. `soup loop canary
+<adapter>` starts a new rollout instead. A loop without a feedback
+log, or a canary that recorded no start (a `loop.yaml` from before the field), is judged by
+errors alone, as before.
 
 The serving process caches the parsed policy using the state file's
 `(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
