@@ -551,7 +551,7 @@ this verdict says nothing about them`, or `checked on few edits` below 10; null 
 ran on enough edits) and `canary_decides`, which is
 `true` only for `no_corrections` when nothing else is wrong, so the canary's ratings, not this
 gate, settle the rollout. Known limits: the stop list is English only (a Russian answer's "в"
-counts as a content word); the gate emits no extra `--progress jsonl` phases, but it prints a console line every 5 answers or 30 seconds, whichever comes first, and one when the last answer is in (`Gate loop-v2: 35/140 answers asked (12 min 4 s elapsed)`; counts and a clock reading only), so a gate of tens of minutes can be told from a hang; `--emit-evidence` is
+counts as a content word); the gate emits no extra `--progress jsonl` phases, but it prints a console line at least every 5 answers, and one when the last answer is in (`Gate loop-v2: 35/140 answers asked (12 min 4 s elapsed)`; counts and a clock reading only); an answer that takes longer than 30 s prints when it returns, not while it runs (a line is only printed when an answer comes back), so a gate of tens of minutes can be told from a hang; `--emit-evidence` is
 refused because the evidence cannot carry the two checks.
 
 ```bash

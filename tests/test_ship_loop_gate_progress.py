@@ -4,13 +4,16 @@ The gate asks BOTH versions every correction paraphrase and every held-out quest
 generation at a time, and printed nothing between "asking both versions N question(s)" and the
 verdict: about 40 minutes on a 0.6B model for 52 + 18 questions, which the loop (a 6 hour limit
 for a ship run) cannot tell from a hang. Now a progress line is printed at least every
-``EVERY_ANSWERS`` answers or ``EVERY_SECONDS`` seconds, and one when the last answer is in. The
-lines hold only counts and a clock reading (no model or user text).
+``EVERY_ANSWERS`` answers, one when an answer returns after ``EVERY_SECONDS`` seconds without a line
+(an answer that takes longer than that prints when it returns, not while it runs: review 5b, N4),
+and one when the last answer is in. The lines hold only counts and a clock reading (no model or
+user text).
 """
 
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -190,3 +193,49 @@ class TestInTheShipRun:
         assert "Gate loop-v2: 5/30 answers asked" in text
         assert "Gate loop-v2: 30/30 answers asked" in text
         assert text.count("answers asked") == 6  # every 5 of 30, the 30th included
+
+
+class TestTheWordsMatchTheBehaviour:
+    """Review 5b, N4: the docs said "every 30 s"; a 52 s answer cannot meet that."""
+
+    def test_an_answer_that_takes_longer_than_the_limit_prints_when_it_returns(self):
+        progress, lines, clock = _reporter(100)
+        seen_while_running: list = []
+
+        def slow(prompt):
+            clock.now += 52.0  # one generation of 52 s
+            seen_while_running.append(list(lines))
+            return "answer"
+
+        progress.wrap(slow)("q")
+
+        assert seen_while_running == [[]]  # nothing printed while it ran
+        assert lines == ["Gate loop-v2: 1/100 answers asked (52 s elapsed)"]
+
+    def test_slow_answers_each_print_when_they_return_and_quick_ones_every_fifth(self):
+        progress, lines, clock = _reporter(100)
+
+        for _ in range(3):
+            clock.now += 52.0
+            progress.step()
+        slow_lines = len(lines)
+        for _ in range(10):
+            clock.now += 1.0
+            progress.step()
+
+        assert slow_lines == 3  # one per slow answer
+        assert len(lines) - slow_lines == 2  # then the 5th and the 10th quick answer
+
+    def test_the_docs_and_the_module_say_it_that_way(self):
+        docs = (Path(__file__).resolve().parents[1] / "docs" / "evaluation.md").read_text(
+            encoding="utf-8"
+        )
+        flat = " ".join(docs.split())
+        module = (
+            Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "utils" / "ship_loop_gate.py"
+        ).read_text(encoding="utf-8")
+
+        assert "at least every 5 answers" in flat
+        assert "an answer that takes longer than 30 s prints when it returns" in flat
+        assert "every 5 answers or 30 seconds" not in flat
+        assert "prints when it returns, not while it runs" in " ".join(module.split())

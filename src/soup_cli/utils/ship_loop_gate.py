@@ -489,7 +489,9 @@ def check_held_out(old_gen: Generator, new_gen: Generator, edits: Sequence[HeldO
 
 #: A progress line at least every this many answers ...
 EVERY_ANSWERS = 5
-#: ... or this many seconds, whichever comes first (checked as an answer comes in).
+#: ... and an answer that comes back after this many seconds without a line prints at once. A
+#: line is only ever printed when an answer returns: one generation of 50 s prints nothing while
+#: it runs, then a line when it returns (review 5b, N4).
 EVERY_SECONDS = 30.0
 
 
@@ -498,9 +500,10 @@ class GateProgress:
 
     The two checks ask BOTH versions every question, one generation at a time; on a small model
     that was about 40 minutes with nothing printed. ``say`` gets one line at least every
-    ``EVERY_ANSWERS`` answers or ``EVERY_SECONDS`` seconds, and one when the last answer is in.
-    The line holds counts and the elapsed time only, never a prompt or an answer. ``wrap`` counts
-    a generator's calls; an answer that raised is not counted.
+    ``EVERY_ANSWERS`` answers, one when an answer returns after ``EVERY_SECONDS`` seconds without a
+    line (an answer that takes longer than that prints when it returns, not while it runs), and
+    one when the last answer is in. The line holds counts and the elapsed time only, never a
+    prompt or an answer. ``wrap`` counts a generator's calls; an answer that raised is not counted.
     """
 
     def __init__(
