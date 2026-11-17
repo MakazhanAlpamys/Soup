@@ -473,10 +473,101 @@ skipped without a message. Weights the reader refuses (`adapter_model.bin`, a sy
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).
 
+`--base-adapter <path>` (and `--adapter`) must not hold pickle weights (`adapter_model.bin`, `.pt`): `soup ship` refuses them before PEFT reads the directory (exit 3, `unsafe weight file (pickle / PyTorch-classic)`), so use safetensors; a safetensors file that is merely unreadable is not refused, only warned about. It swaps the *before* side from the bare base to `base + that LoRA adapter`,
+so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
+already in production (`base + --base-adapter`), both trained from the same base. It is a live
+run with `--adapter` only. `soup ship` refuses it, with exit code 3 and a message naming both
+flags, when `--adapter` is missing (alone, or with `--tuned`); together with `--evidence`,
+`--require-provenance`, `--emit-evidence` or `--baseline`, which all describe the bare base;
+when `--general-suite` names a non-bundled benchmark, which lm-eval would score on the bare
+base; when the path is not an existing directory; and when it is the same path as `--adapter`.
+The `adapter_noop` check above is skipped: an all-zero `--adapter` equals the bare base, which is
+no longer the before side. The `--output` JSON gains a `base_adapter` key (the path, or `null`), the
+terminal panel prints a `Base adapter:` line, and `--noise-floor` repeats run on the
+`base + --base-adapter` model.
+
+#### `--gate loop-v2`: did the new version learn the corrections?
+
+`--gate loop-v2` is the verdict for a continual-learning loop, where a person corrects answers and
+the next version must have learned them without losing the edits kept aside. It is a live run: the
+old version is the base (or `base + --base-adapter`, the version in production) and the new
+version is the candidate. Without `--gate` nothing changes. `soup ship` refuses, with exit code 3
+and a message naming both flags, `--corrections` or `--held-out` without the gate, any other
+`--gate` value, and the gate together with `--evidence`, `--emit-evidence` or
+`--require-provenance` (evidence holds scores only and would replay as the plain verdict).
+
+| Option | File (JSONL, one object per line) |
+|---|---|
+| `--corrections FILE` | `{"edit_id": str, "expected": str, "original": str, "paraphrases": [str, ...]}`: the corrected text, the answer that was corrected, and 1 to 20 rewordings of the question |
+| `--held-out FILE` | `{"edit_id": str, "prompt": str, "expected": str, "original": str}`: an edit kept out of training |
+
+Both files are read under the working directory (no symlink, at most 16 MiB, at most 10,000 rows,
+text fields at most 20,000 characters, `edit_id` unique per file). A bad row is exit code 3 and the
+message names the file, the line and the problem, for example
+``--corrections 'c.jsonl' line 7: "paraphrases" must be a list of 1 to 20 non-empty strings``. A
+missing or empty file is "no rows", not an error.
+
+**Scoring, `added_recall`.** The *added words* of a correction are its content words (lowercased,
+punctuation stripped, stop words removed; negations and numbers are content) that the answer it
+corrected lacked; with fewer than two of them, all of its content words. An answer is a *hit* when
+at least half of the added words are in it, with its `<think>` block removed first. The tokenizer,
+the stop list and the threshold are those of the consuming application's reference
+implementation, word for word.
+
+**Generation.** Both versions answer the corrections and held-out questions greedily with up to
+512 new tokens, as the consuming application does: the 256 that `--task-eval` and the suites use can cut a verbose
+answer before it reaches the corrected fact and score a miss the model did not earn. `--task-eval`
+and the suites keep their 256. The gate rebuilds its generators on the models already loaded for
+the verdict (nothing is loaded twice), so `--base-adapter` and `--chat-template-kwargs` apply to
+its questions too.
+
+**Check 1, corrections learned** (`--corrections`). Per edit, both versions answer every paraphrase
+and the hits are counted: more hits for the new version is *fixed*, fewer is *broken*, equal is a
+tie. `p_value` is the one-sided exact sign test `P(X >= fixed)`, `X ~ Binomial(fixed + broken,
+1/2)`. Outcome: `not_applicable` (no rows), `insufficient` (`fixed + broken < 5`), `pass` (`p <
+0.05`), else `fail`.
+
+**Check 2, held-out edits** (`--held-out`), non-inferiority. Both versions answer the original
+prompt and the number of added words each answer holds is compared (the recall, not the hit):
+*better*, *worse* or a tie. `p_value` is `P(X >= worse)`, `X ~ Binomial(worse + better, 1/2)`.
+Outcome: `not_measured` (fewer than 5 edits), `fail` (`p < 0.05`), `weak` (fewer than 10 edits),
+else `pass`. With `--task-mode pairwise` a judge also rates the held-out answers; that is recorded
+as `held_out.style` and never decides.
+
+**The decision.** SHIP only if check 1 is `pass`, check 2 is not `fail`, and the general suites
+hold. The suites always run, with or without held-out rows: `--task-eval` and the leg-2 suite are
+measured exactly as without the gate, and their two rules keep deciding (`missing_baseline`: nothing
+was measured; `regression`: a benchmark dropped past the threshold or the measured noise floor).
+The leg-1 task win stops deciding and stays in the output as information. Otherwise exit code 2,
+with the most decisive reason: the suites, then `held_out` (significantly worse), then
+`corrections` (not learned), then `corrections_insufficient` (`not enough corrections yet (k/5)`,
+`k = fixed + broken`), then `no_corrections` (`no corrections to check - the canary's ratings
+decide`).
+
+`--output` gains `gate` (`"loop-v2"`), `corrections` and `held_out` (the loop iteration format's
+`verdict.corrections` and `verdict.held_out`, with `scoring: {"method": "added_recall",
+"threshold": 0.5, "template": null}`), `reason` (null on SHIP), `held_out_note` (in words: `held-out edits not checked: 2 of 5 needed;
+this verdict says nothing about them`, or `checked on few edits` below 10; null when the check
+ran on enough edits) and `canary_decides`, which is
+`true` only for `no_corrections` when nothing else is wrong, so the canary's ratings, not this
+gate, settle the rollout. Known limits: the stop list is English only (a Russian answer's "в"
+counts as a content word); the gate emits no extra `--progress jsonl` phases, but it prints a console line at least every 5 answers, and one when the last answer is in (`Gate loop-v2: 35/140 answers asked (12 min 4 s elapsed)`; counts and a clock reading only); an answer that takes longer than 30 s prints when it returns, not while it runs (a line is only printed when an answer comes back), so a gate of tens of minutes can be told from a hang; `--emit-evidence` is
+refused because the evidence cannot carry the two checks.
+
+```bash
+soup ship --base <base> --base-adapter ./adapters/v1 --adapter ./adapters/v2 \
+  --task-eval tasks.jsonl --gate loop-v2 \
+  --corrections corrections.jsonl --held-out held_out.jsonl --output verdict.json
+```
+
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
   --task-eval tasks.jsonl --device cuda
+
+# Live: the candidate adapter vs the adapter in production (same base)
+soup ship --base <base> --base-adapter ./adapters/v1 --adapter ./adapters/v2 \
+  --task-eval tasks.jsonl
 
 # Live: disable thinking when the model's chat template supports that variable
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \

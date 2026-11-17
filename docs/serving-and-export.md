@@ -14,6 +14,7 @@
 - [Inference Server](#inference-server)
 - [Web UI](#web-ui)
 - [Inference Server Trace Log](#inference-server-trace-log)
+- [Response IDs and Feedback](#response-ids-and-feedback)
 - [Soup Quantize — Ergonomic Export Alias](#soup-quantize--ergonomic-export-alias)
 - [Llama.cpp Proxy](#llamacpp-proxy)
 - [Tail-Latency Stats + Tool-Call Timer](#tail-latency-stats--tool-call-timer)
@@ -891,6 +892,28 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters
 
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
+#### Loading an adapter into a running server
+
+A continual-learning loop trains a fresh adapter while the server runs. `POST /v1/adapters/load` adds it to the running server without a restart, so it can then be activated or canaried. The route is off unless the server was started with `--adapter-dir`, the one directory adapters may be loaded from:
+
+```bash
+soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "$TOKEN"
+
+curl -X POST http://localhost:8000/v1/adapters/load \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "v2", "path": ".soup-loops/adapters/loop-train-1a2b3c4d"}'
+# → {"name": "v2", "status": "loaded"}
+```
+
+- **A token is required on every bind**, loopback included: a server started without `--tool-auth-token` answers 401 and names the flag. A server started without `--adapter-dir` answers 404, and only to a caller that sent the token.
+- **The path must be inside `--adapter-dir`.** A relative path is resolved against the server's working directory; a `..` or a symlink that leaves the directory is refused with 403. At the 16-adapter cap the OLDEST loaded runtime adapter that is not in use is unloaded to make room (never the active one, nor what `loop.yaml` names as production, its rollback target or the canary); when every one is in use the load answers `409 runtime adapter limit reached (16)`. **Known limit:** after a server restart a promoted adapter is not loaded again by the server (`soup loop` does not replay `loop.yaml`), so the stable side is the base model until the loop deploys the next version or the adapter is loaded by hand with `POST /v1/adapters/load`. On Windows a UNC path (`\\host\share\x`) or a drive-relative one (`C:x`) is refused with 403 without being resolved. `--adapter-dir` itself may not be a filesystem root (`/`, a drive root, a share root): the server refuses to start (exit 2, naming the flag), as every path would be inside it. The directory must hold an `adapter_config.json` (400 otherwise). Adapters stored as pickle (`adapter_model.bin`) are refused: use safetensors.
+- **Loading does not activate.** The adapter shows up in `GET /v1/adapters`; select it with `POST /v1/adapters/activate/v2` or the `adapter` field of a request.
+- **Name rules:** the pattern above, at most 64 characters; a name that is already loaded (at startup or at runtime, or the `default` adapter of a `--model` that is itself an adapter) answers 409.
+- **At most 16 adapters** are loaded this way at once per server process (adapters given with `--adapters` do not count). The 17th load unloads the oldest unused one first (see the cap rule under the path check above) and answers 409 only when none can be unloaded: every loaded adapter is the active one, production, its rollback target or the canary, the unload fails, or `loop.yaml` cannot be read.
+- A load that fails answers 400 `adapter could not be loaded` (the cause goes to the server log) and leaves the server as it was.
+- **Transformers backend only.** `--adapter-dir` with `--backend vllm`, `sglang` or `mii`, or together with `--mole`, is refused at startup (exit 2); on a server started with `--bank` the route answers 409.
+
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
 Serve many per-user personas from one model at KB-per-user instead of a full LoRA each.
@@ -1086,7 +1109,91 @@ soup ui --port 8080 --no-browser
 soup serve --model ./out --trace-log ./serve-trace.jsonl --trace-log-cap-mb 100
 ```
 
-Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
+Each line is one conversation record in the version 1 format of [Loop data formats](loop-formats.md#conversation) (`soup_cli/schemas/loop/conversation.schema.json`): `schema_version`, `id` (the [response id](#response-ids-and-feedback) of that answer), `conversation_id`, `ts` (ISO 8601, UTC), `model`, `version`, `adapter`, `canary_bucket`, `messages`, `response`, `finish_reason`, `latency_ms`, `tokens` and `source` (`soup-serve`).
+
+- `messages` is the whole conversation the model saw, without the answer; `response` is the answer. `prompt` (the last user message) is kept at the top level so readers of the earlier line keep working.
+- `conversation_id` is the request body's `conversation_id`, else the `X-Conversation-Id` header, else `null` (also `null` when the header is empty or longer than 512 characters).
+- `adapter` is the adapter that generated the answer (`null` for the base model); `canary_bucket` is `stable` or `canary` when the canary router routed the request, else `null`. `version` is always `null`: `soup serve` does not know loop versions.
+- `tokens` is `{"prompt": ..., "completion": ...}`; a count the engine did not report is `null`, never `0`.
+- A request whose messages use a role outside `system`, `developer`, `user`, `assistant` and `tool` is answered but not logged (the reason goes to the server log), so every written line is valid against the schema.
+- Lines written before this format have no `schema_version`, a bare integer `tokens` and no `id`. `soup data from-traces --format soup-serve` and `soup loop` read both; a line with a `schema_version` other than 1 is skipped.
+
+Path-containment validated, hard rotation cap (default 100 MB, one backup retained as `serve.jsonl.1`; `soup loop` reads the rotated files too, oldest first), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` in `messages`, `response` and `prompt` before write. Failures (disk full, serialisation errors) never crash the request handler. A streamed answer is logged once it is generated, before its first chunk is sent.
+
+
+## Response IDs and Feedback
+
+With the default Transformers backend every answer to `/v1/chat/completions` and `/v1/messages` gets a fresh UUID4 in canonical lowercase form. It comes back as the body field `response_id` and as the response header `X-Response-Id`; the `id` field (`chatcmpl-…`) is unchanged, so OpenAI clients see nothing new.
+
+- A streamed `/v1/chat/completions` answer carries the header and a `response_id` field in every `data:` chunk.
+- `/v1/messages` carries the header and a `response_id` field in the reply (a stream: in `message.response_id` of the `message_start` event). It reads the `X-Conversation-Id` header as `/v1/chat/completions` does but has no `conversation_id` body field, so a request without the header has `conversation_id: null` in its trace record.
+- A page served from `localhost` can read the header: `X-Response-Id` is in the CORS exposed headers.
+- A failed generation (500) returns no id and writes no record.
+- The id is what `--trace-log` writes as `id`, so a feedback record points at the answer through `response_id`. The ids exist whether or not `--trace-log` is set.
+
+`soup serve --feedback-log <path>` turns on `POST /v1/feedback`, which appends one line per call to a JSONL file in the feedback format of [Loop data formats](loop-formats.md#feedback) (`feedback.schema.json`). The path must stay under the current directory; the file is append-only and is never rotated, so it has a size cap instead: once it is 256 MiB or more, `POST /v1/feedback` answers `507` naming the file and appends nothing (the cap is a constant, not a flag). The file is created readable by its owner alone (`0600`) on POSIX; on Windows the folder's permissions apply and the mode is not set.
+
+```bash
+soup serve --model ./out --trace-log .soup-loops/traces/serve.jsonl \
+  --feedback-log .soup-loops/feedback.jsonl
+
+curl http://localhost:8000/v1/feedback -H "Content-Type: application/json" -d '{
+  "response_id": "0de3d93e-f426-4096-8ba2-14f7fb992421",
+  "kind": "thumb",
+  "value": 1
+}'
+# {"status": "ok", "id": "7df14f7b-8af9-497d-bd8b-2b1e3d397ac9"}
+```
+
+| `kind` | Also required | Meaning |
+|---|---|---|
+| `thumb` | `value`: `1`, `-1` or `null` | Thumbs up, down, or cleared |
+| `rating` | `value`: an integer 1-5 or `null` | A rating, or cleared |
+| `edit` | `edited_text`: a non-empty string or `null` | The answer as the person corrected it; `null` withdraws an earlier edit |
+| `comment` | `comment`: a non-empty string, at most 10000 characters | Free text |
+
+`edited_text` (at most 20000 characters), `comment` (non-empty, at most 10000 characters, or `null`) and `user_ref` (1-256 characters or `null`, an opaque reference the application chose) are optional next to any kind. A key that does not belong to the kind, such as `value` on an `edit`, is ignored. The server adds `schema_version`, `id` (also returned), `ts` and `source` (`soup-serve`); secrets in `edited_text`, `comment` and `user_ref` are redacted like the trace log's (Hugging Face, OpenAI-style, GitHub, AWS access key, Slack and Bearer tokens, JWTs, PEM private keys, and `api_key=...` / `secret=...` / `password: ...` / `token=...` assignments). [Loop data formats](loop-formats.md#feedback) says which line counts when a person changes their mind.
+
+- **Refused:** a body that breaks the schema gets `400 {"detail": "Invalid request: <field>"}` (`body`, `response_id`, `kind`, `value`, `edited_text`, `comment` or `user_ref`) and writes nothing. A body over 64 KiB gets `413`. A `response_id` this server process did not issue gets `404 unknown response_id`: the server remembers the last 100000 ids it handed out, in memory, so after a restart feedback for an answer given before it is refused. A request that carries an `Origin` header is refused with `403` unless that origin is the server's own (a page served by this server); a request without one (curl, an SDK, a desktop app) is allowed. A line that cannot be written (disk full, file removed) gets `500`, never `ok`.
+- **Not enabled:** without `--feedback-log` the route answers `404 feedback recording not enabled; start soup serve with --feedback-log`.
+- **Access:** the `Host`/`Origin` check of `POST /v1/thumbs`, plus the own-origin rule above, then `Authorization: Bearer <token>` when `--tool-auth-token` is set (and always on a non-loopback bind, which needs the token).
+- **Ids:** the id is checked against the ids this process issued, not against the trace log (which is not read per request), so it works with or without `--trace-log`. The loop's own internal check (`X-Soup-Internal`) issues no id.
+- `POST /v1/thumbs` and `--record-thumbs` are unchanged.
+
+`--trace-log`, `--record-thumbs` and `--feedback-log` belong to the Transformers backend. With `--backend vllm`, `sglang` or `mii` they are refused at startup (exit 2, naming the flag) instead of being ignored.
+
+
+## Internal Calls (`X-Soup-Internal`)
+
+`soup loop` sometimes asks the model it serves a question of its own: before it trains, the pre-wired train stage has the served model write [paraphrases](loop-formats.md#paraphrase) of the prompts people corrected. Such a call must not look like a user's: logged as a conversation it would come back as training data in the next run, and counted against a canary it would skew the quality verdict. So `POST /v1/chat/completions` honours one extra request header:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $SOUP_TOOL_AUTH_TOKEN" \
+  -H "X-Soup-Internal: loop-check" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "..."}]}'
+```
+
+With `X-Soup-Internal: loop-check` and a valid tool token the request is answered as usual, except that it:
+
+- writes **no conversation record** (nothing in `--trace-log`, a streamed answer included);
+- writes **no thumbs** (it never could: thumbs arrive through `POST /v1/thumbs`);
+- is **never routed to a canary bucket**: `conversation_id` and `X-Conversation-Id` are ignored for routing, and the answer comes from the same side unkeyed traffic gets (the active adapter, else the base model);
+- is **not counted** in the canary statistics, whether it succeeds or fails;
+- is **echoed**: the response carries `X-Soup-Internal: loop-check` too. That is how the loop tells a server that honours the header from an older `soup serve` that ignores it and would have recorded the call: without the echo the loop stops asking and says so in the iteration's notes (restart `soup serve` from the same version).
+
+The header is honoured only together with the token, on every bind, loopback included:
+
+| Request | Answer |
+|---|---|
+| header, valid `Authorization: Bearer <token>` | `200`, not recorded, header echoed |
+| header, no or wrong token | `401` `Invalid or missing bearer token: X-Soup-Internal is honoured only with a valid tool token...` |
+| header, server started without `--tool-auth-token` | `401` `Authentication required: X-Soup-Internal is honoured only with a valid tool token. Start soup serve with --tool-auth-token ...` |
+| header with a value other than `loop-check`, valid token | `400` `Unknown X-Soup-Internal value: the only one is 'loop-check'.` |
+| no header | unchanged: recorded and routed as before |
+
+Nothing is generated for a refused request. `/v1/messages` and the other routes ignore the header. The loop sends it with `SOUP_TOOL_AUTH_TOKEN` (set by `soup loop watch --tool-auth-token`) to `SOUP_LOOP_SERVE_ENDPOINT`; see [Adapters, Registry & Governance](adapters-and-governance.md#data-flywheel-soup-loop) for the paraphrase step and `soup loop init --paraphraser-endpoint`.
 
 
 ## Soup Quantize — Ergonomic Export Alias
@@ -1340,15 +1447,16 @@ option or from `SOUP_TOOL_AUTH_TOKEN` first, on every bind, and exits with statu
 loading the model when it does not match; the message names the rule, never the value. An
 empty value counts as no token.
 
-`/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
-bind they take a token only when the server has one.
+`/v1/tools/web_search`, `/v1/thumbs`, `/v1/feedback` and the adapter routes keep their
+rule: on a loopback bind they take a token only when the server has one.
 
-Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
-`Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403. That check runs first.
-The tool routes and all three adapter routes (`GET /v1/adapters`, activate, deactivate)
-then also require `Authorization: Bearer <token>` whenever `--tool-auth-token` is set,
-on loopback too, and answer 401 without it.
+Tool routes, `/v1/thumbs`, `/v1/feedback` and adapter activate/deactivate accept requests
+only when the `Host` header names the bound address (any loopback name for a loopback
+bind) and any `Origin` header names the same; otherwise they answer 421 or 403. That check
+runs first. The tool routes, `/v1/thumbs`, `/v1/feedback` and all three adapter routes
+(`GET /v1/adapters`, activate, deactivate) then also require
+`Authorization: Bearer <token>` whenever `--tool-auth-token` is set, on loopback too, and
+answer 401 without it.
 
 The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
 (`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
@@ -1361,8 +1469,8 @@ checked on these routes, so a proxy can still front them under its own hostname.
 generation routes (`/v1/chat/completions`, and `/v1/messages` on vLLM).
 
 **What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
-without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
-the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
+without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs`,
+`/v1/feedback` and the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
 `/metrics` take no token on any bind, so they answer every client that can reach the port;
 put a proxy that authenticates in front of the server if that is not intended. With
 `--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks

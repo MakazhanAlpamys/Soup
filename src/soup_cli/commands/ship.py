@@ -3,6 +3,8 @@
 Top-level CLI command (NOT a sub-group) — operators type::
 
     soup ship --base <m> --adapter <lora> --task-eval tasks.jsonl
+    soup ship --base <m> --base-adapter <prod-lora> --adapter <new-lora> --task-eval t.jsonl
+    soup ship ... --gate loop-v2 --corrections c.jsonl --held-out h.jsonl   # the loop's gate
     soup ship --evidence ev.json            # offline, pre-computed scores
     soup ship ... --output verdict.json
     soup ship ... --config soup.yaml        # read eval.ship defaults + bind provenance
@@ -40,6 +42,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -78,6 +81,19 @@ from soup_cli.utils.paths import (
     open_no_follow,
     quote_path,
 )
+from soup_cli.utils.ship_loop_gate import (
+    ANSWER_MAX_NEW_TOKENS,
+    GATE_LOOP_V2,
+    GATES,
+    GateInputError,
+    GateInputs,
+    GateProgress,
+    check_corrections,
+    check_held_out,
+    parse_corrections,
+    parse_held_out,
+    unmeasured_loop_gate,
+)
 from soup_cli.utils.ship_progress import group, jsonl_command
 from soup_cli.utils.ship_task_rows import (
     build_task_rows,
@@ -108,6 +124,7 @@ from soup_cli.utils.ship_verdict import (
     ShipVerdict,
     TaskDetail,
     TaskWin,
+    apply_loop_gate,
     build_judged,
     build_task_detail,
     build_task_win,
@@ -138,6 +155,9 @@ _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 # 4 MiB cap on a soup.yaml passed via --config (configs are small).
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
+# 16 MiB cap on a --corrections / --held-out JSONL (at most MAX_ROWS rows of bounded text).
+_MAX_GATE_FILE_BYTES = 16 * 1024 * 1024
 
 # 8 GiB cap on the training file we fingerprint for provenance.data_sha
 # (best-effort — skipped above this, never fatal).
@@ -197,6 +217,91 @@ def _validate_noise_floor_flag(value: Optional[int]) -> Optional[int]:
             _EXIT_USAGE,
         )
     return value
+
+
+def _screen_adapter_weights(path: str, flag: str) -> None:
+    """Refuse an adapter directory holding pickle-format weights, before PEFT reads it.
+
+    A ``.bin`` / ``.pt`` / ``.pth`` / ``.pkl`` / ``.pickle`` / ``.ckpt`` weight file (or a
+    ``.safetensors`` file that is really a pickle or zip) runs code when it is loaded.
+    Only that is refused: a safetensors file that is unreadable, truncated or has a bad
+    header is not a code-execution vector, and ``soup ship`` keeps warning about it and
+    carrying on (``_adapter_is_noop``).
+    """
+    from soup_cli.utils.strict_safetensors import assert_no_pickle_top_level_weights
+
+    try:
+        assert_no_pickle_top_level_weights(path)
+    except ValueError as exc:
+        _fail(f"{flag} {path}: {exc}", _EXIT_USAGE)
+
+
+def _validate_base_adapter(
+    base_adapter: str,
+    *,
+    adapter: Optional[str],
+    base_only_flags: Mapping[str, bool],
+    suite_names: Optional[List[str]] = None,
+) -> None:
+    """Refuse every ``--base-adapter`` combination whose meaning would be wrong (exit 3).
+
+    ``--base-adapter`` makes the BEFORE side ``base + adapter`` (the version in
+    production) for a live run against ``base + --adapter``. Everything that
+    describes the base model alone, or scores it through a path that cannot load an
+    adapter, would silently compare against the wrong "before":
+
+    * ``--evidence`` / ``--require-provenance`` / ``--emit-evidence`` / ``--baseline``
+      carry or store the scores of the bare base (``base_only_flags``);
+    * a non-bundled benchmark goes through lm-eval, which would score the bare base;
+    * without ``--adapter`` there is no second adapter to compare (``--tuned`` is a
+      separate model, not ``base + adapter``);
+    * the same path on both sides compares an adapter with itself.
+
+    Called from ``ship()`` first (the flags that never reach ``_verdict_live``, and a
+    ``--base-adapter`` with no live run at all) and again from ``_verdict_live`` with the
+    baseline and suite it sees, which ``--config`` may have filled in. ``_verdict_live``
+    is also reachable without ``ship()``.
+    """
+    for flag, given in base_only_flags.items():
+        if given:
+            _fail(
+                f"--base-adapter cannot be used with {flag}: {flag} describes the base "
+                "model alone, but --base-adapter makes the before side base + adapter "
+                "(live run only)",
+                _EXIT_USAGE,
+            )
+    if not adapter:
+        _fail(
+            "--base-adapter needs --adapter (it compares two adapters on one base "
+            "model; it cannot be used with --tuned or alone)",
+            _EXIT_USAGE,
+        )
+    if suite_names:
+        from soup_cli.eval.gate_suites import is_bundled_suite
+
+        lm_eval_names = sorted({name for name in suite_names if not is_bundled_suite(name)})
+        if lm_eval_names:
+            shown = ", ".join(lm_eval_names[:5]) + (" ..." if len(lm_eval_names) > 5 else "")
+            _fail(
+                f"--base-adapter cannot score non-bundled benchmark(s) {shown}: lm-eval "
+                "would run on the bare base model, not base + adapter. Name only bundled "
+                "suites in --general-suite",
+                _EXIT_USAGE,
+            )
+    if not os.path.isdir(base_adapter):
+        _fail(
+            f"--base-adapter must be an existing directory; got '{base_adapter}'",
+            _EXIT_USAGE,
+        )
+    if os.path.realpath(base_adapter) == os.path.realpath(adapter):
+        _fail(
+            "--base-adapter and --adapter are the same path; the comparison would be "
+            "an adapter against itself",
+            _EXIT_USAGE,
+        )
+    _screen_adapter_weights(base_adapter, "--base-adapter")
+    if os.path.isdir(adapter):
+        _screen_adapter_weights(adapter, "--adapter")
 
 
 def _parse_chat_template_kwargs(value: Optional[str]) -> Optional[dict]:
@@ -529,6 +634,77 @@ def _flag_is_default(ctx: typer.Context, name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# --gate loop-v2 — the corrections and held-out files
+# ---------------------------------------------------------------------------
+
+# What each offline flag cannot do with the gate. The gate asks the two models its own questions, so
+# it is a live run; evidence replays scores, and a replay of a gated run would be the plain verdict.
+_GATE_OFFLINE_FLAGS = {
+    "--evidence": "offline evidence has no models to ask the corrections and held-out questions",
+    "--emit-evidence": (
+        "evidence holds the scores only and replays as the plain verdict, not the gate's"
+    ),
+    "--require-provenance": "it checks offline evidence",
+}
+
+
+def _read_gate_file(path: str, flag: str) -> str:
+    """Read a ``--corrections`` / ``--held-out`` file: cwd-contained, not a symlink, size-capped."""
+    try:
+        enforce_under_cwd_and_no_symlink(path, f"{flag} path")
+    except (ValueError, TypeError) as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    if not os.path.isfile(path):
+        _fail(f"{flag} {quote_path(path)} is not a file", _EXIT_USAGE)
+    try:
+        return _safe_read_text(path, f"{flag} path", _MAX_GATE_FILE_BYTES)
+    except UnicodeDecodeError:
+        _fail(f"{flag} {quote_path(path)} is not valid UTF-8 text", _EXIT_USAGE)
+    except (ValueError, TypeError, OSError) as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
+def _prepare_loop_gate(
+    gate: Optional[str],
+    corrections: Optional[str],
+    held_out: Optional[str],
+    *,
+    offline_flags: Mapping[str, bool],
+) -> Optional[GateInputs]:
+    """Validate ``--gate`` and read its two files; every refusal is exit 3, before any model loads.
+
+    Returns ``None`` without ``--gate`` (a ``--corrections`` / ``--held-out`` file without the gate
+    is refused rather than silently ignored). An absent file is an empty one: no corrections means
+    check 1 is ``not_applicable``, no held-out edits means check 2 is ``not_measured``.
+    """
+    if gate is None:
+        for flag, given in (("--corrections", corrections), ("--held-out", held_out)):
+            if given is not None:
+                _fail(f"{flag} needs --gate {GATE_LOOP_V2}", _EXIT_USAGE)
+        return None
+    if gate not in GATES:
+        _fail(f"--gate must be {', '.join(GATES)}; got {gate!r}", _EXIT_USAGE)
+    for flag, why in _GATE_OFFLINE_FLAGS.items():
+        if offline_flags.get(flag):
+            _fail(f"--gate {gate} cannot be used with {flag}: {why} (live run only)", _EXIT_USAGE)
+    parsed_corrections: tuple = ()
+    parsed_held_out: tuple = ()
+    try:
+        if corrections is not None:
+            parsed_corrections = parse_corrections(
+                _read_gate_file(corrections, "--corrections"),
+                f"--corrections {quote_path(corrections)}",
+            )
+        if held_out is not None:
+            parsed_held_out = parse_held_out(
+                _read_gate_file(held_out, "--held-out"), f"--held-out {quote_path(held_out)}",
+            )
+    except GateInputError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    return GateInputs(corrections=parsed_corrections, held_out=parsed_held_out)
+
+
+# ---------------------------------------------------------------------------
 # Offline path — --evidence
 # ---------------------------------------------------------------------------
 
@@ -647,8 +823,15 @@ def _resolve_generators(
     device: Optional[str],
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    base_adapter: Optional[str] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
-    """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode)."""
+    """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode).
+
+    With ``base_adapter`` the base side is ``base + base_adapter`` (``--base-adapter``).
+    Every consumer of the base side (leg 1, leg 2 and the ``--noise-floor`` repeats)
+    uses this one generator, so there is no second place that could fall back to the
+    bare base.
+    """
     # #316 — the behavioural suites need a budget that fits a real tool call.
     # At make_generator's default of 64, 31 of 40 tool calls and 15 of 40 JSON
     # fences were truncated ONE CLOSING BRACE short and scored 0.000 on a model
@@ -676,10 +859,19 @@ def _resolve_generators(
     template_options = (
         {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
     )
+    # Passed only when set, so a run without --base-adapter builds the base side
+    # exactly as before (no ``adapter`` keyword at all).
+    base_adapter_options = {"adapter": base_adapter} if base_adapter is not None else {}
+    if base_adapter is not None:
+        console.print(
+            f"[dim]Live eval: base side = base + --base-adapter "
+            f"{escape(for_terminal(base_adapter))}.[/]"
+        )
     with group("load", side="base"):
         base_gen = live_eval.make_generator(
             base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
             dtype=dtype, quantization=quantization,
+            **base_adapter_options,
             **template_options,
         )
     if adapter:
@@ -1655,6 +1847,85 @@ def _adapter_is_noop(adapter: str) -> bool:
     )
 
 
+def _held_out_win_rate(judge_model: str, pairs: List[Tuple[str, str, str]]) -> float:
+    """The new version's pairwise win rate over ``(prompt, old answer, new answer)`` triples."""
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
+
+    provider, model, api_base = _parse_judge_url(judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+    return pairwise_winrate(pairs, evaluator)
+
+
+def _answer_generators(
+    base_id: str,
+    tuned_id: str,
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    *,
+    chat_template_kwargs: Optional[dict] = None,
+) -> Tuple[Callable[[str], str], Callable[[str], str]]:
+    """The two versions again for the gate's questions: the same loaded models, a bigger budget.
+
+    The task eval and the suites generate up to ``BEHAVIOURAL_MAX_NEW_TOKENS`` (256) and keep doing
+    so. A corrections or held-out answer may need more to reach the corrected fact, so those
+    questions get ``ANSWER_MAX_NEW_TOKENS`` (512, as the consuming application), still greedy.
+    The generators are rebuilt on the models ``_resolve_generators`` already loaded
+    (``loaded=``), so no weights are read twice and ``--base-adapter`` and the chat-template
+    options carry over unchanged.
+    """
+    from soup_cli.utils import live_eval
+
+    template_options = (
+        {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
+    )
+
+    def widen(model_id: str, generator: Callable[[str], str]) -> Callable[[str], str]:
+        loaded = getattr(generator, "loaded", None)
+        if loaded is None:
+            raise ValueError("the live generator does not expose its loaded model")
+        return live_eval.make_generator(
+            model_id, loaded=loaded, max_new_tokens=ANSWER_MAX_NEW_TOKENS, **template_options,
+        )
+
+    return widen(base_id, base_gen), widen(tuned_id, tuned_gen)
+
+
+def _apply_loop_gate(
+    verdict: ShipVerdict,
+    inputs: GateInputs,
+    old_gen: Callable[[str], str],
+    new_gen: Callable[[str], str],
+    *,
+    task_mode: str,
+    judge_model: Optional[str],
+) -> ShipVerdict:
+    """Run the corrections and held-out checks and let them decide (``--gate loop-v2``).
+
+    The old version is ``old_gen`` (the base, or base + ``--base-adapter``) and the new one
+    ``new_gen`` (the candidate). A pairwise judge, when ``--task-mode pairwise`` has one, also rates
+    the held-out answers; that note is information and never decides.
+    """
+    console.print(
+        f"[dim]Gate {GATE_LOOP_V2}: asking both versions "
+        f"{sum(len(edit.paraphrases) for edit in inputs.corrections)} correction question(s) and "
+        f"{len(inputs.held_out)} held-out question(s) (up to {ANSWER_MAX_NEW_TOKENS} new tokens "
+        "each).[/]"
+    )
+    # Both versions answer every question one at a time: say where it is every few answers
+    # (review 5, F8: a 40 minute gate that printed nothing read as a hang). Counts only.
+    asked = 2 * (sum(len(edit.paraphrases) for edit in inputs.corrections) + len(inputs.held_out))
+    progress = GateProgress(asked, lambda text: console.print(f"[dim]{for_terminal(text)}[/]"))
+    old_gen, new_gen = progress.wrap(old_gen), progress.wrap(new_gen)
+    corrections = check_corrections(old_gen, new_gen, inputs.corrections)
+    judge_rate = None
+    if task_mode == "pairwise" and judge_model:
+        judge_rate = partial(_held_out_win_rate, judge_model)
+    held_out = check_held_out(old_gen, new_gen, inputs.held_out, judge_rate=judge_rate)
+    progress.finish()
+    return apply_loop_gate(verdict, corrections, held_out)
+
+
 def _local_base_dir(base: str, adapter: str) -> str:
     """The base's weights on disk: a local directory, or the cached Hub snapshot.
 
@@ -1707,6 +1978,8 @@ def _verdict_live(
     noise_floor_runs: Optional[int] = None,
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    base_adapter: Optional[str] = None,
+    gate_inputs: Optional[GateInputs] = None,
     before_models: Optional[Callable[[], None]] = None,
     reward_fn: Optional[str] = None,
 ) -> ShipVerdict:
@@ -1744,6 +2017,15 @@ def _verdict_live(
                 f"< {_MAX_BENCHMARK_NAME_CHARS} chars",
                 _EXIT_USAGE,
             )
+
+    # Before --baseline is resolved: a stored base score describes the bare base.
+    if base_adapter is not None:
+        _validate_base_adapter(
+            base_adapter,
+            adapter=adapter,
+            base_only_flags={"--baseline": bool(baseline_spec)},
+            suite_names=suite_names,
+        )
 
     # Resolve --baseline up front so a bad spec (outside cwd / missing file /
     # unknown registry id) is a USAGE error (exit 2), not a runtime error (1).
@@ -1800,7 +2082,9 @@ def _verdict_live(
     # An empty --adapter / --tuned is absent (the checks above treat "" as not given), so it is
     # recorded as null: an empty string would make the evidence unreadable.
     judged = build_judged(base=base, adapter=adapter or None, tuned=tuned or None)
-    if adapter and _adapter_is_noop(adapter):
+    # Not with --base-adapter: "tuned == base" no longer holds there (the before side
+    # is base + base_adapter), so a zero adapter is a real comparison.
+    if adapter and base_adapter is None and _adapter_is_noop(adapter):
         return ShipVerdict(
             decision=DECISION_DONT_SHIP,
             task_win=TaskWin(
@@ -1812,6 +2096,7 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             soup_version=__version__,
             judged=judged,
+            loop_gate=unmeasured_loop_gate(gate_inputs) if gate_inputs is not None else None,
         )
 
     if before_models is not None:
@@ -1825,7 +2110,8 @@ def _verdict_live(
             if chat_template_kwargs is not None else {}
         )
         base_gen, tuned_gen = _resolve_generators(
-            base, tuned, adapter, device, quantization, **template_options
+            base, tuned, adapter, device, quantization, **template_options,
+            **({"base_adapter": base_adapter} if base_adapter is not None else {}),
         )
 
         measured_floor: Optional[NoiseFloor] = None
@@ -1876,11 +2162,24 @@ def _verdict_live(
         adapter_change = (
             _measure_adapter_change(adapter, base) if adapter else None
         )
+        if gate_inputs is not None:
+            # The old side is built from base_gen (base, + --base-adapter when given): the same
+            # models that scored the task eval and the suites, so there is no second place to
+            # fall back to the bare base. Only the token budget differs.
+            old_answers, new_answers = _answer_generators(
+                base, tuned_id, base_gen, tuned_gen,
+                chat_template_kwargs=chat_template_kwargs,
+            )
+            verdict = _apply_loop_gate(
+                verdict, gate_inputs, old_answers, new_answers,
+                task_mode=task_mode, judge_model=judge_model,
+            )
         return replace(
             verdict,
             numerics=_live_eval_numerics(quantization, device),
             adapter_change=adapter_change,
             judged=judged,
+            base_adapter=base_adapter,
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
@@ -2063,6 +2362,12 @@ def ship(
     adapter: Optional[str] = typer.Option(
         None, "--adapter", help="LoRA adapter path (tuned = base + this adapter)."
     ),
+    base_adapter: Optional[str] = typer.Option(
+        None,
+        "--base-adapter",
+        help="LoRA adapter applied to the base side (before = base + this adapter), "
+        "e.g. the current production version. Live run with --adapter only.",
+    ),
     task_eval: Optional[str] = typer.Option(
         None, "--task-eval", help="JSONL of leg-1 task-win eval tasks."
     ),
@@ -2162,10 +2467,51 @@ def ship(
         None, "--chat-template-kwargs",
         help='Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}.',
     ),
+    gate: Optional[str] = typer.Option(
+        None,
+        "--gate",
+        help="Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits "
+        "not significantly worse and the suites holding; the task win is information only. "
+        "Live run only.",
+    ),
+    corrections: Optional[str] = typer.Option(
+        None,
+        "--corrections",
+        help="JSONL of corrections for --gate loop-v2: {edit_id, expected, original, "
+        "paraphrases}. Check 1 asks both versions every paraphrase.",
+    ),
+    held_out: Optional[str] = typer.Option(
+        None,
+        "--held-out",
+        help="JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. "
+        "Check 2: the new version must not be significantly worse on them.",
+    ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     if progress is not None and progress != "jsonl":
         _fail("--progress must be jsonl", _EXIT_USAGE)
+    if adapter is not None and os.path.isdir(adapter):
+        _screen_adapter_weights(adapter, "--adapter")
+    if base_adapter is not None:
+        # The flags that never reach _verdict_live (it re-runs this check with the
+        # config-resolved --baseline and --general-suite, which only it sees).
+        _validate_base_adapter(
+            base_adapter,
+            adapter=adapter,
+            base_only_flags={
+                "--evidence": bool(evidence),
+                "--require-provenance": require_provenance,
+                "--emit-evidence": bool(emit_evidence),
+            },
+        )
+    gate_inputs = _prepare_loop_gate(
+        gate, corrections, held_out,
+        offline_flags={
+            "--evidence": bool(evidence),
+            "--emit-evidence": bool(emit_evidence),
+            "--require-provenance": require_provenance,
+        },
+    )
     soup_config = None
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
@@ -2343,6 +2689,8 @@ def ship(
                 task_mode=task_mode,
             ),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
+            **({"base_adapter": base_adapter} if base_adapter is not None else {}),
+            **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
         )
         if emit_evidence:
             if binding != capture_binding(task_mode, _parse_suite(general_suite), noise_floor):
