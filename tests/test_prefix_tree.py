@@ -378,6 +378,60 @@ class TestSampler:
         first.set_epoch(0)
         assert list(first) == epoch_0
 
+    def test_a_thousand_nested_beginnings_do_not_recurse(self):
+        """Prefix ``k`` is the first ``16 * k`` tokens of one stream (a trace cut
+        after each step, only the last answer trained): every example opens a
+        level of grouping, 1,200 levels in all, past Python's recursion limit
+        of 1,000. Grouping and flattening are walks over an explicit stack."""
+        import sys
+
+        count = 1200
+        assert count > sys.getrecursionlimit()
+        stream = array("i", (3 + (k * 7919) % 90 for k in range(16 * count)))
+        examples = [
+            (stream[: 16 * k] + array("i", [1, 2]), array("i", [X] * (16 * k) + [1, 2]))
+            for k in range(1, count + 1)
+        ]
+        tree = group_by_shared_prefix(
+            [shareable_prefix(ids, labels, X) for ids, labels in examples]
+        )
+        depth, node = 0, tree
+        while any(isinstance(child, list) for child in node):
+            node = next(child for child in node if isinstance(child, list))
+            depth += 1
+        assert depth >= count - 1, "the nesting this test exists for"
+        sampler = PrefixTreeBatchSampler(examples, max_tokens=512, batch_size=2, seed=1)
+        assert sampler.stats.examples == count
+        for _ in range(2):
+            seen = [index for batch in sampler for index in batch]
+            assert sorted(seen) == list(range(count)), "every example once per epoch"
+
+    def test_the_walks_keep_the_order_a_seed_gives(self):
+        """The iterative grouping and flattening give what the recursive ones
+        gave: the same groups in the same order, the same shuffles."""
+
+        def recursive_flatten(tree, rng):
+            children = list(tree)
+            rng.shuffle(children)
+            for child in children:
+                if isinstance(child, list):
+                    yield from recursive_flatten(child, rng)
+                else:
+                    yield child
+
+        from soup_cli.utils.prefix_tree import _flatten_shuffled
+
+        for seed in range(6):
+            examples = _dataset(seed=seed)
+            tree = group_by_shared_prefix(
+                [shareable_prefix(ids, labels, X) for ids, labels in examples],
+                min_group_tokens=4,
+            )
+            assert any(isinstance(child, list) for child in tree), "vacuous: no groups"
+            assert list(_flatten_shuffled(tree, random.Random(seed))) == list(
+                recursive_flatten(tree, random.Random(seed))
+            )
+
     def test_compact_examples_plan_the_same_rows(self):
         """``array('i')`` pairs, 8 bytes per token, in place of lists of ints."""
         examples = _dataset(seed=2)
@@ -735,6 +789,48 @@ class TestExactness:
         for name, param in model.named_parameters():
             # Not bit-identical: the shared tokens' gradient is one sum instead
             # of one per example, and Llama-family norms round through float32.
+            assert torch.allclose(param.grad, want_grads[name], rtol=0, atol=1e-6 * largest), name
+
+    @pytest.mark.parametrize("side", ["right", "left"])
+    def test_a_batch_of_several_rows_has_the_ordinary_loss_and_gradients(self, arch, side):
+        """What a step of ``batch_size`` 2 or more does: the collator's batch of
+        several rows of different widths, the model given the 4D mask under
+        ``tree_mask_key`` and the batch's positions, the loss on its labels."""
+        import torch
+
+        model = _tiny_model(arch)
+        examples = _model_examples(seed=4) + _model_examples(seed=5)
+        collator = PrefixTreeCollator(
+            _pad_collate(side=side), max_tokens=60, pad_token_id=0, tree_mask_key="tree"
+        )
+        batch = collator(examples)
+        rows = batch["input_ids"].shape[0]
+        widths = (batch["attention_mask"] > 0).sum(dim=1).tolist()
+        assert rows > 1 and len(set(widths)) > 1, "vacuous: one row, or rows of one width"
+
+        plain = _plain_batch(examples)
+        model.zero_grad()
+        want = _float64_loss(
+            model(input_ids=plain["input_ids"], attention_mask=plain["attention_mask"]).logits,
+            plain["labels"],
+        )
+        want.backward()
+        want_grads = {name: p.grad.clone() for name, p in model.named_parameters()}
+
+        model.zero_grad()
+        got = _float64_loss(
+            model(
+                input_ids=batch["input_ids"],
+                attention_mask=batch["tree"],
+                position_ids=batch["position_ids"],
+            ).logits,
+            batch["labels"],
+        )
+        got.backward()
+        assert abs(float(got.detach()) - float(want.detach())) < 1e-12
+        largest = max(float(grad.abs().max()) for grad in want_grads.values())
+        assert largest > 1e-3, "vacuous: no gradient"
+        for name, param in model.named_parameters():
             assert torch.allclose(param.grad, want_grads[name], rtol=0, atol=1e-6 * largest), name
 
     def test_the_stock_shifted_loss_needs_no_change(self, arch):

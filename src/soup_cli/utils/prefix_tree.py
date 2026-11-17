@@ -177,8 +177,9 @@ class _RowBuilder:
         for token, label in zip(ids[depth:], labels[depth:]):
             index = len(self.ids)
             self.ids.append(int(token))
-            # Rule 3: a root has no predecessor to be scored against.
-            self.labels.append(ignore if parent == -1 else int(label))
+            # Rule 3 holds already: a root is an example's first token, whose
+            # label _normalise has ignored.
+            self.labels.append(int(label))
             self.positions.append(0 if parent == -1 else self.positions[parent] + 1)
             self.parents.append(parent)
             # Rule 1: the shareable part of a path ends at its first trained token.
@@ -313,7 +314,8 @@ def collate_prefix_tree(
     (:attr:`PrefixTreeRow.member_counts`), 0 for padding. Its sum is then the
     token count of the ordinary batch, and a sum weighted by it is the ordinary
     batch's sum. Whoever calls the model must hand it the 4D mask as
-    ``attention_mask`` (``utils/prefix_tree_trainer.py`` does).
+    ``attention_mask``; a trainer that passes this batch to the model unchanged
+    would give it the counts instead.
     """
     import torch
 
@@ -438,10 +440,18 @@ def group_by_shared_prefix(
         _common(prefixes[order[at - 1]], prefixes[order[at]]) for at in range(1, len(order))
     ]
 
-    def build(lo: int, hi: int, depth: int) -> list:
-        # order[lo:hi] share ``depth`` tokens. Children: maximal runs whose
-        # neighbours share at least ``depth + min_group_tokens``.
-        out: list = []
+    # Iterative, not recursive: examples whose beginnings are nested prefixes of
+    # one long text (a trace cut after each step) add a level each, and a
+    # thousand of them would pass Python's recursion limit. A work item is
+    # ``(lo, hi, depth, out)``: order[lo:hi] share ``depth`` tokens and their
+    # groups are appended to ``out``. Its children are the maximal runs whose
+    # neighbours share at least ``depth + min_group_tokens``; a run of several
+    # gets its own list, appended in place now and filled when its item is
+    # taken, so the order of the groups does not depend on the order of work.
+    root: list = []
+    work = [(0, len(order), 0, root)]
+    while work:
+        lo, hi, depth, out = work.pop()
         at = lo
         while at < hi:
             end = at + 1
@@ -450,21 +460,36 @@ def group_by_shared_prefix(
             if end - at == 1:
                 out.append(order[at])
             else:
-                out.append(build(at, end, min(shared[at : end - 1])))
+                child: list = []
+                out.append(child)
+                work.append((at, end, min(shared[at : end - 1]), child))
             at = end
-        return out
-
-    return build(0, len(order), 0)
+    return root
 
 
 def _flatten_shuffled(tree: list, rng: random.Random) -> Iterator[int]:
+    """The leaves of ``tree``, each list's children shuffled when it is entered.
+
+    An explicit stack of iterators, not recursion (see
+    :func:`group_by_shared_prefix`). The shuffles happen in the order the
+    recursive walk would make them, so a seed gives the same order either way.
+    """
     children = list(tree)
     rng.shuffle(children)
-    for child in children:
-        if isinstance(child, list):
-            yield from _flatten_shuffled(child, rng)
+    stack = [iter(children)]
+    while stack:
+        child = next(stack[-1], _END)
+        if child is _END:
+            stack.pop()
+        elif isinstance(child, list):
+            nested = list(child)
+            rng.shuffle(nested)
+            stack.append(iter(nested))
         else:
             yield child
+
+
+_END = object()
 
 
 class PrefixTreeBatchSampler:
