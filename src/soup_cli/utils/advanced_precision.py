@@ -4,7 +4,7 @@ Three TrainingConfig surfaces ship here:
 
 * ``fp8_attention: bool`` — extend the v0.28.0 FP8 menu to apply FP8 to
   attention (axolotl-parity flag). Requires ``quantization_aware='fp8'``.
-* ``nvfp4: bool`` — Blackwell-only NVFP4 training (unsloth + axolotl). Gated
+* ``nvfp4: bool`` — NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). Gated
   to non-mlx text-modality training.
 * ``unsloth_bnb_4bit: bool`` — promote Unsloth Dynamic 4-bit to a native
   TrainingConfig flag (previously inferable only from ``backend='unsloth'``
@@ -130,12 +130,19 @@ def nvfp4_training_refusal() -> str | None:
     ):
         return None
     major, minor = capability
+    if major == 12:
+        return (
+            f"NVFP4 training does not run on this SM {major}.{minor} card: torchao's "
+            "NVFP4 backward rounds gradients stochastically (cvt.rs), which only "
+            "SM 10.0 (B200/GB200) and SM 10.3 (B300/GB300) have; on SM 12.x "
+            "(RTX 50-series, RTX PRO Blackwell, DGX Spark) its first backward fails "
+            "to compile."
+        )
     return (
-        f"NVFP4 training does not run on this SM {major}.{minor} card: torchao's "
-        "NVFP4 backward rounds gradients stochastically (cvt.rs), which only "
-        "SM 10.0 (B200/GB200) and SM 10.3 (B300/GB300) have; on SM 12.x "
-        "(RTX 50-series, RTX PRO Blackwell, DGX Spark) its first backward fails "
-        "to compile."
+        f"NVFP4 training is not enabled on this SM {major}.{minor} card: it is "
+        "enabled only on SM 10.0 (B200/GB200) and SM 10.3 (B300/GB300), where "
+        "torchao's NVFP4 backward (stochastic rounding, cvt.rs) was measured to "
+        f"compile; SM {major}.{minor} was not measured."
     )
 
 
@@ -220,7 +227,7 @@ def validate_nvfp4_compat(
 ) -> None:
     """Schema-time gate for ``nvfp4=True``.
 
-    NVFP4 is Blackwell-only and CUDA-only; the *runtime* SM-capability
+    NVFP4 is SM 10.0 / 10.3 only and CUDA-only; the *runtime* SM-capability
     check fires at trainer-construction time. This schema gate is the
     cheap defence-in-depth layer.
     """
@@ -396,7 +403,7 @@ def is_nvfp4_software_supported() -> bool:
 
 
 def apply_nvfp4(model: object) -> int:
-    """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
+    """Quantise ``model`` with torchao's NVFP4 scheme (SM 10.0 / 10.3 only).
 
     Live since v0.71.21 (#141). Routes through torchao's
     ``NVFP4TrainingConfig``, gated on the Blackwell cards that can compile its

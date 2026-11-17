@@ -348,6 +348,10 @@ class TestApplyNvfp4:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
+        # #2867: the card's own capability decides too; pin one that trains NVFP4.
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision._cuda_capability", lambda: (10, 0)
+        )
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(RuntimeError, match="torchao"):
             apply_nvfp4(_tiny_attn_model())
@@ -360,6 +364,10 @@ class TestApplyNvfp4:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
+        # #2867: the card's own capability decides too; pin one that trains NVFP4.
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision._cuda_capability", lambda: (10, 0)
+        )
         with pytest.raises(RuntimeError, match="NVFP4TrainingConfig"):
             apply_nvfp4(_tiny_attn_model())
 
@@ -370,6 +378,10 @@ class TestApplyNvfp4:
         _install_fake_torchao_quant(monkeypatch, record)
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
+        )
+        # #2867: the card's own capability decides too; pin one that trains NVFP4.
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision._cuda_capability", lambda: (10, 0)
         )
         model = _tiny_attn_model()
         count = apply_nvfp4(model)
@@ -1744,6 +1756,10 @@ class TestReviewFollowupsPrecision:
         monkeypatch.delattr(fake_q, "quantize_")
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
+        )
+        # #2867: the card's own capability decides too; pin one that trains NVFP4.
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision._cuda_capability", lambda: (10, 0)
         )
         with pytest.raises(RuntimeError, match="quantize_"):
             apply_nvfp4(_tiny_attn_model())

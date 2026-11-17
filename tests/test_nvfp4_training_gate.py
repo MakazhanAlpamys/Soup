@@ -62,6 +62,22 @@ class TestTheGate:
         assert "cvt.rs" in reason
         assert is_nvfp4_training_gpu() is False
 
+    @pytest.mark.parametrize(
+        ("capability", "measured"),
+        [((10, 1), False), ((11, 0), False), ((12, 0), True), ((12, 1), True)],
+    )
+    def test_the_message_says_which_refusals_were_measured(
+        self, monkeypatch, capability, measured
+    ):
+        """SM 12.x was measured to fail its first backward; SM 10.1 and 11.0 are refused
+        by the table without a measurement, and the message says so."""
+        from soup_cli.utils.advanced_precision import nvfp4_training_refusal
+
+        _card(monkeypatch, capability)
+        reason = nvfp4_training_refusal()
+        assert ("was not measured" in reason) is not measured
+        assert ("fails to compile" in reason) is measured
+
     def test_hopper_keeps_the_no_blackwell_message(self, monkeypatch):
         from soup_cli.utils.advanced_precision import nvfp4_training_refusal
 

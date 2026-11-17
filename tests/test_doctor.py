@@ -350,6 +350,11 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
         "soup_cli.utils.advanced_precision.is_blackwell_gpu",
         lambda: True,
     )
+    # #2867: the card's own capability decides too; pin one that trains NVFP4.
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._cuda_capability",
+        lambda: (10, 0),
+    )
     # Every module the resolver can reach, so a real torchao cached by an
     # earlier test cannot answer past the fakes (#2664).
     from tests.test_v07121 import _install_fake_torchao_quant
