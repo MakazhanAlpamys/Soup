@@ -61,14 +61,23 @@ def build_report(
     scores: Mapping[str, FailureScore],
     soup_version: str = "",
     extras: Mapping[str, str] | None = None,
+    missing_as_not_run: bool = False,
 ) -> FailureReport:
-    """Compose a FailureReport, filling missing modes with neutral stubs."""
+    """Compose a FailureReport, filling missing modes with neutral stubs.
+
+    ``missing_as_not_run`` (#1525) fills them with ``NOT_RUN`` instead, so an evidence
+    file that skips a mode cannot read as a pass.
+    """
     if not isinstance(scores, Mapping):
         raise TypeError("scores must be Mapping[str, FailureScore]")
     filled = dict(scores)
     for mode in FAILURE_MODES:
         if mode not in filled:
-            filled[mode] = neutral_score(mode, "skipped")
+            filled[mode] = (
+                not_run_score(mode, "no evidence supplied")
+                if missing_as_not_run
+                else neutral_score(mode, "skipped")
+            )
         if not isinstance(filled[mode], FailureScore):
             raise TypeError(f"scores[{mode!r}] must be FailureScore")
     return compose_report(

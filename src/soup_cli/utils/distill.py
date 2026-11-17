@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 _DIVERGENCE_ALIASES: Mapping[str, str] = MappingProxyType({
     "kl": "forward_kl",
     "forward_kl": "forward_kl",
@@ -160,7 +162,7 @@ def validate_distill_temperature(value: object) -> float:
         raise TypeError(
             f"distill_temperature must be float, got {type(value).__name__}"
         )
-    fval = float(value)
+    fval = float_with_overflow_check(value, "distill_temperature")
     if not math.isfinite(fval):
         raise ValueError(
             f"distill_temperature must be finite, got {value!r}"

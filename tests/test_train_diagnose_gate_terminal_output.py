@@ -203,7 +203,7 @@ def test_gate_failure_line_quotes_a_refused_verdict_literally(monkeypatch, tmp_p
 
 @pytest.mark.parametrize("error", [ValueError, OSError])
 def test_gate_failure_line_shows_the_exception_text_literally(monkeypatch, error):
-    def _refuse(evidence_path, run_id, base, adapter):
+    def _refuse(evidence_path, run_id, base, adapter, **kwargs):
         raise error(f"cannot use {evidence_path}")
 
     monkeypatch.setattr(train_mod, "_run_diagnose_gate", _refuse)

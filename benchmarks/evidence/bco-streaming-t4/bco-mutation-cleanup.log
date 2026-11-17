@@ -1,0 +1,97 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_wrapper_closes_stream_runtime_when_training_raises ____________
+
+checkpoint = PosixPath('<tmp>/pytest-545/test_wrapper_closes_stream_run0/model')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ffef9e0>
+
+    def test_wrapper_closes_stream_runtime_when_training_raises(checkpoint, monkeypatch):
+        wrapper, inner = _build(checkpoint, "failure")
+        closed = []
+        close = inner._stream_runtime.close
+    
+        def record_close():
+            close()
+            closed.append(True)
+    
+        def fail_training(**kwargs):
+            raise RuntimeError("training failure")
+    
+        monkeypatch.setattr(inner._stream_runtime, "close", record_close)
+        monkeypatch.setattr(inner.trainer, "train", fail_training)
+        with pytest.raises(RuntimeError, match="training failure"):
+            wrapper.train()
+>       assert closed == [True]
+E       assert [] == [True]
+E         
+E         Right contains one more item: True
+E         Use -v to get more diff
+
+<tmp>/soup-2766-bco-mutations.e1bn1pds/tests/test_bco_streaming.py:103: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Loading tokenizer: 
+<tmp>/py
+test-545/test_wrapper_closes_stream_run0/model
+╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
+│ HF/local source: 0.00 GB                                                     │
+│ Soup materialized copy: 0.00 GB (no write required)                          │
+│ Layer-shard cache: 0.00 GB (write required)                                  │
+│ Projected total on disk: 0.00 GB                                             │
+│ Additional writes before training: 0.00 GB                                   │
+│ Free on target volume (layer-shard cache): 26.06 GB                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> 
+<tmp>/py
+test-545/test_wrapper_closes_stream_run0/cache/<tmp>
+__pytest-545__test_wrapper_clos
+es_stream_run0_
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────── training.stream_layers ───────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                  │
+│   base store   0.00 GB across 2 layers (pinned)                              │
+│   VRAM buffers 2 x 0 MB + 1 x 0 MB large-layer slot = 0 MB                   │
+│   resident     0 MB extras + adapters                                        │
+│   peak VRAM    ~0.01 GB at batch 2 x seq 64 (logits 0.00 GB)                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not 
+run resident on this card at all.
+Layer streaming ready: 2 layers, 0.00 GB pageable RAM store, 2 x 0 MB decoder 
+buffers + 1 x 0 MB large-layer slot
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 82,240 total (2.18%)
+----------------------------- Captured stderr call -----------------------------
+
+Extracting prompt from train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Extracting prompt from train dataset: 100%|██████████| 8/8 [00:00<00:00, 2649.17 examples/s]
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 7582.92 examples/s]
+
+Tokenizing train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Tokenizing train dataset: 100%|██████████| 8/8 [00:00<00:00, 2320.82 examples/s]
+
+Processing tokenized train dataset:   0%|          | 0/8 [00:00<?, ? examples/s]
+Processing tokenized train dataset: 100%|██████████| 8/8 [00:00<00:00, 3938.78 examples/s]
+
+Filtering desirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering desirable examples: 100%|██████████| 8/8 [00:00<00:00, 6781.41 examples/s]
+
+Filtering undesirable examples:   0%|          | 0/8 [00:00<?, ? examples/s]
+Filtering undesirable examples: 100%|██████████| 8/8 [00:00<00:00, 9950.90 examples/s]
+[transformers] The model is already on multiple devices. Skipping the move to device specified in `args`.
+
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]
+Map: 100%|██████████| 8/8 [00:00<00:00, 3509.14 examples/s]
+------------------------------ Captured log call -------------------------------
+WARNING  transformers.trainer:trainer.py:4708 The model is already on multiple devices. Skipping the move to device specified in `args`.
+=============================== warnings summary ===============================
+tests/test_bco_streaming.py::test_wrapper_closes_stream_runtime_when_training_raises
+  /opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py:90: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_bco_streaming.py::test_wrapper_closes_stream_runtime_when_training_raises
+1 failed, 1 warning in 3.28s
