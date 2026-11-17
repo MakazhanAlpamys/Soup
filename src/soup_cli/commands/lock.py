@@ -98,6 +98,12 @@ def write_lock_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
+    except OSError as exc:
+        console.print(
+            f"[red]Could not write lock file {for_terminal(output)}: {for_terminal(exc)}[/]",
+            emoji=False,
+        )
+        raise typer.Exit(1) from exc
 
     console.print(
         Panel(
