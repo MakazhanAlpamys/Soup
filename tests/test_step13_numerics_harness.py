@@ -140,6 +140,14 @@ class TestGates:
         assert numerics2.evaluate([row(), row(set="forced", resident_kernel_calls=0)])[
             "exit_code"
         ] == 4
+        fallback = row(
+            resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": True}
+        )
+        assert numerics2.evaluate([row(), forced_ok, fallback])["exit_code"] == 0
+        fallback_diff = row(
+            resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": False}
+        )
+        assert numerics2.evaluate([row(), forced_ok, fallback_diff])["exit_code"] == 7
 
     def test_forcecheck_path_control_gate(self):
         large = {

@@ -44,6 +44,7 @@ Exit codes (default invocation):
   4  forcing silently failed (a forced row still called the fallback)
   5  gradient not bit-exact on some row
   6  forward never differed on a fused row (fused effect absent)
+  7  a row with no counted kernel call showed a forward difference (fallback rows must agree)
   SKIP (0) when CUDA / bitsandbytes is unavailable
 """
 
@@ -73,6 +74,7 @@ EXIT_CONTROL_FAILED = 3
 EXIT_FORCING_FAILED = 4
 EXIT_GRADIENT_DIFF = 5
 EXIT_FORWARD_EFFECT_ABSENT = 6
+EXIT_FALLBACK_FORWARD_DIFF = 7
 EXIT_SKIP = 0
 
 
@@ -328,6 +330,20 @@ def evaluate(rows: list[dict]) -> dict:
                 "the numerical effect cannot be demonstrated"
             ),
         }
+    # The fallback arms run the same code, so their forwards must agree. Check
+    # them explicitly: otherwise a difference on a fallback row would pass unseen
+    # while the reason claimed the difference appears ONLY on fused rows.
+    if any(
+        r["forward"]["exact"] is False for r in rows if r["resident_kernel_calls"] == 0
+    ):
+        return {
+            "verdict": "fallback_forward_diff",
+            "exit_code": EXIT_FALLBACK_FORWARD_DIFF,
+            "reason": (
+                "at least one row with no counted kernel call showed a forward "
+                "difference; the two arms should agree when both take the fallback"
+            ),
+        }
     return {
         "verdict": "mechanism_reproduced",
         "exit_code": EXIT_OK,
@@ -399,6 +415,10 @@ def run_sweep(args) -> dict:
             r["resident_kernel_calls"] > 0 and r["forward"]["exact"] is False
             for r in rows
         ),
+        "n_forward_diff_on_fallback": sum(
+            r["resident_kernel_calls"] == 0 and r["forward"]["exact"] is False
+            for r in rows
+        ),
         **verdict,
     }
 
@@ -459,6 +479,16 @@ def run_self_test() -> None:
     assert evaluate([row(forward={"exact": True}), forced_exact])[
         "exit_code"
     ] == EXIT_FORWARD_EFFECT_ABSENT
+    # A difference on a row with no counted kernel call must not pass unseen:
+    # the reason claims the difference appears only on fused rows.
+    fallback = row(
+        resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": True}
+    )
+    assert evaluate([row(), forced_ok, fallback])["exit_code"] == EXIT_OK
+    fallback_diff = row(
+        resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": False}
+    )
+    assert evaluate([row(), forced_ok, fallback_diff])["exit_code"] == EXIT_FALLBACK_FORWARD_DIFF
     print("numerics2.py --self-test: OK")
 
 
