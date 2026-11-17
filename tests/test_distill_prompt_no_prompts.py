@@ -151,16 +151,24 @@ def test_mixed_rows_write_readable_ones_and_report_skipped(
     assert "Rows: 1 (2 of 3 trace rows skipped: no prompt found)" in text
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
 def test_all_readable_control_reports_no_skipped_rows(
-    tmp_path, monkeypatch, provider_calls
+    tmp_path, monkeypatch, provider_calls, encoding
 ) -> None:
-    _write_traces(tmp_path, [{"prompt": "q1"}, {"messages": [{"role": "user", "content": "q2"}]}])
+    prompts = ["Save the first row", "Keep an embedded \ufeff mark"]
+    rows = [{"prompt": prompts[0]}, {"messages": [{"role": "user", "content": prompts[1]}]}]
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\r\n" for row in rows).encode(encoding)
+    traces = tmp_path / "traces.jsonl"
+    traces.write_bytes(raw)
 
     result = _run_distill(tmp_path, monkeypatch)
     text = _terminal_text(result)
 
     assert result.exit_code == 0, (text, repr(result.exception))
-    assert len((tmp_path / "distilled.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+    output = (tmp_path / "distilled.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["messages"][0]["content"] for line in output] == prompts
+    assert provider_calls == prompts
+    assert traces.read_bytes() == raw
     assert "skipped" not in text
 
 
