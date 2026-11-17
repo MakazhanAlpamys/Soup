@@ -330,3 +330,129 @@ def test_the_cmaes_command_writes_its_best_weights_with_the_same_rule(on_disk, m
     # weight squared the sum is below 1 for any merge that mixes the two.
     assert first > 0.05 and second > 0.05
     assert first + second == pytest.approx(1.0, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# A LoRA bias (#2935)
+#
+# PEFT's ``lora_bias=True`` saves ``<module>.lora_B.bias``. It is added to the
+# output once, not multiplied by ``lora_A``, so it scales by the coefficient
+# itself. ``_factor_coeff`` matched ``lora_b`` anywhere in a name and gave it
+# the square root; it now asks ``_lora_role``, which the ``--rank`` path uses.
+# ---------------------------------------------------------------------------
+
+BIAS_KEY = f"{MODULE}.lora_B.bias"
+FIRST_BIAS = np.arange(1, 9, dtype=np.float32)
+SECOND_BIAS = np.full((8,), 10.0, dtype=np.float32)
+BIASED_FIRST = {**FIRST, BIAS_KEY: FIRST_BIAS}
+BIASED_SECOND = {**SECOND, BIAS_KEY: SECOND_BIAS}
+
+# Every kind of tensor name these tests use, with the PEFT spelling.
+TENSOR_NAMES = [
+    A_KEY,
+    B_KEY,
+    BIAS_KEY,
+    "base_model.model.model.embed_tokens.lora_embedding_A",
+    "base_model.model.model.embed_tokens.lora_embedding_B",
+    f"{MODULE}.lora_magnitude_vector",
+    "base_model.model.lm_head.modules_to_save.default.weight",
+    "bias",
+]
+COEFFICIENTS = [0.0, 0.25, 4.0, -4.0, 1.0, -1.0, 0.7]
+
+
+@pytest.mark.parametrize("name", TENSOR_NAMES)
+@pytest.mark.parametrize("c", COEFFICIENTS)
+def test_factor_coeff_and_lora_role_agree_on_what_a_factor_is(name: str, c: float) -> None:
+    # The element-wise path (_factor_coeff) and the --rank path (_lora_role)
+    # must call the same names LoRA factors, or the two paths drift apart.
+    import math
+
+    from soup_cli.utils.adapter_arithmetic import _factor_coeff, _lora_role
+
+    role = _lora_role(name)
+    if role is None:
+        expected = c
+    elif role[1] == "A":
+        expected = math.sqrt(abs(c))
+    else:
+        expected = math.copysign(math.sqrt(abs(c)), c)
+    assert _factor_coeff(name, c) == pytest.approx(expected)
+
+
+def test_the_bias_is_not_a_factor() -> None:
+    from soup_cli.utils.adapter_arithmetic import _factor_coeff, _lora_role
+
+    assert _lora_role(BIAS_KEY) is None
+    assert _factor_coeff(BIAS_KEY, 0.25) == 0.25
+
+
+@pytest.mark.parametrize("c", [0.25, 4.0, -4.0])
+def test_arithmetic_scales_the_bias_by_the_coefficient(c: float) -> None:
+    from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+    merged, _ = merge_task_arithmetic([BIASED_FIRST], [c])
+    np.testing.assert_allclose(merged[BIAS_KEY], c * FIRST_BIAS, rtol=1e-6)
+    assert _delta(merged)[0, 0] == pytest.approx(c, abs=1e-6)
+
+
+def test_arithmetic_sums_two_biases_by_their_coefficients() -> None:
+    from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+    merged, _ = merge_task_arithmetic([BIASED_FIRST, BIASED_SECOND], [0.5, 0.5])
+    np.testing.assert_allclose(merged[BIAS_KEY], 0.5 * FIRST_BIAS + 0.5 * SECOND_BIAS, rtol=1e-6)
+
+
+@pytest.mark.parametrize("coeffs", [[0.25], [4.0], [-4.0], [0.5, 0.5], [0.7, -0.3]])
+def test_both_arithmetic_paths_give_the_same_bias(coeffs: list[float]) -> None:
+    from soup_cli.utils.adapter_arithmetic import (
+        merge_task_arithmetic,
+        merge_task_arithmetic_concat,
+    )
+
+    inputs = [BIASED_FIRST, BIASED_SECOND][: len(coeffs)]
+    element_wise, _ = merge_task_arithmetic(inputs, coeffs)
+    concat, _, _ = merge_task_arithmetic_concat(inputs, coeffs)
+    np.testing.assert_allclose(element_wise[BIAS_KEY], concat[BIAS_KEY], rtol=1e-6)
+
+
+def test_linear_merge_scales_the_bias_by_the_weight() -> None:
+    merged, _ = merge_linear([BIASED_FIRST, BIASED_SECOND], [0.7, 0.3])
+    np.testing.assert_allclose(merged[BIAS_KEY], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
+    assert _own_terms(merged) == pytest.approx([0.7, 0.3], abs=1e-6)
+
+
+def test_dare_merge_scales_the_bias_by_the_weight() -> None:
+    merged, _ = merge_dare([BIASED_FIRST, BIASED_SECOND], [0.7, 0.3], density=1.0, seed=0)
+    np.testing.assert_allclose(merged[BIAS_KEY], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
+
+
+def test_the_merge_command_scales_the_bias_by_the_weight(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write("a", BIASED_FIRST)
+    _write("b", BIASED_SECOND)
+    result = _soup(
+        "adapters", "merge", "a", "b", "-o", "merged", "--weights", "0.7,0.3", "--allow-unscanned"
+    )
+    assert result.exit_code == 0, _plain(result.output)
+    written = _load("merged")
+    np.testing.assert_allclose(written[BIAS_KEY], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
+    assert _own_terms(written) == pytest.approx([0.7, 0.3], abs=1e-6)
+
+
+@pytest.mark.parametrize("c", [0.25, 4.0, -4.0])
+def test_control_the_factors_do_not_change_with_a_bias_beside_them(c: float) -> None:
+    import math
+
+    from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+    root = math.sqrt(abs(c))
+    with_bias, _ = merge_task_arithmetic([BIASED_FIRST], [c])
+    without_bias, _ = merge_task_arithmetic([FIRST], [c])
+    assert set(without_bias) == {A_KEY, B_KEY}
+    for name in (A_KEY, B_KEY):
+        np.testing.assert_array_equal(with_bias[name], without_bias[name])
+    np.testing.assert_allclose(without_bias[A_KEY], root * FIRST[A_KEY], rtol=1e-6)
+    np.testing.assert_allclose(
+        without_bias[B_KEY], math.copysign(root, c) * FIRST[B_KEY], rtol=1e-6
+    )
