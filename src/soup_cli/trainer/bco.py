@@ -20,6 +20,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -68,13 +69,17 @@ def _split_dpo_rows_to_bco(rows: list[dict]) -> list[dict]:
     return out
 
 
-class BCOTrainerWrapper:
+class BCOTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper for BCO training from SoupConfig.
 
     BCO uses a binary classifier objective (chosen vs rejected). Soup
     accepts the DPO data format and adapts it to TRL's BCOTrainer
     unpaired ``{prompt, completion, label}`` schema.
     """
+
+    # Each batch row holds one completion. The adapter-off reference refills
+    # the shared untied-head slot before the policy backward.
+    _STREAM_REFILL_BEFORE_BACKWARD = True
 
     def __init__(
         self,
@@ -130,12 +135,22 @@ class BCOTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # Reject unusable rows before allocating the streamed base.
+        train_rows = _split_dpo_rows_to_bco(dataset["train"])
+        if not train_rows:
+            raise ValueError(
+                "BCO training: dataset['train'] produced no usable rows. "
+                "Each row must contain 'prompt', 'chosen', and 'rejected'."
+            )
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"
 
-        if use_unsloth:
+        if tcfg.stream_layers:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
@@ -145,7 +160,8 @@ class BCOTrainerWrapper:
         )
 
         trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        total = getattr(self._stream_runtime, "total_params", 0) or total
+        pct = 100 * trainable / total if total else 0.0
         console.print(
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -170,12 +186,6 @@ class BCOTrainerWrapper:
             console.print(f"[green]Auto batch size (BCO):[/] {batch_size}")
 
         # --- Dataset (split DPO rows into BCO unpaired) ---
-        train_rows = _split_dpo_rows_to_bco(dataset["train"])
-        if not train_rows:
-            raise ValueError(
-                "BCO training: dataset['train'] produced no usable rows. "
-                "Each row must contain 'prompt', 'chosen', and 'rejected'."
-            )
         train_ds = Dataset.from_list(train_rows)
         eval_ds = None
         if "val" in dataset and dataset["val"]:
@@ -436,8 +446,9 @@ class BCOTrainerWrapper:
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        with activation_offloading_context(
-            self.config.training, self._output_dir,
+        self._attach_streamed_save_guard()
+        with self._training_context(
+            activation_offloading_context(self.config.training, self._output_dir)
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,
@@ -450,6 +461,7 @@ class BCOTrainerWrapper:
 
         if self.config.training.relora_steps is None:
             self.trainer.save_model(self._output_dir)
+            self._assert_streamed_adapter_saved(self._output_dir)
         else:
             from soup_cli.utils.peft_wiring import save_model_with_relora
 
