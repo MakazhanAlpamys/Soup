@@ -115,6 +115,61 @@ def _invoke(*args: str) -> str:
     return _plain(result.output)
 
 
+def test_cwd_only_limits_matches_after_filtering(db, tmp_path, monkeypatch):
+    project = _project(tmp_path, "project")
+    outside = _project(tmp_path, "outside")
+    older = _finished_run(db, project / "output")
+    newer = _legacy_run(db, "output")
+    unrelated = [_finished_run(db, outside / "output") for _ in range(3)]
+    monkeypatch.chdir(project)
+
+    output = _invoke("--cwd-only", "--limit", "3")
+    assert _NO_RUNS not in output
+    assert output.index(newer) < output.index(older)
+    assert all(run_id not in output for run_id in unrelated)
+
+    output = _invoke("--cwd-only", "--limit", "1")
+    assert newer in output
+    assert older not in output
+
+    output = _invoke("--cwd-only", "--limit", "-1")
+    assert output.index(newer) < output.index(older)
+    assert _NO_RUNS in _invoke("--cwd-only", "--limit", "0")
+    assert unrelated[-1] in _invoke("--limit", "1")
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with closing(sqlite3.connect(str(db))) as conn, conn:
+        conn.execute(
+            "UPDATE runs SET output_dir = ? WHERE run_id = ?",
+            (str(project / "output"), newer),
+        )
+    monkeypatch.chdir(empty)
+    assert _NO_RUNS in _invoke("--cwd-only", "--limit", "3")
+
+
+def test_cwd_only_reconciles_only_displayed_runs(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "120")
+    project = _project(tmp_path, "project")
+    outside = _project(tmp_path, "outside")
+    older = _finished_run(db, project / "output")
+    selected = _finished_run(db, project / "output")
+    unrelated = _finished_run(db, outside / "output")
+    with closing(sqlite3.connect(str(db))) as conn, conn:
+        conn.execute("UPDATE runs SET status = 'running', pid = 123")
+    monkeypatch.setattr(
+        "soup_cli.experiment.tracker._process_is_alive", lambda _pid: False
+    )
+    monkeypatch.chdir(project)
+
+    output = _invoke("--cwd-only", "--limit", "1")
+    assert selected in output and "terminated" in output
+    assert older not in output and unrelated not in output
+    with closing(sqlite3.connect(str(db))) as conn:
+        statuses = dict(conn.execute("SELECT run_id, status FROM runs"))
+    assert statuses == {older: "running", selected: "terminated", unrelated: "running"}
+
+
 class TestFinishRunStoresAnAbsolutePath:
     @pytest.mark.parametrize("given", ["output", "./output"])
     def test_a_relative_output_dir_resolves_against_the_training_directory(
