@@ -313,3 +313,71 @@ def test_ingest_cli_preserves_the_user_question(tmp_path, monkeypatch) -> None:
     row = json.loads((tmp_path / "traces.jsonl").read_text(encoding="utf-8"))
     assert json.loads(row["prompt"]) == _messages()
     assert row["output"] == "A2"
+
+
+def _serialised(kind, content, message_type):
+    """A LangChain message as ``dumpd`` writes it, as LangSmith stores it (#2868)."""
+    kwargs = {"content": content}
+    if message_type is not None:
+        kwargs["type"] = message_type
+    return {"lc": 1, "type": "constructor",
+            "id": ["langchain", "schema", "messages", kind], "kwargs": kwargs}
+
+
+@pytest.mark.parametrize("content", ["Q1", [{"type": "text", "text": "Q1"}]],
+                         ids=["string", "parts"])
+def test_serialised_messages_take_role_and_text_from_kwargs(content) -> None:
+    messages = [_serialised("SystemMessage", "Be helpful.", "system"),
+                _serialised("HumanMessage", content, "human")]
+    assert _coerce_str(messages) == "Q1"
+    multi_turn = [*messages, _serialised("AIMessage", "A1", "ai"),
+                  _serialised("HumanMessage", "Q2", "human")]
+    assert json.loads(_coerce_str(multi_turn)) == _messages()
+
+
+@pytest.mark.parametrize(
+    "unmapped",
+    [_serialised("ToolMessage", "Tool says hi", "tool"),
+     _serialised("ChatMessage", "Chat says hi", "chat"),
+     _serialised("HumanMessage", "No type", None)],
+    ids=["tool", "chat", "missing-type"],
+)
+def test_serialised_class_without_a_role_is_left_out(unmapped) -> None:
+    messages = [_serialised("HumanMessage", "Q1", "human"),
+                _serialised("AIMessage", "A1", "ai"), unmapped,
+                _serialised("HumanMessage", "Q2", "human")]
+    assert json.loads(_coerce_str(messages)) == [
+        {"role": "user", "content": "Q1"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "Q2"},
+    ]
+
+
+def test_serialised_kwargs_role_is_not_read_for_an_unmapped_class() -> None:
+    chat = _serialised("ChatMessage", "Guessed", "chat")
+    chat["kwargs"]["role"] = "user"
+    assert _coerce_str([chat, _serialised("HumanMessage", "Q", "human")]) == "Q"
+
+
+def test_serialised_output_messages_select_last_assistant() -> None:
+    messages = [_serialised("AIMessage", "Earlier answer", "ai"),
+                _serialised("AIMessage", [{"type": "text", "text": "Final answer"}], "ai"),
+                _serialised("HumanMessage", "Trailing user", "human")]
+    assert _coerce_str(messages, prompt=False) == "Final answer"
+
+
+@pytest.mark.parametrize("serialised", [False, True], ids=["plain", "serialised"])
+def test_shared_reader_pins_for_langchain_langfuse_and_openai(serialised) -> None:
+    """The reader change reaches every parser: plain input reads as before."""
+    if serialised:
+        messages = [_serialised("SystemMessage", "Be helpful.", "system"),
+                    _serialised("HumanMessage", "Q1", "human")]
+    else:
+        messages = _messages()[:2]
+    langchain = list(parse_langchain([{"inputs": {"messages": messages},
+                                       "outputs": {"output": "A"}}]))
+    langfuse = list(parse_langfuse([{"input": {"messages": messages}, "output": "A"}]))
+    openai = list(parse_openai([_event(messages, output="A")]))
+    assert [(t.prompt, t.output) for t in langchain] == [("Q1", "A")]
+    assert [(t.prompt, t.output) for t in langfuse] == [("Q1", "A")]
+    assert [(t.prompt, t.output, t.signal) for t in openai] == [("Q1", "A", "thumbs_up")]
