@@ -116,7 +116,7 @@ def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
 
 
 def upcast_trainable_half_to_fp32(model, *, fp16: bool, bf16: bool) -> int:
-    """Give every trainable bf16/fp16 parameter an fp32 master copy under autocast (#ISSUE).
+    """Give every trainable bf16/fp16 parameter an fp32 master copy under autocast (#2941).
 
     peft trains a copy of each ``modules_to_save`` module (the classification head of
     a ``SEQ_CLS`` adapter) in the frozen base's dtype, and its ``autocast_adapter_dtype``

@@ -225,7 +225,7 @@ class AsrTrainerWrapper:
             )
 
         console.print(f"[dim]Loading Whisper model: {cfg.base}[/]")
-        # #ISSUE: a full fine-tune (the default; ``asr_lora`` is opt-in) steps every
+        # #2941: a full fine-tune (the default; ``asr_lora`` is opt-in) steps every
         # weight, so it loads fp32 master weights. With no ``dtype`` transformers 5
         # loads the checkpoint's own: fp16 for whisper-large-v3 and -large-v3-turbo.
         self.model = WhisperForConditionalGeneration.from_pretrained(

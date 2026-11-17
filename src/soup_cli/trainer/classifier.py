@@ -460,13 +460,13 @@ class ClassifierTrainerWrapper:
         # only the adapter (+ classification head) trains. ``lora.r`` defaults
         # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
         # positive rank (a rank of 0 would be a no-op LoRA). Decided before the
-        # load, because it decides whether the base trains (#ISSUE).
+        # load, because it decides whether the base trains (#2941).
         self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
             tcfg.lora.r > 0
         )
 
         console.print(f"[dim]Loading classifier model: {cfg.base}[/]")
-        # #ISSUE: a full fine-tune steps every base weight, so it loads fp32 master
+        # #2941: a full fine-tune steps every base weight, so it loads fp32 master
         # weights, as sft, pretrain, embedding and prm do (#339, #1235). With no
         # ``dtype`` transformers 5 loads the checkpoint's own (``"auto"``): bf16 for
         # most decoder bases, where AdamW steps of about ``lr`` round away.
@@ -659,7 +659,7 @@ class ClassifierTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        # #ISSUE: on the LoRA path peft trains a copy of the classification head
+        # #2941: on the LoRA path peft trains a copy of the classification head
         # (``modules_to_save``) in the frozen base's dtype; give it an fp32 master
         # weight wherever autocast runs the step.
         upcast_trainable_half_to_fp32(

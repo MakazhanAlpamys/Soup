@@ -481,11 +481,13 @@ For these tasks an unset `quantization` resolves to `none`, so the stored config
 pre-flight describe the run that actually happens (#795).
 
 The classifier family and `asr` load an fp32 base for their default full fine-tune, whatever
-dtype the checkpoint was saved in (#ISSUE): a bf16 decoder base, or the fp16 `whisper-large-v3`
+dtype the checkpoint was saved in (#2941): a bf16 decoder base, or the fp16 `whisper-large-v3`
 and `-large-v3-turbo`, used to train in that dtype with no fp32 master copy, and an AdamW step
 of about `lr` left most weights unchanged. With `classifier_lora: true` / `asr_lora: true` the
-frozen base keeps its checkpoint dtype; under bf16/fp16 mixed precision the classification head
-that the adapter trains (`modules_to_save`) is upcast to fp32 like the LoRA weights.
+frozen base keeps its checkpoint dtype, except on a CUDA card without bf16 hardware, where it
+loads in fp16 (v0.77.2 loaded the checkpoint's own dtype there); under bf16/fp16 mixed
+precision the classification head that the adapter trains (`modules_to_save`) is upcast to
+fp32 like the LoRA weights.
 
 An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
 v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,

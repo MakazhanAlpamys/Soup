@@ -1,4 +1,4 @@
-"""#ISSUE: classifier-family and ASR full fine-tuning trained the base in its checkpoint dtype.
+"""#2941: classifier-family and ASR full fine-tuning trained the base in its checkpoint dtype.
 
 ``trainer/classifier.py`` and ``trainer/asr.py`` called ``from_pretrained`` with no
 ``dtype``. Transformers 5 then loads the checkpoint's own (``"auto"``): bf16 for most
