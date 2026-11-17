@@ -1,6 +1,10 @@
 """Tests for soup cost command."""
 
 import json
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
 
 from soup_cli.cli import app
 from tests.conftest import make_cli_runner
@@ -115,6 +119,30 @@ def test_cost_warns_when_dataset_unreadable(tmp_path):
     result = runner.invoke(app, ["cost", "--config", str(config_file)])
     assert result.exit_code == 0
     assert "Could not read training dataset" in result.output
+
+
+@pytest.mark.parametrize("num_examples", [None, 100], ids=["missing-splits", "known-split"])
+def test_cost_with_hub_split_metadata(tmp_path, monkeypatch, num_examples):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLUMNS", "100")
+    dataset_id = "example/training-data"
+    config_file = tmp_path / "soup.yaml"
+    config_file.write_text(f"base: tiny\ndata:\n  train: {dataset_id}\n", encoding="utf-8")
+    splits = None if num_examples is None else {"train": SimpleNamespace(num_examples=num_examples)}
+
+    def load_dataset_builder(path):
+        assert path == dataset_id
+        return SimpleNamespace(info=SimpleNamespace(splits=splits))
+
+    datasets = ModuleType("datasets")
+    datasets.load_dataset_builder = load_dataset_builder
+    monkeypatch.setitem(sys.modules, "datasets", datasets)
+
+    result = runner.invoke(app, ["cost", "--config", str(config_file), "--gpu", "H100"])
+
+    assert result.exit_code == 0, result.exception
+    assert "Training Cost Estimate" in result.stdout
+    assert ("using default of 10,000 examples" in result.stdout) == (num_examples is None)
 
 
 def test_cost_shows_variance_disclaimer(tmp_path):
