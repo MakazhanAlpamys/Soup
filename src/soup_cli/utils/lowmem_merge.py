@@ -165,9 +165,14 @@ def _is_finite(value: Any) -> bool:
 
 def lora_scaling(config: Dict[str, Any]) -> float:
     rank = config.get("r")
-    if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0 or not _is_finite(rank):
+    if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
         raise LowMemoryMergeError(
             f"adapter_config.json field 'r' must be a positive integer, got {rank!r}"
+        )
+    if not _is_finite(rank):
+        raise LowMemoryMergeError(
+            "adapter_config.json field 'r' must be a positive integer that fits in a float, "
+            f"got {rank!r}"
         )
     alpha = config.get("lora_alpha")
     if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or not _is_finite(alpha):

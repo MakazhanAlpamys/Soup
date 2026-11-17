@@ -1061,10 +1061,36 @@ class TestHostileAdapterValues:
         assert not output.exists()
 
     @pytest.mark.parametrize("rslora", [False, True])
+    @pytest.mark.parametrize("rank", [0, -4, "4", 4.0, True, None])
+    def test_invalid_rank_keeps_positive_integer_error(self, rank, rslora):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, lora_scaling
+
+        config = {"r": rank, "lora_alpha": 32, "use_rslora": rslora}
+        with pytest.raises(LowMemoryMergeError, match="field 'r' must be a positive integer, got"):
+            lora_scaling(config)
+
+    @pytest.mark.parametrize("rslora", [False, True])
+    @pytest.mark.parametrize(
+        "field, lora_scale, rslora_scale",
+        [("r", 3.2e-307, 3.2e-153), ("lora_alpha", 2.5e307, 5e307)],
+    )
+    def test_integers_within_float_range_are_accepted(
+        self, field, lora_scale, rslora_scale, rslora
+    ):
+        from soup_cli.utils.lowmem_merge import lora_scaling
+
+        config = {"r": 4, "lora_alpha": 32, "use_rslora": rslora}
+        config[field] = 10**308
+        expected = rslora_scale if rslora else lora_scale
+        assert lora_scaling(config) == pytest.approx(expected, abs=0)
+
+    @pytest.mark.parametrize("rslora", [False, True])
     @pytest.mark.parametrize(
         "field, value",
         [
+            pytest.param("r", 10**309, id="r-just-beyond-float"),
             pytest.param("r", 10**400, id="r-beyond-float"),
+            pytest.param("lora_alpha", 10**309, id="lora_alpha-just-beyond-float"),
             pytest.param("lora_alpha", 10**400, id="lora_alpha-beyond-float"),
             pytest.param("lora_alpha", -(10**400), id="lora_alpha-beyond-negative-float"),
         ],
@@ -1075,7 +1101,8 @@ class TestHostileAdapterValues:
         config = {"r": 4, "lora_alpha": 32, "use_rslora": rslora}
         assert lora_scaling(config) == (16.0 if rslora else 8.0)
         config[field] = value
-        with pytest.raises(LowMemoryMergeError, match=f"field '{field}'"):
+        expected = "a positive integer that fits in a float" if field == "r" else "a finite number"
+        with pytest.raises(LowMemoryMergeError, match=f"field '{field}' must be {expected}"):
             lora_scaling(config)
 
 

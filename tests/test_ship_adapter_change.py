@@ -173,6 +173,7 @@ def test_sharded_base_uses_the_index(tmp_path):
         ({"bias": "all"}, "bias"),
         ({"modules_to_save": ["lm_head"]}, "modules_to_save"),
         ({"peft_type": "VERA"}, "peft_type"),
+        ({"r": 10**400}, "field 'r'"),
     ],
 )
 def test_adapters_the_reader_refuses_are_not_measured(tmp_path, config, expected):
