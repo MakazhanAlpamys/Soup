@@ -1563,8 +1563,8 @@ Usage: `soup data sample [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_sampled.jsonl) |
-| `--n`, `-n` | integer |  |  | Number of samples to select |
-| `--pct` | float |  |  | Percentage of dataset to sample (0-100) |
+| `--n`, `-n` | integer |  |  | Number of samples to select (positive integer) |
+| `--pct` | float |  |  | Percentage of dataset to sample in (0, 100] |
 | `--strategy`, `-s` | text | `random` |  | Sampling strategy: random, diverse (TF-IDF + clusters), hard (by length) |
 | `--seed` | integer |  |  | Random seed for reproducibility |
 
