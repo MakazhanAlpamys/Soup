@@ -203,3 +203,25 @@ def test_apply_reports_recipe_yaml_syntax_error():
     assert "apply failed: while parsing a flow sequence" in text
     assert "data: [unfinished" in text
     assert "Loaded recipe:" not in text
+
+
+@pytest.mark.parametrize(
+    "probs",
+    ["[0.5, pending]", "0.5", "[" + "9" * 310 + "]"],
+    ids=["nonnumeric-weight", "scalar", "overflow"],
+)
+def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
+    recipe = Path("r.yaml")
+    recipe.write_text(
+        "data:\n  train: [a.jsonl, b.jsonl]\n  interleave:\n"
+        f"    strategy: probs\n    probs: {probs}\n",
+        encoding="utf-8",
+    )
+
+    result = _mix("--apply", recipe.name)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "apply failed: invalid data.interleave.probs in r.yaml" in text
+    assert "Loaded recipe:" not in text
+    assert "\ndata:\n" not in strip_ansi(result.stdout)

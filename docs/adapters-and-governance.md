@@ -816,12 +816,14 @@ soup adapters branches
 
 | Strategy | Math | Use case |
 |----------|------|----------|
-| `linear` | Weighted average per layer | Baseline; tasks share a basis |
+| `linear` | Weighted merge per layer; each input's own delta scales by its weight | Baseline; tasks share a basis |
 | `ties` | Trim by density → elect majority sign → disjoint average | Conflicting task adapters (Yadav et al. 2023) |
 | `dare` | Random drop with `density` + rescale `1/density`, then average | Sparse-merge; reduces parameter interference (Yu et al. 2024) |
 | `svd` | Linear-merge → low-rank reconstruction via SVD (`--rank`) | Constrain effective rank of the merged delta |
 
 The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` truncates the merged result and does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
+
+**How `--weights` is applied.** Weights are normalised to sum to 1 (`7,3` is `0.7,0.3`; the default is equal weights). A LoRA's delta is `ΔW = B·A`, so `linear`, `dare` and `svd` scale each input's `lora_A` and `lora_B` (and `lora_embedding_A` / `lora_embedding_B`) by `√cᵢ`: each input's own term is `cᵢ` times its delta, so `--weights 0.7,0.3` keeps 0.7 and 0.3 of the two deltas and equal weights keep half of each of two inputs. Other tensors, such as a DoRA magnitude vector or the `lora_B.bias` that PEFT saves with `lora_bias=True`, take `cᵢ`. This is the rule of the same-rank path of `soup adapters arithmetic`, and like it a factor-wise merge also adds cross terms `√(cᵢcⱼ)·Bᵢ·Aⱼ` between inputs; for the exact weighted sum of the deltas use `soup adapters arithmetic ... --rank N`, which concatenates the factors. `dare` applies its `1/density` rescale on top, and `ties` is not weighted this way: its disjoint average divides by the weights that agree. Before v0.78.0 both factors took `cᵢ`, so an input's own term was `cᵢ²` times its delta (0.49 and 0.09 for `0.7,0.3`; a quarter of each for an equal-weight pair).
 
 **Defaults & safety:**
 
