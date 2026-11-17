@@ -197,8 +197,19 @@ def merge_linear(
     weights_list: Sequence[Mapping[str, Any]],
     weights: Sequence[float],
 ) -> Tuple[dict[str, Any], Tuple[str, ...]]:
-    """Weighted average per layer over the intersection of names."""
+    """Weighted merge per layer over the intersection of names.
+
+    A LoRA's delta is ``B @ A``, so a weight ``c`` on both factors would scale
+    that input's own delta by ``c²`` (#2908). Each ``lora_A`` / ``lora_B`` (and
+    ``lora_embedding_A`` / ``lora_embedding_B``) tensor is scaled by ``√c``
+    instead, so an input's own term is ``c`` times its delta — the rule
+    ``soup adapters arithmetic`` uses on its same-rank path. Any other tensor
+    keeps ``c``. Inputs that use the same rank slots also contribute cross
+    terms ``√(cᵢcⱼ)·Bᵢ@Aⱼ``, as they do there.
+    """
     import numpy as np
+
+    from soup_cli.utils.adapter_arithmetic import _factor_coeff
 
     if len(weights_list) < _MIN_ADAPTERS:
         raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
@@ -222,7 +233,7 @@ def merge_linear(
             continue
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += c * t
+            acc += _factor_coeff(name, c) * t
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -308,6 +319,8 @@ def merge_dare(
     for adapters in weights_list[1:]:
         shared &= set(adapters.keys())
 
+    from soup_cli.utils.adapter_arithmetic import _factor_coeff
+
     rng = np.random.default_rng(seed)
     merged: dict[str, Any] = {}
     skipped: list[str] = []
@@ -321,7 +334,7 @@ def merge_dare(
         for c, t in zip(coeffs, tensors):
             mask = rng.random(t.shape) < density_val
             rescaled = np.where(mask, t / density_val, 0.0)
-            acc += c * rescaled
+            acc += _factor_coeff(name, c) * rescaled
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
