@@ -365,6 +365,10 @@ def merge_svd(
     return out, skipped
 
 
+#: The bias PEFT adds to ``lora_B``'s output for ``lora_bias=True``; scaled with it.
+_LORA_B_BIAS = ".lora_B.bias"
+
+
 def fold_lora_scaling(
     weights_list: Sequence[Mapping[str, Any]],
     adapter_dirs: Sequence[str],
@@ -377,7 +381,8 @@ def fold_lora_scaling(
     different ``lora_alpha``, ``use_rslora`` or per-module ``alpha_pattern`` /
     ``rank_pattern`` would otherwise contribute at the wrong strength (a
     ``lora_alpha=32`` adapter merged under a ``lora_alpha=16`` template counts for
-    half). Each ``lora_B`` / ``lora_embedding_B`` is multiplied by its own module
+    half). Each ``lora_B`` / ``lora_embedding_B``, and the ``lora_B`` bias of an adapter
+    saved with ``lora_bias=True``, is multiplied by its own module
     scaling over the template's, so every ``B @ A`` keeps its effective delta.
 
     Inputs whose scaling already matches the template are passed through
@@ -410,6 +415,9 @@ def fold_lora_scaling(
         if config is not None:
             for name, tensor in weights.items():
                 role = _lora_role(name)
+                if role is None and name.endswith(_LORA_B_BIAS):
+                    # PEFT scales lora_B's output, its bias (lora_bias=True) included.
+                    role = (name[: -len(_LORA_B_BIAS)], "B", _LORA_B_BIAS)
                 if role is None or role[1] != "B":
                     continue
                 module = peft_module_name(role[0])

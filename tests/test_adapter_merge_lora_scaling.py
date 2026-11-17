@@ -279,6 +279,21 @@ class TestOtherLoraTensors:
         np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_B"], emb_b * 4.0)
         np.testing.assert_array_equal(folded[1][f"{stem}.lora_embedding_A"], emb_a)
 
+    def test_lora_b_bias_is_rescaled_like_lora_b(self, tmp_path, monkeypatch):
+        """An adapter saved with ``lora_bias=True`` carries ``lora_B.bias``, which PEFT scales
+        with the rest of ``lora_B``'s output, so it is folded by the same ratio."""
+        from soup_cli.utils.adapter_merge import fold_lora_scaling
+
+        bias = np.ones((_DIM,), dtype=np.float32)
+        b = np.ones((_DIM, 2), dtype=np.float32)
+        weights = {_B: b, f"{_STEM}.lora_B.bias": bias}
+        folded = fold_lora_scaling(
+            [weights, weights], self._configs(tmp_path, monkeypatch, lora_bias=True)
+        )
+
+        np.testing.assert_array_equal(folded[1][_B], b * 4.0)
+        np.testing.assert_array_equal(folded[1][f"{_STEM}.lora_B.bias"], bias * 4.0)
+
     def test_dora_magnitude_vector_is_left_as_it_is(self, tmp_path, monkeypatch):
         """DoRA's ``lora_magnitude_vector`` is not multiplied by the LoRA scaling in PEFT's
         forward: it rescales ``W + scaling * B @ A`` column by column. Folding ``lora_B``
