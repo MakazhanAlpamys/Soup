@@ -1,0 +1,37 @@
+[
+  {
+    "mutant": "reference-materialization",
+    "node": "tests/test_ipo_streaming.py::test_untied_streamed_loss_and_gradients_match_resident",
+    "caught": true
+  },
+  {
+    "mutant": "refill",
+    "node": "tests/test_ipo_streaming.py::test_untied_streamed_loss_and_gradients_match_resident",
+    "caught": true
+  },
+  {
+    "mutant": "resume",
+    "node": "tests/test_ipo_streaming.py::test_streamed_resume_restores_adapter_and_reference_state",
+    "caught": true
+  },
+  {
+    "mutant": "row-budget",
+    "node": "tests/test_ipo_streaming.py::test_streamed_budget_counts_the_loss_batch_shape",
+    "caught": true
+  },
+  {
+    "mutant": "cleanup",
+    "node": "tests/test_ipo_streaming.py::test_wrapper_closes_stream_runtime_when_training_raises",
+    "caught": true
+  },
+  {
+    "mutant": "checkpoint-save",
+    "node": "tests/test_ipo_streaming.py::test_wrapper_rejects_empty_streamed_adapter[checkpoint]",
+    "caught": true
+  },
+  {
+    "mutant": "final-save",
+    "node": "tests/test_ipo_streaming.py::test_wrapper_rejects_empty_streamed_adapter[final]",
+    "caught": true
+  }
+]

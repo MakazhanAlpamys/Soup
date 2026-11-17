@@ -84,6 +84,24 @@ EVIDENCE_CORPUS = (
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "task_rows": "verdict.task-rows.jsonl",
     },
+    # version 2, reward mode: what scored the leg (a file's name and hash) and the descriptive
+    # paired summary (12 rows: not underpowered); neither decides anything
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "reward",
+            "base": 0.5,
+            "tuned": 0.6,
+            "rows": {"better": 7, "worse": 3, "same": 2, "n": 12},
+            "reward": {"fn": "rewards/score.py", "sha256": "a" * 64},
+            "paired": {
+                "n": 12, "better": 7, "worse": 3, "same": 2, "mean_difference": 0.1,
+                "ci_low": -0.05, "ci_high": 0.25, "confidence": 0.95, "resamples": 2000,
+                "seed": 20261114, "underpowered": False,
+            },
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+    },
     # version 2 with nothing measured: every count is null, never 0
     {
         "schema_version": 2,
@@ -153,6 +171,20 @@ def test_corpus_covers_every_registered_evidence_field():
                 evidence["judged"].keys()
                 for evidence in EVIDENCE_CORPUS
                 if "judged" in evidence
+            )
+        ),
+        "reward": set().union(
+            *(
+                evidence["task"]["reward"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "reward" in evidence["task"]
+            )
+        ),
+        "paired": set().union(
+            *(
+                evidence["task"]["paired"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "paired" in evidence["task"]
             )
         ),
     }
@@ -277,6 +309,35 @@ MALFORMED_CORPUS = (
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
         "benchmarks": {},
         "task_rows": "verdict.task-rows.jsonl",
+    },
+    # reward mode must name its function, and no other mode may
+    {
+        "schema_version": 2,
+        "task": {"mode": "reward", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "accuracy", "sha256": None},
+        },
+        "benchmarks": {},
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "reward", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "a\x1b[2Jb.py", "sha256": None},
+        },
+        "benchmarks": {},
+    },
+    {
+        "task": {
+            "mode": "reward", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "accuracy", "sha256": None},
+        },
+        "benchmarks": {},
     },
 )
 
