@@ -286,6 +286,11 @@ class LoopState:
     # that records its promotion, cleared when the canary ends. None = no override.
     # Last, so adding it shifted no existing positional field; loads as None from before.
     canary_override: Optional[str] = None
+    # The latest idle poll (review 5b, N2): a cycle that trained nothing, failed nothing and
+    # touched no canary writes no iteration line and no manifest; this keeps when it was
+    # and why ("not_enough_new_data: ..."), a dict with "at" and "reason". None = no idle
+    # poll yet. Last, so adding it shifted no existing positional field; loads as None.
+    last_idle: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -473,6 +478,8 @@ class LoopState:
             _check_pending_deploy(self.pending_deploy)
         if self.failed_train is not None:
             _check_failed_train(self.failed_train)
+        if self.last_idle is not None:
+            _check_last_idle(self.last_idle)
         if self.canary_override is not None:
             _require_str("canary_override", self.canary_override, allow_empty=False)
             if any(ord(char) < 0x20 or ord(char) == 0x7F for char in self.canary_override):
@@ -621,6 +628,20 @@ def _check_failed_train(record: object) -> None:
     _require_str("failed_train reason", reason, allow_empty=False)
     if len(reason) > 300 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in reason):
         raise ValueError("failed_train reason must be one short line without control characters")
+
+
+def _check_last_idle(record: object) -> None:
+    """``last_idle`` is ``{"at": <ISO time>, "reason": <one short line>}``; nothing else."""
+    if not isinstance(record, dict) or sorted(record) != ["at", "reason"]:
+        raise ValueError('last_idle must be a dict with exactly "at" and "reason"')
+    for name, limit in (("at", 64), ("reason", 300)):
+        value = record[name]
+        _require_str(f"last_idle {name}", value, allow_empty=False)
+        if len(value) > limit or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError(
+                f"last_idle {name} must be one line of at most {limit} characters, "
+                "without control characters"
+            )
 
 
 def _brief(value: object) -> str:

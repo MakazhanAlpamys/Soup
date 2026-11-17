@@ -1237,21 +1237,20 @@ def _cycle(state, pipeline, log=None, **kwargs):
 
 
 class TestIdlePoll:
-    def test_an_iteration_with_nothing_to_train_is_one_skipped_line_and_no_progress(self, cwd):
+    def test_an_iteration_with_nothing_to_train_writes_no_line_and_no_progress(self, cwd):
+        """An idle poll (review 5b, N2): the seed is the only line; loop.yaml keeps the reason."""
         state = _running()
 
         new_state, record, decision = run_once(
             state, WatchConfig(poll_interval_sec=1.0, max_iterations=1), log=LoopLog()
         )
 
-        assert decision.proceed is True
+        assert decision.proceed is False and decision.reason.startswith("idle poll: ")
         iterations = _read(cwd, "iteration")
-        seed, idle = iterations
+        (seed,) = iterations
         assert seed["outcome"] == "promoted" and seed["reason"] == "initial deploy"
-        assert idle["iteration_id"] == record.iteration_id
-        assert idle["outcome"] == "skipped" and idle["to_version"] is None
-        assert idle["parent_iteration_id"] == seed["iteration_id"]
-        assert (idle["from_version"],) == (1,)
+        assert new_state.last_idle["reason"] == "nothing to train"
+        assert (new_state.iteration_count, new_state.runs_today) == (0, 0)
         assert not (cwd / ".soup-loops" / "progress.jsonl").exists()
         (initial,) = _read(cwd, "version")
         assert initial["cause"] == "initial" and initial["actor"] == "loop"

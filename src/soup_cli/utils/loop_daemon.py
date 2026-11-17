@@ -476,6 +476,26 @@ def run_once(
         verify_log=_log_ref(gate_out.get("verify_log")),
         **_evidence(gate_out),
     )
+    if _is_idle_poll(
+        pending, trained_run, train_out, deploying, deploy_refused, gate_out, rolled_back,
+        canary_notes,
+    ):
+        # Nothing to train, nothing failed, no canary touched (review 5b, N2): no iteration line, no
+        # manifest, no counter. loop.yaml keeps when and why, for `soup loop status`.
+        reason = _idle_reason(train_out)
+        idle_state = _state_with(
+            state,
+            waiting_note=_safe_wait(waiting_note),
+            last_failure=(failure_note or "")[:500] or None,
+            failed_train=_failed_train_after(state, train_out, pending is None),
+            last_idle={"at": _utc_iso(), "reason": reason},
+        )
+        return idle_state, _noted(record, log), BudgetDecision(
+            proceed=False,
+            reason=f"idle poll: {reason}"[:300],
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        )
     # The lifetime totals count what training used: an iteration that only waited for
     # more feedback (or whose training failed) would otherwise add the whole pile again.
     trained = _training_ran(train_out)
@@ -747,6 +767,40 @@ def _plain_json(stage_out: Mapping[str, object]) -> "dict[str, object]":
         except (TypeError, ValueError):
             continue
     return kept
+
+
+def _is_idle_poll(
+    pending: object,
+    trained_run: bool,
+    train_out: Mapping[str, object],
+    deploying: bool,
+    deploy_refused: bool,
+    gate_out: Mapping[str, object],
+    rolled_back: bool,
+    canary_notes: "list[str]",
+) -> bool:
+    """True for a cycle that did nothing: no training, no failure, no deploy, no canary event.
+
+    A failed train, a DON'T SHIP verdict, a deploy retry, a promotion or a withdrawal DID something
+    and keeps its iteration line (review 5, F4); waiting for more data or a hold does not.
+    """
+    return (
+        pending is None
+        and not trained_run
+        and not train_out.get("failed")
+        and not deploying
+        and not deploy_refused
+        and not rolled_back
+        and not canary_notes
+        and gate_out.get("gate_verdict") in (None, "SKIPPED")
+    )
+
+
+def _idle_reason(train_out: Mapping[str, object]) -> str:
+    """Why nothing was trained, on one line of at most 300 characters (control characters out)."""
+    text = str(train_out.get("notes") or "nothing to train")
+    text = "".join(char if ord(char) >= 0x20 and ord(char) != 0x7F else " " for char in text)
+    return " ".join(text.split())[:300] or "nothing to train"
 
 
 def _failed_train_after(

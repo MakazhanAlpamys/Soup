@@ -565,13 +565,12 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     _, iterations = loop["cycle"]()
     assert iterations == 1
     assert loop["trained_on"] == [] and loop["verdicts"] == []
-    record = read_iteration(loop["created"][-1])
-    assert record.run_id is None and record.pairs_harvested == 4  # the rows are there, though
+    assert loop["created"] == []  # an idle poll writes no manifest (review 5b, N2)
+    state = read_state()
     assert (
         "not_enough_new_data: 1 new edits (needs 8) and 2 new rated answers (needs 30) "
         "since the last training run"
-    ) in record.notes
-    state = read_state()
+    ) in state.last_idle["reason"]  # loop.yaml keeps what the idle poll found
     assert state.harvest_cursor_ts is None and state.canary_active is None
 
     # Seven more corrections make eight: the next cycle trains.

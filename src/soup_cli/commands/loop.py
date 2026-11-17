@@ -750,6 +750,11 @@ def status_cmd() -> None:
             "pending_deploy",
             f"attempt {state.pending_deploy.get('attempts', 0)} refused; retried next cycle",
         )
+    if state.last_idle:
+        # The last poll that found nothing to do: it writes no iteration line, no manifest.
+        table.add_row(
+            "last_idle_poll", for_terminal(f"{state.last_idle['at']}: {state.last_idle['reason']}")
+        )
     retry_text = describe_failed_train(state.failed_train)
     if retry_text:
         # A training run that failed is not repeated on the same inputs (review 5, F3): it waits,
