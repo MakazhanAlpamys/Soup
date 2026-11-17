@@ -10,7 +10,9 @@ both ``Qwen/Qwen2-7B-Instruct`` and ``alibaba/Qwen2.5-3B`` with one entry.
 
 from __future__ import annotations
 
+import contextlib
 import os
+from collections.abc import Iterator
 from typing import Literal
 
 # Compute capability thresholds.
@@ -113,6 +115,35 @@ def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
     return casted
 
 
+def upcast_trainable_half_to_fp32(model, *, fp16: bool, bf16: bool) -> int:
+    """Give every trainable bf16/fp16 parameter an fp32 master copy under autocast (#2941).
+
+    peft trains a copy of each ``modules_to_save`` module (the classification head of
+    a ``SEQ_CLS`` adapter) in the frozen base's dtype, and its ``autocast_adapter_dtype``
+    upcasts only the ``lora_*`` weights. A bf16 copy gets bf16 AdamW state, and an
+    update of about ``lr`` is below half a bf16 ulp for most of the head's weights, so
+    they never move; a fp16 copy makes the fp16 GradScaler refuse to unscale.
+
+    Only under mixed precision (``bf16`` or ``fp16`` set): autocast then runs the
+    module's matmul in the half dtype whatever its weight's dtype. Without it (the
+    CPU) the frozen base's half-precision activations would meet an fp32 weight, so
+    nothing is cast. The trainable set this touches is the head, a few thousand
+    parameters; a full fine-tune already loads fp32.
+
+    Returns the number of params cast.
+    """
+    if model is None or not (fp16 or bf16):
+        return 0
+    import torch
+
+    casted = 0
+    for _name, param in model.named_parameters():
+        if param.requires_grad and param.dtype in (torch.bfloat16, torch.float16):
+            param.data = param.data.to(torch.float32)
+            casted += 1
+    return casted
+
+
 def align_trainable_dtype_for_fsdp_qlora(
     model,
     *,
@@ -210,6 +241,36 @@ def _resume_skipped_the_root_adapter(checkpoint: str, model) -> bool:
     )
 
 
+@contextlib.contextmanager
+def _watch_root_adapter_reads(model, checkpoint: str) -> Iterator[list[str]]:
+    """Collect the reads of ``checkpoint``'s root adapter into ``default`` made inside.
+
+    The model's ``load_adapter`` is wrapped for the duration of the block and put
+    back as it was, an instance attribute or the class method.
+    """
+    reads: list[str] = []
+    load_adapter = getattr(model, "load_adapter", None)
+    if load_adapter is None:
+        yield reads
+        return
+    root = os.path.normcase(os.path.abspath(checkpoint))
+    own = vars(model).get("load_adapter")
+
+    def _watching(model_id, adapter_name, *args, **kwargs):
+        if adapter_name == "default" and os.path.normcase(os.path.abspath(model_id)) == root:
+            reads.append(adapter_name)
+        return load_adapter(model_id, adapter_name, *args, **kwargs)
+
+    model.load_adapter = _watching
+    try:
+        yield reads
+    finally:
+        if own is not None:
+            model.load_adapter = own
+        else:
+            del model.load_adapter
+
+
 def reload_root_adapter_on_resume(trainer) -> None:
     """Load the trained adapter that a checkpoint resume leaves out (#1768).
 
@@ -221,15 +282,23 @@ def reload_root_adapter_on_resume(trainer) -> None:
     while the optimizer and the step counter are restored, and the run goes on
     from a new adapter. Load the root into ``default`` right after that load.
 
-    A checkpoint with no adapter subfolder is loaded once, by the Trainer. Call
-    this before ``keep_trainable_dtype_on_resume`` so that the reload is cast
-    back with the rest.
+    A checkpoint with no adapter subfolder is loaded once, by the Trainer. So is
+    one with a subfolder, from transformers 5.23.0 on, where the Trainer reads
+    the root ``default`` adapter itself before the subfolder ones: the helper
+    watches the Trainer's own ``load_adapter`` calls and reads the root only
+    when the Trainer did not, by what it did rather than by a version table
+    (the floor, 5.16.1, still needs it). Call this before
+    ``keep_trainable_dtype_on_resume`` so that the reload is cast back with the
+    rest.
     """
     original_load = trainer._load_from_checkpoint
 
     def _load_then_root_adapter(resume_from_checkpoint, model=None):
-        original_load(resume_from_checkpoint, model)
         target = model if model is not None else trainer.model
+        with _watch_root_adapter_reads(target, resume_from_checkpoint) as root_reads:
+            original_load(resume_from_checkpoint, model)
+        if root_reads:
+            return
         if not _resume_skipped_the_root_adapter(resume_from_checkpoint, target):
             return
         # The adapter exists, so this only reads the weights into it: which

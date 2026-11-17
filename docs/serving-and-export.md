@@ -14,6 +14,7 @@
 - [Inference Server](#inference-server)
 - [Web UI](#web-ui)
 - [Inference Server Trace Log](#inference-server-trace-log)
+- [Response IDs and Feedback](#response-ids-and-feedback)
 - [Soup Quantize — Ergonomic Export Alias](#soup-quantize--ergonomic-export-alias)
 - [Llama.cpp Proxy](#llamacpp-proxy)
 - [Tail-Latency Stats + Tool-Call Timer](#tail-latency-stats--tool-call-timer)
@@ -57,8 +58,16 @@ file; a single-file model is memory-mapped as a whole, so it saves little). The
 tensor values are the same as the regular merge, but the output keeps the base's
 shard layout instead of a single `model.safetensors`. It needs the default
 `fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`, rank or
-alpha patterns, adapters on embeddings or `lm_head`, and base weights stored in a
-quantized dtype are refused with a message to run the regular merge. The merge is
+alpha patterns, adapters on embeddings or `lm_head`, an `init_lora_weights`
+outside the values below, and base weights stored in a quantized dtype are
+refused with a message to run the regular merge. `init_lora_weights` is accepted
+when it is `true`, `false`, `0`, `null` or left out, `"gaussian"` or `"mica"` in any
+letter case, or `"eva"` or `"orthogonal"` in lower case, as peft spells them;
+none of these changes the base weights. Any other value is refused, any other
+non-string included (`1`, a list): `"pissa"` (and `"pissa_niter_<n>"`), `"olora"`, `"corda"`, `"loftq"`
+and `"lora_ga"` rewrite the base weights at initialization (`lora.init_strategy`
+writes `"pissa"`, `"olora"` and `"loftq"`), and peft rejects other spellings
+such as `"EVA"`. The merge is
 written to a staging directory next to `--output` and moved into place only when
 complete; an existing non-empty `--output` is not overwritten, and base-model
 files that are symlinks pointing outside the model directory (other than a
@@ -163,7 +172,8 @@ including indexed shards, and leaves the model/config unchanged. Actual MTP tens
 are preserved. Malformed or missing checkpoint metadata is refused rather than
 treated as absent weights. The selected converter must advertise `--no-mtp` in a
 successful `--help` probe; otherwise choose a compatible checkout with
-`--llama-cpp`. The default `b5270` pin does not support this flag.
+`--llama-cpp`. The default `b12423` pin advertises the flag (as the alias of
+`--no-nextn`); older pins do not support it.
 The shared safetensors header reader currently refuses unsupported dtypes such as
 `F8_E4M3`; this inspection can therefore refuse an FP8 checkpoint even when its MTP
 tensors are present.
@@ -171,7 +181,7 @@ tensors are present.
 ### Converter compatibility
 
 For a fresh default auto-clone, Soup checks the effective text architecture in
-`config.json` against capability data generated from the exact `b5270` converter.
+`config.json` against capability data generated from the exact `b12423` converter.
 `text_config.architectures`, when present, takes precedence over the root's
 architecture, as in that converter. Known unsupported architectures are refused
 before cloning, installing dependencies, converting or quantizing, with a
@@ -185,26 +195,36 @@ including stderr), with a 15-second timeout. A failed or unrecognized probe is
 inconclusive: conversion remains the final check, without applying the default
 pin's capability set to that checkout. No runtime network lookup is added.
 
-The shared pin remains `b5270`; this diagnostic does not enable Qwen3.5 export on
-that version. A compatible selected converter may need additional handling such
-as the MTP boundary tracked in [#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
+The shared pin `b12423` registers Qwen3.5 dense and MoE text models, so they pass
+this diagnostic on a fresh default checkout. An existing `~/.soup/llama.cpp`
+checkout is not updated automatically; remove it to have the next export clone the
+pinned tag, then rebuild the quantizer. Older or otherwise selected converters
+may still lack support, and the MTP boundary remains tracked in
+[#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
 
 To regenerate capabilities when changing the pin, obtain the unmodified
-`convert_hf_to_gguf.py` from its immutable upstream commit, then run:
+`convert_hf_to_gguf.py` and its `conversion/` package from the immutable
+upstream commit, then run:
 
 ```bash
 python scripts/gen_llama_cpp_capabilities.py --converter /path/to/convert_hf_to_gguf.py \
-  --tag b5270 --commit 3bf785f3efa89ed28294fbf73054558a2b034bfb
+  --package-dir /path/to/conversion \
+  --tag b12423 --commit f4d0673917c75493c73fc9b64ab42841600ba944
 ```
 
 The generated `src/soup_cli/utils/llama_cpp_capabilities.json` records the tag,
-commit, source URL, SHA-256 and Git blob identity. The generator parses registered
+commit, source URL, SHA-256 and Git blob identity for the entry script and each
+top-level `conversion/*.py` file used to derive the maps. The generator parses registered
 classes and inherited model kinds without importing or executing upstream code.
 The pin/data guard rejects a changed pin until its capabilities are regenerated.
+GGUF export needs `transformers`, which the converter imports at load. Soup now
+reports it missing before cloning for default GGUF export rather than letting the
+converter fail later; it does not install it automatically. Install the compatible
+training extra with `pip install "soup-cli[train]"`.
 
 ### Building llama.cpp (required for quantized GGUF)
 
-Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
+Soup auto-clones llama.cpp (pinned tag `b12423`) to `~/.soup/llama.cpp` on first use,
 but it does **not** build it. The conversion step (`f16` / `f32`) works from the
 Python script alone; every *quantized* type additionally needs the `llama-quantize`
 binary, so build it once:
@@ -233,13 +253,119 @@ Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are unteste
 
 ### ONNX Export
 
-Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
+Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/).
+The supported path uses **two environments**: keep training and adapter merging
+in the training environment, and install only `soup-cli[onnx]` in a separate
+export environment. Installing `[train]` and `[onnx]` together is unsupported.
+
+For an adapter-only output, merge it in the existing training environment first;
+a standalone dense checkpoint can be exported directly. For compatible model
+configurations and tokenizers, the POSIX workflow is:
 
 ```bash
-pip install "soup-cli[onnx]"
-soup export --model ./output --format onnx
-soup export --model ./output --format onnx --output ./model_onnx
+# In the existing training environment, for an adapter-only output:
+soup merge --adapter ./output --output ./merged
+
+# Switch to a fresh export-only environment:
+python3 -m venv .venv-onnx
+source .venv-onnx/bin/activate
 ```
+
+Install the [qualified export-only pins below](#qualified-export-only-setup),
+including CPU PyTorch and the compatible Optimum/Transformers versions, in this
+environment before exporting:
+
+```bash
+soup export --model ./merged --format onnx --output ./model_onnx
+```
+
+On Windows, activate the export environment with
+`.venv-onnx\Scripts\Activate.ps1` in PowerShell instead of `source`.
+
+To check a causal-LM export numerically on your own inputs, add `--validate-onnx`:
+
+```bash
+soup export --model ./merged --format onnx --validate-onnx \
+  --prompts ./prompts.txt --atol 0.0001 --output ./model_onnx
+```
+
+The prompt file is UTF-8, one text per line, or `.jsonl` with one
+`{"prompt": "..."}` object per line. The check uses the same token IDs for the source
+model and ONNX Runtime, compares **all logits**, and prints maximum absolute error,
+element-weighted mean absolute error, the tolerance and PASS/FAIL. It runs both models
+on CPU in float32, one prompt at a time, without a chat template, padding or truncation.
+The default absolute tolerance, `0.0001`, is a configurable starting point for an FP32
+smoke check; it is not a model-independent quality threshold. There is no additional
+relative tolerance. Non-finite logits never pass.
+
+Allow RAM for both the source model and ONNX Runtime: the source's float32 weights
+alone need roughly four bytes per parameter, plus logits and runtime buffers.
+A large merged checkpoint can therefore need substantially more RAM than its file size.
+
+The first version supports `--onnx-task text-generation` with exactly one ONNX graph,
+standard integer token inputs and a float32 `logits` output. Cached decoding, split
+graphs, other tasks and unknown inputs are refused. Inputs are limited to 1 MiB,
+32 non-empty prompts and 512 tokens per prompt; exceeding a limit refuses the check
+rather than silently checking a subset. A check on these inputs says nothing about
+held-out accuracy or generation with a KV cache.
+
+After the requested validation runs, exit **0** means PASS and **2** means a numerical
+FAIL: logits exceeded the tolerance or were non-finite. Exit **3** means invalid
+validation input, missing validation dependencies or an unsupported/failed comparison.
+Exporter failures retain their existing exit code **1**.
+
+Exit **2** is also an existing export usage code: for example, `--verbose` or
+`--no-install-deps` with ONNX is refused before export because those options require
+GGUF. A script must not classify exit 2 alone as numerical drift. The numerical case
+prints the `ONNX Logits Validation` report with `FAIL` and error figures; option
+conflicts print their option-specific diagnostic and no validation report. Invalid
+validation arguments print `ONNX validation input error` and exit 3; an unusable
+comparison prints `ONNX validation could not run` and exits 3. These existing export
+option-conflict codes are unchanged with or without the validation flag.
+
+A failed check leaves the exported files for inspection,
+does not print the completion panel and does not register the export. For an adapter,
+the reference is its freshly merged model, checked before the temporary merge is removed.
+Without `--validate-onnx`, export behaviour is unchanged; `--prompts` and `--atol` require
+the flag.
+
+**Supported exporter/dependency policy.** ONNX export and the opt-in validation
+check use the separate export-only environment described above. The `[onnx]`
+extra remains `optimum[onnxruntime]>=1.16.0`; this feature does not change any
+dependency bounds or select a different export backend. The policy is confirmed
+in [the exporter support decision](https://github.com/MakazhanAlpamys/Soup/issues/2676#issuecomment-6816046820).
+
+#### Qualified export-only setup
+
+**Why the environments are separate.** The tested
+`optimum-onnx==0.1.0` requires Transformers below 4.58, while Soup's training extra requires
+Transformers 5.16.1 or newer. These requirements do not fit in one environment. For a
+merged checkpoint whose model configuration and tokenizer are supported by Transformers 4.57.6,
+the following separate, export-only environment was checked on Linux / Python 3.12:
+
+```bash
+python3 -m venv .venv-onnx
+.venv-onnx/bin/python -m pip install "torch==2.6.0" \
+  --index-url https://download.pytorch.org/whl/cpu
+.venv-onnx/bin/python -m pip install -e ".[onnx]" \
+  "optimum==2.1.0" "optimum-onnx==0.1.0" "transformers==4.57.6"
+.venv-onnx/bin/python -m pip check
+.venv-onnx/bin/python -m soup_cli.cli export --model ./merged --format onnx \
+  --validate-onnx --prompts ./prompts.txt --output ./model_onnx
+```
+
+Install only the ONNX extra there; keep training and merging in their training environment.
+**Known tokenizer limit:** a checkpoint saved by Transformers 5 may have a tokenizer
+that the export environment's 4.x loader cannot read. For example, a tokenizer saved
+as `TokenizersBackend` cannot be loaded by the tested 4.x loader. Such a checkpoint
+is outside this export path's compatibility scope; do not rename its tokenizer
+class to bypass the error. Transformers-5-only architectures are likewise not
+qualified by these checks.
+
+The compatibility report and a separate native-PyTorch lab prototype are in
+[the ONNX qualification record](../benchmarks/onnx-export-compatibility-2026-11-11.md).
+That prototype remains a lab harness. A native exporter for Transformers 5 would
+require a separate issue and optional-dependency decision; it is outside this feature.
 
 ### TensorRT-LLM Export
 
@@ -315,7 +441,7 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
 - **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). Without the flag, `soup export` looks for the entry registered from the run that wrote `--model`: it compares each entry's run `output_dir` in the experiment tracker with `--model` (resolved paths, the newest 1000 entries). Entries without a run id never match, and when several match (one run registered twice, or several runs trained into the same directory) the most recently registered entry wins; the attach line names the entry it chose, and nothing is attached when no entry matches. A run whose output directory was recorded as a relative path (as the tracker stored the default `./output` until #2725) is resolved against the current directory, so it matches when you export from the directory it trained in. If the registry or the experiment tracker database cannot be read, the export still succeeds and prints a warning instead of attaching; pass `--registry-id` to attach explicitly. When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -371,8 +497,10 @@ to the default Transformers backend is refused with a backend hint.
 
 The initial native consumer supports ordinary linear text LoRA (including the saved
 rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
-DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
-adapter targets are refused. This does not add MLX serving or adapter fusion.
+Adapters trained with native linear RoPE scaling record `rope_scaling` in `adapter_config.json`,
+which is re-applied during generation and fusion for unquantized base models (quantized bases
+with RoPE scaling are refused). DoRA, full-finetune adapters, embedding/switch-layer targets
+and other quantized adapter targets are refused. This does not add MLX serving or adapter fusion.
 Use the base tokenizer's chat template; rendered special tokens are encoded once.
 Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
 with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
@@ -764,6 +892,28 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters
 
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
+#### Loading an adapter into a running server
+
+A continual-learning loop trains a fresh adapter while the server runs. `POST /v1/adapters/load` adds it to the running server without a restart, so it can then be activated or canaried. The route is off unless the server was started with `--adapter-dir`, the one directory adapters may be loaded from:
+
+```bash
+soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "$TOKEN"
+
+curl -X POST http://localhost:8000/v1/adapters/load \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "v2", "path": ".soup-loops/adapters/loop-train-1a2b3c4d"}'
+# → {"name": "v2", "status": "loaded"}
+```
+
+- **A token is required on every bind**, loopback included: a server started without `--tool-auth-token` answers 401 and names the flag. A server started without `--adapter-dir` answers 404, and only to a caller that sent the token.
+- **The path must be inside `--adapter-dir`.** A relative path is resolved against the server's working directory; a `..` or a symlink that leaves the directory is refused with 403. At the 16-adapter cap the OLDEST loaded runtime adapter that is not in use is unloaded to make room (never the active one, nor what `loop.yaml` names as production, its rollback target or the canary); when every one is in use the load answers `409 runtime adapter limit reached (16)`. **Known limit:** after a server restart a promoted adapter is not loaded again by the server (`soup loop` does not replay `loop.yaml`), so the stable side is the base model until the loop deploys the next version or the adapter is loaded by hand with `POST /v1/adapters/load`. On Windows a UNC path (`\\host\share\x`) or a drive-relative one (`C:x`) is refused with 403 without being resolved. `--adapter-dir` itself may not be a filesystem root (`/`, a drive root, a share root): the server refuses to start (exit 2, naming the flag), as every path would be inside it. The directory must hold an `adapter_config.json` (400 otherwise). Adapters stored as pickle (`adapter_model.bin`) are refused: use safetensors.
+- **Loading does not activate.** The adapter shows up in `GET /v1/adapters`; select it with `POST /v1/adapters/activate/v2` or the `adapter` field of a request.
+- **Name rules:** the pattern above, at most 64 characters; a name that is already loaded (at startup or at runtime, or the `default` adapter of a `--model` that is itself an adapter) answers 409.
+- **At most 16 adapters** are loaded this way at once per server process (adapters given with `--adapters` do not count). The 17th load unloads the oldest unused one first (see the cap rule under the path check above) and answers 409 only when none can be unloaded: every loaded adapter is the active one, production, its rollback target or the canary, the unload fails, or `loop.yaml` cannot be read.
+- A load that fails answers 400 `adapter could not be loaded` (the cause goes to the server log) and leaves the server as it was.
+- **Transformers backend only.** `--adapter-dir` with `--backend vllm`, `sglang` or `mii`, or together with `--mole`, is refused at startup (exit 2); on a server started with `--bank` the route answers 409.
+
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
 Serve many per-user personas from one model at KB-per-user instead of a full LoRA each.
@@ -810,7 +960,9 @@ The base model comes from `--base` if set, otherwise the base recorded in the ma
 requires `--backend transformers` and is mutually exclusive with `--bank` / `--steer` /
 `--adapters` / `--speculative-decoding`. The manifest + gate are cwd-contained, symlink-rejected,
 and size-capped, and the gate loads with `weights_only=True`. Because the blend recomputes the
-sequence each step (no KV cache), this path is best for small / demo models. (v0.71.17)
+sequence each step (no KV cache), this path is best for small / demo models. Concurrent requests
+under `--mole` are decoded sequentially via an internal lock, as each decode step switches the
+active adapter on the shared PEFT model. (v0.71.17)
 
 ### Structured Output (JSON Schema / Regex)
 
@@ -867,7 +1019,7 @@ soup serve --model ./output \
 
 The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`; a host written only as numbers that is not a valid IPv4 address is rejected too. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
-> **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
+> **Note:** `max_tokens` is capped at 16,384 per request. `--max-tokens`, the default for a request that omits `max_tokens`, must be between 1 and 16384, the same range: `soup serve` refuses a value outside it at startup with exit 2, on every backend. Error details are never exposed in HTTP responses.
 
 
 ## Web UI
@@ -901,7 +1053,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 178 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 181 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -910,7 +1062,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (178 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (181 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -957,7 +1109,91 @@ soup ui --port 8080 --no-browser
 soup serve --model ./out --trace-log ./serve-trace.jsonl --trace-log-cap-mb 100
 ```
 
-Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
+Each line is one conversation record in the version 1 format of [Loop data formats](loop-formats.md#conversation) (`soup_cli/schemas/loop/conversation.schema.json`): `schema_version`, `id` (the [response id](#response-ids-and-feedback) of that answer), `conversation_id`, `ts` (ISO 8601, UTC), `model`, `version`, `adapter`, `canary_bucket`, `messages`, `response`, `finish_reason`, `latency_ms`, `tokens` and `source` (`soup-serve`).
+
+- `messages` is the whole conversation the model saw, without the answer; `response` is the answer. `prompt` (the last user message) is kept at the top level so readers of the earlier line keep working.
+- `conversation_id` is the request body's `conversation_id`, else the `X-Conversation-Id` header, else `null` (also `null` when the header is empty or longer than 512 characters).
+- `adapter` is the adapter that generated the answer (`null` for the base model); `canary_bucket` is `stable` or `canary` when the canary router routed the request, else `null`. `version` is always `null`: `soup serve` does not know loop versions.
+- `tokens` is `{"prompt": ..., "completion": ...}`; a count the engine did not report is `null`, never `0`.
+- A request whose messages use a role outside `system`, `developer`, `user`, `assistant` and `tool` is answered but not logged (the reason goes to the server log), so every written line is valid against the schema.
+- Lines written before this format have no `schema_version`, a bare integer `tokens` and no `id`. `soup data from-traces --format soup-serve` and `soup loop` read both; a line with a `schema_version` other than 1 is skipped.
+
+Path-containment validated, hard rotation cap (default 100 MB, one backup retained as `serve.jsonl.1`; `soup loop` reads the rotated files too, oldest first), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` in `messages`, `response` and `prompt` before write. Failures (disk full, serialisation errors) never crash the request handler. A streamed answer is logged once it is generated, before its first chunk is sent.
+
+
+## Response IDs and Feedback
+
+With the default Transformers backend every answer to `/v1/chat/completions` and `/v1/messages` gets a fresh UUID4 in canonical lowercase form. It comes back as the body field `response_id` and as the response header `X-Response-Id`; the `id` field (`chatcmpl-…`) is unchanged, so OpenAI clients see nothing new.
+
+- A streamed `/v1/chat/completions` answer carries the header and a `response_id` field in every `data:` chunk.
+- `/v1/messages` carries the header and a `response_id` field in the reply (a stream: in `message.response_id` of the `message_start` event). It reads the `X-Conversation-Id` header as `/v1/chat/completions` does but has no `conversation_id` body field, so a request without the header has `conversation_id: null` in its trace record.
+- A page served from `localhost` can read the header: `X-Response-Id` is in the CORS exposed headers.
+- A failed generation (500) returns no id and writes no record.
+- The id is what `--trace-log` writes as `id`, so a feedback record points at the answer through `response_id`. The ids exist whether or not `--trace-log` is set.
+
+`soup serve --feedback-log <path>` turns on `POST /v1/feedback`, which appends one line per call to a JSONL file in the feedback format of [Loop data formats](loop-formats.md#feedback) (`feedback.schema.json`). The path must stay under the current directory; the file is append-only and is never rotated, so it has a size cap instead: once it is 256 MiB or more, `POST /v1/feedback` answers `507` naming the file and appends nothing (the cap is a constant, not a flag). The file is created readable by its owner alone (`0600`) on POSIX; on Windows the folder's permissions apply and the mode is not set.
+
+```bash
+soup serve --model ./out --trace-log .soup-loops/traces/serve.jsonl \
+  --feedback-log .soup-loops/feedback.jsonl
+
+curl http://localhost:8000/v1/feedback -H "Content-Type: application/json" -d '{
+  "response_id": "0de3d93e-f426-4096-8ba2-14f7fb992421",
+  "kind": "thumb",
+  "value": 1
+}'
+# {"status": "ok", "id": "7df14f7b-8af9-497d-bd8b-2b1e3d397ac9"}
+```
+
+| `kind` | Also required | Meaning |
+|---|---|---|
+| `thumb` | `value`: `1`, `-1` or `null` | Thumbs up, down, or cleared |
+| `rating` | `value`: an integer 1-5 or `null` | A rating, or cleared |
+| `edit` | `edited_text`: a non-empty string or `null` | The answer as the person corrected it; `null` withdraws an earlier edit |
+| `comment` | `comment`: a non-empty string, at most 10000 characters | Free text |
+
+`edited_text` (at most 20000 characters), `comment` (non-empty, at most 10000 characters, or `null`) and `user_ref` (1-256 characters or `null`, an opaque reference the application chose) are optional next to any kind. A key that does not belong to the kind, such as `value` on an `edit`, is ignored. The server adds `schema_version`, `id` (also returned), `ts` and `source` (`soup-serve`); secrets in `edited_text`, `comment` and `user_ref` are redacted like the trace log's (Hugging Face, OpenAI-style, GitHub, AWS access key, Slack and Bearer tokens, JWTs, PEM private keys, and `api_key=...` / `secret=...` / `password: ...` / `token=...` assignments). [Loop data formats](loop-formats.md#feedback) says which line counts when a person changes their mind.
+
+- **Refused:** a body that breaks the schema gets `400 {"detail": "Invalid request: <field>"}` (`body`, `response_id`, `kind`, `value`, `edited_text`, `comment` or `user_ref`) and writes nothing. A body over 64 KiB gets `413`. A `response_id` this server process did not issue gets `404 unknown response_id`: the server remembers the last 100000 ids it handed out, in memory, so after a restart feedback for an answer given before it is refused. A request that carries an `Origin` header is refused with `403` unless that origin is the server's own (a page served by this server); a request without one (curl, an SDK, a desktop app) is allowed. A line that cannot be written (disk full, file removed) gets `500`, never `ok`.
+- **Not enabled:** without `--feedback-log` the route answers `404 feedback recording not enabled; start soup serve with --feedback-log`.
+- **Access:** the `Host`/`Origin` check of `POST /v1/thumbs`, plus the own-origin rule above, then `Authorization: Bearer <token>` when `--tool-auth-token` is set (and always on a non-loopback bind, which needs the token).
+- **Ids:** the id is checked against the ids this process issued, not against the trace log (which is not read per request), so it works with or without `--trace-log`. The loop's own internal check (`X-Soup-Internal`) issues no id.
+- `POST /v1/thumbs` and `--record-thumbs` are unchanged.
+
+`--trace-log`, `--record-thumbs` and `--feedback-log` belong to the Transformers backend. With `--backend vllm`, `sglang` or `mii` they are refused at startup (exit 2, naming the flag) instead of being ignored.
+
+
+## Internal Calls (`X-Soup-Internal`)
+
+`soup loop` sometimes asks the model it serves a question of its own: before it trains, the pre-wired train stage has the served model write [paraphrases](loop-formats.md#paraphrase) of the prompts people corrected. Such a call must not look like a user's: logged as a conversation it would come back as training data in the next run, and counted against a canary it would skew the quality verdict. So `POST /v1/chat/completions` honours one extra request header:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $SOUP_TOOL_AUTH_TOKEN" \
+  -H "X-Soup-Internal: loop-check" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "..."}]}'
+```
+
+With `X-Soup-Internal: loop-check` and a valid tool token the request is answered as usual, except that it:
+
+- writes **no conversation record** (nothing in `--trace-log`, a streamed answer included);
+- writes **no thumbs** (it never could: thumbs arrive through `POST /v1/thumbs`);
+- is **never routed to a canary bucket**: `conversation_id` and `X-Conversation-Id` are ignored for routing, and the answer comes from the same side unkeyed traffic gets (the active adapter, else the base model);
+- is **not counted** in the canary statistics, whether it succeeds or fails;
+- is **echoed**: the response carries `X-Soup-Internal: loop-check` too. That is how the loop tells a server that honours the header from an older `soup serve` that ignores it and would have recorded the call: without the echo the loop stops asking and says so in the iteration's notes (restart `soup serve` from the same version).
+
+The header is honoured only together with the token, on every bind, loopback included:
+
+| Request | Answer |
+|---|---|
+| header, valid `Authorization: Bearer <token>` | `200`, not recorded, header echoed |
+| header, no or wrong token | `401` `Invalid or missing bearer token: X-Soup-Internal is honoured only with a valid tool token...` |
+| header, server started without `--tool-auth-token` | `401` `Authentication required: X-Soup-Internal is honoured only with a valid tool token. Start soup serve with --tool-auth-token ...` |
+| header with a value other than `loop-check`, valid token | `400` `Unknown X-Soup-Internal value: the only one is 'loop-check'.` |
+| no header | unchanged: recorded and routed as before |
+
+Nothing is generated for a refused request. `/v1/messages` and the other routes ignore the header. The loop sends it with `SOUP_TOOL_AUTH_TOKEN` (set by `soup loop watch --tool-auth-token`) to `SOUP_LOOP_SERVE_ENDPOINT`; see [Adapters, Registry & Governance](adapters-and-governance.md#data-flywheel-soup-loop) for the paraphrase step and `soup loop init --paraphraser-endpoint`.
 
 
 ## Soup Quantize — Ergonomic Export Alias
@@ -1048,6 +1284,8 @@ soup deploy hf-space --space my-org/my-app --model my-org/my-model --template-di
 ```
 
 If `requirements.txt` lists `streamlit`, the Space is created with the Streamlit SDK. Otherwise (no requirements, gradio listed, etc.), Soup falls back to the Gradio default. The HF Hub allows `docker` and `static` SDKs too, but those cannot be inferred from `requirements.txt` alone — use the built-in templates or supply a custom one with an explicit `--sdk` override.
+
+Hugging Face no longer creates new Spaces that use the Streamlit SDK. In v0.78.0, Soup prints a deprecation warning for the built-in `streamlit-chat` template and for custom template directories detected as Streamlit; Gradio templates have no warning. Existing Streamlit Spaces remain deployable. For a new deployment, use `--template gradio-chat` or a custom Gradio template. If the Hub response names the `sdk` field and an SDK value, Soup explains the Streamlit refusal, suggests the Gradio alternative, and includes the Hub response; unrelated Hub errors retain their original message.
 
 
 ## Anthropic Messages API Converter
@@ -1209,15 +1447,16 @@ option or from `SOUP_TOOL_AUTH_TOKEN` first, on every bind, and exits with statu
 loading the model when it does not match; the message names the rule, never the value. An
 empty value counts as no token.
 
-`/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
-bind they take a token only when the server has one.
+`/v1/tools/web_search`, `/v1/thumbs`, `/v1/feedback` and the adapter routes keep their
+rule: on a loopback bind they take a token only when the server has one.
 
-Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
-`Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403. That check runs first.
-The tool routes and all three adapter routes (`GET /v1/adapters`, activate, deactivate)
-then also require `Authorization: Bearer <token>` whenever `--tool-auth-token` is set,
-on loopback too, and answer 401 without it.
+Tool routes, `/v1/thumbs`, `/v1/feedback` and adapter activate/deactivate accept requests
+only when the `Host` header names the bound address (any loopback name for a loopback
+bind) and any `Origin` header names the same; otherwise they answer 421 or 403. That check
+runs first. The tool routes, `/v1/thumbs`, `/v1/feedback` and all three adapter routes
+(`GET /v1/adapters`, activate, deactivate) then also require
+`Authorization: Bearer <token>` whenever `--tool-auth-token` is set, on loopback too, and
+answer 401 without it.
 
 The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
 (`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
@@ -1230,8 +1469,8 @@ checked on these routes, so a proxy can still front them under its own hostname.
 generation routes (`/v1/chat/completions`, and `/v1/messages` on vLLM).
 
 **What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
-without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
-the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
+without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs`,
+`/v1/feedback` and the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
 `/metrics` take no token on any bind, so they answer every client that can reach the port;
 put a proxy that authenticates in front of the server if that is not intended. With
 `--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks

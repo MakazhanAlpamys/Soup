@@ -22,24 +22,35 @@ CPU-testable. Model loading + live evaluation live in ``commands/ship.py``.
 
 Public surface
 --------------
-- Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``ShipVerdict``.
-- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``TASK_MODES``,
+- Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``AdapterChange``,
+  ``ShipVerdict``, and the detail of the task leg: ``TaskDetail`` (``TaskRows``,
+  ``Truncation``, ``GenerationFailures``, ``PairedSummary``), ``Judged`` and, for the ``reward``
+  mode, ``RewardSpec`` (what scored the leg; ``decimal_mean`` is how its number is made).
+- ``LegScore``: a float that also carries the per-row scores and flags it was built from.
+- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``SCHEMA_VERSION``, ``TASK_MODES``,
   ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` / ``DECISION_DONT_SHIP``, the
-  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
+  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``,
+  ``ADAPTER_CHANGE_WARN_BELOW``.
 - Pure functions: ``build_task_win``, ``compute_benchmark_deltas``,
   ``decide_ship`` (the moat), ``render_ship_panel``, ``format_ship_rubric``,
   ``verdict_from_evidence`` (the canonical evidence reader),
   ``verdict_to_dict``, ``verdict_to_evidence`` (the inverse of the ``--evidence``
   reader — makes ``soup ship`` output replayable as input, #312),
-  ``numerics_family`` / ``numerics_from_evidence`` (the #367 judge-numerics stamp).
+  ``numerics_family`` / ``numerics_from_evidence`` (the #367 judge-numerics stamp),
+  ``apply_loop_gate`` (``--gate loop-v2``: the corrections and held-out checks decide, see
+  ``utils/ship_loop_gate.py``).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+import os
+import random
+import re
+from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from types import MappingProxyType
-from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from rich.console import Group
 from rich.markup import escape
@@ -50,8 +61,24 @@ from soup_cli import __version__
 
 # Declared in the dependency-free leaf so the schema can import the bound
 # without this module (#780); re-exported so there is only one object.
-from soup_cli.utils.config_bounds import MAX_NOISE_FLOOR_RUNS, MIN_NOISE_FLOOR_RUNS
+from soup_cli.utils.config_bounds import (
+    MAX_NOISE_FLOOR_RUNS,
+    MIN_NOISE_FLOOR_RUNS,
+    has_control_character,
+)
+from soup_cli.utils.ship_loop_gate import (
+    CorrectionsCheck,
+    HeldOutCheck,
+    LoopGate,
+    decide_loop_gate,
+    gate_lines,
+    gate_reason,
+    held_out_note,
+)
 from soup_cli.utils.terminal import strip_control as for_terminal
+
+if TYPE_CHECKING:  # typing only: the row module imports this one
+    from soup_cli.utils.ship_task_rows import TaskRow
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -62,17 +89,60 @@ from soup_cli.utils.terminal import strip_control as for_terminal
 # a future optional addition cannot be silently ignored by both public readers.
 # ``provenance`` is intentionally opaque metadata, so its nested keys are not
 # part of the verdict schema.
+#
+# Schema version 2 (soup-cli 0.78) added ``schema_version``, ``judged`` and ``task_rows`` (the
+# name of the per-row file, see ``utils/ship_task_rows.py``) at the root and
+# ``rows`` / ``truncated`` / ``generation_failures`` in the task; their own keys are the
+# ``rows`` ... ``judged`` sections. ``V2_ONLY_FIELDS`` lists the paths a reader of version 1 does
+# not know: the reader refuses them under version 1.
 EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
-    "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
-    "task": frozenset({"mode", "base", "tuned"}),
+    "root": frozenset({
+        "task", "benchmarks", "noise_floor", "provenance", "numerics", "schema_version", "judged",
+        "task_rows",
+    }),
+    "task": frozenset({
+        "mode", "base", "tuned", "rows", "truncated", "generation_failures", "reward", "paired",
+    }),
     "benchmark": frozenset({"base", "tuned"}),
     "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
+    "rows": frozenset({"better", "worse", "same", "n"}),
+    "truncated": frozenset({"base", "tuned", "n", "max_new_tokens"}),
+    "generation_failures": frozenset({"base", "tuned", "n"}),
+    "judged": frozenset({"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}),
+    "reward": frozenset({"fn", "sha256"}),
+    "paired": frozenset({
+        "n", "better", "worse", "same", "mean_difference", "ci_low", "ci_high", "confidence",
+        "resamples", "seed", "underpowered",
+    }),
 })
 
+#: ``--output`` and ``--emit-evidence`` carry ``schema_version``. Absent means 1 (soup-cli 0.77.x).
+#: Version 2 adds ``task_win.rows`` / ``truncated`` / ``generation_failures`` and ``judged``.
+#: A reader of version 1 must treat a file with a ``schema_version`` it does not know as
+#: unreadable (soup-cli 0.77.x does: ``unsupported field(s): 'schema_version'``, exit 3).
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (1, 2)
+
+#: Evidence paths introduced by version 2: (section, key).
+V2_ONLY_FIELDS: Tuple[Tuple[str, str], ...] = (
+    ("root", "judged"),
+    ("root", "task_rows"),
+    ("task", "rows"),
+    ("task", "truncated"),
+    ("task", "generation_failures"),
+    ("task", "reward"),
+    ("task", "paired"),
+)
+
 # Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
-# a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
-TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
-SUPPORTED_TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
+# a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``. ``reward`` scores
+# the generated text of each row with a reward function (a float in [0, 1]) and decides on the
+# mean, with the same strict rule.
+TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise", "reward")
+SUPPORTED_TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise", "reward")
+
+#: The reward mode's mean (``decimal_mean``) and the file it names are for this mode only.
+MODE_REWARD = "reward"
 
 DECISION_SHIP = "SHIP"
 DECISION_DONT_SHIP = "DON'T SHIP"
@@ -86,6 +156,75 @@ FAILED_ADAPTER_NOOP = "adapter_noop"  # every lora_B is zero: tuned == base, not
 # Default forgetting threshold — 0.05 ABSOLUTE points, mirroring
 # ``EvalGateConfig.regression_threshold`` and ``run_gate`` semantics.
 DEFAULT_FORGETTING_THRESHOLD = 0.05
+
+# Below this changed fraction ``soup ship --adapter`` adds a warning line (#2762).
+# A display line, not a rule: the calibration table in docs/evaluation.md has
+# near-zero-learning-rate controls up to 6.5e-3 and early checkpoints of real runs
+# from 2.5e-3, so no fraction separates them and the verdict never depends on it.
+ADAPTER_CHANGE_WARN_BELOW = 1e-2
+
+# Task-leg detail: what a SHIP / DON'T SHIP is made of, shown beside the verdict and never part
+# of the decision.
+
+#: Name of the one warning the detail can raise. It is information: the verdict, ``failed_rule``
+#: and the exit code are the same with and without it.
+WARNING_TRUNCATION_GROWTH = "truncation_growth"
+
+#: ``truncation_growth`` fires when the tuned model's cut-off answers exceed the base's by at
+#: least ``max(TRUNCATION_GROWTH_MIN_ROWS, ceil(TRUNCATION_GROWTH_MIN_SHARE * n))`` rows. One or
+#: two rows never fire (greedy decoding on a GPU is not bit-stable, #376); a fall never fires.
+#: A display constant like the changed-fraction bound, NOT calibrated: no table of real runs
+#: exists yet, and it stays a warning until one does. A reported run 5 -> 14 of 64: threshold 7,
+#: rise 9, fires.
+TRUNCATION_GROWTH_MIN_ROWS = 3
+TRUNCATION_GROWTH_MIN_SHARE = 0.10
+
+#: Two per-row scores closer than this are the same row (float noise is not a change).
+ROW_SCORE_EPS = 1e-9
+
+#: What a row is, tuned against base (``row_change``); the per-row file stores one per row.
+CHANGE_BETTER = "better"
+CHANGE_WORSE = "worse"
+CHANGE_SAME = "same"
+ROW_CHANGES: Tuple[str, ...] = (CHANGE_BETTER, CHANGE_WORSE, CHANGE_SAME)
+
+#: The file ``soup ship`` writes next to ``--output`` is ``<stem>`` + this suffix, and the verdict
+#: JSON and the evidence name it (``task_rows``) by that bare file name.
+TASK_ROWS_SUFFIX = ".task-rows.jsonl"
+_MAX_TASK_ROWS_NAME_CHARS = 255
+
+# Bounds on an evidence-supplied detail block (a task file holds at most 10 000 rows, so a count
+# or an ``n`` above that cannot describe a real run). ``_MAX_EVIDENCE_ROWS`` equals
+# ``eval.custom.MAX_EVAL_TASKS``; it is not imported (this module stays light) and a test pins
+# the equality.
+_MAX_EVIDENCE_ROWS = 10_000
+#: The most rows one task leg (and so one per-row file) can have: the task-file bound.
+MAX_TASK_ROWS = _MAX_EVIDENCE_ROWS
+_MAX_EVIDENCE_NEW_TOKENS = 1 << 20
+_MAX_JUDGED_CHARS = 4096  # a path
+_MAX_CHECKPOINT_STEP = 10**15
+
+#: ``checkpoint-<digits>`` exactly: ``\Z`` (``$`` also accepts a trailing newline), ASCII digits
+#: only, and a bounded digit run so ``int()`` never sees an unbounded string.
+_CHECKPOINT_RE = re.compile(r"checkpoint-([0-9]{1,15})\Z")
+_PATH_SEPARATORS = re.compile(r"[\\/]")
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:[\\/]")
+
+# The reward mode names its function by the text of ``--reward-fn`` (a built-in name,
+# ``verifiable:<domain>`` or the path of a ``.py`` file) and, for a file, the sha256 of its bytes.
+REWARD_FN_MAX_CHARS = 512
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+# The paired summary of a reward run (tuned minus base, per row). DESCRIPTIVE: it is reported and
+# decides nothing. The interval is a percentile bootstrap over the per-row differences, drawn with
+# ``random.Random(PAIRED_BOOTSTRAP_SEED)`` (its ``random()`` is the one method Python promises to
+# keep stable across versions), so the same rows give the same interval on every machine and the
+# seed and the resample count are recorded beside it.
+PAIRED_BOOTSTRAP_SEED = 20261114
+PAIRED_BOOTSTRAP_RESAMPLES = 2000
+PAIRED_CONFIDENCE = 0.95
+_MAX_PAIRED_RESAMPLES = 1_000_000
+_MAX_PAIRED_SEED = 2**63 - 1
 
 # Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
 # format name; full-precision loads use the torch dtype that actually went to
@@ -139,6 +278,225 @@ _MAX_FLOOR_AXIS_CHARS = 256
 # Frozen dataclasses
 # ---------------------------------------------------------------------------
 
+def truncation_growth_threshold(n: int) -> int:
+    """Rows by which the tuned truncation count must exceed the base's to raise the warning.
+
+    ``max(TRUNCATION_GROWTH_MIN_ROWS, ceil(TRUNCATION_GROWTH_MIN_SHARE * n))`` in exact
+    arithmetic (a ``Fraction`` of the constant's decimal text), so no float rounding can move a
+    boundary if the share is ever changed: ``0.07 * 100`` is ``7.000000000000001``, whose float
+    ceiling is 8, not 7.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("n must be a non-negative integer")
+    share = Fraction(str(TRUNCATION_GROWTH_MIN_SHARE))
+    return max(TRUNCATION_GROWTH_MIN_ROWS, math.ceil(share * n))
+
+
+@dataclass(frozen=True)
+class TaskRows:
+    """Per-row comparison of the task leg: how many rows the tuned model got better / worse."""
+
+    better: int
+    worse: int
+    same: int
+
+    @property
+    def n(self) -> int:
+        return self.better + self.worse + self.same
+
+
+@dataclass(frozen=True)
+class Truncation:
+    """Answers that stopped at the new-token cap, for the base and the tuned model.
+
+    A count is ``None`` (never 0) when it was not measured: the generator returned a plain
+    ``str`` for some row, or a row's generation failed. ``max_new_tokens`` is the cap the task
+    leg generated with (``None`` when unknown).
+    """
+
+    base: Optional[int]
+    tuned: Optional[int]
+    n: int
+    max_new_tokens: Optional[int] = None
+
+    @property
+    def warning(self) -> Optional[str]:
+        """``truncation_growth`` when the tuned count exceeds the base's by the threshold.
+
+        Computed, never stored: it needs both counts measured. Information only.
+        """
+        if self.base is None or self.tuned is None:
+            return None
+        if self.tuned - self.base >= truncation_growth_threshold(self.n):
+            return WARNING_TRUNCATION_GROWTH
+        return None
+
+
+@dataclass(frozen=True)
+class GenerationFailures:
+    """Rows whose generation raised and was swallowed (scored as wrong), per side."""
+
+    base: int
+    tuned: int
+    n: int
+
+
+def paired_min_rows(confidence: float = PAIRED_CONFIDENCE) -> int:
+    """The fewest rows from which a two-sided sign test could reach ``confidence``.
+
+    If EVERY one of n rows got better, chance alone does that with probability ``2 / 2**n``
+    (two-sided); that can be at most ``1 - confidence`` only from the first n where
+    ``2 / 2**n <= 1 - confidence``. Below it the rows cannot support the confidence the interval
+    claims even in the best case: 5 rows give 6.25 %, 6 rows 3.1 %, at 95 %. Derived from the
+    confidence, in exact arithmetic (a ``Fraction`` of its decimal text), not a chosen row count.
+    """
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise ValueError("confidence must be a number")
+    if not math.isfinite(confidence) or not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be strictly between 0 and 1")
+    alpha = 1 - Fraction(str(float(confidence)))
+    rows = 1
+    while Fraction(2, 2**rows) > alpha:
+        rows += 1
+    return rows
+
+
+@dataclass(frozen=True)
+class PairedSummary:
+    """Tuned minus base, row by row: DESCRIPTIVE statistics of the per-row differences.
+
+    ``mean_difference`` is the exact mean of the per-row differences (``tuned - base``) of the
+    decimal numbers in the per-row file; ``ci_low`` .. ``ci_high`` is the ``confidence`` interval
+    of a percentile bootstrap of ``resamples`` resamples drawn with ``seed``; ``better`` /
+    ``worse`` / ``same`` are the counts of ``compare_rows``. Nothing here is a rule: the verdict is
+    decided on the two means alone.
+    """
+
+    n: int
+    better: int
+    worse: int
+    same: int
+    mean_difference: float
+    ci_low: float
+    ci_high: float
+    confidence: float
+    resamples: int
+    seed: int
+
+    @property
+    def underpowered(self) -> bool:
+        """True when ``n`` rows could not support the confidence even if every row got better."""
+        return self.n < paired_min_rows(self.confidence)
+
+
+@dataclass(frozen=True)
+class TaskDetail:
+    """What the task leg's number is made of. Every part is ``None`` when it was not measured."""
+
+    rows: Optional[TaskRows] = None
+    truncated: Optional[Truncation] = None
+    generation_failures: Optional[GenerationFailures] = None
+    #: One record per task (prompts, answers, scores) for the per-row file next to ``--output``.
+    #: User data, kept in memory only until that file is written: it is not compared, not shown
+    #: and not part of ``verdict_to_dict`` / ``verdict_to_evidence`` / the PR comment, and a
+    #: replay of evidence has none.
+    records: "Optional[Tuple[TaskRow, ...]]" = field(default=None, compare=False, repr=False)
+    #: The paired summary of a reward run; ``None`` for every other mode. Descriptive only.
+    paired: Optional[PairedSummary] = None
+
+    def is_empty(self) -> bool:
+        return (
+            self.rows is None
+            and self.truncated is None
+            and self.generation_failures is None
+            and self.paired is None
+        )
+
+
+@dataclass(frozen=True)
+class Judged:
+    """What was judged: the strings of the command line, and the checkpoint step they name."""
+
+    base: str
+    adapter: Optional[str] = None
+    tuned: Optional[str] = None
+    base_adapter: Optional[str] = None
+    checkpoint_step: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class RewardSpec:
+    """What scored a ``reward`` leg: the reward function as it was named, and its file's hash.
+
+    ``fn`` is the text of ``--reward-fn``: a built-in (``accuracy``, ``format``),
+    ``verifiable:math`` / ``verifiable:json_schema``, or the path of a ``.py`` file, which
+    ``soup ship`` EXECUTES.
+    ``sha256`` is the hash of the bytes of that file as they were run, ``None`` for a built-in.
+    """
+
+    fn: str
+    sha256: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fn, str) or not self.fn or len(self.fn) > REWARD_FN_MAX_CHARS:
+            raise ValueError(
+                f"reward fn must be a non-empty string of at most {REWARD_FN_MAX_CHARS} characters"
+            )
+        if "\x00" in self.fn or has_control_character(self.fn):
+            raise ValueError("reward fn must not contain a control character")
+        if self.sha256 is not None and (
+            not isinstance(self.sha256, str) or not _SHA256_HEX.match(self.sha256)
+        ):
+            raise ValueError("reward sha256 must be 64 lowercase hex digits, or null")
+
+
+class LegScore(float):
+    """A leg-1 score (a ``float`` in every other respect) that remembers what it came from.
+
+    The scorers hand back a plain-looking float, so every caller (the noise floor, a test that
+    stubs a scorer with a bare float) keeps working; ``build_task_detail`` reads the extra
+    attributes when they are there. ``row_scores`` is one score per task, in task order.
+    ``truncated`` is one flag per generated answer (``True`` / ``False`` / ``None`` for "the
+    generator could not tell", see ``GeneratedText``); a pairwise leg generates for two sides,
+    so ``truncated`` holds side A's flags and ``truncated_other`` side B's. ``failures`` counts
+    the generations that raised and were swallowed. For the per-row file a leg also keeps the
+    ``answers`` it was scored on, which of them ``failed_rows``, and the ``tasks`` behind them
+    (all in task order). ``value`` is the number the leg reports: the ``row_mean`` of
+    ``row_scores`` exactly for ``metric``, and the evaluator's own number for ``judge_score``,
+    which the rows add up to within ``JUDGE_MEAN_TOLERANCE`` (it is never rebuilt from them).
+    """
+
+    row_scores: Optional[Tuple[float, ...]]
+    truncated: Optional[Tuple[Optional[bool], ...]]
+    truncated_other: Optional[Tuple[Optional[bool], ...]]
+    failures: Optional[int]
+    answers: Optional[Tuple[str, ...]]
+    failed_rows: Optional[Tuple[bool, ...]]
+    tasks: Optional[Tuple[object, ...]]
+
+    def __new__(
+        cls,
+        value: float,
+        *,
+        row_scores: Optional[Sequence[float]] = None,
+        truncated: Optional[Sequence[Optional[bool]]] = None,
+        truncated_other: Optional[Sequence[Optional[bool]]] = None,
+        failures: Optional[int] = None,
+        answers: Optional[Sequence[str]] = None,
+        failed_rows: Optional[Sequence[bool]] = None,
+        tasks: Optional[Sequence[object]] = None,
+    ) -> "LegScore":
+        instance = super().__new__(cls, value)
+        instance.row_scores = None if row_scores is None else tuple(row_scores)
+        instance.truncated = None if truncated is None else tuple(truncated)
+        instance.truncated_other = None if truncated_other is None else tuple(truncated_other)
+        instance.failures = failures
+        instance.answers = None if answers is None else tuple(answers)
+        instance.failed_rows = None if failed_rows is None else tuple(failed_rows)
+        instance.tasks = None if tasks is None else tuple(tasks)
+        return instance
+
+
 @dataclass(frozen=True)
 class TaskWin:
     """Leg 1 — did the tuned model beat the base model on the target task?"""
@@ -147,6 +505,12 @@ class TaskWin:
     base: float
     tuned: float
     won: bool  # tuned > base (STRICT)
+    #: What the two numbers are made of (rows better / worse, cut-off answers, failed
+    #: generations). ``None`` when the leg could not say (an evidence file of version 1, an
+    #: adapter that changes nothing). Never part of the decision.
+    detail: Optional[TaskDetail] = None
+    #: What scored the leg: set for ``mode == "reward"`` and for no other mode.
+    reward: Optional[RewardSpec] = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +564,41 @@ class NoiseFloor:
 
 
 @dataclass(frozen=True)
+class AdapterChange:
+    """How much of the base an adapter's merged update changes (#2762).
+
+    ``changed`` of ``elements`` (the elements of the ``modules`` target modules)
+    differ in value after the update is added in the base dtype. ``reason`` is set
+    instead when the adapter or base could not be measured; the counts are then 0.
+    """
+
+    changed: int = 0
+    elements: int = 0
+    modules: int = 0
+    base_dtypes: Tuple[str, ...] = ()
+    reason: Optional[str] = None
+
+    @classmethod
+    def not_measured(cls, reason: str) -> "AdapterChange":
+        return cls(reason=reason or "unknown reason")
+
+    @property
+    def measured(self) -> bool:
+        return self.reason is None
+
+    @property
+    def fraction(self) -> Optional[float]:
+        if not self.measured or self.elements <= 0:
+            return None
+        return self.changed / self.elements
+
+    @property
+    def warning(self) -> bool:
+        fraction = self.fraction
+        return fraction is not None and fraction < ADAPTER_CHANGE_WARN_BELOW
+
+
+@dataclass(frozen=True)
 class ShipVerdict:
     """The binary decision plus the evidence that produced it."""
 
@@ -216,6 +615,21 @@ class ShipVerdict:
     #: pre-#367 evidence that never stamped it — the panel then says
     #: ``unstamped`` rather than implying bf16.
     numerics: Optional[str] = None
+    #: Set only by a live ``--adapter`` run that reached the evaluation (#2762).
+    #: Display only: no rule reads it.
+    adapter_change: Optional[AdapterChange] = None
+    #: What was judged (the strings of the command line and the checkpoint step they name).
+    #: ``None`` for a verdict that was not produced by a live run and whose evidence did not
+    #: record it (a file of version 1). Never part of the decision.
+    judged: Optional[Judged] = None
+    #: ``soup ship --base-adapter``: the LoRA adapter the BEFORE side was loaded with
+    #: (before = base + this adapter). ``None`` means the before side is the bare base
+    #: model, which is every verdict not produced by a live ``--base-adapter`` run.
+    base_adapter: Optional[str] = None
+    #: ``soup ship --gate loop-v2``: what the gate measured (the corrections and held-out checks)
+    #: and whether the canary settles a DON'T SHIP. ``None`` for every verdict not produced under
+    #: the gate, which keeps their output unchanged.
+    loop_gate: Optional[LoopGate] = None
 
 
 # ---------------------------------------------------------------------------
@@ -364,27 +778,293 @@ def _floor_of(noise_floor: Optional[NoiseFloor], axis: str) -> float:
     return noise_floor.of(axis)
 
 
+def _score_tuple(values: Sequence[object], name: str) -> Tuple[float, ...]:
+    return tuple(_validate_score(value, f"{name}[{index}]") for index, value in enumerate(values))
+
+
+def _flag_tuple(flags: Sequence[object], name: str) -> Tuple[Optional[bool], ...]:
+    out: List[Optional[bool]] = []
+    for index, flag in enumerate(flags):
+        if flag is not None and not isinstance(flag, bool):
+            raise TypeError(f"{name}[{index}] must be True, False or None")
+        out.append(flag)
+    return tuple(out)
+
+
+def row_change(base_score: float, tuned_score: float) -> str:
+    """One row, tuned against base: better iff ``tuned > base + ROW_SCORE_EPS``, worse iff
+    ``tuned < base - ROW_SCORE_EPS``, the same otherwise. The one definition of the three
+    classes: ``compare_rows`` counts them and the per-row file stores them."""
+    if tuned_score > base_score + ROW_SCORE_EPS:
+        return CHANGE_BETTER
+    if tuned_score < base_score - ROW_SCORE_EPS:
+        return CHANGE_WORSE
+    return CHANGE_SAME
+
+
+def compare_rows(
+    base_scores: Sequence[object], tuned_scores: Sequence[object]
+) -> TaskRows:
+    """How many rows the tuned model got better / worse / the same, from per-row scores.
+
+    The classes are those of ``row_change``, so ``better + worse + same`` is the row count.
+    """
+    base = _score_tuple(base_scores, "base row score")
+    tuned = _score_tuple(tuned_scores, "tuned row score")
+    if len(base) != len(tuned):
+        raise ValueError("base and tuned need the same number of rows to be compared")
+    changes = [row_change(base_score, tuned_score) for base_score, tuned_score in zip(base, tuned)]
+    better = changes.count(CHANGE_BETTER)
+    worse = changes.count(CHANGE_WORSE)
+    return TaskRows(better=better, worse=worse, same=len(base) - better - worse)
+
+
+def _finite_float(value: object, name: str) -> float:
+    """A finite number as a ``float``: refuses a bool, a non-number, NaN, inf and a huge int."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number")
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float
+        raise ValueError(f"{name} must be finite") from None
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def decimal_mean(scores: Sequence[object]) -> float:
+    """The mean of per-row scores as the exact mean of the decimal numbers they are written as.
+
+    Each score is read as the shortest decimal that round-trips (``repr``, which is also how the
+    per-row file writes it), the decimals are added in exact arithmetic and divided by the count,
+    and the result is rounded to a ``float`` ONCE. So the same scores in any order give the same
+    float, and scores that add up to the same decimal (0.3 + 0.0 and 0.1 + 0.2) give the same
+    float, where a binary left-to-right sum differs by a rounding: that rounding is what turned a
+    mathematical tie into a win by one ulp. Used for the ``reward`` mode, whose scores are
+    arbitrary floats; ``metric`` keeps ``correct / total``.
+    """
+    total = Fraction(0)
+    count = 0
+    for score in scores:
+        total += Fraction(repr(_finite_float(score, "a row score")))
+        count += 1
+    if count == 0:
+        raise ValueError("a mean needs at least one score")
+    return float(total / count)
+
+
+def build_paired_summary(
+    base_scores: Sequence[object], tuned_scores: Sequence[object]
+) -> PairedSummary:
+    """The paired summary of tuned minus base over the rows of a reward run (descriptive)."""
+    base = _score_tuple(base_scores, "base row score")
+    tuned = _score_tuple(tuned_scores, "tuned row score")
+    if len(base) != len(tuned):
+        raise ValueError("base and tuned need the same number of rows to be compared")
+    size = len(base)
+    if size == 0:
+        raise ValueError("a paired summary needs at least one row")
+    rows = compare_rows(base, tuned)
+    exact = (
+        sum(Fraction(repr(score)) for score in tuned) - sum(Fraction(repr(score)) for score in base)
+    ) / size
+    # Sorted, so the same rows in any order are the same resamples; each resample is summed with
+    # ``math.fsum`` (exactly rounded), because ``sum()`` of floats changed in Python 3.12 and the
+    # interval would differ between 3.11 and 3.12 in its last digits.
+    differences = sorted(t - b for b, t in zip(base, tuned))
+    generator = random.Random(PAIRED_BOOTSTRAP_SEED)
+    draw = generator.random
+    last = size - 1
+    means = sorted(
+        math.fsum(differences[min(last, int(draw() * size))] for _ in range(size)) / size
+        for _ in range(PAIRED_BOOTSTRAP_RESAMPLES)
+    )
+    tail = math.floor(
+        Fraction(PAIRED_BOOTSTRAP_RESAMPLES) * (1 - Fraction(str(PAIRED_CONFIDENCE))) / 2
+    )
+    return PairedSummary(
+        n=size,
+        better=rows.better,
+        worse=rows.worse,
+        same=rows.same,
+        mean_difference=float(exact),
+        ci_low=means[tail],
+        ci_high=means[PAIRED_BOOTSTRAP_RESAMPLES - 1 - tail],
+        confidence=PAIRED_CONFIDENCE,
+        resamples=PAIRED_BOOTSTRAP_RESAMPLES,
+        seed=PAIRED_BOOTSTRAP_SEED,
+    )
+
+
+def count_truncated(flags: Sequence[Optional[bool]]) -> Optional[int]:
+    """Answers that hit the cap, from one flag per answer; ``None`` when any flag is unknown.
+
+    One unmeasured answer makes the whole count unmeasured: a count that skipped it would read
+    as measured over every row. ``None`` is never read as ``False``.
+    """
+    total = 0
+    for flag in _flag_tuple(flags, "truncated flag"):
+        if flag is None:
+            return None
+        total += flag
+    return total
+
+
+def build_truncation(
+    base_flags: Sequence[Optional[bool]],
+    tuned_flags: Sequence[Optional[bool]],
+    *,
+    max_new_tokens: Optional[int] = None,
+) -> Truncation:
+    """The two truncation counts of a task leg (one flag per answer and side)."""
+    base = _flag_tuple(base_flags, "base truncated flag")
+    tuned = _flag_tuple(tuned_flags, "tuned truncated flag")
+    if len(base) != len(tuned):
+        raise ValueError("base and tuned need the same number of rows to be compared")
+    return Truncation(
+        base=count_truncated(base),
+        tuned=count_truncated(tuned),
+        n=len(base),
+        max_new_tokens=max_new_tokens,
+    )
+
+
+def build_task_detail(
+    base_leg: object,
+    tuned_leg: object,
+    *,
+    max_new_tokens: Optional[int] = None,
+    paired: bool = False,
+) -> Optional[TaskDetail]:
+    """The task leg's detail from the two ``LegScore`` s, or ``None`` when they carry none.
+
+    A plain float on either side (a stubbed scorer) means the leg could not say, and gives
+    ``None``: the verdict is built exactly as without the detail. ``paired`` (the reward mode)
+    adds the descriptive paired summary of the per-row scores.
+    """
+    if not isinstance(base_leg, LegScore) or not isinstance(tuned_leg, LegScore):
+        return None
+    rows = None
+    summary = None
+    if base_leg.row_scores is not None and tuned_leg.row_scores is not None:
+        rows = compare_rows(base_leg.row_scores, tuned_leg.row_scores)
+        if paired:
+            summary = build_paired_summary(base_leg.row_scores, tuned_leg.row_scores)
+    truncated = None
+    if base_leg.truncated is not None and tuned_leg.truncated is not None:
+        truncated = build_truncation(
+            base_leg.truncated, tuned_leg.truncated, max_new_tokens=max_new_tokens
+        )
+    failures = None
+    if base_leg.failures is not None and tuned_leg.failures is not None:
+        size = next(
+            (
+                len(seq)
+                for seq in (base_leg.row_scores, base_leg.truncated)
+                if seq is not None
+            ),
+            None,
+        )
+        if size is not None:
+            failures = GenerationFailures(
+                base=base_leg.failures, tuned=tuned_leg.failures, n=size
+            )
+    detail = TaskDetail(
+        rows=rows, truncated=truncated, generation_failures=failures, paired=summary
+    )
+    return None if detail.is_empty() else detail
+
+
+def checkpoint_step_of(adapter: Optional[str]) -> Optional[int]:
+    """N when the LAST path component of ``adapter`` is exactly ``checkpoint-N``, else ``None``.
+
+    Never guessed: ``checkpoint-12-old``, ``ckpt-12``, ``checkpoint-`` and a checkpoint that is
+    not the last component all give ``None``. Both separators count (a Windows path) and a
+    trailing one is ignored.
+    """
+    if not isinstance(adapter, str):
+        return None
+    last = _PATH_SEPARATORS.split(adapter.rstrip("\\/"))[-1]
+    match = _CHECKPOINT_RE.match(last)
+    return int(match.group(1)) if match else None
+
+
+def task_rows_pointer_error(value: object) -> Optional[str]:
+    """Why ``value`` cannot be the ``task_rows`` pointer, or ``None`` when it can.
+
+    The pointer is a bare file name ending in ``TASK_ROWS_SUFFIX``: no directory part (either
+    separator), no drive, no control character, at most 255 characters. It is resolved next to
+    the file that holds it, so it can never name a place outside that directory. The writer
+    refuses any anchor whose derived name this would refuse, so a reader never meets a pointer
+    the command wrote and cannot take.
+    """
+    reason = (
+        f"must be a bare file name ending in {TASK_ROWS_SUFFIX} (no directory part, no "
+        f"control character, at most {_MAX_TASK_ROWS_NAME_CHARS} characters)"
+    )
+    if not isinstance(value, str):
+        return reason
+    if not value.endswith(TASK_ROWS_SUFFIX) or len(value) == len(TASK_ROWS_SUFFIX):
+        return reason
+    if len(value) > _MAX_TASK_ROWS_NAME_CHARS:
+        return reason
+    if _PATH_SEPARATORS.search(value) or _DRIVE_PREFIX.match(value):
+        return reason
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value):
+        return reason
+    return None
+
+
+def build_judged(
+    *,
+    base: str,
+    adapter: Optional[str] = None,
+    tuned: Optional[str] = None,
+    base_adapter: Optional[str] = None,
+) -> Judged:
+    """What a live run judged, from the command-line strings exactly as given."""
+    return Judged(
+        base=base,
+        adapter=adapter,
+        tuned=tuned,
+        base_adapter=base_adapter,
+        checkpoint_step=checkpoint_step_of(adapter),
+    )
+
+
 def build_task_win(
     mode: str,
     base: object,
     tuned: object,
     *,
     noise_floor: Optional[NoiseFloor] = None,
+    detail: Optional[TaskDetail] = None,
+    reward: Optional[RewardSpec] = None,
 ) -> TaskWin:
     """Build a leg-1 ``TaskWin``. ``won`` is the STRICT inequality tuned > base.
 
     With a ``noise_floor``, the margin must also clear what the instrument can
     resolve on ``TASK_AXIS``: a win of 0.004 measured on an instrument with a
     0.020 floor is not a win, it is the instrument. Without one the behaviour
-    is byte-identical to v0.73.1.
+    is byte-identical to v0.73.1. ``detail`` rides along and decides nothing. ``reward`` names
+    what scored a ``reward`` leg: required for that mode, refused for every other.
     """
     if mode not in TASK_MODES:
         raise ValueError(f"mode must be one of {TASK_MODES}, got {mode!r}")
+    if detail is not None and not isinstance(detail, TaskDetail):
+        raise TypeError("detail must be a TaskDetail instance")
+    if reward is not None and not isinstance(reward, RewardSpec):
+        raise TypeError("reward must be a RewardSpec instance")
+    if mode == MODE_REWARD and reward is None:
+        raise ValueError("a reward verdict must name its reward function (reward=RewardSpec)")
+    if mode != MODE_REWARD and reward is not None:
+        raise ValueError(f"reward applies only to mode {MODE_REWARD!r}, not {mode!r}")
     base_f = _validate_score(base, "task base")
     tuned_f = _validate_score(tuned, "task tuned")
     floor = _floor_of(noise_floor, TASK_AXIS)
     return TaskWin(
-        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor
+        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor, detail=detail,
+        reward=reward,
     )
 
 
@@ -494,15 +1174,10 @@ def decide_ship(
     # Canonicalise the task win for the SAME reason the deltas are canonicalised
     # above: the panel renders ``verdict.task_win.won``, so a TaskWin built
     # without the floor would print "won" beside a DON'T SHIP decided with it.
+    # ``replace`` and not a rebuilt ``TaskWin``: every field the caller set (the task detail
+    # included) survives; only ``won`` is recomputed.
     canonical_win = (
-        task_win
-        if task_win.won == leg1_pass
-        else TaskWin(
-            mode=task_win.mode,
-            base=task_win.base,
-            tuned=task_win.tuned,
-            won=leg1_pass,
-        )
+        task_win if task_win.won == leg1_pass else replace(task_win, won=leg1_pass)
     )
     any_regressed = any(item.regressed for item in canonical)
 
@@ -526,6 +1201,35 @@ def decide_ship(
     )
 
 
+def apply_loop_gate(
+    verdict: ShipVerdict, corrections: CorrectionsCheck, held_out: HeldOutCheck,
+) -> ShipVerdict:
+    """Decide ``--gate loop-v2`` from the plain ``decide_ship`` verdict of the same run.
+
+    ``decide_ship`` is three rules: the general suites measured (``missing_baseline``), the task
+    win (``task_win``) and no benchmark regressed (``regression``). Under the gate the suites keep
+    their two rules exactly as they are (a benchmark is compared against the noise floor when one
+    was measured, because ``verdict.benchmark_deltas`` is already canonical), the task win stops
+    deciding and stays on the verdict as information, and the corrections and held-out checks
+    decide in its place: SHIP iff check 1 passed AND check 2 is not a fail AND the suites hold.
+    """
+    if not isinstance(verdict, ShipVerdict):
+        raise TypeError("verdict must be a ShipVerdict instance")
+    if not verdict.benchmark_deltas:
+        suites_failed_rule: Optional[str] = FAILED_MISSING_BASELINE
+    elif any(item.regressed for item in verdict.benchmark_deltas):
+        suites_failed_rule = FAILED_REGRESSION
+    else:
+        suites_failed_rule = None
+    decision = decide_loop_gate(corrections, held_out, suites_failed_rule=suites_failed_rule)
+    return replace(
+        verdict,
+        decision=DECISION_SHIP if decision.ship else DECISION_DONT_SHIP,
+        failed_rule=decision.failed_rule,
+        loop_gate=LoopGate(corrections, held_out, decision.canary_decides),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reason strings (shared by rubric + panel)
 # ---------------------------------------------------------------------------
@@ -536,6 +1240,31 @@ def _regressed_names(verdict: ShipVerdict) -> List[str]:
 
 def _failed_rule_explanation(verdict: ShipVerdict) -> str:
     """One-line, human-readable reason for the failed rule (or a SHIP note)."""
+    if verdict.loop_gate is not None:
+        # The task win does not decide under the gate, so "even though the task improved" and
+        # "task did not improve" would both be wrong here.
+        if verdict.failed_rule is None:
+            note = held_out_note(verdict.loop_gate.held_out)
+            if verdict.loop_gate.held_out.outcome == "not_measured":
+                return (
+                    f"Corrections learned and no general benchmark regressed past "
+                    f"{verdict.forgetting_threshold:.2%}; the {note}."
+                )
+            return (
+                "Corrections learned, no held-out edit significantly worse, and no general "
+                f"benchmark regressed past {verdict.forgetting_threshold:.2%}."
+                + (f" Note: {note}." if note else "")
+            )
+        reason = gate_reason(verdict.failed_rule, verdict.loop_gate)
+        if reason is not None:
+            return reason
+        if verdict.failed_rule == FAILED_REGRESSION:
+            names = _regressed_names(verdict)
+            joined = ", ".join(names) if names else "(unknown)"
+            return (
+                f"General benchmark(s) regressed past {verdict.forgetting_threshold:.2%}: "
+                f"{joined}."
+            )
     if verdict.failed_rule is None:
         return (
             "Task improved AND no general benchmark regressed past "
@@ -581,11 +1310,169 @@ def _failed_rule_explanation(verdict: ShipVerdict) -> str:
     return f"Unrecognised failed rule: {verdict.failed_rule!r}"
 
 
+def adapter_change_lines(change: AdapterChange) -> List[str]:
+    """Plain-text lines for the adapter-update number (and its warning)."""
+    if not change.measured:
+        return [
+            f"Adapter update: not measured ({change.reason}). Only plain LoRA "
+            "adapters on safetensors bases are measured; nothing was checked here."
+        ]
+    fraction = change.fraction
+    dtypes = ", ".join(change.base_dtypes) or "unknown dtype"
+    if fraction is None:
+        return [f"Adapter update: its {change.modules} target modules have no elements."]
+    lines = [
+        f"Adapter update: changes {change.changed:,} of {change.elements:,} elements "
+        f"of its {change.modules} target modules in the base dtype ({dtypes}), "
+        f"fraction {fraction:.3e}."
+    ]
+    if change.warning:
+        lines.append(
+            f"Warning: the adapter changes fewer than {ADAPTER_CHANGE_WARN_BELOW:.0%} of "
+            f"the elements of its target modules ({fraction:.3e} < "
+            f"{ADAPTER_CHANGE_WARN_BELOW:.0e}). Adapters trained with a near-zero "
+            "learning rate sit in this range, and so can an early checkpoint of a real "
+            "run. This line does not change the verdict."
+        )
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Task-leg detail lines (shared by the rubric, the panel and a replay of evidence)
+# ---------------------------------------------------------------------------
+
+def _count_text(count: Optional[int]) -> str:
+    return "not measured" if count is None else str(count)
+
+
+def detail_lines(win: TaskWin) -> List[Tuple[str, bool]]:
+    """The task leg's detail as ``(text, is_warning)`` lines; empty when there is none.
+
+    Plain text with integers and constants only (no user string), so a caller escapes it for
+    its own medium. A live run and a replay of its evidence print the same lines.
+    """
+    detail = win.detail
+    if detail is None:
+        return []
+    lines: List[Tuple[str, bool]] = []
+    if detail.rows is not None:
+        rows = detail.rows
+        lines.append((
+            f"Rows (tuned vs base): better {rows.better}, worse {rows.worse}, "
+            f"same {rows.same} of {rows.n}",
+            False,
+        ))
+    if detail.paired is not None:
+        paired = detail.paired
+        lines.append((
+            f"Paired difference (tuned - base per row): mean {paired.mean_difference:+.4f}, "
+            f"{paired.confidence:.0%} interval [{paired.ci_low:+.4f}, {paired.ci_high:+.4f}] "
+            f"(bootstrap, {paired.resamples} resamples, seed {paired.seed}; descriptive, "
+            "decides nothing)",
+            False,
+        ))
+        if paired.underpowered:
+            lines.append((
+                f"Underpowered: {paired.n} rows; even if every row were better, a two-sided "
+                f"sign test could not reach {paired.confidence:.0%} (at least "
+                f"{paired_min_rows(paired.confidence)} rows are needed). This line does not "
+                "change the verdict.",
+                True,
+            ))
+    if detail.truncated is not None:
+        cut = detail.truncated
+        text = (
+            f"Truncated answers: base {_count_text(cut.base)}, "
+            f"tuned {_count_text(cut.tuned)} of {cut.n}"
+        )
+        if cut.max_new_tokens is not None:
+            text += f" (cap {cut.max_new_tokens} new tokens)"
+        lines.append((text, False))
+        warning = cut.warning
+        if warning is not None and cut.base is not None and cut.tuned is not None:
+            lines.append((
+                f"Warning {warning}: truncated {cut.base} -> {cut.tuned} of {cut.n} "
+                f"(rise {cut.tuned - cut.base}, threshold {truncation_growth_threshold(cut.n)})",
+                True,
+            ))
+    if detail.generation_failures is not None:
+        failed = detail.generation_failures
+        any_failed = failed.base > 0 or failed.tuned > 0
+        text = f"Generation failures: base {failed.base}, tuned {failed.tuned} of {failed.n}"
+        if any_failed:
+            text += " (scored as wrong)"
+        lines.append((text, any_failed))
+    return lines
+
+
+def _public_name(value: str) -> str:
+    """What a judged value may show in text that leaves this machine (the ``--push`` comment).
+
+    A local path shows only its last component, so the directories above it (a user name, a
+    project layout) are not posted. A value is a local path when it looks absolute (a leading
+    separator, a drive letter, ``~``) or names something that exists here; anything else, a Hub
+    id such as ``org/name``, is shown whole. The terminal, the JSON and the evidence keep the
+    value exactly as given.
+    """
+    looks_absolute = value.startswith(("/", "\\", "~")) or _DRIVE_PREFIX.match(value) is not None
+    try:
+        exists = os.path.exists(value)
+    except (OSError, ValueError):
+        exists = False
+    if not (looks_absolute or exists):
+        return value
+    parts = [part for part in _PATH_SEPARATORS.split(value) if part]
+    return parts[-1] if parts else value
+
+
+def reward_line(win: TaskWin, *, public: bool = False) -> Optional[str]:
+    """``Reward function: ...`` for a ``reward`` leg, or ``None`` for every other mode.
+
+    Names the function as it was given and the start of its file's hash. The text comes from the
+    command line, a config or an evidence file: control bytes are stripped. With ``public`` a
+    local path is cut to its last component (see ``_public_name``): the text posted by ``--push``.
+    """
+    reward = win.reward
+    if reward is None:
+        return None
+    shown = for_terminal(_public_name(reward.fn) if public else reward.fn)
+    if reward.sha256 is None:
+        return f"Reward function: {shown}"
+    return f"Reward function: {shown} (sha256 {reward.sha256[:12]})"
+
+
+def judged_line(verdict: ShipVerdict, *, public: bool = False) -> Optional[str]:
+    """``Judged: ...`` for the terminal, or ``None`` when the verdict did not record it.
+
+    The strings come from the command line (or an evidence file): control bytes are stripped.
+    With ``public`` a local path is cut to its last component (see ``_public_name``): that is
+    the text posted to GitHub by ``--push``.
+    """
+    judged = verdict.judged
+    if judged is None:
+        return None
+
+    def shown(value: str) -> str:
+        return for_terminal(_public_name(value) if public else value)
+
+    parts = [f"base {shown(judged.base)}"]
+    if judged.base_adapter is not None:
+        parts.append(f"base-adapter {shown(judged.base_adapter)}")
+    if judged.adapter is not None:
+        text = f"adapter {shown(judged.adapter)}"
+        if judged.checkpoint_step is not None:
+            text += f" (checkpoint step {judged.checkpoint_step})"
+        parts.append(text)
+    if judged.tuned is not None:
+        parts.append(f"tuned {shown(judged.tuned)}")
+    return "Judged: " + ", ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Rendering — plain text (for --output / clipboard) and Rich (for the terminal)
 # ---------------------------------------------------------------------------
 
-def format_ship_rubric(verdict: ShipVerdict) -> str:
+def format_ship_rubric(verdict: ShipVerdict, *, public: bool = False) -> str:
     """Plain-text, one-screen verdict (stable output; NO Rich markup applied).
 
     The output may contain user-controlled benchmark names verbatim. Callers
@@ -599,15 +1486,25 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
     won_str = "won" if win.won else "no win"
     parts: List[str] = []
     parts.append(f"Decision:    {verdict.decision}")
+    if verdict.loop_gate is not None:
+        parts.append(f"Gate:        {verdict.loop_gate.gate}")
     if verdict.numerics is not None:
         parts.append(f"Judge numerics: {verdict.numerics}")
     else:
         parts.append("Judge numerics: unstamped")
+    judged = judged_line(verdict, public=public)
+    if judged is not None:
+        parts.append(judged)
     parts.append("")
     parts.append(
         f"Leg 1 task win ({win.mode}): "
         f"{win.base:.4f} -> {win.tuned:.4f}  [{won_str}]"
+        + ("  (information only)" if verdict.loop_gate is not None else "")
     )
+    reward = reward_line(win, public=public)
+    if reward is not None:
+        parts.append(f"  {reward}")
+    parts.extend(f"  {text}" for text, _warning in detail_lines(win))
     parts.append(
         f"Leg 2 general suite (forgetting_threshold {verdict.forgetting_threshold:.2%}):"
     )
@@ -620,6 +1517,12 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
             )
     else:
         parts.append("  (no benchmarks measured)")
+    if verdict.adapter_change is not None:
+        parts.append("")
+        parts.extend(adapter_change_lines(verdict.adapter_change))
+    if verdict.loop_gate is not None:
+        parts.append("")
+        parts.extend(gate_lines(verdict.loop_gate))
     parts.append("")
     if verdict.failed_rule is not None:
         parts.append(f"Failed rule: {verdict.failed_rule}")
@@ -651,6 +1554,19 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
         f"{escape(verdict.numerics) if verdict.numerics is not None else 'unstamped'}"
         "[/]"
     )
+    if verdict.base_adapter is not None:
+        # The path comes from the command line: markup-escape it AND strip control bytes.
+        header += f"\n[dim]Base adapter: {escape(for_terminal(verdict.base_adapter))}[/]"
+    reward = reward_line(win)
+    if reward is not None:
+        # reward_line stripped the control bytes (the name is user input); escape the markup.
+        header += f"\n[dim]{escape(reward)}[/]"
+    for text, is_warning in detail_lines(win):
+        header += f"\n[{'yellow' if is_warning else 'dim'}]{escape(text)}[/]"
+    judged = judged_line(verdict)
+    if judged is not None:
+        # judged_line stripped the control bytes (the strings are user input); escape the markup.
+        header += f"\n[dim]{escape(judged)}[/]"
 
     table = Table(
         title=f"Leg 2 general suite (threshold {verdict.forgetting_threshold:.2%})",
@@ -685,6 +1601,21 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
             f"[dim]Measured over {verdict.noise_floor.runs} base repeats. Each "
             "axis is gated at max(threshold, its floor). A floor sizes this "
             "instrument's resolution; it does not calibrate a threshold.[/]",
+            "",
+        ])
+    if verdict.adapter_change is not None:
+        # The reason can quote tensor names from the adapter file.
+        for line in adapter_change_lines(verdict.adapter_change):
+            text = escape(for_terminal(line))
+            if line.startswith("Warning:"):
+                text = "[yellow]" + text + "[/]"
+            parts.append(text)
+        parts.append("")
+    if verdict.loop_gate is not None:
+        parts.extend([
+            f"[bold]Gate {escape(verdict.loop_gate.gate)}[/] "
+            "[dim](the task win above is information only)[/]",
+            *(f"  {escape(line)}" for line in gate_lines(verdict.loop_gate)),
             "",
         ])
     parts.append(footer)
@@ -749,7 +1680,8 @@ def render_ship_pr_markdown(verdict: ShipVerdict) -> str:
     """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
-    body = format_ship_rubric(verdict)
+    # Posted to GitHub: a local path in the "Judged:" line is cut to its last component.
+    body = format_ship_rubric(verdict, public=True)
     fence = "`" * max(_MIN_MD_FENCE_LEN, _longest_backtick_run(body) + 1)
     emoji = "✅" if verdict.decision == DECISION_SHIP else "❌"
     return (
@@ -763,10 +1695,61 @@ def render_ship_pr_markdown(verdict: ShipVerdict) -> str:
 # Serialization (--output)
 # ---------------------------------------------------------------------------
 
+def _rows_dict(rows: TaskRows) -> Dict[str, object]:
+    return {"better": rows.better, "worse": rows.worse, "same": rows.same, "n": rows.n}
+
+
+def _truncated_dict(cut: Truncation, *, with_warning: bool) -> Dict[str, object]:
+    block: Dict[str, object] = {
+        "base": cut.base,
+        "tuned": cut.tuned,
+        "n": cut.n,
+        "max_new_tokens": cut.max_new_tokens,
+    }
+    if with_warning:
+        block["warning"] = cut.warning
+    return block
+
+
+def _failures_dict(failed: GenerationFailures) -> Dict[str, object]:
+    return {"base": failed.base, "tuned": failed.tuned, "n": failed.n}
+
+
+def _reward_dict(reward: RewardSpec) -> Dict[str, object]:
+    return {"fn": reward.fn, "sha256": reward.sha256}
+
+
+def _paired_dict(paired: PairedSummary) -> Dict[str, object]:
+    return {
+        "n": paired.n,
+        "better": paired.better,
+        "worse": paired.worse,
+        "same": paired.same,
+        "mean_difference": paired.mean_difference,
+        "ci_low": paired.ci_low,
+        "ci_high": paired.ci_high,
+        "confidence": paired.confidence,
+        "resamples": paired.resamples,
+        "seed": paired.seed,
+        "underpowered": paired.underpowered,
+    }
+
+
+def _judged_dict(judged: Judged) -> Dict[str, object]:
+    return {
+        "base": judged.base,
+        "adapter": judged.adapter,
+        "tuned": judged.tuned,
+        "base_adapter": judged.base_adapter,
+        "checkpoint_step": judged.checkpoint_step,
+    }
+
+
 def verdict_to_evidence(
     verdict: ShipVerdict,
     *,
     provenance: Optional[Mapping[str, object]] = None,
+    task_rows: Optional[str] = None,
 ) -> Dict[str, object]:
     """Project a verdict into the ``--evidence`` INPUT schema (the inverse read).
 
@@ -784,18 +1767,55 @@ def verdict_to_evidence(
     staleness gate uses ``provenance.config_sha`` to bind evidence to the exact
     config that produced it (v0.71.39). ``numerics`` (optional) is the actual
     live-eval load precision; the gate compares its family against ``--config``
-    (#367).
+    (#367). ``task_rows`` (optional) is the bare name of the per-row file next to this one
+    (``task_rows_pointer_error``); like ``provenance`` it is metadata of the file, not part of
+    the verdict, and the reader discards it after checking it.
     """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
     win = verdict.task_win
+    task_block: Dict[str, object] = {"mode": win.mode, "base": win.base, "tuned": win.tuned}
     evidence: Dict[str, object] = {
-        "task": {"mode": win.mode, "base": win.base, "tuned": win.tuned},
+        "task": task_block,
         "benchmarks": {
             item.name: {"base": item.base, "tuned": item.tuned}
             for item in verdict.benchmark_deltas
         },
     }
+    # Schema version 2: the task detail and what was judged. Each block is written only when it
+    # was measured, and the version is stamped only when something version 2 is written, so a
+    # verdict that carries none of it (a replayed version-1 file) is still a version-1 file that
+    # soup-cli 0.77.x can read. The truncation warning is NOT stored: it is computed from the
+    # counts on every read, so a stored warning can never contradict its own counts.
+    detail = win.detail
+    carries_v2 = False
+    if detail is not None:
+        if detail.rows is not None:
+            task_block["rows"] = _rows_dict(detail.rows)
+            carries_v2 = True
+        if detail.truncated is not None:
+            task_block["truncated"] = _truncated_dict(detail.truncated, with_warning=False)
+            carries_v2 = True
+        if detail.generation_failures is not None:
+            task_block["generation_failures"] = _failures_dict(detail.generation_failures)
+            carries_v2 = True
+        if detail.paired is not None:
+            task_block["paired"] = _paired_dict(detail.paired)
+            carries_v2 = True
+    if win.reward is not None:
+        task_block["reward"] = _reward_dict(win.reward)
+        carries_v2 = True
+    if verdict.judged is not None:
+        evidence["judged"] = _judged_dict(verdict.judged)
+        carries_v2 = True
+    if task_rows is not None:
+        pointer_error = task_rows_pointer_error(task_rows)
+        if pointer_error is not None:
+            raise ValueError(f"task_rows {pointer_error}")
+        evidence["task_rows"] = task_rows
+        carries_v2 = True
+    if carries_v2:
+        evidence["schema_version"] = SCHEMA_VERSION
     # A verdict decided against a measured floor does NOT replay without it —
     # the offline reader would recompute both legs at the bare threshold and
     # could return the opposite decision. #312's property is that the output is
@@ -877,6 +1897,285 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     )
 
 
+def _evidence_schema_version(payload: Mapping[object, object]) -> int:
+    """The evidence's ``schema_version``: absent is 1 (soup-cli 0.77.x), 1 and 2 are read.
+
+    Anything else, a bool and a float included, is refused with the key named. A reader never
+    guesses what a version it does not know means.
+    """
+    if "schema_version" not in payload:
+        return 1
+    value = payload["schema_version"]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value not in SUPPORTED_SCHEMA_VERSIONS
+    ):
+        shown = (
+            str(value)
+            if isinstance(value, int) and not isinstance(value, bool) and abs(value) < 10**6
+            else type(value).__name__
+        )
+        raise ValueError(f"evidence.schema_version must be 1 or 2, got {shown}")
+    return value
+
+
+def _refuse_v2_fields_under_v1(
+    payload: Mapping[object, object], task: Mapping[object, object]
+) -> None:
+    """Version 1 (or an absent version) does not know the version-2 fields: refuse, naming one."""
+    for section, key in V2_ONLY_FIELDS:
+        block = payload if section == "root" else task
+        if key in block:
+            path = f"evidence.{key}" if section == "root" else f"evidence.{section}.{key}"
+            raise ValueError(
+                f"{path} is a schema_version 2 field, but this evidence is schema_version 1 "
+                "(an absent schema_version means 1); set schema_version to 2 to carry it"
+            )
+
+
+def _evidence_int(
+    value: object, path: str, *, low: int, high: int, nullable: bool = False
+) -> Optional[int]:
+    if value is None and nullable:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{path} must be an integer" + (" or null" if nullable else ""))
+    if not (low <= value <= high):
+        raise ValueError(f"{path} must be in [{low}, {high}]")
+    return value
+
+
+def _evidence_block(block: object, section: str, path: str) -> Mapping[object, object]:
+    """A detail block: an object holding exactly the registered keys (null says not measured)."""
+    if not isinstance(block, Mapping):
+        raise ValueError(f"{path} must be an object")
+    _validate_evidence_fields(block, section, path)
+    missing = sorted(EVIDENCE_SCHEMA_FIELDS[section] - set(block))
+    if missing:
+        raise ValueError(f"{path} needs {', '.join(missing)} (use null for not measured)")
+    return block
+
+
+def _rows_from_evidence(payload: object) -> TaskRows:
+    path = "evidence.task.rows"
+    block = _evidence_block(payload, "rows", path)
+    counts = {
+        key: _evidence_int(block[key], f"{path}.{key}", low=0, high=_MAX_EVIDENCE_ROWS)
+        for key in ("better", "worse", "same")
+    }
+    rows = TaskRows(better=counts["better"], worse=counts["worse"], same=counts["same"])
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    if rows.n != n:
+        raise ValueError(f"{path}: better + worse + same must equal n ({rows.n} != {n})")
+    return rows
+
+
+def _truncation_from_evidence(payload: object) -> Truncation:
+    path = "evidence.task.truncated"
+    block = _evidence_block(payload, "truncated", path)
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    return Truncation(
+        base=_evidence_int(block["base"], f"{path}.base", low=0, high=n, nullable=True),
+        tuned=_evidence_int(block["tuned"], f"{path}.tuned", low=0, high=n, nullable=True),
+        n=n,
+        max_new_tokens=_evidence_int(
+            block["max_new_tokens"], f"{path}.max_new_tokens",
+            low=1, high=_MAX_EVIDENCE_NEW_TOKENS, nullable=True,
+        ),
+    )
+
+
+def _failures_from_evidence(payload: object) -> GenerationFailures:
+    path = "evidence.task.generation_failures"
+    block = _evidence_block(payload, "generation_failures", path)
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    return GenerationFailures(
+        base=_evidence_int(block["base"], f"{path}.base", low=0, high=n),
+        tuned=_evidence_int(block["tuned"], f"{path}.tuned", low=0, high=n),
+        n=n,
+    )
+
+
+def _evidence_float(
+    value: object, path: str, *, low: float, high: float
+) -> float:
+    """A finite number in ``[low, high]``; a bool, a non-number and a huge integer are refused."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a number in [{low}, {high}]")
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float
+        raise ValueError(f"{path} must be a number in [{low}, {high}]") from None
+    if not math.isfinite(number) or not low <= number <= high:
+        raise ValueError(f"{path} must be a number in [{low}, {high}]")
+    return number
+
+
+def _reward_from_evidence(payload: object) -> RewardSpec:
+    path = "evidence.task.reward"
+    block = _evidence_block(payload, "reward", path)
+    fn = block["fn"]
+    if (
+        not isinstance(fn, str)
+        or not fn
+        or len(fn) > REWARD_FN_MAX_CHARS
+        or "\x00" in fn
+        or has_control_character(fn)
+    ):
+        raise ValueError(
+            f"{path}.fn must be a non-empty string of at most {REWARD_FN_MAX_CHARS} characters "
+            "without a control character"
+        )
+    sha = block["sha256"]
+    if sha is not None and (not isinstance(sha, str) or not _SHA256_HEX.match(sha)):
+        raise ValueError(f"{path}.sha256 must be 64 lowercase hex digits, or null")
+    return RewardSpec(fn=fn, sha256=sha)
+
+
+def _paired_from_evidence(payload: object) -> PairedSummary:
+    path = "evidence.task.paired"
+    block = _evidence_block(payload, "paired", path)
+    n = _evidence_int(block["n"], f"{path}.n", low=1, high=_MAX_EVIDENCE_ROWS)
+    counts = {
+        key: _evidence_int(block[key], f"{path}.{key}", low=0, high=_MAX_EVIDENCE_ROWS)
+        for key in ("better", "worse", "same")
+    }
+    if sum(counts.values()) != n:
+        raise ValueError(
+            f"{path}: better + worse + same must equal n ({sum(counts.values())} != {n})"
+        )
+    mean = _evidence_float(block["mean_difference"], f"{path}.mean_difference", low=-1.0, high=1.0)
+    ci_low = _evidence_float(block["ci_low"], f"{path}.ci_low", low=-1.0, high=1.0)
+    ci_high = _evidence_float(block["ci_high"], f"{path}.ci_high", low=-1.0, high=1.0)
+    if ci_low > ci_high:
+        raise ValueError(f"{path}: ci_low must not exceed ci_high")
+    confidence_raw = block["confidence"]
+    confidence = _evidence_float(confidence_raw, f"{path}.confidence", low=0.0, high=1.0)
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"{path}.confidence must be strictly between 0 and 1")
+    summary = PairedSummary(
+        n=n,
+        better=counts["better"],
+        worse=counts["worse"],
+        same=counts["same"],
+        mean_difference=mean,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        confidence=confidence,
+        resamples=_evidence_int(
+            block["resamples"], f"{path}.resamples", low=1, high=_MAX_PAIRED_RESAMPLES
+        ),
+        seed=_evidence_int(block["seed"], f"{path}.seed", low=0, high=_MAX_PAIRED_SEED),
+    )
+    # Stored so a reader of the file sees it, and informational: it is a heuristic whose
+    # definition may change, so a stored value that differs from this reader's own is NOT
+    # refused. The type is checked; the value reported (and written back) is the reader's own.
+    if not isinstance(block["underpowered"], bool):
+        raise ValueError(f"{path}.underpowered must be true or false")
+    return summary
+
+
+def _refuse_a_dead_side_in_evidence(failures: Optional[GenerationFailures]) -> None:
+    """A side the evidence records as entirely failed is a failed measurement, not a 0.
+
+    The replay twin of ``commands/ship.py::_refuse_a_dead_side`` (#2870): the live path
+    refuses before a verdict is built, so a file written by a live run cannot carry a
+    dead side; only a hand-made or edited file reaches the gap (#2899). Reuses the first
+    part of the live message — the shape a program matches — and drops the "Check that
+    the model loads" tail, which says nothing about a file. Refused as a ValueError, so
+    replay exits 3 (usage) while the live path keeps its RuntimeError (exit 1).
+    """
+    if failures is None:
+        return
+    if failures.base == failures.n:
+        raise ValueError(
+            f"every task generation failed on the base side ({failures.base} of {failures.n})"
+        )
+    if failures.tuned == failures.n:
+        raise ValueError(
+            f"every task generation failed on the tuned side ({failures.tuned} of {failures.n})"
+        )
+
+
+def _task_detail_from_evidence(task: Mapping[object, object]) -> Optional[TaskDetail]:
+    """Decode the version-2 detail blocks of ``evidence.task`` (each is optional)."""
+    rows = _rows_from_evidence(task["rows"]) if "rows" in task else None
+    truncated = _truncation_from_evidence(task["truncated"]) if "truncated" in task else None
+    failures = (
+        _failures_from_evidence(task["generation_failures"])
+        if "generation_failures" in task else None
+    )
+    paired = _paired_from_evidence(task["paired"]) if "paired" in task else None
+    # One task file, one row count: the blocks describe the same rows.
+    sizes = [
+        (name, block.n)
+        for name, block in (
+            ("rows", rows), ("truncated", truncated), ("generation_failures", failures),
+            ("paired", paired),
+        )
+        if block is not None
+    ]
+    for name, size in sizes[1:]:
+        if size != sizes[0][1]:
+            raise ValueError(
+                f"evidence.task.{name}.n ({size}) differs from "
+                f"evidence.task.{sizes[0][0]}.n ({sizes[0][1]})"
+            )
+    if rows is not None and paired is not None and (
+        (paired.better, paired.worse, paired.same) != (rows.better, rows.worse, rows.same)
+    ):
+        raise ValueError(
+            f"evidence.task.paired counts (better {paired.better}, worse {paired.worse}, "
+            f"same {paired.same}) differ from evidence.task.rows (better {rows.better}, "
+            f"worse {rows.worse}, same {rows.same})"
+        )
+    detail = TaskDetail(
+        rows=rows, truncated=truncated, generation_failures=failures, paired=paired
+    )
+    _refuse_a_dead_side_in_evidence(failures)
+    return None if detail.is_empty() else detail
+
+
+def _judged_string(value: object, path: str, *, nullable: bool) -> Optional[str]:
+    if value is None and nullable:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_JUDGED_CHARS
+        or "\x00" in value
+    ):
+        raise ValueError(
+            f"{path} must be a non-empty string of at most {_MAX_JUDGED_CHARS} characters "
+            "without NUL" + (" or null" if nullable else "")
+        )
+    return value
+
+
+def _judged_from_evidence(payload: object) -> Judged:
+    path = "evidence.judged"
+    block = _evidence_block(payload, "judged", path)
+    adapter = _judged_string(block["adapter"], f"{path}.adapter", nullable=True)
+    step = _evidence_int(
+        block["checkpoint_step"], f"{path}.checkpoint_step",
+        low=0, high=_MAX_CHECKPOINT_STEP, nullable=True,
+    )
+    if step != checkpoint_step_of(adapter):
+        # "Never guessed" holds on read too: the step is what the path says, or null.
+        raise ValueError(
+            f"{path}.checkpoint_step must be {checkpoint_step_of(adapter)} for the adapter "
+            "path it names (null when the last path component is not checkpoint-<digits>)"
+        )
+    return Judged(
+        base=_judged_string(block["base"], f"{path}.base", nullable=False),
+        adapter=adapter,
+        tuned=_judged_string(block["tuned"], f"{path}.tuned", nullable=True),
+        base_adapter=_judged_string(block["base_adapter"], f"{path}.base_adapter", nullable=True),
+        checkpoint_step=step,
+    )
+
+
 def verdict_from_evidence(
     payload: Mapping[str, object],
     *,
@@ -891,12 +2190,15 @@ def verdict_from_evidence(
     if not isinstance(payload, Mapping):
         raise TypeError("evidence must be an object")
     _validate_evidence_fields(payload, "root", "evidence")
+    version = _evidence_schema_version(payload)
     threshold = _validate_threshold(forgetting_threshold)
 
     task = payload.get("task")
     if not isinstance(task, Mapping):
         raise ValueError("evidence.task must be an object with 'mode', 'base', 'tuned'")
     _validate_evidence_fields(task, "task", "evidence.task")
+    if version == 1:  # not "< SCHEMA_VERSION": a reader that learns version 3 still reads 2
+        _refuse_v2_fields_under_v1(payload, task)
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
         supported = ", ".join(SUPPORTED_TASK_MODES)
@@ -905,14 +2207,24 @@ def verdict_from_evidence(
         )
     if "base" not in task or "tuned" not in task:
         raise ValueError("evidence.task needs both 'base' and 'tuned' scores")
+    reward = _reward_from_evidence(task["reward"]) if "reward" in task else None
+    if mode == MODE_REWARD and reward is None:
+        raise ValueError(
+            "evidence.task.reward is required when evidence.task.mode is 'reward' (name the "
+            "reward function that scored it, with its sha256 or null)"
+        )
+    if mode != MODE_REWARD and reward is not None:
+        raise ValueError("evidence.task.reward applies only when evidence.task.mode is 'reward'")
 
     try:
         stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
+    detail = _task_detail_from_evidence(task)
     try:
         task_win = build_task_win(
-            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
+            str(mode), task["base"], task["tuned"], noise_floor=stored_floor, detail=detail,
+            reward=reward,
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.task: {exc}") from exc
@@ -955,6 +2267,14 @@ def verdict_from_evidence(
         stored_numerics = numerics_from_evidence(payload.get("numerics"))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.numerics: {exc}") from exc
+    if "judged" in payload:
+        verdict = replace(verdict, judged=_judged_from_evidence(payload["judged"]))
+    if "task_rows" in payload:
+        # Checked and then dropped: the pointer names a file next to the evidence, it is not part
+        # of the verdict (a replay writes no row file, so it has no pointer to give).
+        pointer_error = task_rows_pointer_error(payload["task_rows"])
+        if pointer_error is not None:
+            raise ValueError(f"evidence.task_rows {pointer_error}")
     if stored_numerics is not None:
         return replace(verdict, numerics=stored_numerics)
     return verdict
@@ -978,18 +2298,51 @@ def floor_exceeds_threshold(
     )
 
 
-def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
-    """JSON-serializable dict for ``--output`` / programmatic consumers."""
+def verdict_to_dict(
+    verdict: ShipVerdict, *, task_rows: Optional[str] = None
+) -> Dict[str, object]:
+    """JSON-serializable dict for ``--output`` / programmatic consumers.
+
+    ``task_rows`` is the bare name of the per-row file next to the output, or ``None`` when
+    this run wrote none (the key is always present).
+    """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
+    if task_rows is not None:
+        pointer_error = task_rows_pointer_error(task_rows)
+        if pointer_error is not None:
+            raise ValueError(f"task_rows {pointer_error}")
     win = verdict.task_win
-    return {
+    detail = win.detail
+    data: Dict[str, object] = {
+        # Absent in soup-cli 0.77.x, which reads as version 1. Version 2 adds ``judged`` and
+        # ``task_win.rows`` / ``truncated`` / ``generation_failures`` (each null when not
+        # measured); no key of version 1 is removed or renamed.
+        "schema_version": SCHEMA_VERSION,
         "decision": verdict.decision,
         "task_win": {
             "mode": win.mode,
             "base": win.base,
             "tuned": win.tuned,
             "won": win.won,
+            "rows": (
+                None if detail is None or detail.rows is None else _rows_dict(detail.rows)
+            ),
+            "truncated": (
+                None
+                if detail is None or detail.truncated is None
+                else _truncated_dict(detail.truncated, with_warning=True)
+            ),
+            "generation_failures": (
+                None
+                if detail is None or detail.generation_failures is None
+                else _failures_dict(detail.generation_failures)
+            ),
+            # reward mode only: what scored the leg, and the descriptive paired summary
+            "reward": None if win.reward is None else _reward_dict(win.reward),
+            "paired": (
+                None if detail is None or detail.paired is None else _paired_dict(detail.paired)
+            ),
         },
         "benchmark_deltas": [
             {
@@ -1016,4 +2369,37 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
             }
         ),
         "numerics": verdict.numerics,
+        "adapter_change": _adapter_change_dict(verdict.adapter_change),
+        "judged": None if verdict.judged is None else _judged_dict(verdict.judged),
+        "base_adapter": verdict.base_adapter,
+        "task_rows": task_rows,
+    }
+    if verdict.loop_gate is not None:
+        # Only under ``--gate loop-v2``: the keys of the loop iteration format's
+        # ``verdict.corrections`` / ``verdict.held_out`` and the canary hand-over.
+        data["gate"] = verdict.loop_gate.gate
+        data["corrections"] = verdict.loop_gate.corrections.to_dict()
+        data["held_out"] = verdict.loop_gate.held_out.to_dict()
+        data["canary_decides"] = verdict.loop_gate.canary_decides
+        # In words, so a SHIP is never read as "the held-out edits passed" (None = checked).
+        data["held_out_note"] = held_out_note(verdict.loop_gate.held_out)
+        data["reason"] = (
+            None if verdict.decision == DECISION_SHIP else _failed_rule_explanation(verdict)
+        )
+    return data
+
+
+def _adapter_change_dict(change: Optional[AdapterChange]) -> Optional[Dict[str, object]]:
+    if change is None:
+        return None
+    return {
+        "measured": change.measured,
+        "fraction": change.fraction,
+        "changed": change.changed,
+        "elements": change.elements,
+        "modules": change.modules,
+        "base_dtypes": list(change.base_dtypes),
+        "warn_below": ADAPTER_CHANGE_WARN_BELOW,
+        "warning": change.warning,
+        "reason": change.reason,
     }

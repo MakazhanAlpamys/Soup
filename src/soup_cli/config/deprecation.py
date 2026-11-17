@@ -14,6 +14,10 @@ A schema validator calls :func:`warn_deprecated_value`. While
 code that built ``SoupConfig`` directly saw an ordinary
 :class:`SoupConfigDeprecationWarning`; that path stays, for the next value that
 needs a release of notice.
+
+The fields no code reads and no warning ever named (#1814) are a later cohort: they
+warn through :func:`warn_unconsumed_field` whatever that switch says, and are refused
+in :data:`UNCONSUMED_FIELD_REJECTION_VERSION`.
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ import warnings
 #: instead of turning the warning into a lie. One minor of notice: the warning
 #: shipped in 0.76, the refusal in 0.77.
 DEPRECATED_VALUE_REJECTION_VERSION = "0.77"
+
+#: The release that refuses the declared fields no code reads and that nothing warned
+#: about before v0.78.0: ``training.warmup_auto`` and ``training.forgetting_threshold``
+#: (#1814). A cohort of its own, not :data:`DEPRECATED_VALUE_REJECTION_VERSION`: that
+#: deadline has passed, and these fields get their own minor of notice (warned in 0.78,
+#: refused in 0.79). Written out here, and built into every message by
+#: :func:`warn_unconsumed_field`; ``tests/test_config_deprecated_fields.py`` pins it and
+#: turns red in the release that reaches it.
+UNCONSUMED_FIELD_REJECTION_VERSION = "0.79.0"
 
 #: The release that removed ``soup export --format awq`` / ``gptq`` (#1710, #1951).
 #:
@@ -71,6 +84,24 @@ def deadline_clause() -> str:
     if refuses_deprecated_values():
         return f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
     return f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."
+
+
+def warn_unconsumed_field(setting: str, why: str, fix: str) -> None:
+    """Warn that ``setting`` is accepted and read by nothing (#1814).
+
+    ``setting`` is the line as written (``training.warmup_auto: true``), ``why`` says
+    what reads it instead or why nothing does, and ``fix`` is the sentence that ends
+    with what the user does. Always a warning, whatever
+    :data:`DEPRECATED_VALUE_SEVERITY` says: that switch belongs to the v0.77 cohort and
+    flipped with it, while this cohort is refused in
+    :data:`UNCONSUMED_FIELD_REJECTION_VERSION`. The loader prints it once per load.
+    """
+    warnings.warn(
+        f"{setting} has no effect: {why}. {fix} "
+        f"Soup v{UNCONSUMED_FIELD_REJECTION_VERSION} will refuse it.",
+        SoupConfigDeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def warn_deprecated_value(

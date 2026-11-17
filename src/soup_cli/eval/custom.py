@@ -44,6 +44,9 @@ class EvalResult:
     output: str
     score: float
     matched: bool
+    #: True when the generation for this task raised (or returned no text) and the row was
+    #: scored as wrong without an answer. An empty answer is NOT a failure.
+    failed: bool = False
 
 
 @dataclass
@@ -451,7 +454,7 @@ def run_eval(
     for task, output in track(zip(tasks, outputs), len(tasks)):
         result = (
             score_task(task, output) if output is not None
-            else EvalResult(task=task, output="", score=0.0, matched=False)
+            else EvalResult(task=task, output="", score=0.0, matched=False, failed=True)
         )
         results.append(result)
 
