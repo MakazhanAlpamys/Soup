@@ -70,7 +70,14 @@ from soup_cli.utils.loop_log import (
 )
 from soup_cli.utils.loop_reconcile import finish as finish_promotion
 from soup_cli.utils.loop_reconcile import promoted_state
-from soup_cli.utils.loop_retry import after_failure
+from soup_cli.utils.loop_retry import (
+    STAGE_ERROR_STAGES,
+    after_failure,
+    is_stage_error,
+    stage_error_fingerprint,
+    stage_error_hold,
+    stage_error_reason,
+)
 from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
@@ -82,7 +89,7 @@ from soup_cli.utils.loop_state import (
     update_state,
     write_state,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 _LOG = logging.getLogger(__name__)
 # BucketStats.verdict's default: canary answers needed before a verdict.
@@ -344,7 +351,17 @@ def run_once(
             projected_total_usd=state.spent_this_month_usd,
             runs_today=state.runs_today,
         )
-    estimated = float(config.cost_fn(state))
+    # A record of a stage that raised (its back-off or hold) is judged before any stage runs, so a
+    # cost stage that keeps raising is not called again either. A deploy retry is not held by it.
+    held_note = (
+        None if state.pending_deploy is not None
+        else stage_error_hold(state.failed_train, datetime.now(timezone.utc))
+    )
+    stage_error: Optional[_StageError] = None
+    estimated = 0.0
+    if held_note is None:
+        cost, stage_error = _guard("cost", lambda: float(config.cost_fn(state)))
+        estimated = 0.0 if stage_error is not None else cost
     decision = check_budget(
         estimated_run_usd=estimated,
         spent_so_far_usd=state.spent_this_month_usd,
@@ -373,44 +390,88 @@ def run_once(
     # Stage events: held back until the iteration has work to show (see StageEvents).
     events = StageEvents(log, iteration_id)
     pending = state.pending_deploy
-    if pending is None:
-        events.emit("harvest", "start")
-        harvest_out = dict(config.harvest_fn(state))
-        events.emit("harvest", "end", message=_harvest_message(harvest_out))
-        waiting_note = _log_wait(log, iteration_id, state, harvest_out)
-        if harvest_out.get("pairs_path"):
-            events.go_live()  # a dataset was handed to training
-        events.emit("train", "start")
-        train_out = dict(config.train_fn(state, harvest_out))
-        trained_run = _training_ran(train_out)
-        if trained_run:
-            events.go_live()  # (a custom stage can train without a dataset path)
-        _emit_train_end(events, train_out, trained_run)
-        read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
-        plan = harvest_out.get("holdout")
-        if trained_run:
-            events.emit("verdict", "start")
-        gate_out = dict(config.gate_fn(state, train_out))
-        if trained_run:
-            _emit_verdict_end(events, gate_out)
-        resumed_attempts = 0
-    else:
+    harvest_out: dict = {"pairs_harvested": 0, "traces_collected": 0}
+    waiting_note: Optional[str] = None
+    read_up_to = None
+    plan = None
+    resumed_attempts = 0
+    trained_run = False
+    train_out: dict = {}
+    gate_out: dict = {"gate_verdict": "SKIPPED"}
+    if pending is not None:
         # A candidate trained earlier whose deploy was refused: only the deploy runs again.
+        stage_error = None  # (a cost stage that raised is in the log; the retry goes ahead)
         events.go_live()
-        harvest_out = {"pairs_harvested": 0, "traces_collected": 0}
-        waiting_note = None
         train_out = dict(pending["train"])
         gate_out = dict(pending["gate"])
         trained_run = True
         read_up_to = valid_cursor(pending.get("cursor_ts"))
-        plan = None
         resumed_attempts = int(pending["attempts"])
         iteration_id = str(pending.get("iteration_id") or iteration_id)
         events.emit("deploy", "start")
+    elif held_note is not None:
+        # The same stage raised before and is waiting or held: no stage is called.
+        train_out = {"run_id": None, "skipped": True, "train_held": True, "notes": held_note}
+    elif stage_error is None:
+        events.emit("harvest", "start")
+        raw_harvest, stage_error = _guard("harvest", lambda: config.harvest_fn(state))
+        if stage_error is None:
+            harvest_out = dict(raw_harvest)
+            events.emit("harvest", "end", message=_harvest_message(harvest_out))
+            waiting_note = _log_wait(log, iteration_id, state, harvest_out)
+            if harvest_out.get("pairs_path"):
+                events.go_live()  # a dataset was handed to training
+            events.emit("train", "start")
+            raw_train, stage_error = _guard("train", lambda: config.train_fn(state, harvest_out))
+        if stage_error is None:
+            train_out = dict(raw_train)
+            trained_run = _training_ran(train_out)
+            if trained_run:
+                events.go_live()  # (a custom stage can train without a dataset path)
+            _emit_train_end(events, train_out, trained_run)
+            read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
+            plan = harvest_out.get("holdout")
+            if trained_run:
+                events.emit("verdict", "start")
+            raw_gate, stage_error = _guard("gate", lambda: config.gate_fn(state, train_out))
+            if stage_error is None:
+                gate_out = dict(raw_gate)
+                if trained_run:
+                    _emit_verdict_end(events, gate_out)
+    if stage_error is not None:
+        events.go_live()
+        events.emit(
+            "verdict" if stage_error.stage == "gate" else stage_error.stage, "error",
+            error="stage_exception", message=stage_error.text,
+        )
+        if stage_error.stage == "gate":
+            gate_out = {"gate_verdict": "SKIPPED", "failed": True, "notes": stage_error.text}
+        else:
+            train_out = {
+                "run_id": None, "skipped": False, "failed": True,
+                "notes": stage_error.text, "failure": stage_error.text,
+            }
+            trained_run = False
+            read_up_to = None
+            plan = None
     deploying = trained_run and (gate_out.get("gate_verdict") == "OK" or _canary_decides(gate_out))
     if deploying and pending is None:
         events.emit("deploy", "start")
-    deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
+    if stage_error is not None or held_note is not None:
+        deploy_out: dict = {"deployed": False, "canary_verdict": None}  # nothing to deploy
+    else:
+        raw_deploy, deploy_error = _guard(
+            "deploy", lambda: config.deploy_fn(state, {**train_out, **gate_out})
+        )
+        if deploy_error is None:
+            deploy_out = dict(raw_deploy)
+        else:
+            stage_error = deploy_error  # (a deploy that raised is retried like a refused one)
+            deploy_out = {
+                "deployed": False, "canary_verdict": None, "failed": True,
+                "notes": deploy_error.text,
+            }
+            events.go_live()
     if deploying:
         _emit_deploy_end(events, deploy_out)
     gate_verdict = str(gate_out.get("gate_verdict", "SKIPPED"))
@@ -441,6 +502,8 @@ def run_once(
         # The failure itself (exit code or signal name, log tail), not the notes that came before
         # it (quantization, max_length, paraphrases): last_failure keeps its first 500 characters.
         failure_note = str(train_out.get("failure") or train_out["notes"])
+    elif stage_error is not None:
+        failure_note = stage_error.text  # a gate that raised, or a deploy that did (not retried)
     deploy_out = {**deploy_out, **({"notes": failure_note} if deploy_refused else {})}
     ledger_notes = (
         record_plan(plan, iteration_id=iteration_id, until=read_up_to)
@@ -482,7 +545,7 @@ def run_once(
         verify_log=_log_ref(gate_out.get("verify_log")),
         **_evidence(gate_out),
     )
-    if _is_idle_poll(
+    if stage_error is None and _is_idle_poll(
         pending, trained_run, train_out, deploying, deploy_refused, gate_out, rolled_back,
         canary_notes,
     ):
@@ -492,8 +555,13 @@ def run_once(
         idle_state = _state_with(
             state,
             waiting_note=_safe_wait(waiting_note),
-            last_failure=(failure_note or "")[:500] or None,
-            failed_train=_failed_train_after(state, train_out, pending is None),
+            # a stage that raised is still waiting or held: its failure stays in view
+            last_failure=(
+                (failure_note or "")[:500]
+                or (state.last_failure if held_note is not None else None)
+                or None
+            ),
+            failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
             last_idle={"at": _utc_iso(), "reason": reason},
         )
         return idle_state, _noted(record, log), BudgetDecision(
@@ -534,7 +602,7 @@ def run_once(
             else None
         ),
         last_failure=(failure_note or "")[:500] or None,
-        failed_train=_failed_train_after(state, train_out, pending is None),
+        failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
     )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
@@ -816,6 +884,42 @@ def _plain_json(stage_out: Mapping[str, object]) -> "dict[str, object]":
     return kept
 
 
+@dataclass(frozen=True)
+class _StageError:
+    """A stage of the cycle that raised: its name, the exception's type and a short message."""
+
+    stage: str
+    error_type: str
+    detail: str
+
+    @property
+    def text(self) -> str:
+        base = f"the {self.stage} stage raised {self.error_type}"
+        return f"{base}: {self.detail}" if self.detail else base
+
+
+_STAGE_ERROR_DETAIL_CHARS = 100
+
+
+def _guard(stage: str, call: Callable[[], object]) -> "tuple[object, Optional[_StageError]]":
+    """Call a stage; an exception is a failed cycle for the daemon, never its end.
+
+    ``KeyboardInterrupt`` and ``SystemExit`` are not ``Exception``: they pass through and still
+    stop the daemon. The traceback goes to the daemon log; the record keeps the stage's name, the
+    exception's type and the first words of its message on one clean line.
+    """
+    try:
+        return call(), None
+    except Exception as exc:  # noqa: BLE001 — a stage that raises must not stop the daemon
+        try:
+            detail = " ".join(strip_control(exc).split())[:_STAGE_ERROR_DETAIL_CHARS]
+        except Exception:  # noqa: BLE001 — a message that cannot be printed is left out
+            detail = ""
+        error = _StageError(stage, type(exc).__name__, detail)
+        _LOG.warning("watch: %s", error.text, exc_info=True)
+        return None, error
+
+
 def _is_idle_poll(
     pending: object,
     trained_run: bool,
@@ -854,7 +958,10 @@ def _idle_reason(notes: str) -> str:
 
 
 def _failed_train_after(
-    state: LoopState, train_out: Mapping[str, object], ran_train_stage: bool
+    state: LoopState,
+    train_out: Mapping[str, object],
+    ran_train_stage: bool,
+    stage_error: "Optional[_StageError]" = None,
 ) -> Optional[dict]:
     """``state.failed_train`` after this cycle's train stage (review 5, F3).
 
@@ -862,9 +969,21 @@ def _failed_train_after(
     run that trained clears the record; a cycle that waited, or skipped for want of data, or only
     retried a deploy leaves it as it is. A custom train stage that reports no fingerprint
     (``train_inputs``) is never held.
+
+    A stage that raised (the cost, harvest, train or gate stage) counts as a failure of its own
+    fingerprint, the stage's name; a cycle that got through every stage clears such a record.
     """
+    if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
+        return after_failure(
+            state.failed_train,
+            stage_error_fingerprint(stage_error.stage),
+            datetime.now(timezone.utc),
+            stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
+        )
     if not ran_train_stage or train_out.get("train_held"):
         return state.failed_train
+    if state.failed_train is not None and is_stage_error(state.failed_train):
+        return None  # every stage ran this cycle without raising
     fingerprint = train_out.get("train_inputs")
     if train_out.get("failed") and isinstance(fingerprint, str):
         reason = str(train_out.get("failure") or train_out.get("notes") or "train failed")

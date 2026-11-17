@@ -452,15 +452,15 @@ def iteration_from_record(
     traffic), and ``harvest`` / ``train`` / ``gate`` / ``deploy`` what the stages returned.
     Everything the record holds comes from the record, so the manifest written from the same
     object says the same. Anything the stages did not report is null or left out, never made
-    up. The outcome is ``canary`` when a canary started, ``failed`` when the train or deploy
-    stage reported that it failed, and ``skipped`` otherwise (nothing to train, a verdict of
+    up. The outcome is ``canary`` when a canary started, ``failed`` when the train, gate or
+    deploy stage reported that it failed, and ``skipped`` otherwise (nothing to train, a verdict of
     DON'T SHIP or none at all, a deploy that was not attempted).
     """
     trained = record.run_id is not None and not train.get("skipped")
     canary_name = deploy.get("canary_active") if record.shipped else None
     if canary_name:
         outcome = "canary"
-    elif train.get("failed") or deploy.get("failed"):
+    elif train.get("failed") or gate.get("failed") or deploy.get("failed"):
         outcome = "failed"
     else:
         outcome = "skipped"
