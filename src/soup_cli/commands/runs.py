@@ -52,8 +52,6 @@ def _filter_runs_by_cwd(
     ``os.path.realpath + commonpath`` for Windows 8.3 short-name safety
     (project-wide path-containment convention).
     """
-    if limit == 0:
-        return []
     cwd_real = os.path.realpath(cwd)
     kept: list[dict] = []
     for run in runs:
