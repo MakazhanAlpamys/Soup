@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_under_cwd, open_no_follow
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +128,16 @@ def open_private_append(path: "Path | str") -> Any:
 
     The mode applies to a file this call creates; a log that already exists keeps the
     permissions it has (a ``chmod`` of someone else's file is not this function's call).
+
+    The file is opened without following a link: a symlink or reparse point at ``path``, a
+    linked parent directory (under the working directory) or a hard link raises ``OSError``
+    (``ELOOP`` / ``EMLINK``) naming the path, so a link put there after the writer resolved its
+    log cannot send the lines to another file.
     """
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-    fd = os.open(os.fspath(path), flags, LOG_FILE_MODE)
+    fd = open_no_follow(
+        os.fspath(path), flags, LOG_FILE_MODE, check_parent=True, refuse_hardlink=True
+    )
     try:
         return os.fdopen(fd, "ab")
     except Exception:
