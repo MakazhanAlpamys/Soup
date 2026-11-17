@@ -323,6 +323,54 @@ class TestRunsEndpoint:
             assert data["run_id"] == run_id
             assert data["base_model"] == "llama"
 
+    def test_runs_output_dir_relativized_or_shortened(self, tmp_path):
+        """Relative path for run under working dir, last component for run outside."""
+        pytest.importorskip("fastapi")
+
+        db_path = tmp_path / "test.db"
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
+            from soup_cli.experiment.tracker import ExperimentTracker
+            from soup_cli.ui.app import create_app
+
+            tracker = ExperimentTracker(db_path=db_path)
+            r_under = tracker.start_run(
+                config_dict={"base": "b1"},
+                device="cpu",
+                device_name="CPU",
+                gpu_info={"memory_total": "N/A"},
+            )
+            tracker.finish_run(r_under, 1.0, 0.5, 1, 1.0, output_dir=str(proj_dir / "output"))
+            r_outside = tracker.start_run(
+                config_dict={"base": "b2"},
+                device="cpu",
+                device_name="CPU",
+                gpu_info={"memory_total": "N/A"},
+            )
+            tracker.finish_run(
+                r_outside, 1.0, 0.5, 1, 1.0, output_dir=str(outside_dir / "models_out")
+            )
+            tracker.close()
+
+            client = ui_client(create_app(server_dir=proj_dir))
+            response = client.get("/api/runs", headers=_auth_headers())
+            assert response.status_code == 200
+            runs = {r["run_id"]: r["output_dir"] for r in response.json()["runs"]}
+            assert runs[r_under] == "output"
+            assert runs[r_outside] == "models_out"
+
+            resp_under = client.get(f"/api/runs/{r_under}", headers=_auth_headers())
+            assert resp_under.status_code == 200
+            assert resp_under.json()["output_dir"] == "output"
+
+            resp_outside = client.get(f"/api/runs/{r_outside}", headers=_auth_headers())
+            assert resp_outside.status_code == 200
+            assert resp_outside.json()["output_dir"] == "models_out"
+
     def test_get_run_not_found(self, tmp_path):
         """Should return 404 for nonexistent run."""
         pytest.importorskip("fastapi")

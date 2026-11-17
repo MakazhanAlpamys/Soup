@@ -698,3 +698,235 @@ class TestMLXRoPELifecycleNative:
             if isinstance(m, nn.RoPE)
         }
         assert scales and set(scales.values()) == {1.0}
+
+
+@pytest.fixture
+def revision_snapshots(tmp_path, monkeypatch):
+    """Real native assets behind a deterministic, moving HF transport boundary."""
+    pytest.importorskip("mlx.core")
+    upstream = pytest.importorskip("mlx_lm.utils")
+    from types import SimpleNamespace
+
+    import huggingface_hub
+    import mlx.core as mx
+
+    from soup_cli.utils import run_provenance as provenance
+
+    first, second = "a" * 40, "b" * 40
+    factory = TestMLXRoPELifecycleNative()._create_tiny_llama
+    snapshots = {
+        first: factory(tmp_path / "first", orig_ctx=64),
+        second: factory(tmp_path / "second", orig_ctx=32),
+    }
+    # Same architecture, deliberately different weights, tokenizer and context.
+    weights = mx.load(str(snapshots[second] / "model.safetensors"))
+    weights["lm_head.weight"] = weights["lm_head.weight"] + 0.25
+    mx.save_safetensors(str(snapshots[second] / "model.safetensors"), weights)
+    tokenizer_path = snapshots[second] / "tokenizer.json"
+    tokenizer = json.loads(tokenizer_path.read_text())
+    vocab = tokenizer["model"]["vocab"]
+    vocab["alpha"], vocab["beta"] = vocab["beta"], vocab["alpha"]
+    tokenizer_path.write_text(json.dumps(tokenizer), encoding="utf-8")
+    state = SimpleNamespace(first=first, second=second, snapshots=snapshots,
+                            downloads=[], configs=[], lookups=[], cache_hit=False)
+    for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "WORLD_SIZE", "RANK",
+                "LOCAL_RANK", "MLX_RANK", "MLX_HOSTFILE", "MLX_WORLD_SIZE",
+                "LOCAL_WORLD_SIZE", "MLXLM_USE_MODELSCOPE"):
+        monkeypatch.delenv(key, raising=False)
+
+    def model_info(base, **kwargs):
+        assert base == "owner/revision-fixture"
+        state.lookups.append(base)
+        return SimpleNamespace(sha=first if len(state.lookups) == 1 else second)
+
+    def snapshot_download(repo_id, *, revision=None, **kwargs):
+        assert repo_id == "owner/revision-fixture"
+        state.downloads.append(revision)
+        return str(snapshots[revision or second])
+
+    def config_download(*, repo_id, filename, revision=None, **kwargs):
+        assert repo_id == "owner/revision-fixture" and filename == "config.json"
+        state.configs.append((revision, kwargs.get("local_files_only", False)))
+        if kwargs.get("local_files_only") and not state.cache_hit:
+            raise FileNotFoundError("cold cache")
+        return str(snapshots[revision or second] / "config.json")
+
+    # Keep real upstream load/_download/load_model/load_tokenizer. Only HF's
+    # transport is replaced; the selected directory contains real native bytes.
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    monkeypatch.setattr(upstream, "snapshot_download", snapshot_download)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", config_download)
+    monkeypatch.setattr(provenance, "get_hf_api", lambda: SimpleNamespace(model_info=model_info))
+    return state
+
+
+@pytest.mark.parametrize("task,rank", [("sft", 4), ("sft", 0), ("dpo", 4), ("grpo", 4)])
+def test_revision_native_setup_loads_matching_weights_tokenizer_and_config(
+    tmp_path, revision_snapshots, task, rank,
+):
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.dispatch import build_trainer
+    from soup_cli.utils.mlx import mlx_revision_binding_reason
+    from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
+
+    state = revision_snapshots
+    assert mlx_revision_binding_reason() is None
+    cfg = SoupConfig(
+        base="owner/revision-fixture", backend="mlx", task=task,
+        output=str(tmp_path / "trained"),
+        data={"train": "unused.jsonl", "max_length": 128, "val_split": 0},
+        training={"batch_size": 1, "gradient_accumulation_steps": 1,
+                  "quantization": "none", "reward_fn": "format",
+                  "lora": {"r": rank},
+                  **({"rope_scaling_type": "linear"} if task == "sft" else {})},
+    )
+    wrapper = build_trainer(cfg, device="cpu")
+    identity = BaseRevision(cfg.base)
+    with base_revision_scope(identity):
+        wrapper.setup({"train": [{"messages": [{"role": "user", "content": "alpha"}]}],
+                       "val": []})
+    assert identity.revision == state.first and identity.source == "hub_commit"
+    assert state.lookups == [cfg.base]
+    assert wrapper.tokenizer.encode("alpha", add_special_tokens=False) == [5]
+    loaded = dict(tree_flatten(wrapper.model.parameters()))
+    first_weights = mx.load(str(state.snapshots[state.first] / "model.safetensors"))
+    assert mx.array_equal(loaded["lm_head.weight"], first_weights["lm_head.weight"]).item()
+    wrong_weights = mx.load(str(state.snapshots[state.second] / "model.safetensors"))
+    assert not mx.array_equal(loaded["lm_head.weight"], wrong_weights["lm_head.weight"]).item()
+    assert state.downloads == [state.first]
+    if task == "sft":
+        scales = {float(module.scale) for _, module in wrapper.model.named_modules()
+                  if isinstance(module, nn.RoPE)}
+        assert scales == {0.5}
+        assert wrapper._effective_rope_scaling["factor"] == 2.0
+        assert state.configs == [(state.first, True), (state.first, False)]
+        if rank == 0:
+            assert wrapper._full_model_config["max_position_embeddings"] == 128
+    else:
+        assert state.configs == []
+    assert cfg.base == "owner/revision-fixture"
+
+
+@pytest.mark.parametrize("rank,cache_hit", [(4, True), (4, False), (0, False)])
+def test_revision_native_train_cli_updates_saves_and_fresh_process_reloads(
+    tmp_path, monkeypatch, revision_snapshots, rank, cache_hit,
+):
+    import hashlib
+    import os
+    import subprocess
+    import sys
+
+    import mlx.core as mx
+    import yaml
+    from mlx.utils import tree_flatten
+
+    from soup_cli.cli import app
+    from soup_cli.commands import train
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+    from soup_cli.utils.run_provenance import read_run_provenance
+    from tests.conftest import make_cli_runner, strip_ansi
+
+    state = revision_snapshots
+    state.cache_hit = cache_hit
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(train, "detect_device", lambda backend=None: ("cpu", "CPU"))
+    monkeypatch.setattr(train, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"})
+    source = tmp_path / "train.jsonl"
+    source.write_text('{"text":"alpha beta gamma alpha beta gamma"}\n' * 2, encoding="utf-8")
+    cfg = {
+        "base": "owner/revision-fixture", "backend": "mlx", "output": str(tmp_path / "trained"),
+        "data": {"train": str(source), "format": "plaintext", "val_split": 0,
+                 "max_length": 128, "train_on_responses_only": False},
+        "training": {"quantization": "none", "rope_scaling_type": "linear", "epochs": 1,
+                     "batch_size": 1, "gradient_accumulation_steps": 1, "lr": 0.01,
+                     "scheduler": "constant", "warmup_ratio": 0, "weight_decay": 0,
+                     "logging_steps": 1, "save_steps": 100, "rewind_log": False,
+                     "lora": ({"r": rank, "alpha": 8, "dropout": 0,
+                               "target_modules": ["self_attn.q_proj"]} if rank else {"r": 0})},
+    }
+    config_path = tmp_path / "soup.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    observed = {}
+    setup = MLXSFTTrainerWrapper.setup
+
+    def observe(wrapper, dataset):
+        setup(wrapper, dataset)
+        observed["wrapper"] = wrapper
+        import mlx.nn as nn
+
+        observed["rope_scales"] = {
+            float(module.scale) for _, module in wrapper.model.named_modules()
+            if isinstance(module, nn.RoPE)
+        }
+
+    from soup_cli.trainer import mlx_optim
+
+    build_optimizer = mlx_optim.build_optimizer
+
+    def capture_before_updates(plan):
+        observed["before"] = dict(tree_flatten(observed["wrapper"].model.parameters()))
+        mx.eval(observed["before"])
+        return build_optimizer(plan)
+
+    monkeypatch.setattr(MLXSFTTrainerWrapper, "setup", observe)
+    monkeypatch.setattr(mlx_optim, "build_optimizer", capture_before_updates)
+    result = make_cli_runner().invoke(app, [
+        "--no-telemetry", "--no-audit-log", "train", "--config", str(config_path), "--yes",
+    ])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert observed["rope_scales"] == {0.5}
+    assert state.downloads == [state.first] and state.lookups == [cfg["base"]]
+    assert state.configs == [(state.first, True)] + ([] if cache_hit else [(state.first, False)])
+    wrapper = observed["wrapper"]
+    after = dict(tree_flatten(wrapper.model.parameters()))
+    before = observed["before"]
+    trained = set(dict(tree_flatten(wrapper.model.trainable_parameters())))
+    assert any(not mx.array_equal(after[name], before[name]).item() for name in trained)
+    assert all(mx.array_equal(after[name], before[name]).item() for name in before.keys() - trained)
+    wrapper.model.eval()
+    expected = np.array(wrapper.model(mx.array([[3, 5, 6, 7]])))
+    tracker = ExperimentTracker(tmp_path / "runs.db")
+    try:
+        row, = tracker.list_runs()
+    finally:
+        tracker.close()
+    metadata = read_run_provenance(cfg["output"])
+    assert metadata["base_revision"] == row["base_revision"] == state.first
+    assert metadata["base_model"] == row["base_model"] == cfg["base"]
+    assert metadata["training_data_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert row["status"] == "completed" and row["total_steps"] == 2
+    plain = " ".join(strip_ansi(result.output).split())
+    assert f"Base revision: {state.first} (bound Hub commit)" in plain
+    # Independent process, real upstream native loader, entirely local paths.
+    # This verifies this training artifact; it does not qualify other Soup consumers.
+    script = """
+import json, sys
+from pathlib import Path
+import mlx.core as mx
+from mlx_lm import load
+artifact, base, destination, rank = sys.argv[1:]
+kwargs = {} if rank == '0' else {
+    'adapter_path': artifact,
+    'model_config': {'rope_scaling': {'type': 'linear', 'factor': 2.0},
+                     'max_position_embeddings': 128},
+}
+model, tokenizer = load(artifact if rank == '0' else base, **kwargs)
+model.eval()
+Path(destination).write_text(json.dumps({'logits': model(mx.array([[3,5,6,7]])).tolist(),
+    'tokens': tokenizer.encode('alpha', add_special_tokens=False)}))
+"""
+    reload_path = tmp_path / "reloaded.json"
+    child = subprocess.run([
+        sys.executable, "-c", script, cfg["output"], str(state.snapshots[state.first]),
+        str(reload_path), str(rank),
+    ], capture_output=True, text=True, timeout=60, env=dict(os.environ, HF_HUB_OFFLINE="1"))
+    assert child.returncode == 0, child.stderr
+    reloaded = json.loads(reload_path.read_text())
+    np.testing.assert_allclose(reloaded["logits"], expected, atol=1e-5, rtol=1e-5)
+    assert reloaded["tokens"] == [5]
