@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import re
-
 import pytest
 from typer.testing import CliRunner
 
+from soup_cli.utils import hf
+from tests.conftest import strip_ansi
+
 runner = CliRunner()
-_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def _clean(text: str) -> str:
-    return " ".join(_ANSI.sub("", text).split())
+    return " ".join(strip_ansi(text).split())
 
 
 @pytest.fixture
@@ -161,9 +161,18 @@ class TestHfTokenDeprecation:
         # The env token is still the one used: resolution is unchanged.
         assert hf_api_tokens == ["hf_FROM_ENV"]
 
-    def test_hf_token_typed_on_command_line_still_warns(self, model_dir, hf_api_tokens):
+    @pytest.mark.parametrize(
+        ("installed_version", "command"),
+        [("0.33.5", "huggingface-cli login"), ("0.34.0", "hf auth login")],
+    )
+    def test_hf_token_typed_on_command_line_still_warns(
+        self, model_dir, hf_api_tokens, monkeypatch, installed_version, command,
+    ):
+        monkeypatch.setattr(hf, "version", lambda _: installed_version, raising=False)
         result = _push("--token", "hf_TYPED")
-        assert self._DEPRECATION in _clean(result.output)
+        out = _clean(result.output)
+        assert self._DEPRECATION in out
+        assert f"Use HF_TOKEN env var or run '{command}'." in out
         assert hf_api_tokens == ["hf_TYPED"]
 
     def test_hf_token_typed_with_env_set_still_warns(self, model_dir, hf_api_tokens,
@@ -173,14 +182,20 @@ class TestHfTokenDeprecation:
         assert self._DEPRECATION in _clean(result.output)
         assert hf_api_tokens == ["hf_TYPED"]
 
-    def test_hf_missing_token_hint_does_not_suggest_deprecated_flag(self, model_dir,
-                                                                    hf_api_tokens):
+    @pytest.mark.parametrize(
+        ("installed_version", "command"),
+        [("0.33.5", "huggingface-cli login"), ("0.34.0", "hf auth login")],
+    )
+    def test_hf_missing_token_hint_does_not_suggest_deprecated_flag(
+        self, model_dir, hf_api_tokens, monkeypatch, installed_version, command,
+    ):
+        monkeypatch.setattr(hf, "version", lambda _: installed_version, raising=False)
         result = _push()
         out = _clean(result.output)
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "No HuggingFace token found" in out
         assert "HF_TOKEN" in out
-        assert "huggingface-cli login" in out
+        assert command in out
         assert "--token" not in out
         assert hf_api_tokens == []
 

@@ -5,8 +5,8 @@ and an ``HfApi`` factory used by push, data push, deploy hf-space, and
 auto-push callbacks.
 
 Design goals:
-- **No custom token flags**: respect ``HF_TOKEN`` / ``HUGGINGFACE_HUB_TOKEN``
-  env vars and the cached login from ``huggingface-cli login``.
+- **Token sources**: respect ``HF_TOKEN`` / ``HUGGINGFACE_HUB_TOKEN``
+  env vars and the login cached by the Hub CLI. See ``hf_login_command``.
 - **Self-hosted Hub**: ``HF_ENDPOINT`` env var overrides the public endpoint.
 - **SSRF hardening**: only HTTPS remotes allowed; localhost HTTP permitted
   for self-hosted dev rigs.
@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import os
 import re
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+from packaging.version import InvalidVersion, Version
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import UNSPECIFIED_HOST_HINT
@@ -33,6 +36,17 @@ _REPO_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 
 # Collection slugs use "owner/title-<hash>" with longer hashes allowed.
 _COLLECTION_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def hf_login_command() -> str:
+    """Suggest ``hf auth login`` from Hub 0.34, or ``huggingface-cli login`` before it."""
+    try:
+        installed = version("huggingface-hub")
+        if installed and Version(installed) < Version("0.34.0"):
+            return "huggingface-cli login"
+    except (PackageNotFoundError, InvalidVersion):
+        pass
+    return "hf auth login"
 
 
 def resolve_token(explicit: Optional[str] = None) -> Optional[str]:

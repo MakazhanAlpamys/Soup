@@ -116,6 +116,12 @@ def push(
         )
         raise typer.Exit(1)
 
+    from soup_cli.utils.hf import (
+        hf_login_command,
+        resolve_endpoint,
+        resolve_token,
+        validate_repo_id,
+    )
     from soup_cli.utils.typer_compat import ParameterSource
 
     # --token also reads HF_TOKEN via envvar; only a value typed on the
@@ -126,7 +132,7 @@ def push(
     if hub_canonical == "hf" and token_typed:
         console.print(
             "[yellow]Warning: --token is deprecated. Use HF_TOKEN env var or "
-            "run 'huggingface-cli login'.[/]"
+            f"run '{hf_login_command()}'.[/]"
         )
 
     # Sanitise commit message: strip to first line, cap length so a crafted
@@ -143,15 +149,13 @@ def push(
         )
         raise typer.Exit(1)
 
-    # --- Resolve HF token (env > cached login, see utils.hf.resolve_token) ---
-    from soup_cli.utils.hf import resolve_endpoint, resolve_token, validate_repo_id
-
     try:
         validate_repo_id(repo)
     except ValueError as exc:
         console.print(f"[red]Invalid --repo:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
+    # Resolve tokens (env > cached login for HF, see utils.hf.resolve_token).
     hub_token: Optional[str] = None
     hf_token: Optional[str] = None
     hf_endpoint: Optional[str] = None
@@ -176,7 +180,7 @@ def push(
                 "[red]No HuggingFace token found.[/]\n"
                 "Provide one via:\n"
                 "  HF_TOKEN=... env variable\n"
-                "  huggingface-cli login"
+                f"  {hf_login_command()}"
             )
             raise typer.Exit(1)
 

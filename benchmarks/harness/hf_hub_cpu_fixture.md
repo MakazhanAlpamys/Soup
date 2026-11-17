@@ -35,7 +35,9 @@ Without `--train`, it prepares those inputs only. In either local-only mode it r
 This is intentionally an explicit, credentialed operation. Before running it:
 
 1. Create a **new private model repository** on Hugging Face yourself.
-2. Configure a write token through `HF_TOKEN` or `huggingface-cli login`; never put the token in a shell history, fixture file, or issue comment.
+2. Configure a write token through `HF_TOKEN` or sign in with `hf auth login`
+   (`huggingface-hub` 0.34 or newer) or `huggingface-cli login` (older versions).
+   Keep the token out of shell history, fixture files, and issue comments.
 3. Pass the existing repo name below. The harness checks that it is private and that it does **not** already have a `checkpoint-1` branch before training. This prevents an old complete branch from being mistaken for this run's upload. Soup's current auto-push callback calls `create_repo(..., private=False, exist_ok=True)`, so pre-creating the private repository preserves its visibility.
 
 ```bash
