@@ -1771,6 +1771,12 @@ boolean compared with `==` against a number would be equal in Python (`True == 1
 | `tool_call_match` | the parsed `arguments` objects must be equal, JSON types included; the function name must match too | match | no match |
 | `tool_call_args_subset` | `0.5` for the function name plus `0.5` for the fraction of expected arguments present with a matching value | `1.0` | `0.5` — the name matched, the argument did not |
 
+A `tool_call_args_subset` row counts as Correct in `soup eval custom`'s Accuracy only at full
+credit (`1.0`): the right function with every expected argument present and matching (extra
+arguments are allowed). A partial score such as `0.5` or `0.75` is not Correct, but `score`
+keeps it, and the eval gate, `soup eval quant-check` and the other callers that average
+`score` see the partial credit.
+
 Numbers still compare equal across forms, so gold `{"n": 1}` matches `{"n": 1.0}`; that is
 existing behaviour and not a rounding of the policy. The rule applies inside nested objects
 and lists, and whether `arguments` is an object or a JSON string does not change it.
