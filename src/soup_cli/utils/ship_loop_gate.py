@@ -220,6 +220,13 @@ def _rows(text: str, source: str):
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             raise GateInputError(f"{source} line {number}: invalid JSON: {exc.msg}") from None
+        except ValueError:
+            # A JSON integer over the interpreter's digit limit (set by
+            # PYTHONINTMAXSTRDIGITS) raises a plain ValueError, not a
+            # JSONDecodeError; it is still a row the gate refuses.
+            raise GateInputError(
+                f"{source} line {number}: invalid JSON: integer exceeds the digit limit"
+            ) from None
         except RecursionError:
             raise GateInputError(
                 f"{source} line {number}: invalid JSON: nested too deeply"
