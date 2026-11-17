@@ -1,0 +1,191 @@
+{
+  "fixture_sha256": "c7b6f896cde0dded8df648e5f9f22bc972d5faff05da69c92dfadd2dabdeac38",
+  "fixture": "offline seeded native Llama",
+  "seed": 7,
+  "data": {
+    "train": [
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "gamma beta"
+          },
+          {
+            "role": "assistant",
+            "content": "alpha"
+          }
+        ]
+      },
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "gamma beta"
+          },
+          {
+            "role": "assistant",
+            "content": "beta gamma alpha beta"
+          }
+        ]
+      },
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "gamma beta"
+          },
+          {
+            "role": "assistant",
+            "content": "gamma alpha"
+          }
+        ]
+      },
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "gamma beta"
+          },
+          {
+            "role": "assistant",
+            "content": "beta gamma alpha"
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "base": "./base",
+    "backend": "mlx",
+    "data": {
+      "train": "./train.jsonl",
+      "val_split": 0.0,
+      "max_length": 64
+    },
+    "training": {
+      "epochs": 1,
+      "lr": 0.01,
+      "batch_size": 1,
+      "gradient_accumulation_steps": 2,
+      "seed": 17,
+      "data_seed": 19,
+      "warmup_ratio": 0.0,
+      "weight_decay": 0.0,
+      "max_grad_norm": 0.1,
+      "lora": {
+        "r": 0
+      },
+      "quantization": "none",
+      "scheduler": "constant",
+      "save_steps": 2,
+      "logging_steps": 2,
+      "rewind_log": false
+    },
+    "output": "./trained"
+  },
+  "training": {
+    "initial_loss": 3.581664800643921,
+    "final_loss": 2.506007194519043,
+    "loss_summary_kind": "delta",
+    "total_steps": 4,
+    "duration_secs": 0.02787184715270996,
+    "duration": "0s",
+    "output_dir": "./trained"
+  },
+  "peak_bytes": 3810996,
+  "metadata": {
+    "fine_tune_type": "full",
+    "architecture": "llama",
+    "freeze_cutoff": 0,
+    "num_layers": 2,
+    "trainable_parameters": 86336,
+    "frozen_parameters": 0,
+    "trainable_tensors": 21,
+    "frozen_tensors": 0,
+    "trainable_names": [
+      "lm_head.weight",
+      "model.embed_tokens.weight",
+      "model.layers.0.input_layernorm.weight",
+      "model.layers.0.mlp.down_proj.weight",
+      "model.layers.0.mlp.gate_proj.weight",
+      "model.layers.0.mlp.up_proj.weight",
+      "model.layers.0.post_attention_layernorm.weight",
+      "model.layers.0.self_attn.k_proj.weight",
+      "model.layers.0.self_attn.o_proj.weight",
+      "model.layers.0.self_attn.q_proj.weight",
+      "model.layers.0.self_attn.v_proj.weight",
+      "model.layers.1.input_layernorm.weight",
+      "model.layers.1.mlp.down_proj.weight",
+      "model.layers.1.mlp.gate_proj.weight",
+      "model.layers.1.mlp.up_proj.weight",
+      "model.layers.1.post_attention_layernorm.weight",
+      "model.layers.1.self_attn.k_proj.weight",
+      "model.layers.1.self_attn.o_proj.weight",
+      "model.layers.1.self_attn.q_proj.weight",
+      "model.layers.1.self_attn.v_proj.weight",
+      "model.norm.weight"
+    ],
+    "frozen_names": [],
+    "checkpoint_parameter_dtypes": [
+      "mlx.core.float32"
+    ],
+    "trainable_dtype": "float32",
+    "tie_word_embeddings": false,
+    "model": "./base",
+    "batch_size": 1,
+    "iters": 4,
+    "learning_rate": 0.01,
+    "steps_per_report": 2,
+    "steps_per_eval": 1000,
+    "steps_per_save": 2,
+    "max_seq_length": 64,
+    "mask_prompt": false,
+    "response_token_mask": true,
+    "pre_tokenized": false,
+    "train_on_responses_only": true,
+    "train_on_messages_with_train_field": false,
+    "mask_history": false,
+    "grad_checkpoint": false,
+    "grad_accumulation_steps": 2,
+    "optimizer": "AdamW",
+    "scheduler": "constant",
+    "warmup_updates": 0,
+    "total_updates": 2,
+    "weight_decay": 0.0,
+    "peak_lr": 0.01,
+    "max_grad_norm": 0.1,
+    "resume_training_state": false,
+    "accumulation_weighting": "supervised_tokens",
+    "completed_iterations": 4,
+    "completed_updates": 2
+  },
+  "parameter_max_abs_deltas": {
+    "model.embed_tokens.weight": 0.07415188103914261,
+    "model.layers.0.self_attn.q_proj.weight": 0.07406985759735107,
+    "model.layers.0.self_attn.k_proj.weight": 0.07409001886844635,
+    "model.layers.0.self_attn.v_proj.weight": 0.07414291799068451,
+    "model.layers.0.self_attn.o_proj.weight": 0.07416410744190216,
+    "model.layers.0.mlp.gate_proj.weight": 0.07412347197532654,
+    "model.layers.0.mlp.down_proj.weight": 0.07412734627723694,
+    "model.layers.0.mlp.up_proj.weight": 0.07409925758838654,
+    "model.layers.0.input_layernorm.weight": 0.07404863834381104,
+    "model.layers.0.post_attention_layernorm.weight": 0.07385331392288208,
+    "model.layers.1.self_attn.q_proj.weight": 0.07326644659042358,
+    "model.layers.1.self_attn.k_proj.weight": 0.07296854257583618,
+    "model.layers.1.self_attn.v_proj.weight": 0.07415410876274109,
+    "model.layers.1.self_attn.o_proj.weight": 0.07416114211082458,
+    "model.layers.1.mlp.gate_proj.weight": 0.07409878075122833,
+    "model.layers.1.mlp.down_proj.weight": 0.07411815971136093,
+    "model.layers.1.mlp.up_proj.weight": 0.07412679493427277,
+    "model.layers.1.input_layernorm.weight": 0.07336270809173584,
+    "model.layers.1.post_attention_layernorm.weight": 0.07405859231948853,
+    "model.norm.weight": 0.07414638996124268,
+    "lm_head.weight": 0.0741448700428009
+  },
+  "optimizer_state_bytes": 690700,
+  "moment_dtypes": [
+    "mlx.core.float32"
+  ],
+  "reload_max_abs_error": 0.0,
+  "resolved_config_sha256": "5e0f57781cba7b1a90a5f7020d6a7df5336e2b74b76e5af55d0a44a86429fbae"
+}

@@ -1,0 +1,45 @@
+import json
+import math
+import os
+from pathlib import Path
+
+import pytest
+
+from tests.test_issue2766_streamed_ipo_bco import _build, _trained_adapters, checkpoint
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize('quant', ['none', '4bit'])
+@pytest.mark.parametrize('stream,scale', [(False, None), (True, None), (True, 1024)])
+def test_ipo_fp16_control(checkpoint, quant, stream, scale):
+    wrapper, inner = _build(checkpoint, 'diagnostic', 'ipo', device='cuda',
+                            quant=quant, stream=stream)
+    try:
+        scaler = inner.trainer.accelerator.scaler
+        initial_scale = scaler.get_scale()
+        if scale is not None:
+            # Diagnostic only: no production setting or qualification row uses this override.
+            state = scaler.state_dict()
+            state['scale'] = float(scale)
+            scaler.load_state_dict(state)
+        effective_scale = scaler.get_scale()
+        inner.trainer.args.max_steps = 1
+        before = _trained_adapters(inner.model)
+        wrapper.train()
+        after = _trained_adapters(inner.model)
+        row = next(entry for entry in inner.trainer.state.log_history if 'loss' in entry)
+        values = {
+            'stream_layers': stream, 'quantization': quant,
+            'default_initial_scale': initial_scale, 'effective_initial_scale': effective_scale,
+            'final_scale': scaler.get_scale(), 'raw_loss': row['loss'],
+            'grad_norm': row['grad_norm'] if math.isfinite(row['grad_norm']) else str(row['grad_norm']),
+            'optimizer_skipped': inner.trainer.accelerator.optimizer_step_was_skipped,
+            'adapter_max_delta': max((after[key] - before[key]).abs().max().item() for key in before),
+            'qualification': False,
+        }
+        name = f'ipo-diagnostic-{stream}-{scale}-{quant}.json'
+        (Path(os.environ['SOUP_TEST_2766_EVIDENCE_DIR']) / name).write_text(
+            json.dumps(values, indent=2, allow_nan=False) + '\n')
+        print(values)
+    finally:
+        inner._close_stream_runtime()

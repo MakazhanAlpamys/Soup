@@ -31,13 +31,19 @@ def _read_checkpoint_config(
     try:
         from huggingface_hub import hf_hub_download
 
+        from soup_cli.utils.run_provenance import base_revision_kwargs
+
+        revision_kwargs = base_revision_kwargs(repo_id)
         # Try offline cache first, then fall back to normal download
         try:
             downloaded = hf_hub_download(
-                repo_id=repo_id, filename="config.json", local_files_only=True
+                repo_id=repo_id, filename="config.json", local_files_only=True,
+                **revision_kwargs,
             )
         except Exception:
-            downloaded = hf_hub_download(repo_id=repo_id, filename="config.json")
+            downloaded = hf_hub_download(
+                repo_id=repo_id, filename="config.json", **revision_kwargs,
+            )
         return json.loads(Path(downloaded).read_text(encoding="utf-8")), repo_id
     except Exception as exc:
         raise ValueError(

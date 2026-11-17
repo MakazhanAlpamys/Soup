@@ -10,6 +10,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -29,7 +30,7 @@ from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 console = Console()
 
 
-class IPOTrainerWrapper:
+class IPOTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper for IPO training from SoupConfig.
 
     IPO is a theoretically grounded variant of DPO that uses a squared
@@ -41,6 +42,10 @@ class IPOTrainerWrapper:
     - chosen: the preferred response
     - rejected: the less preferred response
     """
+
+    # TRL batches both completions and runs the reference before backward.
+    _STREAM_ROWS_PER_EXAMPLE = 2
+    _STREAM_REFILL_BEFORE_BACKWARD = True
 
     def __init__(
         self,
@@ -96,7 +101,9 @@ class IPOTrainerWrapper:
 
         use_unsloth = cfg.backend == "unsloth"
 
-        if use_unsloth:
+        if tcfg.stream_layers:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
@@ -106,7 +113,8 @@ class IPOTrainerWrapper:
         )
 
         trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        total = getattr(self._stream_runtime, "total_params", 0) or total
+        pct = 100 * trainable / total if total else 0.0
         console.print(
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -193,6 +201,10 @@ class IPOTrainerWrapper:
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if tcfg.stream_layers:
+            from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
+
+            materialize_meta_adapter_copy(self.model)
         if not config_accepts(DPOConfig, "max_prompt_length"):
             cap_kwargs = {
                 "max_length": cfg.data.max_length,
@@ -407,8 +419,9 @@ class IPOTrainerWrapper:
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        with activation_offloading_context(
-            self.config.training, self._output_dir,
+        self._attach_streamed_save_guard()
+        with self._training_context(
+            activation_offloading_context(self.config.training, self._output_dir)
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,
@@ -424,6 +437,7 @@ class IPOTrainerWrapper:
 
         if self.config.training.relora_steps is None:
             self.trainer.save_model(self._output_dir)
+            self._assert_streamed_adapter_saved(self._output_dir)
         else:
             from soup_cli.utils.peft_wiring import save_model_with_relora
 

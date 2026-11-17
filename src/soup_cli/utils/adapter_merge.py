@@ -7,8 +7,11 @@ Four strategies wrap mergekit-style math in pure numpy:
 - ``dare``: drop and rescale by 1/(1-density) (Yu et al. 2024)
 - ``svd``: low-rank SVD reconstruction of the merged delta
 
-All strategies operate on the intersection of layer names; shape-mismatched
-tensors are silently skipped (rank changed between adapters). Live canary
+All strategies operate on the intersection of layer names. ``merge_adapters``
+refuses inputs that cannot be merged before anything is written (#2907): a
+shared tensor whose shape differs between inputs (the LoRA rank changed), or
+inputs that share no tensor name at all. The per-strategy functions still skip
+a shape-mismatched tensor when called directly. Live canary
 verdict via v0.55 eval gate is deferred to v0.57.1; stub returns ``None``.
 
 The merged adapter keeps the first input's ``adapter_config.json``, so every
@@ -99,6 +102,95 @@ def _validate_density(density: float, field: str) -> float:
     if not 0 < val <= 1:
         raise ValueError(f"{field} must be in (0, 1]")
     return val
+
+
+def _lora_rank_of(name: str, shape: Tuple[int, ...]) -> Optional[int]:
+    """LoRA rank a factor tensor carries, or ``None`` for any other tensor.
+
+    ``lora_A`` / ``lora_embedding_A`` hold the rank on axis 0, ``lora_B`` /
+    ``lora_embedding_B`` on axis 1 (linear, embedding and conv layers alike).
+    """
+    if "lora_A" in name or "lora_embedding_A" in name:
+        return int(shape[0]) if len(shape) >= 1 else None
+    if "lora_B" in name or "lora_embedding_B" in name:
+        return int(shape[1]) if len(shape) >= 2 else None
+    return None
+
+
+def _module_of(name: str) -> str:
+    """``...q_proj.lora_A.weight`` -> ``...q_proj``; other names unchanged."""
+    for marker in (".lora_embedding_A", ".lora_embedding_B", ".lora_A", ".lora_B"):
+        head, sep, _tail = name.partition(marker)
+        if sep:
+            return head
+    return name
+
+
+def check_mergeable(weights_list: Sequence[Mapping[str, Any]]) -> None:
+    """Refuse inputs that ``soup adapters merge`` cannot merge (#2907).
+
+    Every strategy merges only the tensors all inputs share and skips a shared
+    tensor whose shapes differ. Inputs with different LoRA ranks differ in
+    shape on every factor, so the merge used to be empty and still exit 0.
+    Raises ``ValueError`` when:
+
+    - the inputs share no tensor name at all (disjoint ``target_modules``), or
+    - a shared LoRA tensor differs in shape between inputs (on every module,
+      or on some only, as with ``rank_pattern``), or
+    - no shared tensor has one shape, so the merge would be empty.
+
+    Not a refusal, as before: a tensor present in only some inputs stays out
+    of the merge, and a shared tensor that is not a LoRA one (a
+    ``modules_to_save`` head, say) and differs in shape is skipped by the
+    strategy and listed as skipped.
+    """
+    import numpy as np
+
+    if len(weights_list) < _MIN_ADAPTERS:
+        return
+    shared = set(weights_list[0].keys())
+    for adapter in weights_list[1:]:
+        shared &= set(adapter.keys())
+    if not shared:
+        raise ValueError(
+            "cannot merge: the adapters share no tensor name, so the merged "
+            "adapter would hold no weights (the inputs target different "
+            "modules). Nothing was written."
+        )
+    mergeable = 0
+    for name in sorted(shared):
+        shapes = [tuple(np.shape(adapter[name])) for adapter in weights_list]
+        if len(set(shapes)) == 1:
+            mergeable += 1
+            continue
+        if "lora_" not in name:
+            continue
+        ranks = [_lora_rank_of(name, shape) for shape in shapes]
+        if None not in ranks and len(set(ranks)) > 1:
+            per_input = ", ".join(
+                f"rank {rank} in adapter {pos}" for pos, rank in enumerate(ranks, 1)
+            )
+            raise ValueError(
+                f"cannot merge: module {_module_of(name)!r} has LoRA {per_input}. "
+                "`soup adapters merge` needs the same rank on every module; for "
+                "mixed ranks use `soup adapters arithmetic ... --rank N`. "
+                "Nothing was written."
+            )
+        per_input = ", ".join(
+            f"{shape} in adapter {pos}" for pos, shape in enumerate(shapes, 1)
+        )
+        raise ValueError(
+            f"cannot merge: tensor {name!r} has shape {per_input}. "
+            "`soup adapters merge` needs every shared tensor to have one shape "
+            "(were the adapters trained on the same base model?). "
+            "Nothing was written."
+        )
+    if not mergeable:
+        raise ValueError(
+            "cannot merge: no tensor the adapters share has the same shape in "
+            "every input, so the merged adapter would hold no weights. "
+            "Nothing was written."
+        )
 
 
 def merge_linear(
@@ -371,9 +463,11 @@ def merge_adapters(
         [("adapter", path) for path in adapter_paths], [("output_dir", output_dir)]
     )
 
-    weights_list = fold_lora_scaling(
-        [load_adapter_weights(p) for p in adapter_paths], adapter_paths
-    )
+    weights_list = [load_adapter_weights(p) for p in adapter_paths]
+    check_mergeable(weights_list)
+    # Inputs that pass are rescaled to the template's LoRA scaling (#2861); the
+    # fold changes lora_B values only, never a shape, so the check above holds.
+    weights_list = fold_lora_scaling(weights_list, adapter_paths)
 
     if weights is None:
         eq = 1.0 / len(adapter_paths)

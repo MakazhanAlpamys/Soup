@@ -17,7 +17,10 @@ from soup_cli.utils.gpu import (
     resolve_base_load_dtype,
     resolve_device_map,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -528,6 +531,12 @@ class PretrainTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            # TRL's SFTTrainer casts a 4/8-bit base's adapter to bf16 when it is
+            # built, and the checkpoint reload upcasts it to fp32. Without this a
+            # resumed pretrain run trains and saves another dtype than the
+            # uninterrupted one, as SFT did before #1503 (and DPO/GRPO before #1573).
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             with manual_save_context(self.trainer):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
