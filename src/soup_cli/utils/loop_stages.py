@@ -32,7 +32,6 @@ import logging
 import os
 import re
 import sqlite3
-import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -68,7 +67,7 @@ from soup_cli.utils.loop_holdout import (
 )
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
 from soup_cli.utils.loop_retry import hold_reason, train_inputs_fingerprint
-from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit
+from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit, python_child_argv
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
@@ -951,15 +950,14 @@ def train_dpo_from_pairs(
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
     atomic_write_text(rendered, yaml_path, field="train yaml")
 
-    argv = [
-        sys.executable,
+    argv = python_child_argv(
         "-m",
         "soup_cli.cli",
         "train",
         "--config",
         yaml_path,
         "--yes",
-    ]
+    )
     runner = _TRAIN_RUNNER
     if runner is None:
         import subprocess  # noqa: S404 — argv list mode, no shell
@@ -1312,13 +1310,13 @@ def verify_with_ship(
             **common,
             **_verdict_skipped(f"the gate files could not be written ({_short(exc)})"),
         }
-    argv = [
-        sys.executable, "-m", "soup_cli.cli", "ship",
+    argv = python_child_argv(
+        "-m", "soup_cli.cli", "ship",
         "--base", base,
         "--adapter", str(adapter_path),
         "--task-eval", state.eval_suite,
         "--output", out_path,
-    ]
+    )
     if state.production_adapter:
         argv.extend(["--base-adapter", state.production_adapter])
     # The loop's verdict: did the candidate learn the corrections, and keep the edits held out?

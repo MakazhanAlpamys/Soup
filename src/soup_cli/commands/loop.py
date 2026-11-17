@@ -22,7 +22,6 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
-import sys
 import time
 import uuid
 from dataclasses import replace
@@ -70,6 +69,7 @@ from soup_cli.utils.loop_log import (
     withdrawn_line,
 )
 from soup_cli.utils.loop_retry import describe as describe_failed_train
+from soup_cli.utils.loop_spawn import python_child_argv
 from soup_cli.utils.loop_state import (
     ALL_LINEAR,
     CANARY_ON_TIMEOUT,
@@ -1044,8 +1044,7 @@ def watch_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]invalid watch config:[/] {for_terminal(str(exc))}")
             raise typer.Exit(code=2)
-        argv = [
-            sys.executable,
+        argv = python_child_argv(
             "-m",
             "soup_cli.cli",
             "loop",
@@ -1053,7 +1052,7 @@ def watch_cmd(
             "--foreground",
             "--poll-interval",
             str(poll_interval),
-        ]
+        )
         if max_iterations is not None:
             argv.extend(["--max-iterations", str(max_iterations)])
         if pre_wired:
