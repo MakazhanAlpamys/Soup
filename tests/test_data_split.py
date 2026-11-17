@@ -5,6 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import strip_ansi
+
+
+def _plain(output: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output."""
+    return " ".join(strip_ansi(output).split())
+
 
 def _make_jsonl(path: Path, count: int, field: str = "category"):
     """Create a JSONL file with count rows, optional category field."""
@@ -423,3 +430,228 @@ class TestDataSplitSecurity:
         # Output should be in same dir as input
         assert (tmp_path / "data_train.jsonl").exists()
         assert (tmp_path / "data_val.jsonl").exists()
+
+
+# ─── Bounds and Validation Tests (#2965) ─────────────────────────────────
+
+
+class TestDataSplitBoundsValidation:
+    """Regression tests for #2965: boundary validation on --val and --test."""
+
+    def test_split_val_zero_rejected(self, tmp_path):
+        """--val 0 yields no split at all and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["data", "split", str(data_file), "--val", "0"])
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_test_zero_rejected(self, tmp_path):
+        """--test 0 yields no split at all and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["data", "split", str(data_file), "--test", "0"])
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_both_zero_rejected(self, tmp_path):
+        """--val 0 --test 0 yields no split at all and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "0", "--test", "0"],
+        )
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_val_zero_absolute_rejected(self, tmp_path):
+        """--val 0 with --absolute yields no split and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "0", "--absolute"],
+        )
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_test_zero_absolute_rejected(self, tmp_path):
+        """--test 0 with --absolute yields no split and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--test", "0", "--absolute"],
+        )
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_both_zero_absolute_rejected(self, tmp_path):
+        """--val 0 --test 0 with --absolute yields no split and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "0", "--test", "0", "--absolute"],
+        )
+        assert result.exit_code == 1
+        assert "positive split" in _plain(result.output).lower()
+
+    def test_split_negative_rejected(self, tmp_path):
+        """Negative split values must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["data", "split", str(data_file), "--val", "-5"])
+        assert result.exit_code == 1
+        assert "non-negative" in _plain(result.output)
+
+    def test_split_percentage_sum_exceeds_100_rejected(self, tmp_path):
+        """Percentages summing to >= 100 must be refused before row slicing."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 2)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "90", "--test", "40"],
+        )
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "Split percentages must sum to less than 100" in plain
+
+    def test_split_percentage_100_rejected(self, tmp_path):
+        """--val 100 leaves no rows for train and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["data", "split", str(data_file), "--val", "100"])
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "Split percentages must sum to less than 100" in plain
+
+    def test_split_percentage_sum_100_rejected(self, tmp_path):
+        """--val 50 --test 50 leaves 0% for train and must be refused."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "50", "--test", "50"],
+        )
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "Split percentages must sum to less than 100" in plain
+
+    def test_split_val_zero_with_test_allowed(self, tmp_path):
+        """--val 0 with a positive --test keeps meaning no val split."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 20)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "0", "--test", "10", "--seed", "42"],
+        )
+        assert result.exit_code == 0
+        assert (tmp_path / "data_train.jsonl").exists()
+        assert (tmp_path / "data_test.jsonl").exists()
+        assert not (tmp_path / "data_val.jsonl").exists()
+
+        train_rows = _read_jsonl(tmp_path / "data_train.jsonl")
+        test_rows = _read_jsonl(tmp_path / "data_test.jsonl")
+        assert len(train_rows) == 18
+        assert len(test_rows) == 2
+        expected_test = ["sample 5", "sample 19"]
+        expected_train = [f"sample {i}" for i in range(20) if i not in (5, 19)]
+        assert [r["text"] for r in train_rows] == expected_train
+        assert [r["text"] for r in test_rows] == expected_test
+
+    def test_split_test_zero_with_val_allowed(self, tmp_path):
+        """--test 0 with a positive --val keeps meaning no test split."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 20)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["data", "split", str(data_file), "--val", "10", "--test", "0", "--seed", "42"],
+        )
+        assert result.exit_code == 0
+        assert (tmp_path / "data_train.jsonl").exists()
+        assert (tmp_path / "data_val.jsonl").exists()
+        assert not (tmp_path / "data_test.jsonl").exists()
+
+        train_rows = _read_jsonl(tmp_path / "data_train.jsonl")
+        val_rows = _read_jsonl(tmp_path / "data_val.jsonl")
+        assert len(train_rows) == 18
+        assert len(val_rows) == 2
+        expected_val = ["sample 5", "sample 19"]
+        expected_train = [f"sample {i}" for i in range(20) if i not in (5, 19)]
+        assert [r["text"] for r in train_rows] == expected_train
+        assert [r["text"] for r in val_rows] == expected_val
+
