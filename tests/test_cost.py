@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from soup_cli.cli import app
-from tests.conftest import make_cli_runner
+from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
 
@@ -141,8 +141,9 @@ def test_cost_with_hub_split_metadata(tmp_path, monkeypatch, num_examples):
     result = runner.invoke(app, ["cost", "--config", str(config_file), "--gpu", "H100"])
 
     assert result.exit_code == 0, result.exception
-    assert "Training Cost Estimate" in result.stdout
-    assert ("using default of 10,000 examples" in result.stdout) == (num_examples is None)
+    text = " ".join(strip_ansi(result.stdout).split())
+    assert "Training Cost Estimate" in text
+    assert ("using default of 10,000 examples" in text) == (num_examples is None)
 
 
 def test_cost_shows_variance_disclaimer(tmp_path):
