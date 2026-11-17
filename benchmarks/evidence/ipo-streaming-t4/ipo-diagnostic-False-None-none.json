@@ -1,0 +1,12 @@
+{
+  "stream_layers": false,
+  "quantization": "none",
+  "default_initial_scale": 65536.0,
+  "effective_initial_scale": 65536.0,
+  "final_scale": 32768.0,
+  "raw_loss": 25.0,
+  "grad_norm": "nan",
+  "optimizer_skipped": true,
+  "adapter_max_delta": 0.0,
+  "qualification": false
+}
