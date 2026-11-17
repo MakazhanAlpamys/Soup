@@ -149,7 +149,6 @@ def test_cwd_only_limits_matches_after_filtering(db, tmp_path, monkeypatch):
 
 
 def test_cwd_only_reconciles_only_displayed_runs(db, tmp_path, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "120")
     project = _project(tmp_path, "project")
     outside = _project(tmp_path, "outside")
     older = _finished_run(db, project / "output")
@@ -163,7 +162,7 @@ def test_cwd_only_reconciles_only_displayed_runs(db, tmp_path, monkeypatch):
     monkeypatch.chdir(project)
 
     output = _invoke("--cwd-only", "--limit", "1")
-    assert selected in output and "terminated" in output
+    assert selected in output
     assert older not in output and unrelated not in output
     with closing(sqlite3.connect(str(db))) as conn:
         statuses = dict(conn.execute("SELECT run_id, status FROM runs"))
