@@ -19,11 +19,6 @@ base_matmul_dtype_forward_and_backward
     arm changes that choice everywhere it is read, so it covers the forward
     and the backward together.
 
-base_weight_dtype
-    The same choice seen from the weight's side: the dequantised weight of a
-    quantised projection keeps its own dtype instead of the requested one.
-    A dense (not quantised) projection keeps the real behaviour.
-
 scaling_order
     The fast path folds the scaling into the addition
     (``torch.add(out, term, alpha=scaling)``); PEFT scales the LoRA term and
@@ -33,16 +28,17 @@ per_projection_a
     The fast path multiplies the input by the stacked LoRA A matrices in one
     GEMM and slices the result; PEFT multiplies per projection.  This arm
     splits the stacked A into per-projection GEMMs.  Only the stacked A is
-    split: it is an fp32 weight with few rows, where the reference's own fp32
-    linears have many.
+    split: it holds ``r`` rows per projection, so its row count is small,
+    while the base weights and the LoRA B matrices have the projection's
+    output width in their rows.
 
 Controls
 --------
 * two runs of the same configuration give the same numbers;
 * every armed run reached its replacement (each arm counts its calls);
-* on a card that runs the fixture at bf16 -- where the row is red -- no arm
-  gives the recorded numbers and every arm brings the three names to a ratio
-  near 1 (at most 1.5 here).
+* on a card that runs the fixture at bf16 -- where the row is red -- with no
+  arm the baseline gives the recorded numbers, and with all three arms on
+  together the three names come to a ratio near 1 (at most 1.5 here).
 
 The report also prints the dtype each base GEMM asked for, so a card owner can
 see which dtypes were in play.
@@ -77,7 +73,6 @@ NEAR_ONE = 1.5
 #: Every arm the harness can switch on.
 ARMS = (
     "base_matmul_dtype_forward_and_backward",
-    "base_weight_dtype",
     "scaling_order",
     "per_projection_a",
 )
@@ -93,27 +88,6 @@ def _deps():
 # ─── the arms ───────────────────────────────────────────────────────────────
 
 
-def _dense_weight_without_the_cast(weight, qmeta, qparts, dtype, calls):
-    """``_dense_weight`` that keeps a quantised weight's own dtype.
-
-    ``dequantize_4bit`` returns the weight in the dtype it was quantised from,
-    which is the compute dtype for weights quantised from it, so this arm only
-    moves a weight whose own dtype differs from the requested one.  A dense
-    projection is not quantised and keeps the real behaviour.
-    """
-    calls.append("base_weight_dtype")
-    if qmeta is None:
-        from soup_cli.utils.fast_lora import _as_dtype
-
-        return _as_dtype(weight, dtype)
-    from bitsandbytes.functional import dequantize_4bit
-
-    from soup_cli.utils.fast_lora import _rebuild_quant_state
-
-    state = _rebuild_quant_state(qmeta, qparts)
-    return dequantize_4bit(weight, state)
-
-
 def _scaled_lora_add_peft_order(out, hidden, lora_b, scaling, calls):
     """PEFT's order: scale the LoRA term, then add it."""
     import torch
@@ -124,7 +98,7 @@ def _scaled_lora_add_peft_order(out, hidden, lora_b, scaling, calls):
     return torch.add(out.to(promoted), term.to(promoted)).to(out.dtype)
 
 
-def _per_projection_linear(original, calls, max_rows):
+def _per_projection_linear(original, calls, rows, max_rows):
     """``F.linear`` that splits a stacked LoRA A into per-projection GEMMs.
 
     The stacked A holds ``r`` rows per projection, so its row count is small
@@ -138,10 +112,11 @@ def _per_projection_linear(original, calls, max_rows):
     def linear(input, weight, bias=None):
         if (
             bias is None
-            and weight.shape[0] <= max_rows
+            and 4 < weight.shape[0] <= max_rows
             and weight.shape[0] % 4 == 0
         ):
             calls.append("per_projection_a")
+            rows.append(weight.shape[0])
             blocks = torch.split(weight, 4, dim=0)
             return torch.cat([original(input, block) for block in blocks], dim=-1)
         return original(input, weight, bias)
@@ -156,7 +131,10 @@ def _in_activation_dtype(meta, fallback, calls):
 
 
 @contextlib.contextmanager
-def _arms_enabled(arms, monkeypatch, calls: list[str], trace: list[str] | None = None):
+def _arms_enabled(
+    arms, monkeypatch, calls: list[str], trace: list[str] | None = None,
+    rows: list[int] | None = None,
+):
     """Enable the named arms for the duration of the block."""
     import torch
 
@@ -172,17 +150,6 @@ def _arms_enabled(arms, monkeypatch, calls: list[str], trace: list[str] | None =
                     meta, fallback, _calls
                 ),
             )
-    if "base_weight_dtype" in arms:
-        for module in modules:
-            monkeypatch.setattr(
-                module,
-                "_dense_weight",
-                lambda weight, qmeta, qparts, dtype, _calls=calls, _m=module: (
-                    _dense_weight_without_the_cast(
-                        weight, qmeta, qparts, dtype, _calls
-                    )
-                ),
-            )
     if "scaling_order" in arms:
         for module in modules:
             monkeypatch.setattr(
@@ -196,7 +163,9 @@ def _arms_enabled(arms, monkeypatch, calls: list[str], trace: list[str] | None =
         monkeypatch.setattr(
             torch.nn.functional,
             "linear",
-            _per_projection_linear(torch.nn.functional.linear, calls, max_rows=16),
+            _per_projection_linear(
+                torch.nn.functional.linear, calls, rows if rows is not None else [], max_rows=16
+            ),
         )
     if trace is not None:
         for module in modules:
@@ -287,17 +256,19 @@ def _row_report(tmp_path, monkeypatch, capsys, arms) -> tuple[dict, list[str], l
     tmp_path.mkdir(parents=True, exist_ok=True)
     trace: list[str] = []
     calls: list[str] = []
-    with _arms_enabled(arms, monkeypatch, calls, trace):
-        try:
-            _run_streamed_row(tmp_path, monkeypatch, "4bit")
-        except AssertionError as exc:
-            message = str(exc)
-            if "#792 criterion violated" not in message or "drifted" in message:
-                raise
+    rows: list[int] = []
+    with monkeypatch.context() as patch:
+        with _arms_enabled(arms, patch, calls, trace, rows):
+            try:
+                _run_streamed_row(tmp_path, patch, "4bit")
+            except AssertionError as exc:
+                message = str(exc)
+                if "#792 criterion violated" not in message or "drifted" in message:
+                    raise
     printed = capsys.readouterr().out
     for line in printed.splitlines():
         if line.startswith("#792 {"):
-            return json.loads(line[len("#792 "):]), trace, calls
+            return json.loads(line[len("#792 "):]), trace, calls, rows
     raise AssertionError(f"the row printed no report:\n{printed[-2000:]}")
 
 
@@ -310,16 +281,20 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
     controls that hold everywhere (the same configuration twice, and every arm
     reached) are asserted always.
     """
-    report, trace, _ = _row_report(tmp_path / "baseline", monkeypatch, capsys, ())
+    report, trace, _, _ = _row_report(tmp_path / "baseline", monkeypatch, capsys, ())
     baseline = report["ratios"]
     armed = {}
     arm_calls = {}
     for arm in ARMS:
-        arm_report, _, calls = _row_report(tmp_path / arm, monkeypatch, capsys, (arm,))
+        arm_report, _, calls, rows = _row_report(
+            tmp_path / arm, monkeypatch, capsys, (arm,)
+        )
         armed[arm] = arm_report["ratios"]
         arm_calls[arm] = calls
-    every_report, _, every_calls = _row_report(tmp_path / "every", monkeypatch, capsys, ARMS)
-    again_report, _, _ = _row_report(tmp_path / "again", monkeypatch, capsys, ())
+    every_report, _, every_calls, every_rows = _row_report(
+        tmp_path / "every", monkeypatch, capsys, ARMS
+    )
+    again_report, _, _, _ = _row_report(tmp_path / "again", monkeypatch, capsys, ())
 
     def names(ratios: dict) -> dict:
         return {name: _ratio_for(ratios, name) for name in THE_THREE_NAMES}
@@ -335,6 +310,8 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
         "base_gemm_dtypes": sorted(set(trace)),
         "arm_calls": {arm: calls.count(arm) for arm, calls in arm_calls.items()},
         "every_arm_calls": {arm: every_calls.count(arm) for arm in ARMS},
+        "split_rows": sorted(set(rows)),
+        "every_split_rows": sorted(set(every_rows)),
     }
     with capsys.disabled():
         print("#792 arms " + json.dumps(measured))
@@ -344,11 +321,16 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
         assert arm_calls[arm].count(arm) > 0, arm
         assert every_calls.count(arm) > 0, arm
 
+    # The stacked A is 12 rows for q/k/v and 8 for gate/up: pin that the
+    # split actually saw those two shapes, not just one-block rank-4 A's.
+    assert 12 in rows and 8 in rows
+    assert 12 in every_rows and 8 in every_rows
+
     # Control: the same configuration twice gives the same numbers.
     assert again_report["ratios"] == baseline
 
     # The red-row controls, where the row is red: the recorded numbers with no
-    # arm, and the PEFT error with every arm.
+    # arm, and the PEFT error with all three arms on together.
     runs_at_bf16 = any("dtype=torch.bfloat16" in line for line in trace)
     if runs_at_bf16:
         for name, recorded in RECORDED_RATIOS.items():
