@@ -160,8 +160,9 @@ def sample_sharegpt_file(tmp_path: Path) -> Path:
     return filepath
 
 
-def test_convert_command(sample_alpaca_file, tmp_path):
+def test_convert_command(sample_alpaca_file, tmp_path, monkeypatch):
     """soup data convert should convert alpaca → sharegpt."""
+    monkeypatch.chdir(tmp_path)
     output = str(tmp_path / "output.jsonl")
     result = runner.invoke(
         app, ["data", "convert", str(sample_alpaca_file), "--to", "sharegpt", "-o", output]
@@ -192,8 +193,9 @@ def test_convert_missing_file():
     assert result.exit_code == 1
 
 
-def test_merge_command(sample_alpaca_file, sample_sharegpt_file, tmp_path):
+def test_merge_command(sample_alpaca_file, sample_sharegpt_file, tmp_path, monkeypatch):
     """soup data merge should merge files."""
+    monkeypatch.chdir(tmp_path)
     output = str(tmp_path / "merged.jsonl")
     result = runner.invoke(
         app,
