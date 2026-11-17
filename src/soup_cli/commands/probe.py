@@ -19,12 +19,12 @@ from typing import Any, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
@@ -32,6 +32,47 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Post-train activation probes (v0.66.0).",
 )
+
+
+# Bases, paths, adapter names, SAE ids and error text come from outside the
+# program, so every line that carries them is printed as ``Text``: shown as
+# typed, never read as markup or ``:name:`` emoji, control characters removed
+# (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
+
+
+def _wrote(message: object) -> None:
+    console.print(terminal_text(message, "green"))
+
+
+def _print_report(markdown: str) -> None:
+    console.print(terminal_text(markdown))
+
+
+def _print_escaped_report(markdown: str) -> None:
+    """Print a report whose renderer put a backslash before every ``[`` and ``]``.
+
+    ``render_pack_markdown`` and ``render_matrix_markdown`` escape brackets so
+    that their text was safe to print as markup. Printed as ``Text`` it needs no
+    escaping, so those backslashes are taken back out: the renderer added exactly
+    one in front of each bracket and changed nothing else.
+    """
+    console.print(terminal_text(markdown.replace("\\[", "[").replace("\\]", "]")))
+
+
+def _no_evidence_panel(canonical: str, spec: Any, title: str, *, bands: bool = False) -> Panel:
+    body = Text.assemble(
+        "Base: ",
+        (strip_control(canonical), "bold"),
+        f"\nHidden dim: {spec.hidden_dim}\nThreshold: {spec.threshold:.3f}\n",
+        "Bands: 5% / 20% (OK / MINOR / MAJOR)\n" if bands else "",
+        f"Description: {strip_control(spec.description)}\n\n",
+        ("Pass --evidence <activations.json> to run the probe.", "dim"),
+    )
+    return Panel(body, title=title)
 
 
 # 16 MiB caps mirror v0.56.0 diagnose evidence policy.
@@ -97,7 +138,7 @@ def pack(
         table = Table(title="Probe pack bases")
         table.add_column("Base", style="bold")
         for b in bases:
-            table.add_row(escape(b))
+            table.add_row(terminal_text(b))
         console.print(table)
         return
 
@@ -110,19 +151,19 @@ def pack(
     try:
         result = get_probe_pack(base)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
-    console.print(render_pack_markdown(result))
+    _print_escaped_report(render_pack_markdown(result))
 
     if output is not None:
         try:
             atomic_write_text(render_pack_json(result), output,
                               field="--output")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Cannot write --output: {escape(str(exc))}[/]")
+            _refuse(f"Cannot write --output: {exc}")
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote probe pack → {escape(output)}[/]")
+        _wrote(f"Wrote probe pack → {output}")
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +215,7 @@ def sleeper(
         try:
             loaded_weights = load_probe_weights(weights)
         except (TypeError, ValueError, KeyError, FileNotFoundError, RuntimeError) as exc:
-            console.print(f"[red]--weights: {escape(str(exc))}[/]")
+            _refuse(f"--weights: {exc}")
             raise typer.Exit(2) from exc
         canonical = base
         spec = None
@@ -182,19 +223,12 @@ def sleeper(
         try:
             canonical = validate_base_for_probe(base)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
         spec = BUNDLED_PROBES[canonical]
 
     if evidence is None and spec is not None:
-        console.print(Panel(
-            f"Base: [bold]{escape(canonical)}[/]\n"
-            f"Hidden dim: {spec.hidden_dim}\n"
-            f"Threshold: {spec.threshold:.3f}\n"
-            f"Description: {escape(spec.description)}\n\n"
-            "[dim]Pass --evidence <activations.json> to run the probe.[/]",
-            title="Sleeper probe (no evidence)",
-        ))
+        console.print(_no_evidence_panel(canonical, spec, "Sleeper probe (no evidence)"))
         # Emit neutral OK report — composes with v0.56 diagnose policy.
         neutral = SleeperProbeResult(
             base=canonical,
@@ -209,9 +243,9 @@ def sleeper(
                     render_sleeper_json(neutral), output, field="--output"
                 )
             except (TypeError, ValueError) as exc:
-                console.print(f"[red]{escape(str(exc))}[/]")
+                _refuse(exc)
                 raise typer.Exit(2) from exc
-            console.print(f"[green]Wrote neutral report → {escape(output)}[/]")
+            _wrote(f"Wrote neutral report → {output}")
         return
 
     if evidence is None:
@@ -224,7 +258,7 @@ def sleeper(
     try:
         payload = _read_json_evidence(evidence, field="--evidence")
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     acts_raw = payload.get("activations")
@@ -234,25 +268,25 @@ def sleeper(
     try:
         activations = np.asarray(acts_raw, dtype=np.float32)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]--evidence: invalid activations — {escape(str(exc))}[/]")
+        _refuse(f"--evidence: invalid activations — {exc}")
         raise typer.Exit(2) from exc
 
     try:
         result = run_sleeper_probe(activations, canonical, weights=loaded_weights)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
-    console.print(render_sleeper_markdown(result))
+    _print_report(render_sleeper_markdown(result))
 
     if output is not None:
         try:
             atomic_write_text(render_sleeper_json(result), output,
                               field="--output")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote probe result → {escape(output)}[/]")
+        _wrote(f"Wrote probe result → {output}")
 
     if result.verdict == "MAJOR":
         raise typer.Exit(2)
@@ -292,27 +326,23 @@ def _run_kind_probe_cli(
         try:
             loaded_weights = load_probe_weights(weights)
         except (TypeError, ValueError, KeyError, FileNotFoundError, RuntimeError) as exc:
-            console.print(f"[red]--weights: {escape(str(exc))}[/]")
+            _refuse(f"--weights: {exc}")
             raise typer.Exit(2) from exc
         canonical = base
     else:
         try:
             canonical = validate_base(base)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
         spec = bundled[canonical]
 
     if evidence is None and spec is not None:
-        console.print(Panel(
-            f"Base: [bold]{escape(canonical)}[/]\n"
-            f"Hidden dim: {spec.hidden_dim}\n"
-            f"Threshold: {spec.threshold:.3f}\n"
-            f"Bands: 5% / 20% (OK / MINOR / MAJOR)\n"
-            f"Description: {escape(spec.description)}\n\n"
-            "[dim]Pass --evidence <activations.json> to run the probe.[/]",
-            title=f"{kind.capitalize()} probe (no evidence)",
-        ))
+        console.print(
+            _no_evidence_panel(
+                canonical, spec, f"{kind.capitalize()} probe (no evidence)", bands=True
+            )
+        )
         neutral = ProbeResult(
             kind=kind, base=canonical, num_tokens=0, flag_rate=0.0,
             max_score=0.0, verdict="OK",
@@ -321,9 +351,9 @@ def _run_kind_probe_cli(
             try:
                 atomic_write_text(render_json(neutral), output, field="--output")
             except (TypeError, ValueError) as exc:
-                console.print(f"[red]{escape(str(exc))}[/]")
+                _refuse(exc)
                 raise typer.Exit(2) from exc
-            console.print(f"[green]Wrote neutral report → {escape(output)}[/]")
+            _wrote(f"Wrote neutral report → {output}")
         return
 
     if evidence is None:
@@ -335,7 +365,7 @@ def _run_kind_probe_cli(
     try:
         payload = _read_json_evidence(evidence, field="--evidence")
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     acts_raw = payload.get("activations")
@@ -345,24 +375,24 @@ def _run_kind_probe_cli(
     try:
         activations = np.asarray(acts_raw, dtype=np.float32)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]--evidence: invalid activations — {escape(str(exc))}[/]")
+        _refuse(f"--evidence: invalid activations — {exc}")
         raise typer.Exit(2) from exc
 
     try:
         result = run_probe(activations, canonical, weights=loaded_weights)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
-    console.print(render_markdown(result))
+    _print_report(render_markdown(result))
 
     if output is not None:
         try:
             atomic_write_text(render_json(result), output, field="--output")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote probe result → {escape(output)}[/]")
+        _wrote(f"Wrote probe result → {output}")
 
     if result.verdict == "MAJOR":
         raise typer.Exit(2)
@@ -498,14 +528,14 @@ def _emit_matrix(matrix: Any, output: Optional[str]) -> None:
     """Render + write the interference matrix and exit 2 on MAJOR worst-pair."""
     from soup_cli.utils.interference import render_matrix_json, render_matrix_markdown
 
-    console.print(render_matrix_markdown(matrix))
+    _print_escaped_report(render_matrix_markdown(matrix))
     if output is not None:
         try:
             atomic_write_text(render_matrix_json(matrix), output, field="--output")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote matrix → {escape(output)}[/]")
+        _wrote(f"Wrote matrix → {output}")
     if matrix.worst_pair is not None and abs(matrix.worst_score) >= 0.20:
         raise typer.Exit(2)
 
@@ -526,13 +556,13 @@ def _run_interference_measure(
     try:
         adapters = _parse_adapter_specs(adapter_specs)
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     try:
         eval_rows = _load_jsonl_rows(measure, field="--measure")
     except (OSError, ValueError) as exc:
-        console.print(f"[red]--measure: {escape(str(exc))}[/]")
+        _refuse(f"--measure: {exc}")
         raise typer.Exit(2) from exc
     if not eval_rows:
         console.print("[red]--measure: eval suite has no usable rows.[/]")
@@ -541,21 +571,24 @@ def _run_interference_measure(
     from soup_cli.utils.interference_live import measure_interference_losses
 
     console.print(
-        f"[cyan]--measure:[/] loading {len(adapters)} adapters on "
-        f"{escape(base_model)} and measuring {len(eval_rows)} eval rows ..."
+        Text.assemble(
+            ("--measure:", "cyan"),
+            f" loading {len(adapters)} adapters on {strip_control(base_model)} "
+            f"and measuring {len(eval_rows)} eval rows ...",
+        )
     )
     try:
         losses = measure_interference_losses(
             base_model, adapters, eval_rows, device=device
         )
     except (TypeError, ValueError, RuntimeError, ImportError) as exc:
-        console.print(f"[red]--measure failed: {escape(str(exc))}[/]")
+        _refuse(f"--measure failed: {exc}")
         raise typer.Exit(2) from exc
 
     try:
         matrix = build_interference_matrix(tuple(adapters), losses)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
     _emit_matrix(matrix, output)
 
@@ -614,7 +647,7 @@ def interference(
     try:
         payload = _read_json_evidence(losses, field="--losses")
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     adapters_raw = payload.get("adapters")
@@ -629,20 +662,14 @@ def interference(
     parsed_losses: dict[tuple[str, str], float] = {}
     for key, value in losses_raw.items():
         if not isinstance(key, str) or "|" not in key:
-            console.print(
-                f"[red]Invalid losses key {for_terminal(repr(key))}; "
-                "expected 'a|b' shape.[/]"
-            )
+            _refuse(f"Invalid losses key {key!r}; expected 'a|b' shape.")
             raise typer.Exit(2)
         # H3 review fix (v0.66.0): validate the value is numeric BEFORE
         # inserting into the parsed map. Otherwise a string/list/dict
         # value passes through and crashes deep inside the math kernel
         # with a confusing message.
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            console.print(
-                f"[red]losses[{for_terminal(repr(key))}] must be numeric, "
-                f"got {type(value).__name__}[/]"
-            )
+            _refuse(f"losses[{key!r}] must be numeric, got {type(value).__name__}")
             raise typer.Exit(2)
         target, co = key.split("|", 1)
         parsed_losses[(target, co)] = float(value)
@@ -650,7 +677,7 @@ def interference(
     try:
         matrix = build_interference_matrix(tuple(adapters_raw), parsed_losses)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     _emit_matrix(matrix, output)
@@ -695,46 +722,48 @@ def sae_diff(
     try:
         if auto_download:
             console.print(
-                f"[cyan]--auto-download:[/] fetching SAE {escape(sae)} "
-                "into ~/.soup/sae-cache/ ..."
+                Text.assemble(
+                    ("--auto-download:", "cyan"),
+                    f" fetching SAE {strip_control(sae)} into ~/.soup/sae-cache/ ...",
+                )
             )
             sae_weights = download_sae(sae)
         else:
             sae_weights = load_sae_weights(sae)
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from exc
     except (TypeError, ValueError, RuntimeError, KeyError, ImportError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     try:
         pre_payload = _read_json_evidence(pre_acts, field="pre_acts")
         post_payload = _read_json_evidence(post_acts, field="post_acts")
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     try:
         pre = np.asarray(pre_payload.get("activations"), dtype=np.float32)
         post = np.asarray(post_payload.get("activations"), dtype=np.float32)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid activations JSON: {escape(str(exc))}[/]")
+        _refuse(f"Invalid activations JSON: {exc}")
         raise typer.Exit(2) from exc
 
     try:
         report = compute_sae_diff(pre, post, sae_weights, top_k=top_k)
     except (TypeError, ValueError, KeyError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
-    console.print(render_report_markdown(report))
+    _print_report(render_report_markdown(report))
 
     if output is not None:
         try:
             atomic_write_text(render_report_json(report), output,
                               field="--output")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote diff → {escape(output)}[/]")
+        _wrote(f"Wrote diff → {output}")

@@ -1770,6 +1770,7 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--citation-style` | text | `bracket` |  | Citation style for the live RAFT citation probe: bracket (\[doc-id]) / inline ((doc-id)) / footnote (\[^id]). Must match the style the model was trained to emit. (v0.71.17 #254) |
 | `--allow-not-run` | flag | off |  | Exit 0 even when a requested probe did not run (verdict NOT_RUN). Without it such a run exits 3. |
+| `--require-all-modes` | flag | off |  | With --evidence: a mode missing from the file is NOT_RUN instead of a neutral OK, so the run exits 3 unless --allow-not-run (#1525). |
 | `--shuffle-seed` | integer |  |  | RAFT document-shuffle seed for the live citation probe (composes the \[doc-N] ids the model is scored against). (v0.71.17 #254) |
 
 ## `soup diff`
@@ -3557,7 +3558,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
 | `--task-eval` | text |  |  | JSONL of leg-1 task-win eval tasks. |
-| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate). |
+| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs --reward-fn). |
+| `--reward-fn` | text |  |  | Reward function for --task-mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| path/to/file.py. A .py file is EXECUTED as Python code on this machine (it must sit under the working directory and not be a symlink): only use a file you trust. It is called once per row and returns one number in \[0, 1]; the verdict is decided on the mean. |
 | `--noise-floor` | integer |  |  | Re-run the BASE model N times (2-10) to measure what this instrument can resolve, print it beside the verdict, and refuse to call any delta smaller than the measured floor significant. Costs N extra base passes. The leg-1 task floor is measured in every --task-mode; in judge_score / pairwise each repeat is N extra JUDGE passes (N x the judge API calls), and the floor is labelled decode + judge. |
 | `--judge-model` | text |  |  | Judge model URL for --task-mode judge_score or pairwise. |
 | `--general-suite` | text |  |  | Comma list of leg-2 benchmarks (default: the bundled offline suite — MCQ/arithmetic + tool-call/JSON/safety; non-bundled names route through lm-eval). |
@@ -3755,6 +3757,7 @@ Usage: `soup train [OPTIONS]`
 | `--profile` | flag | off |  | Record a torch.profiler trace (Chrome trace JSON) during early training steps. Output: &lt;output>/profiles/&lt;run_id>.trace.json |
 | `--allow-oom-attempt` | flag | off |  | Bypass the analytical hardware-fit VRAM gate and launch even when the run is predicted to run out of GPU memory (opt-out). |
 | `--diagnose-gate` | text |  |  | After training, run `soup diagnose` against the supplied evidence JSON (or scratch evidence). Refuses to mark the run successful if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3). |
+| `--diagnose-gate-require-all-modes` | flag | off |  | With --diagnose-gate: a mode missing from the evidence JSON counts as NOT_RUN (exit 3) instead of a neutral OK, so the gate proves coverage. |
 | `--annex-xi` | text |  |  | After training, render an EU AI Act Annex XI/XII auto-doc to the given output path (cwd-contained). Markdown body now; PDF in v0.59.1. |
 | `--repro-receipt` | text |  |  | After training, write an SR 11-7-style reproducibility receipt (seeds + kernel versions + GPU + OS) to the given path. v0.59.0. |
 | `--capture-activations` | text |  |  | After training, capture residual-stream activations at the named decoder layer (e.g. model.layers.5) on --capture-prompts and write them to &lt;output>/activations/activations.json for soup probe sae-diff / sleeper. v0.71.8 #219. |

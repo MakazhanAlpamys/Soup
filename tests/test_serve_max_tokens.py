@@ -1,13 +1,12 @@
-"""``soup serve --max-tokens`` refuses a count below 1 before any backend loads (#2730).
+"""``soup serve --max-tokens`` outside 1 to 16384 is refused before any backend loads (#2730).
 
 Every backend uses ``--max-tokens`` for a request that omits ``max_tokens``. With 0 or
 a negative value the server used to start and then answer each such request with a
-500 (``max_new_tokens must be greater than 0``). ``serve()`` now refuses the value
-next to the ``--max-model-len`` check, before any backend branch, availability check
-or model load, with exit 2 and one message on every backend.
-
-The upper end (above 16384) is not refused here: such values work on v0.77.2 for a
-request that omits ``max_tokens``, so refusing them waits for v0.78.0.
+500 (``max_new_tokens must be greater than 0``, #2855). Above 16384 it gave such a
+request more than the per-request cap (``max_tokens`` is ``le=16384``) lets a request
+ask for; that half is refused as of v0.78.0. ``serve()`` refuses both next to the
+``--max-model-len`` check, before any backend branch, availability check or model
+load, with exit 2 and one message on every backend.
 """
 
 from __future__ import annotations
@@ -59,8 +58,8 @@ def _serve(model_dir, *args):
 
 class TestRefused:
     @pytest.mark.parametrize("backend", BACKENDS)
-    @pytest.mark.parametrize("value", ["0", "-5"])
-    def test_a_count_below_1_exits_2_before_anything_loads(
+    @pytest.mark.parametrize("value", ["0", "-5", "16385", "100000"])
+    def test_a_count_outside_the_range_exits_2_before_anything_loads(
         self, model_dir, backend, value, monkeypatch
     ):
         monkeypatch.setenv("COLUMNS", "400")
@@ -74,16 +73,16 @@ class TestRefused:
             result = _serve(model_dir, "--backend", backend, "--max-tokens", value)
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
-        assert _plain(result.output) == f"--max-tokens: must be at least 1 (got {value}).", (
-            result.output
-        )
+        assert _plain(result.output) == (
+            f"--max-tokens: must be between 1 and 16384 (got {value})."
+        ), result.output
         for guard in guards:
             guard.assert_not_called()
 
 
 class TestAccepted:
-    @pytest.mark.parametrize("value", ["1", "16384", "16385"])
-    def test_a_count_of_1_or_more_reaches_the_load(self, model_dir, value, monkeypatch):
+    @pytest.mark.parametrize("value", ["1", "512", "16384"])
+    def test_a_count_inside_the_range_reaches_the_load(self, model_dir, value, monkeypatch):
         monkeypatch.setenv("COLUMNS", "400")
         with patch(
             "soup_cli.commands.serve._load_model", side_effect=_ReachedTheLoadError
