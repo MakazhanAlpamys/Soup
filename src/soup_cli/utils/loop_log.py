@@ -27,6 +27,7 @@ import logging
 import math
 import os
 import posixpath
+import stat
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -83,6 +84,30 @@ def _ends_mid_line(fd: int) -> bool:
     return os.read(fd, 1) != b"\n"
 
 
+#: Permission bits of a loop log: the owner alone reads and writes it. ``paraphrases.jsonl`` holds
+#: rewrites of the user's prompts and the iteration lines hold failure tails, so on a POSIX host
+#: another local user must not read them (the serve trace and feedback logs are 0600 too). Windows
+#: ignores the mode: access follows the folder's permissions there.
+LOG_FILE_MODE = 0o600
+
+
+def _tighten_to_owner(fd: int, *, posix: Optional[bool] = None) -> None:
+    """POSIX: bring a log that already exists, with wider bits than 0600, down to 0600.
+
+    ``open`` applies the mode only to a file it creates, so a log written by an older version
+    (0644) is tightened the next time it is opened for an append. A file this process may not
+    ``chmod`` (another user's) is left as it is: the append still goes through. On Windows the
+    mode is not used and nothing is done. ``posix`` replaces the platform test (tests).
+    """
+    if not (os.name != "nt" if posix is None else posix):
+        return
+    try:
+        if stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
+            os.fchmod(fd, LOG_FILE_MODE)
+    except OSError:
+        return  # not ours to change; nothing is lost by leaving it
+
+
 def append_json_line(path: str, record: Mapping[str, Any]) -> None:
     """Append ``record`` to the JSONL file ``path`` as one line, in one ``write`` call.
 
@@ -90,15 +115,16 @@ def append_json_line(path: str, record: Mapping[str, Any]) -> None:
     never overwritten, and a line another writer left without its ``\\n`` (a crash) does not
     swallow this one: it is preceded by a newline in the same write. ``path`` must stay under
     the working directory and neither it nor a parent directory may be a symlink, junction or
-    hard link. Raises ``ValueError`` / ``TypeError`` for a bad path or record and ``OSError``
-    when the file cannot be written; nothing is written then.
+    hard link. A new file is created ``0600`` and an older, wider one is brought down to ``0600``
+    (POSIX; see ``_tighten_to_owner``). Raises ``ValueError`` / ``TypeError`` for a bad path or
+    record and ``OSError`` when the file cannot be written; nothing is written then.
     """
     enforce_under_cwd_and_no_symlink(path, _FIELD)
     data = _encode_line(record)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
     try:
-        fd = open_no_follow(path, flags, 0o644, check_parent=True, refuse_hardlink=True)
+        fd = open_no_follow(path, flags, LOG_FILE_MODE, check_parent=True, refuse_hardlink=True)
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise ValueError(
@@ -108,6 +134,7 @@ def append_json_line(path: str, record: Mapping[str, Any]) -> None:
             raise ValueError(f"{_FIELD} must not be a hard link") from exc
         raise
     try:
+        _tighten_to_owner(fd)
         if _ends_mid_line(fd):
             data = b"\n" + data
         view = memoryview(data)
