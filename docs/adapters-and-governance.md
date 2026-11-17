@@ -419,6 +419,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # train_retry row.
 soup loop watch --detach
 
+# A poll that finds nothing to train (not enough new feedback, a wait, a hold) writes no
+# iteration line and no iter-* directory and bumps no counter, so it does not use up
+# --max-runs-per-day: .soup/loop.yaml keeps the time and the reason of the latest one,
+# and `soup loop status` shows it as last_idle_poll. A failed train, a DON'T SHIP verdict
+# and a deploy retry did something: each is an iteration and keeps its line.
 # `soup loop status` has a daemon row: "running (pid N), log .soup/loop.log",
 # "not running", or "not running (stale pid file)". It only reads the file. When loop.yaml
 # names a production adapter it also has a server row: it asks SOUP_LOOP_SERVE_ENDPOINT's /health
@@ -434,7 +439,17 @@ soup loop status
 # production. While the canary runs, watch starts no new iteration. At 30 canary
 # answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
 # it and it becomes the router's stable side), MAJOR withdraws it and production
-# never changed. Give the loop the server's token: --tool-auth-token, or
+# never changed. A promotion is written in this order: the server switch (if the
+# server refuses, nothing is recorded as promoted), then .soup/loop.yaml (atomic, under
+# the lock, at the moment of the promotion, not when the cycle ends: the cycle goes on
+# into the next harvest, train and ship), then versions.jsonl and the iteration's
+# closing line. loop.yaml decides which version is production. A watch that was
+# stopped between two of those writes finishes the promotion when it starts (the version
+# line and the closing line are written from loop.yaml, or loop.yaml is promoted
+# from a version line it lacks, if nothing moved meanwhile) and says so in progress.jsonl;
+# a mismatch it cannot finish is reported, not touched. `soup loop status` has a
+# `promotion` row that names the mismatch (it writes nothing), and its `server` row names a
+# server that serves a canary loop.yaml has not promoted. Give the loop the server's token: --tool-auth-token, or
 # SOUP_TOOL_AUTH_TOKEN to keep it out of the shell history. A --detach child gets
 # it through its environment (so does the train stage's `soup train` child, which
 # ignores it). soup serve has no TLS and the loop refuses plain http off-loopback,

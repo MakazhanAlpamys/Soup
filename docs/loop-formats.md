@@ -334,18 +334,21 @@ manifest is not rewritten.
 
 ### `iterations.jsonl`
 
-A line is appended when an iteration is recorded (a cycle that only waits for ratings, or
-that the budget skips, records no iteration of its own) and again when its outcome changes.
-Every recorded iteration has its own line, a failed one and a skipped one included: a line is
-told from a repeat of itself by its `iteration_id` and `outcome` (the parent is the same for
-every iteration of one production version, so it does not identify a line):
+A line is appended when an iteration is recorded and again when its outcome changes. A cycle
+that only waits for ratings, that the budget skips, or that finds nothing to train (an idle poll:
+not enough new feedback, a wait, a hold) records no iteration of its own: no line, no
+`iter-*` directory, no counter; `loop.yaml` keeps the time and the reason of the latest idle poll
+(`last_idle`, shown by `soup loop status` as `last_idle_poll`). Every iteration that did something
+has its own line, a failed train and a `DON'T SHIP` verdict included: a line is told from a repeat
+of itself by its `iteration_id` and `outcome` (the parent is the same for every iteration of one
+production version, so it does not identify a line):
 
 | Outcome | When |
 |---|---|
 | `canary` | The adapter was trained, passed the check and its canary started (`to_version` is the version it will take if promoted; `finished_at` is null). |
 | `promoted` | A later cycle promoted the canary; `to_version` is now a version. |
 | `rolled_back` | The canary was withdrawn by a regression, by `--canary-on-timeout rollback`, by `soup loop rollback`, or because `soup loop canary` replaced it. `to_version` becomes null. |
-| `skipped` | Nothing to train, no new data, a `DON'T SHIP` verdict (`verdict.decision` says so), no verdict reached (`ERROR` or `SKIPPED`), or a deploy that was not attempted (no serve endpoint). |
+| `skipped` | A candidate was trained and not deployed: a `DON'T SHIP` verdict (`verdict.decision` says so), no verdict reached (`ERROR` or `SKIPPED`), or a deploy that was not attempted (no serve endpoint). A poll with nothing to train is not an iteration and writes no line (see above). |
 | `failed` | The training run died, or the deploy was attempted and refused. |
 
 A promotion or a rollback after the iteration was promoted (a person going back the next
@@ -404,7 +407,7 @@ Stages `harvest`, `train`, `verdict` (the check before rollout), `deploy`, `cana
 `promote` and `rollback`, each with `start` and `end` (or `error`, with the code
 `train_failed`, `verdict_not_reached`, `deploy_failed` or `promote_refused`). The harvest
 and train events are written only for an iteration that has something to train on or a
-canary to start; an idle poll adds only its `skipped` iteration line. `done` and `total`
+canary to start; an idle poll adds nothing. `done` and `total`
 are null for stages that cannot count.
 
 The `canary` stage is the one a person watches: a `start` line with `done: 0` and
