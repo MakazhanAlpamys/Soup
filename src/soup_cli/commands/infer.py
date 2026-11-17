@@ -635,7 +635,7 @@ def _infer_asr(
     try:
         enforce_under_cwd_and_no_symlink(output_file, "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from exc
 
     # Audio containment base: --audio-dir (must be under cwd) or the input's dir.
@@ -661,10 +661,10 @@ def _infer_asr(
                 asr_language=asr_language, asr_task=asr_task,
             )
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(1) from exc
         except ValueError as exc:  # arch guard / bad base
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(2) from exc
 
     refs: list[str] = []
