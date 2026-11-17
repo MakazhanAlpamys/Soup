@@ -31,6 +31,8 @@ import logging
 import math
 from typing import Any
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 logger = logging.getLogger(__name__)
 
 MIN_CAPACITY_FACTOR: float = 0.0  # exclusive
@@ -50,7 +52,7 @@ def validate_capacity_factor(value: object) -> float:
         raise TypeError(
             f"capacity_factor must be numeric, got {type(value).__name__}"
         )
-    fval = float(value)
+    fval = float_with_overflow_check(value, "capacity_factor")
     if not math.isfinite(fval):
         raise ValueError(f"capacity_factor must be finite, got {value!r}")
     if fval <= MIN_CAPACITY_FACTOR:

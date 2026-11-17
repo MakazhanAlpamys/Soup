@@ -1,0 +1,98 @@
+{
+  "v1": {
+    "status": "canceled after prolonged queue",
+    "session_id": 369975739
+  },
+  "v2": {
+    "status": "startup failure",
+    "reason": "git apply rejected existing files incorrectly marked new"
+  },
+  "v3": {
+    "base": "a6f5e72466991aabbce10b303047c997cedd71bc",
+    "patch_sha256": "bdcbb21bf1e86ce3d838ceaf1fa672cd872ad9fbaf03d1f1794e28140884d8a4",
+    "bco": "4 passed",
+    "ipo": "4 failed: raw loss 25.0, NaN grad_norm"
+  },
+  "v4": {
+    "purpose": "unqualified IPO default-scale and diagnostic-scale controls",
+    "controls": [
+      {
+        "stream_layers": false,
+        "quantization": "4bit",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 65536.0,
+        "final_scale": 32768.0,
+        "raw_loss": 25.0,
+        "grad_norm": "nan",
+        "optimizer_skipped": true,
+        "adapter_max_delta": 0.0,
+        "qualification": false
+      },
+      {
+        "stream_layers": false,
+        "quantization": "none",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 65536.0,
+        "final_scale": 32768.0,
+        "raw_loss": 25.0,
+        "grad_norm": "nan",
+        "optimizer_skipped": true,
+        "adapter_max_delta": 0.0,
+        "qualification": false
+      },
+      {
+        "stream_layers": true,
+        "quantization": "4bit",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 1024.0,
+        "final_scale": 1024.0,
+        "raw_loss": 25.0,
+        "grad_norm": 13.991411209106445,
+        "optimizer_skipped": false,
+        "adapter_max_delta": 1.9999999494757503e-05,
+        "qualification": false
+      },
+      {
+        "stream_layers": true,
+        "quantization": "none",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 1024.0,
+        "final_scale": 1024.0,
+        "raw_loss": 25.0,
+        "grad_norm": 15.559629440307617,
+        "optimizer_skipped": false,
+        "adapter_max_delta": 1.99999976757681e-05,
+        "qualification": false
+      },
+      {
+        "stream_layers": true,
+        "quantization": "4bit",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 65536.0,
+        "final_scale": 32768.0,
+        "raw_loss": 25.0,
+        "grad_norm": "nan",
+        "optimizer_skipped": true,
+        "adapter_max_delta": 0.0,
+        "qualification": false
+      },
+      {
+        "stream_layers": true,
+        "quantization": "none",
+        "default_initial_scale": 65536.0,
+        "effective_initial_scale": 65536.0,
+        "final_scale": 32768.0,
+        "raw_loss": 25.0,
+        "grad_norm": "nan",
+        "optimizer_skipped": true,
+        "adapter_max_delta": 0.0,
+        "qualification": false
+      }
+    ]
+  },
+  "v5": {
+    "commit": "2c57034a35cdd6af43673b7e5f6480bb10ea8655",
+    "bco": "4 passed",
+    "kernel": "<notebook>/5"
+  }
+}
