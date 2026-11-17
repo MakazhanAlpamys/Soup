@@ -1,5 +1,6 @@
 """soup expect prints typed paths, judge URLs and loader errors as typed, not as Rich markup."""
 
+import errno
 import re
 from pathlib import Path
 
@@ -227,3 +228,27 @@ def test_the_table_title_keeps_its_italic_style(monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     # Italic is SGR 3.
     assert re.search(r"\x1b\[3m\s*soup expect", result.output)
+
+
+@pytest.mark.parametrize(
+    ("module", "filename"),
+    [
+        pytest.param("soup_cli.utils.expectations", "suite.yaml", id="suite"),
+        pytest.param("soup_cli.commands.expect", "data.jsonl", id="data"),
+    ],
+)
+def test_unreadable_input_exits_with_usage_error(monkeypatch, module, filename):
+    data, suite = _data(), _suite()
+
+    def denied_open(path, *args, **kwargs):
+        assert Path(path).name == filename
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+
+    monkeypatch.setattr(f"{module}.open", denied_open, raising=False)
+
+    result = _expect(data, suite)
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "Permission denied" in text
+    assert filename in text

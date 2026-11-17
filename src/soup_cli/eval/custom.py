@@ -418,7 +418,12 @@ def score_task(task: EvalTask, output: str) -> EvalResult:
 
     if task.scoring == "tool_call_args_subset":
         similarity = tool_call_args_subset(output, task.expected)
-        matched = similarity >= 0.5
+        # Matched only at full credit (#2811): the name and the arguments are
+        # worth 0.5 each, so a 0.5 threshold counted a call with every argument
+        # wrong, or to the wrong tool, as Correct. `score` keeps the partial
+        # credit, which the eval gate, quant_check, deploy_measure and
+        # cmaes_merge average.
+        matched = similarity >= 1.0
         return EvalResult(
             task=task, output=output, score=similarity, matched=matched,
         )
