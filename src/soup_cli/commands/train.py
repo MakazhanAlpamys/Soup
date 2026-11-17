@@ -760,6 +760,23 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
+    """``tracker.fail_run`` that can never replace the original error with its own.
+
+    The failure is already being raised (and, on the training path, written to a crash
+    bundle); a fault while recording it is reported and swallowed.
+    """
+    try:
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+    except Exception as record_error:
+        from soup_cli.utils.terminal import for_terminal
+
+        console.print(
+            f"[dim]Could not record the failure of {for_terminal(run_id)}: "
+            f"{for_terminal(type(record_error).__name__)}[/]"
+        )
+
+
 def _describe_exception_for_tracker(exc: BaseException) -> str:
     """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
 
@@ -1041,6 +1058,14 @@ def train(
             "After training, run `soup diagnose` against the supplied evidence "
             "JSON (or scratch evidence). Refuses to mark the run successful "
             "if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3)."
+        ),
+    ),
+    diagnose_gate_require_all_modes: bool = typer.Option(
+        False,
+        "--diagnose-gate-require-all-modes",
+        help=(
+            "With --diagnose-gate: a mode missing from the evidence JSON counts as "
+            "NOT_RUN (exit 3) instead of a neutral OK, so the gate proves coverage."
         ),
     ),
     annex_xi: str = typer.Option(
@@ -1452,6 +1477,9 @@ def train(
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
         raise typer.Exit(1)
+    if diagnose_gate_require_all_modes and not diagnose_gate:
+        console.print("[red]--diagnose-gate-require-all-modes requires --diagnose-gate[/]")
+        raise typer.Exit(1)
     hf_refusal = _resume_refusal(cfg, "--hf-resume") if hf_resume else None
     if hf_refusal:
         console.print(f"[red]{hf_refusal}[/]")
@@ -1694,6 +1722,7 @@ def train(
                         trust_remote_code=trust_remote_code,
                         tracker=tracker,
                         diagnose_gate=diagnose_gate,
+                        diagnose_gate_require_all_modes=diagnose_gate_require_all_modes,
                         annex_xi=annex_xi,
                         repro_receipt=repro_receipt,
                         profile_run=profile_run,
@@ -2239,10 +2268,15 @@ def train(
             synchronize_base_revision,
         )
 
-        base_identity = BaseRevision(
-            run_base,
-            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"),
-        )
+        binding_supported = cfg.backend == "transformers" and hub_name == "hf"
+        mlx_binding_reason = None
+        if cfg.backend == "mlx" and hub_name == "hf":
+            from soup_cli.utils.mlx import mlx_revision_binding_reason
+
+            # Qualify before setup's first RoPE config read or native download.
+            mlx_binding_reason = mlx_revision_binding_reason()
+            binding_supported = mlx_binding_reason is None
+        base_identity = BaseRevision(run_base, binding_supported=binding_supported)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
@@ -2257,6 +2291,11 @@ def train(
             console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
         elif base_identity.source == "cache_path":
             console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        elif mlx_binding_reason and base_identity.source == "unsupported_backend":
+            console.print(
+                f"[dim]Base revision: unknown ({mlx_binding_reason}; "
+                "existing loading behavior preserved)[/]"
+            )
         else:
             console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
@@ -2352,7 +2391,7 @@ def train(
                 energy_ctx = contextlib.nullcontext()
 
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         raise
 
     try:
@@ -2406,7 +2445,7 @@ def train(
             trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
-        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
@@ -2462,7 +2501,11 @@ def train(
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
         _run_diagnose_gate_or_exit(
-            diagnose_gate, run_id, cfg.base, result["output_dir"]
+            diagnose_gate,
+            run_id,
+            cfg.base,
+            result["output_dir"],
+            require_all_modes=diagnose_gate_require_all_modes,
         )
 
     # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
@@ -2759,16 +2802,21 @@ def _should_run_diagnose_gate_on_rank() -> bool:
 
 
 def _run_diagnose_gate(
-    evidence_path: str, run_id: str, base: str, adapter: str
+    evidence_path: str,
+    run_id: str,
+    base: str,
+    adapter: str,
+    require_all_modes: bool = False,
 ) -> None:
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
     refuses to mark the run successful if any mode comes back MAJOR (exit 2)
-    or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score so partial evidence
-    still produces a useful report card. The train command only calls
-    this helper on the chief worker (RANK==0 in a multi-node launch, else
-    LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
+    or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score
+    so partial evidence still produces a useful report card, unless
+    ``require_all_modes`` (#1525) makes them NOT_RUN. The train command only
+    calls this helper on the chief worker (RANK==0 in a multi-node launch,
+    else LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
     not once per worker (v0.71.15 #170).
     """
     import json
@@ -2816,7 +2864,11 @@ def _run_diagnose_gate(
         )
 
     report = build_report(
-        run_id=run_id, base=base, adapter=adapter, scores=scores
+        run_id=run_id,
+        base=base,
+        adapter=adapter,
+        scores=scores,
+        missing_as_not_run=require_all_modes,
     )
     if report.overall == "MAJOR":
         console.print(
@@ -2845,13 +2897,24 @@ def _run_diagnose_gate(
 
 
 def _run_diagnose_gate_or_exit(
-    evidence_path: str, run_id: str, base: str, adapter: str
+    evidence_path: str,
+    run_id: str,
+    base: str,
+    adapter: str,
+    *,
+    require_all_modes: bool = False,
 ) -> None:
     """Run the gate; an unreadable or refused evidence file is reported and exits 1."""
     from soup_cli.utils.terminal import for_terminal
 
     try:
-        _run_diagnose_gate(evidence_path, run_id, base, adapter)
+        _run_diagnose_gate(
+            evidence_path,
+            run_id,
+            base,
+            adapter,
+            require_all_modes=require_all_modes,
+        )
     except typer.Exit:
         raise
     except (OSError, ValueError) as exc:

@@ -90,3 +90,23 @@ def test_control_different_text_under_output_is_drift_exit_three(files) -> None:
     out = _plain(result.output)
     assert result.exit_code == 3, (result.exit_code, out)
     assert "DRIFT" in out
+
+
+@pytest.mark.parametrize("side", ["reference", "live"])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_first_row_counts_toward_drift_verdict(tmp_path, monkeypatch, side, encoding) -> None:
+    monkeypatch.chdir(tmp_path)
+    rows = '{"output": "first"}\r\n{"output": "second"}\r\n'
+    for name in ("reference", "live"):
+        data = rows.encode(encoding if name == side else "utf-8")
+        (tmp_path / f"{name}.jsonl").write_bytes(data)
+
+    result = CliRunner().invoke(app, [
+        "drift-alarm", "--reference", "reference.jsonl", "--live", "live.jsonl",
+    ])
+
+    out = _plain(result.output)
+    assert result.exit_code == 0, (result.exit_code, out)
+    assert "KL: 0.0000" in out
+    assert "n_reference: 2" in out
+    assert "n_live: 2" in out

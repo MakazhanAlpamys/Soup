@@ -247,9 +247,10 @@ def merge_task_arithmetic(
         tensors = [np.asarray(w[name], dtype=np.float64) for w in weights_list]
         if len({t.shape for t in tensors}) > 1:
             raise ValueError(
-                f"rank/shape mismatch on {name!r} across adapters — task "
-                f"arithmetic requires same-rank adapters (harmonize the LoRA "
-                f"rank first, or merge with `soup adapters merge --strategy svd`)"
+                f"rank/shape mismatch on {name!r} across adapters — the "
+                f"element-wise path requires the same rank on every module "
+                f"(harmonize the LoRA rank first, or take the concat path with "
+                f"`soup adapters arithmetic ... --rank N`)"
             )
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
