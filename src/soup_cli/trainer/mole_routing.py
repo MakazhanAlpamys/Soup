@@ -96,7 +96,9 @@ def make_mole_trainer_class(base_cls: type) -> type:
                     target.mole_gate.requires_grad_(True)
                     gate_path = Path(resume_from_checkpoint) / "mole_gate.pt"
                     if gate_path.is_file():
-                        gate_state = torch.load(gate_path, map_location="cpu", weights_only=True)
+                        from soup_cli.utils.mole_routing import load_gate_state
+
+                        gate_state = load_gate_state(str(gate_path))
                         target.mole_gate.load_state_dict(gate_state)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):

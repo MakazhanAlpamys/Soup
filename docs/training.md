@@ -10,15 +10,14 @@
 > 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
 > every further 512 tokens costs about 1 GB more (see
 > [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
-> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
-> `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
-> `kto` still hold one copy of the output head per step) — see
-> [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
-> You can also select `dpo`, `orpo` or `simpo` with `task: preference` and
-> `training.preference_loss`. The same streaming restrictions apply: use a concrete
-> `batch_size`; `stream_vram_probe`, `stream_loss_chunk` and `stream_recompute` other than
-> `on` remain SFT-only. IPO, BCO and `preference_loss_weights` do not stream yet.
+> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, `bco`, and `ipo`.
+> DPO and IPO use a frozen reference adapter on the streamed base. KTO and BCO
+> use that base with adapters disabled for the reference pass. On untied
+> checkpoints these four tasks hold a private copy of the output head for backward. See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Select `dpo`, `orpo`, `simpo`, `bco`, or `ipo` with `task: preference` and
+> `training.preference_loss`, or use the loss as the task name. Use a concrete
+> `batch_size`. `stream_vram_probe`, `stream_loss_chunk`, and `stream_recompute`
+> other than `on` remain SFT-only. Streaming refuses `preference_loss_weights`.
 
 **Contents:**
 
@@ -127,7 +126,10 @@ advantages are normalised within each group, so it stays near zero, can be
 negative, and does not measure held-out quality. It is not recorded or shown as
 a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
 appear. The per-task choice lives in `VALIDATION_METRICS` in
-`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`. The
+per-step training reward (`reward`, `reward_std`) is stored in the metrics table's
+`reward` / `reward_std` columns, which are separate from `val_reward`; see
+`docs/backends-and-ops.md` for the logged keys and what NULL means.
 TRL needs whole groups of
 `num_generations` completions in an evaluation batch, so `grpo` evaluates at the
 largest multiple of `num_generations` that fits in the train batch, and says so
@@ -651,6 +653,10 @@ inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
 later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
 files from runs before this version are not comparable.
 
+### Mid-epoch RL checkpoints
+
+`training.rl_checkpoint_save_every_steps` saves the adapter, the optimizer state and a manifest under `<output>/rl-checkpoints/step-N/`; the `pid_lagrangian` rollback below restores from them. The optimizer state (`optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory (the adapter is loaded under the same containment). A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on.
+
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
 The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
@@ -1161,7 +1167,7 @@ Where they come from depends on which trainer is built:
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
 | `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
 | `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
-| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+| `bco` mixed with anything | Loads, then refused at the start of trainer setup, after the data has loaded and before the model does (`validate_weight_compat`): BCO takes the same rows as DPO, but its trainer splits each one into unpaired completion and label rows, which the paired losses cannot read. Run BCO as its own `task: bco` stage. |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
 only* — the margin / odds-ratio objective — without the likelihood (NLL) term
@@ -1505,6 +1511,9 @@ frozen reference.
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
 
+The streamed BCO T4 checks use `batch_size: 2` with both labels and
+`gradient_accumulation_steps: 1`; other batch shapes have no CUDA measurement.
+
 **When the prompt is cut, for all six preference tasks (transformers
 backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`
 enforces `data.max_length` itself
@@ -1595,8 +1604,10 @@ training:
   preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+Schema validates 2-5 entries summing to 1. A `bco` blend with a paired loss
+passes that check and is refused when the trainer is set up (see the table in
+[Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
 and `orpo` trains; which reference and which tokens the terms use depends on
 the loss with the largest weight
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
@@ -2147,6 +2158,10 @@ On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; se
 
 ## IPO Training (Regularized Preference)
 
+On an FP16 card, the gradient scaler can skip the first IPO updates and lower
+its scale until gradients are finite. This can happen with resident IPO too.
+See the [one-step and backoff checks on a Tesla T4](../benchmarks/ipo-streaming-t4.md).
+
 IPO is a theoretically grounded DPO variant with stronger regularization:
 
 ```yaml
@@ -2617,6 +2632,15 @@ The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights 
 Linear weights. (v0.71.23)
 
 ## Training source identity
+
+Single-process native MLX `soup train` also records the actual Hugging Face base
+commit in its `runs` row and final `soup_run.json`, retaining the configured base
+ID. Its first RoPE config read and native model/weights/tokenizer load share that
+commit. An imported non-HF or unqualified provider records no Hub revision and
+prints why, preserving its existing load flow. Local/cache-path hints and offline
+or failed metadata lookup retain their existing nullable semantics. This does not
+bind MLX sweeps or independent inference/chat/serve/merge/export consumers; see
+[Recorded base identity](backends-and-ops.md#recorded-base-identity).
 
 `soup train` captures `training_data_sha256` before loading or transforming a
 supported single local raw text-training file. The digest is SHA-256 of the

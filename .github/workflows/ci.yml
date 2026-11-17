@@ -1050,6 +1050,22 @@ jobs:
         env:
           PIP_EXTRA_INDEX_URL: ${{ runner.os == 'Linux' && 'https://download.pytorch.org/whl/cpu' || '' }}
         run: pip install -e ".[dev]" "pytest-xdist[psutil]" ${{ needs.plan.outputs.constraints }}
+      - name: Print the host CPU
+        if: env.RUN_SUITE == 'true' && matrix.os == 'windows-latest' && steps.reuse.outputs.cache-hit != 'true'
+        # 2026-11-16: on a minority of Windows hosts (2 of 58 jobs between 2026-11-14 and
+        # 2026-11-16) two xdist workers died with `Windows fatal exception: code 0xc000001d`
+        # (illegal instruction) inside torch's CPU bfloat16 `F.linear`, and pytest-xdist 3.8.0
+        # then aborted the session with `KeyError: <WorkerController gw5>` at about 46% of the
+        # suite. The runner image and the packages were the same in good and bad runs; the log
+        # never named the CPU. This step names it, so the next bad run says which host class
+        # it was. It changes nothing, never fails the job and cannot hold a runner for long.
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          Write-Output "PROCESSOR_IDENTIFIER=$env:PROCESSOR_IDENTIFIER"
+          Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List
+          python -c "import torch; print('torch cpu capability:', torch.backends.cpu.get_cpu_capability())"
       - name: Warm HF Hub cache (models the tests load)
         if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         # Pre-download the models the unit tests load, with retries, so a

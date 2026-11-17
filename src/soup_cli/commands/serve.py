@@ -556,13 +556,17 @@ def serve(
             )
 
     # #2730 — every backend uses --max-tokens for a request that omits
-    # max_tokens, and 0 or a negative value let the server start and then fail
-    # each such request with a 500. Refused here, before any backend branch or
-    # model load, so the message reads the same on every backend. Checked in
-    # the body rather than with ``min=``, for the --help width reason given at
+    # max_tokens. 0 or a negative value let the server start and then fail each
+    # such request with a 500; a value above 16384 gave such a request more than
+    # the per-request cap (``ChatCompletionRequest.max_tokens``, le=16384) lets
+    # a request ask for. Refused here, before any backend branch or model load,
+    # so the message reads the same on every backend. Checked in the body rather
+    # than with ``min=``/``max=``, for the --help width reason given at
     # --max-model-len. Exit 2, as for the other bad option values here.
-    if max_tokens_default < 1:
-        console.print(f"[red]--max-tokens:[/] must be at least 1 (got {max_tokens_default}).")
+    if not 1 <= max_tokens_default <= 16384:
+        console.print(
+            f"[red]--max-tokens:[/] must be between 1 and 16384 (got {max_tokens_default})."
+        )
         raise typer.Exit(2)
 
     # DeepSpeed-MII v0.27.0: dependency check only — live pipeline wiring
