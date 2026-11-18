@@ -936,7 +936,7 @@ class TestSecurityHardening:
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
-            content = json.dumps(row) + "\\n"
+            content = json.dumps(row) + "\n"
             Path("plain.jsonl").write_text(content, encoding="utf-8")
             Path("bom.jsonl").write_text(content, encoding="utf-8-sig")
             parse = getattr(ship_cmd, parser)
