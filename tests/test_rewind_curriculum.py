@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 #: Answer lengths in words, deliberately out of file order and all distinct, so
 #: the sorted list differs from the file at every position but the shortest.
 _WORD_COUNTS = (5, 1, 7, 3, 8, 2, 6, 4)
@@ -323,4 +325,4 @@ class TestRewindPreviewsHandBuilt:
         assert result.exit_code == 0, result.output
         assert mismatch in result.output
         assert "hello" not in result.output
-        assert "Step 4 rows" in result.output
+        assert "Step 4 rows" in " ".join(strip_ansi(result.output).split())
