@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.recipes.catalog import RECIPES
+from tests.conftest import strip_ansi
 
 NAME = "qwen3.5-0.8b-pretrain"
 BASE = "Qwen/Qwen3.5-0.8B-Base"
@@ -40,7 +41,7 @@ def test_show_and_use_produce_the_08b_base_config(tmp_path, monkeypatch) -> None
     runner = CliRunner()
     shown = runner.invoke(app, ["recipes", "show", NAME])
     assert shown.exit_code == 0, (shown.output, repr(shown.exception))
-    assert BASE in shown.output
+    assert BASE in strip_ansi(shown.output)
 
     used = runner.invoke(app, ["recipes", "use", NAME, "--yes"])
     assert used.exit_code == 0, (used.output, repr(used.exception))
