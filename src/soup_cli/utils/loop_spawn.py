@@ -24,10 +24,23 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 from typing import Optional
 
 #: ``subprocess.CREATE_NO_WINDOW``, spelled out for the interpreters that lack the constant.
 CREATE_NO_WINDOW = 0x08000000
+
+
+def python_child_argv(*arguments: str) -> "list[str]":
+    """The argv of a Python child of the loop: this interpreter, ``-P``, then ``arguments``.
+
+    ``python -m ...`` and ``python -c ...`` put the current directory first on ``sys.path``, so a
+    file in the project directory named like a library (``torch.py``, ``yaml.py``) would be
+    imported by the child, which carries the daemon's environment. ``-P`` (Python 3.11, the
+    declared floor) leaves the current directory off ``sys.path``. Every child the loop starts is
+    built here.
+    """
+    return [sys.executable, "-P", *arguments]
 
 #: The NTSTATUS codes a Python or CUDA child ends with, by name and in words.
 _NTSTATUS = {

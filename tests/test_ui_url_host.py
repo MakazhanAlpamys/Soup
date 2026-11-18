@@ -12,12 +12,13 @@ address. See #2054.
 from __future__ import annotations
 
 import re
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
-from tests.conftest import strip_ansi
+from tests.conftest import InlineThread, strip_ansi
 
 pytest.importorskip("fastapi")
 pytest.importorskip("uvicorn")
@@ -33,25 +34,25 @@ def _collapse(text: str) -> str:
     return re.sub(r"\s+", " ", strip_ansi(text))
 
 
-def _immediate_thread(target=None, daemon=None, **kwargs):
-    thread = MagicMock()
-    thread.start.side_effect = lambda: target() if target else None
-    return thread
-
-
 def _lan_socket(*args, **kwargs):
     sock = MagicMock()
     sock.__enter__.return_value.getsockname.return_value = (_LAN_IP, 0)
     return sock
 
 
-def _run_ui(*args: str) -> tuple[object, list[str], str, str]:
-    """Invoke ``soup ui`` with the browser thread inline.
+def _run_ui(*args: str, before_app=None) -> tuple[object, list[str], str, str]:
+    """Invoke ``soup ui`` with the browser thread inline (``InlineThread``).
 
     Returns the result, the opened URLs, the host given to ``uvicorn.run`` and the
-    host given to ``create_app``.
+    host given to ``create_app``. ``before_app`` runs just before the app is created, that
+    is while ``threading.Thread`` is already replaced and before the browser thread is built.
     """
     opened: list[str] = []
+
+    def _make_app(*a, **kw):
+        if before_app is not None:
+            before_app()
+        return create_app(*a, **kw)
 
     def _open(url, *a, **kw):
         opened.append(url)
@@ -59,9 +60,9 @@ def _run_ui(*args: str) -> tuple[object, list[str], str, str]:
 
     with (
         patch("uvicorn.run") as run,
-        patch("soup_cli.ui.app.create_app", wraps=create_app) as made,
+        patch("soup_cli.ui.app.create_app", side_effect=_make_app) as made,
         patch("webbrowser.open", side_effect=_open),
-        patch("threading.Thread", side_effect=_immediate_thread),
+        patch("threading.Thread", InlineThread),
         patch("time.sleep"),
         patch("socket.socket", side_effect=_lan_socket),
     ):
@@ -119,3 +120,24 @@ class TestOtherHostsUnchanged:
         assert f"URL: {login_url}" in _collapse(result.output)
         assert opened == [login_url]
         assert bound == app_host == host
+
+
+class TestAThreadBuiltWhileTheBrowserThreadIsFaked:
+    def test_a_timer_built_by_another_thread_does_not_stop_the_url_being_opened(self):
+        # A canary buffer left over from an earlier test retries a failed flush every two
+        # seconds on a background thread, and builds a ``threading.Timer`` each time. One built
+        # while ``threading.Thread`` is replaced reaches ``Thread.__init__(self)`` through that
+        # name. A MagicMock there had its side_effect cleared by the call (Python 3.13: mock no
+        # longer reads the properties of a spec, so the call goes through), so ``soup ui``
+        # printed the URL, exited 0 and never opened it: the nightly of 2026-11-18, Windows
+        # 3.13, ``opened == []``.
+        timers: list[threading.Timer] = []
+
+        result, opened, _, _ = _run_ui(
+            before_app=lambda: timers.append(threading.Timer(60, str)),
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert opened == [f"http://127.0.0.1:7861/?token={_TOKEN}"]
+        assert len(timers) == 1
+        timers[0].daemon = True  # "Thread.__init__() not called" if the init never ran
