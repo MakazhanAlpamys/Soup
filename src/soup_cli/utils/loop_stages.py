@@ -83,6 +83,30 @@ _LOG = logging.getLogger(__name__)
 
 _PAIRS_DIR = ".soup-loops/pairs"
 _ADAPTERS_DIR = ".soup-loops/adapters"
+
+
+def ensure_adapters_dir() -> None:
+    """Create the ``.soup-loops/adapters`` directory owner-only (#3034).
+
+    The loop deploys through ``soup serve --adapter-dir .soup-loops/adapters``,
+    and serve refuses a missing directory, so ``soup loop init`` creates it up
+    front. Only the adapters directory itself is owner-only: the parent is an
+    ordinary loop directory other commands already create with plain ``mkdir``
+    (and may already exist group-writable from an earlier run), so it is made
+    with ``makedirs``. Raises :class:`OwnerOnlyError` when the directory cannot
+    be created or cannot be made owner-only (a planted link, another owner's
+    folder); the caller refuses the run.
+    """
+    from soup_cli.utils.owner_only_dir import OwnerOnlyError, ensure_owner_only_dir
+
+    parent = os.path.dirname(_ADAPTERS_DIR)
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError as exc:
+        raise OwnerOnlyError(f"could not create {parent} ({exc})") from exc
+    ensure_owner_only_dir(_ADAPTERS_DIR)
+
+
 #: The trace directory read when neither SOUP_LOOP_TRACE_DIR nor trace_dir is set.
 DEFAULT_TRACE_DIR = ".soup-loops/traces"
 #: The feedback log read when neither SOUP_LOOP_FEEDBACK_LOG nor feedback_log is set.
