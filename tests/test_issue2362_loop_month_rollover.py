@@ -36,9 +36,14 @@ def _state(**overrides) -> LoopState:
 def _config(cost: float, harvested: list) -> WatchConfig:
     def harvest(state):
         harvested.append(state.last_run_date)
-        return {"pairs_harvested": 0}
+        return {"pairs_harvested": 1}
 
-    return WatchConfig(harvest_fn=harvest, cost_fn=lambda s: cost)
+    # The stub pipeline trains something: an iteration that costs and counts. A poll that finds
+    # nothing to train is idle, spends nothing and bumps no counter (tests/test_loop_idle_poll.py).
+    def train(state, harvested_rows):
+        return {"run_id": "run-1", "skipped": False, "adapter_path": "out/a"}
+
+    return WatchConfig(harvest_fn=harvest, train_fn=train, cost_fn=lambda s: cost)
 
 
 class TestMonthRollover:

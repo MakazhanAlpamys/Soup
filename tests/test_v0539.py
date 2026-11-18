@@ -396,6 +396,26 @@ def test_tokenizer_train_rejects_vocab_size_bounds(tmp_path, monkeypatch):
     assert result.exit_code != 0
 
 
+def test_tokenizer_train_refuses_a_file_as_output_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("small corpus\n", encoding="utf-8")
+    output = tmp_path / "old[vocab].json"
+    original = b'{"existing": 1}\n'
+    output.write_bytes(original)
+
+    result = CliRunner().invoke(
+        app, ["tokenizer", "train", "--input", corpus.name, "--output", output.name]
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    text = " ".join(_plain(result.output).split())
+    assert f"Output path is not a directory: {output.name}" in text
+    assert "BPE Tokenizer Training" not in text
+    assert output.read_bytes() == original
+    assert set(tmp_path.iterdir()) == {corpus, output}
+
+
 def test_tokenizer_train_happy_path(tmp_path, monkeypatch):
     pytest.importorskip("tokenizers")
     monkeypatch.chdir(tmp_path)

@@ -351,7 +351,13 @@ def _merge_low_memory(
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.lowmem_merge import (
+            LowMemoryMergeError,
+            hub_snapshot_revision,
+            hub_support_patterns,
+            hub_weight_patterns,
+            merge_low_memory,
+        )
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
@@ -378,14 +384,28 @@ def _merge_low_memory(
             from soup_cli.utils.hubs import snapshot_download
 
             console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
+            # #2856: the index and support files first, then the weights the local
+            # rule reads from them, both from one commit.
+            support = hub_support_patterns(trc)
+            revision = revision_kwargs.get("revision")
             base_dir = Path(
                 snapshot_download(
-                    base,
-                    cache_dir=None,
-                    allow_patterns=["*.safetensors", "*.json"],
-                    revision=revision_kwargs.get("revision"),
+                    base, cache_dir=None, allow_patterns=support, revision=revision
                 )
             )
+            revision = revision or hub_snapshot_revision(base_dir)
+            weights = hub_weight_patterns(base_dir)
+            if weights is not None:
+                allow_patterns, ignore_patterns = weights
+                base_dir = Path(
+                    snapshot_download(
+                        base,
+                        cache_dir=None,
+                        allow_patterns=[*allow_patterns, *support],
+                        ignore_patterns=ignore_patterns or None,
+                        revision=revision,
+                    )
+                )
 
         def save_tokenizer(staging: Path) -> None:
             console.print("[dim]Saving tokenizer...[/]")

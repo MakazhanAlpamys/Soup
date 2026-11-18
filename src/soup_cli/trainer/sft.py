@@ -109,6 +109,38 @@ def _assert_finite_training_state(
         )
 
 
+def curriculum_keeps_sorted_order(
+    *,
+    curriculum: bool,
+    pretokenized: bool,
+    is_raft: bool,
+    packing: bool,
+    multipack: bool,
+) -> bool:
+    """Whether a ``curriculum: true`` SFT run reads its length-sorted rows in order.
+
+    The sort reaches the model only through a sequential sampler, and only on the paths
+    that hand the sorted list to the Trainer's own sampler:
+
+    - plain text, vision and audio rows, and RAFT with or without ``raft_epoch_shuffle``
+      (the shuffle re-permutes the documents inside each row per epoch, not the rows;
+      RAFT's plain Trainer ignores ``packing`` and ``multipack``): the order holds;
+    - a pre-tokenised dataset (``soup data preprocess``) replaces the sorted list with
+      the cached rows in file order: left shuffled, as before;
+    - ``packing: true``: TRL's default ``bfd`` packing sorts the rows longest first into
+      bins, so reading the bins in order would run long to short: left shuffled;
+    - ``multipack: true``: its FFD batch sampler owns the dataloader and ignores the
+      sampling strategy: left as it is.
+
+    No combination is refused (#2863).
+    """
+    if not curriculum or pretokenized:
+        return False
+    if is_raft:
+        return True
+    return not (packing or multipack)
+
+
 def rewind_skip_reason(
     *,
     task: str,
@@ -893,6 +925,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
+        # Curriculum: the length sort above reaches the model only if the
+        # sampler keeps it. The Trainer's default sampler is random, which
+        # dealt the sorted rows out in a seeded random order, so a
+        # `curriculum: true` run saw no easier-to-harder progression at all.
+        # Pre-tokenised data, packing and multipack keep the default; the
+        # helper says why for each (#2863).
+        if curriculum_keeps_sorted_order(
+            curriculum=bool(tcfg.curriculum),
+            pretokenized=pretok is not None,
+            is_raft=self._is_raft,
+            packing=bool(tcfg.packing),
+            multipack=bool(getattr(tcfg, "multipack", False)),
+        ):
+            training_kwargs["train_sampling_strategy"] = "sequential"
+
         # FSDP2 — alternative to DeepSpeed. The helper also enables
         # torch.compile when tcfg.use_fsdp2_compile is True.
         from soup_cli.utils.fsdp import apply_fsdp_training_kwargs
@@ -1430,26 +1477,64 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # enabling the option undo the validated MPS policy above.
             return bf16_fp16_flags(self.device, allow_mps_bf16=True)
 
+        picked = self._auto_mixed_precision_pick(base_model)
+        if picked is None:
+            return (self.device == "cuda", False)
+        mode, _cc = picked
+        return (mode == "bf16", mode == "fp16")
+
+    def _auto_mixed_precision_pick(self, base_model: str) -> Optional[tuple[str, float]]:
+        """``(mode, compute capability)`` that ``pick_mixed_precision`` gives the CUDA card.
+
+        ``None`` when the card or the model name cannot be read; the callers then keep
+        their defaults. The one answer for the run: ``_resolve_load_dtype`` (the dtype
+        the base is stored in), ``_kbit_compute_dtype`` (#2683, the dtype a 4-bit/8-bit
+        base's unquantized weights keep) and ``_resolve_mixed_precision`` (the dtype it
+        trains in) all read it, so it is asked once per base and the "Auto mixed-precision
+        picked" line prints once, however many of them a run reaches.
+        """
+        picks = self.__dict__.setdefault("_auto_mixed_precision_picks", {})
+        if base_model not in picks:
+            picked = self._read_auto_mixed_precision_pick(base_model)
+            picks[base_model] = picked
+            if picked is not None:
+                console.print(
+                    f"[green]Auto mixed-precision picked:[/] {picked[0]} "
+                    f"(model={base_model}, cc={picked[1]})"
+                )
+        return picks[base_model]
+
+    @staticmethod
+    def _read_auto_mixed_precision_pick(base_model: str) -> Optional[tuple[str, float]]:
+        """Ask the card and ``pick_mixed_precision``; ``None`` when either cannot answer."""
         try:
             import torch
 
             major, minor = torch.cuda.get_device_capability()
             cc = float(f"{major}.{minor}")
         except (ImportError, RuntimeError, AssertionError, OSError):
-            return (self.device == "cuda", False)
+            return None
 
         from soup_cli.utils.mixed_precision import pick_mixed_precision
 
         try:
-            mode = pick_mixed_precision(base_model, cc)
+            return pick_mixed_precision(base_model, cc), cc
         except ValueError:
-            return (self.device == "cuda", False)
+            return None
 
-        console.print(
-            f"[green]Auto mixed-precision picked:[/] {mode} "
-            f"(model={base_model}, cc={cc})"
-        )
-        return (mode == "bf16", mode == "fp16")
+    def _kbit_compute_dtype(self, tcfg, base_model: str):
+        """The dtype a 4-bit/8-bit run computes in, for ``prepare_kbit_model`` (#2609).
+
+        What ``TrainingArguments`` gets: an ``auto_mixed_precision`` pick of fp16 on a bf16
+        card keeps PEFT's fp32 non-quantised weights, instead of putting bf16 weights under
+        an fp16 run.
+        """
+        from soup_cli.utils.kbit_prepare import kbit_compute_dtype
+
+        if not getattr(tcfg, "auto_mixed_precision", False):
+            return kbit_compute_dtype(self.device)
+        bf16, _fp16 = self._resolve_mixed_precision(tcfg, base_model)
+        return kbit_compute_dtype(self.device, prefer_fp16=not bf16)
 
     def _resolve_load_dtype(self, tcfg):
         """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
@@ -1481,14 +1566,37 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           fourteen other places. One resolver instead of two duplicated
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
+        - ``auto_mixed_precision`` picking fp16 on a card that has bf16 (the
+          Qwen2 / Qwen2.5 / Phi-3 entries of ``KNOWN_PRECISION_QUIRKS``): the
+          same split from the other side, so an unquantized frozen base loads
+          ``torch.float16``, as it does on a pre-Ampere card. Left at ``"auto"``,
+          a bf16 checkpoint under fp16 autocast has each frozen weight cast to
+          an fp16 copy that the backward pass keeps, and its bf16 + fp16
+          residual adds promote the hidden states to fp32: one LoRA step of
+          Qwen2.5-1.5B at 4 x 128 peaked at 7.81 GiB against 4.94 GiB with the
+          storage matching the compute (RTX PRO 5000, sm_120). A 4/8-bit base is
+          left alone: k-bit preparation casts its unquantized weights to fp32.
 
         The loader uses ``dtype`` consistently with the declared Transformers
         5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
         This changes the argument name, not the precision decision above.
         """
-        return resolve_base_load_dtype(
+        dtype = resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
         )
+        if (
+            isinstance(dtype, str)
+            and dtype == "auto"
+            and self.device == "cuda"
+            and getattr(tcfg, "auto_mixed_precision", False)
+            and getattr(tcfg, "quantization", "none") == "none"
+        ):
+            picked = self._auto_mixed_precision_pick(self.config.base)
+            if picked is not None and picked[0] == "fp16":
+                import torch
+
+                return torch.float16
+        return dtype
 
     @staticmethod
     def _as_sft_config(training_args, max_length, packing=False):
@@ -1520,7 +1628,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoTokenizer
 
         from soup_cli.utils.kimi_k2 import (
@@ -1705,13 +1813,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # Freeze training — freeze bottom layers before LoRA
@@ -2047,7 +2157,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
@@ -2104,13 +2214,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only
@@ -2210,7 +2322,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_audio_transformers(self, cfg, tcfg):
         """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from rich.panel import Panel as RichPanel
         from transformers import AutoModel, AutoProcessor
 
@@ -2272,13 +2384,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only

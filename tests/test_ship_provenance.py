@@ -320,7 +320,15 @@ def test_real_scorers_emit_replayable_binding(work, monkeypatch, floor_runs):
     ])
     assert result.exit_code == 0, (result.output, result.exception)
     payload = json.loads((work / "bound.json").read_text(encoding="utf-8"))
-    assert payload["task"] == {"mode": "metric", "base": 0.0, "tuned": 1.0}
+    task = payload["task"]
+    assert {key: task[key] for key in ("mode", "base", "tuned")} == {
+        "mode": "metric", "base": 0.0, "tuned": 1.0,
+    }
+    # schema version 2 carries the task detail; these generators return plain str, so the
+    # truncation counts are not measured (null, never 0)
+    assert payload["schema_version"] == 2
+    assert task["rows"] == {"better": 1, "worse": 0, "same": 0, "n": 1}
+    assert (task["truncated"]["base"], task["truncated"]["tuned"]) == (None, None)
     assert payload["benchmarks"]["mini_mmlu"]["base"] == payload["benchmarks"]["mini_mmlu"]["tuned"]
     assert payload["provenance"]["binding"]["policy"]["noise_floor_runs"] == floor_runs
     assert {side for side, _ in calls} == {"base", "tuned"}

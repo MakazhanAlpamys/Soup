@@ -201,7 +201,7 @@ def _read_traces(traces_path: str) -> List[Mapping[str, Any]]:
     rows: List[Mapping[str, Any]] = []
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(canonical, flags)
-    with os.fdopen(fd, encoding="utf-8") as handle:
+    with os.fdopen(fd, encoding="utf-8-sig") as handle:
         for line in handle:
             line = line.strip()
             if not line:

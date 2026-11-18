@@ -58,14 +58,13 @@ def test_render_is_data_only_and_uses_documented_rest_payload(credentials):
     ns = _controller()
     assert base64.b64decode(ns["_CONFIG_B64"]).decode() == CONFIG
     payload = ns["_launch_payload"]("ssh-ed25519 AAAATEST fixture", "soup-test")
-    assert payload["gpuTypeIds"] == ["NVIDIA A100-SXM4-80GB"]
-    assert payload["gpuCount"] == 1
+    assert payload["gpu"] == {"id": "NVIDIA A100-SXM4-80GB", "count": 1}
     assert payload["ports"] == ["22/tcp"]
     assert payload["env"] == {"PUBLIC_KEY": "ssh-ed25519 AAAATEST fixture"}
     assert "test-provider-secret" not in json.dumps(payload)
     assert "not-a-real-private-key" not in json.dumps(payload)
-    assert payload["dockerEntrypoint"] == ["/bin/bash", "-lc"]
-    assert "sshd" in payload["dockerStartCmd"][0]
+    assert payload["entrypoint"] == ["/bin/bash", "-lc"]
+    assert "sshd" in payload["cmd"][0]
 
 
 @pytest.mark.parametrize(
@@ -196,8 +195,12 @@ def test_uncertain_launch_is_reconciled_by_unique_name(credentials):
         if method == "POST":
             name.append(payload["name"])
             raise RuntimeError("lost create response")
-        if path == "/pods":
-            return [{"id": "pod-1", "name": name[0]}, {"id": "other", "name": "unrelated"}]
+        if path.startswith("/pods?"):
+            return {
+                "pods": [{"id": "pod-1", "name": name[0]},
+                         {"id": "other", "name": "unrelated"}],
+                "pagination": {"nextCursor": None, "hasNextPage": False},
+            }
         return None
 
     ns["_request_json"] = request
@@ -229,7 +232,7 @@ def test_rest_auth_uses_header_and_refuses_redirects(monkeypatch):
     monkeypatch.setattr(ns["urllib"].request, "build_opener", build_opener)
     assert ns["_request_json"]("provider-secret", "/pods/pod-1") == {"id": "pod-1"}
     request, timeout = seen[0]
-    assert request.full_url == "https://rest.runpod.io/v1/pods/pod-1"
+    assert request.full_url == "https://api.runpod.io/v2/pods/pod-1"
     assert request.get_header("Authorization") == "Bearer provider-secret"
     assert "provider-secret" not in request.full_url
     assert timeout == 60
