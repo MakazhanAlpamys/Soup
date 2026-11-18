@@ -1,0 +1,573 @@
+{
+  "runs": [
+    {
+      "name": "openai_style_llm",
+      "inputs": {
+        "messages": [
+          {
+            "content": "Name another primary color.",
+            "role": "user"
+          }
+        ]
+      },
+      "inputs_preview": null,
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.972004",
+      "end_time": "2026-11-15T06:16:31.972056",
+      "extra": {
+        "metadata": {
+          "ls_method": "traceable",
+          "ls_run_depth": 0
+        },
+        "runtime": {
+          "langchain_core_version": "1.8.0",
+          "langchain_version": null,
+          "library": "langsmith",
+          "py_implementation": "CPython",
+          "runtime": "python",
+          "runtime_version": "3.11.15",
+          "sdk": "langsmith-py",
+          "sdk_version": "0.14.17"
+        }
+      },
+      "error": null,
+      "execution_order": 1,
+      "serialized": null,
+      "outputs": {
+        "choices": [
+          {
+            "message": {
+              "content": "Blue is also a primary color.",
+              "role": "assistant"
+            }
+          }
+        ]
+      },
+      "outputs_preview": null,
+      "parent_run_id": null,
+      "events": [],
+      "tags": [],
+      "trace_id": "01a1ddd9-a9e4-7bee-a428-8c3f2ae2c763",
+      "dotted_order": "20261115T061631972004Z01a1ddd9-a9e4-7bee-a428-8c3f2ae2c763",
+      "trace_min_start_time": null,
+      "trace_max_start_time": null,
+      "id": "01a1ddd9-a9e4-7bee-a428-8c3f2ae2c763",
+      "status": "success",
+      "child_run_ids": null,
+      "direct_child_run_ids": null,
+      "parent_run_ids": [],
+      "feedback_stats": null,
+      "reference_example_id": null,
+      "total_tokens": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "prompt_token_details": {},
+      "completion_token_details": {},
+      "total_cost": null,
+      "prompt_cost": null,
+      "completion_cost": null,
+      "prompt_cost_details": {},
+      "completion_cost_details": {},
+      "first_token_time": null,
+      "messages": null,
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "last_queued_at": null,
+      "in_dataset": false,
+      "trace_tier": "shortlived",
+      "trace_first_received_at": "2026-11-15T06:16:32.614645",
+      "ttl_seconds": 1209600,
+      "trace_upgrade": false,
+      "reference_dataset_id": null,
+      "thread_id": null
+    },
+    {
+      "name": "FakeListChatModel",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "Translate 'hello' to Spanish.",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "inputs_preview": null,
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.971723",
+      "end_time": "2026-11-15T06:16:31.971873",
+      "extra": {
+        "batch_size": 1,
+        "invocation_params": {
+          "_type": "fake-list-chat-model",
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "metadata": {
+          "_type": "fake-list-chat-model",
+          "lc_versions": {
+            "langchain-core": "1.8.0"
+          },
+          "ls_integration": "langchain_chat_model",
+          "ls_method": "traceable",
+          "ls_model_type": "chat",
+          "ls_provider": "fakelistchatmodel",
+          "ls_run_depth": 1,
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "options": {
+          "stop": null
+        },
+        "runtime": {
+          "langchain_core_version": "1.8.0",
+          "langchain_version": null,
+          "library": "langchain-core",
+          "library_version": "1.8.0",
+          "py_implementation": "CPython",
+          "runtime": "python",
+          "runtime_version": "3.11.15",
+          "sdk": "langsmith-py",
+          "sdk_version": "0.14.17"
+        }
+      },
+      "error": null,
+      "execution_order": 1,
+      "serialized": null,
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Hola.",
+                  "id": "lc_run--01a1ddd9-a9e3-733e-8d88-4b705105d1de-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Hola.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      },
+      "outputs_preview": null,
+      "parent_run_id": "01a1ddd9-a9e3-7384-91c5-379975474ed4",
+      "events": [
+        {
+          "name": "start",
+          "time": "2026-11-15T06:16:31.971723+00:00"
+        },
+        {
+          "name": "end",
+          "time": "2026-11-15T06:16:31.971873+00:00"
+        }
+      ],
+      "tags": [],
+      "trace_id": "01a1ddd9-a9e3-7384-91c5-379975474ed4",
+      "dotted_order": "20261115T061631971536Z01a1ddd9-a9e3-7384-91c5-379975474ed4.20261115T061631971723Z01a1ddd9-a9e3-733e-8d88-4b705105d1de",
+      "trace_min_start_time": null,
+      "trace_max_start_time": null,
+      "id": "01a1ddd9-a9e3-733e-8d88-4b705105d1de",
+      "status": "success",
+      "child_run_ids": null,
+      "direct_child_run_ids": null,
+      "parent_run_ids": [
+        "01a1ddd9-a9e3-7384-91c5-379975474ed4"
+      ],
+      "feedback_stats": null,
+      "reference_example_id": null,
+      "total_tokens": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "prompt_token_details": {},
+      "completion_token_details": {},
+      "total_cost": null,
+      "prompt_cost": null,
+      "completion_cost": null,
+      "prompt_cost_details": {},
+      "completion_cost_details": {},
+      "first_token_time": null,
+      "messages": null,
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "last_queued_at": null,
+      "in_dataset": false,
+      "trace_tier": "shortlived",
+      "trace_first_received_at": "2026-11-15T06:16:32.614645",
+      "ttl_seconds": 1209600,
+      "trace_upgrade": false,
+      "reference_dataset_id": null,
+      "thread_id": null
+    },
+    {
+      "name": "FakeListChatModel",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "Name a primary color.",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "inputs_preview": null,
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.971111",
+      "end_time": "2026-11-15T06:16:31.971327",
+      "extra": {
+        "batch_size": 1,
+        "invocation_params": {
+          "_type": "fake-list-chat-model",
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "metadata": {
+          "_type": "fake-list-chat-model",
+          "lc_versions": {
+            "langchain-core": "1.8.0"
+          },
+          "ls_integration": "langchain_chat_model",
+          "ls_model_type": "chat",
+          "ls_provider": "fakelistchatmodel",
+          "ls_run_depth": 0,
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "options": {
+          "stop": null
+        },
+        "runtime": {
+          "langchain_core_version": "1.8.0",
+          "langchain_version": null,
+          "library": "langchain-core",
+          "library_version": "1.8.0",
+          "py_implementation": "CPython",
+          "runtime": "python",
+          "runtime_version": "3.11.15",
+          "sdk": "langsmith-py",
+          "sdk_version": "0.14.17"
+        }
+      },
+      "error": null,
+      "execution_order": 1,
+      "serialized": null,
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Red.",
+                  "id": "lc_run--b11a9e24-4a58-4596-bd2d-cd06fad7a788-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Red.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      },
+      "outputs_preview": null,
+      "parent_run_id": null,
+      "events": [
+        {
+          "name": "start",
+          "time": "2026-11-15T06:16:31.971111+00:00"
+        },
+        {
+          "name": "end",
+          "time": "2026-11-15T06:16:31.971327+00:00"
+        }
+      ],
+      "tags": [],
+      "trace_id": "b11a9e24-4a58-4596-bd2d-cd06fad7a788",
+      "dotted_order": "20261115T061631971111Zb11a9e24-4a58-4596-bd2d-cd06fad7a788",
+      "trace_min_start_time": null,
+      "trace_max_start_time": null,
+      "id": "b11a9e24-4a58-4596-bd2d-cd06fad7a788",
+      "status": "success",
+      "child_run_ids": null,
+      "direct_child_run_ids": null,
+      "parent_run_ids": [],
+      "feedback_stats": {
+        "thumbs": {
+          "n": 1,
+          "avg": 0.0,
+          "stdev": 0.0,
+          "errors": 0,
+          "show_feedback_arrow": false,
+          "comments": [
+            ""
+          ],
+          "sources": [
+            "{\"type\": \"api\"}"
+          ],
+          "session_min_score": null,
+          "session_max_score": null,
+          "values": {},
+          "contains_thread_feedback": false
+        }
+      },
+      "reference_example_id": null,
+      "total_tokens": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "prompt_token_details": {},
+      "completion_token_details": {},
+      "total_cost": null,
+      "prompt_cost": null,
+      "completion_cost": null,
+      "prompt_cost_details": {},
+      "completion_cost_details": {},
+      "first_token_time": null,
+      "messages": null,
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "last_queued_at": null,
+      "in_dataset": false,
+      "trace_tier": "shortlived",
+      "trace_first_received_at": "2026-11-15T06:16:32.614645",
+      "ttl_seconds": 1209600,
+      "trace_upgrade": false,
+      "reference_dataset_id": null,
+      "thread_id": null
+    },
+    {
+      "name": "FakeListChatModel",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "What is the capital of France?",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "inputs_preview": null,
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.945073",
+      "end_time": "2026-11-15T06:16:31.970365",
+      "extra": {
+        "batch_size": 1,
+        "invocation_params": {
+          "_type": "fake-list-chat-model",
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "metadata": {
+          "_type": "fake-list-chat-model",
+          "lc_versions": {
+            "langchain-core": "1.8.0"
+          },
+          "ls_integration": "langchain_chat_model",
+          "ls_model_type": "chat",
+          "ls_provider": "fakelistchatmodel",
+          "ls_run_depth": 0,
+          "responses": [
+            "Paris.",
+            "Red.",
+            "Hola."
+          ],
+          "stop": null
+        },
+        "options": {
+          "stop": null
+        },
+        "runtime": {
+          "langchain_core_version": "1.8.0",
+          "langchain_version": null,
+          "library": "langchain-core",
+          "library_version": "1.8.0",
+          "py_implementation": "CPython",
+          "runtime": "python",
+          "runtime_version": "3.11.15",
+          "sdk": "langsmith-py",
+          "sdk_version": "0.14.17"
+        }
+      },
+      "error": null,
+      "execution_order": 1,
+      "serialized": null,
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Paris.",
+                  "id": "lc_run--ca77fb5c-6d6c-479e-9128-3b616a18ad97-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Paris.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      },
+      "outputs_preview": null,
+      "parent_run_id": null,
+      "events": [
+        {
+          "name": "start",
+          "time": "2026-11-15T06:16:31.945073+00:00"
+        },
+        {
+          "name": "end",
+          "time": "2026-11-15T06:16:31.970365+00:00"
+        }
+      ],
+      "tags": [],
+      "trace_id": "ca77fb5c-6d6c-479e-9128-3b616a18ad97",
+      "dotted_order": "20261115T061631945073Zca77fb5c-6d6c-479e-9128-3b616a18ad97",
+      "trace_min_start_time": null,
+      "trace_max_start_time": null,
+      "id": "ca77fb5c-6d6c-479e-9128-3b616a18ad97",
+      "status": "success",
+      "child_run_ids": null,
+      "direct_child_run_ids": null,
+      "parent_run_ids": [],
+      "feedback_stats": {
+        "thumbs": {
+          "n": 1,
+          "avg": 1.0,
+          "stdev": 0.0,
+          "errors": 0,
+          "show_feedback_arrow": false,
+          "comments": [
+            ""
+          ],
+          "sources": [
+            "{\"type\": \"api\"}"
+          ],
+          "session_min_score": null,
+          "session_max_score": null,
+          "values": {},
+          "contains_thread_feedback": false
+        }
+      },
+      "reference_example_id": null,
+      "total_tokens": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "prompt_token_details": {},
+      "completion_token_details": {},
+      "total_cost": null,
+      "prompt_cost": null,
+      "completion_cost": null,
+      "prompt_cost_details": {},
+      "completion_cost_details": {},
+      "first_token_time": null,
+      "messages": null,
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "last_queued_at": null,
+      "in_dataset": false,
+      "trace_tier": "shortlived",
+      "trace_first_received_at": "2026-11-15T06:16:32.614645",
+      "ttl_seconds": 1209600,
+      "trace_upgrade": false,
+      "reference_dataset_id": null,
+      "thread_id": null
+    }
+  ],
+  "cursors": {
+    "next": null,
+    "prev": null
+  },
+  "search_cursors": null,
+  "parsed_query": null
+}

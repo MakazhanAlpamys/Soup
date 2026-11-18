@@ -359,6 +359,29 @@ def test_serialised_kwargs_role_is_not_read_for_an_unmapped_class() -> None:
     assert _coerce_str([chat, _serialised("HumanMessage", "Q", "human")]) == "Q"
 
 
+def test_kwargs_without_lc_is_read_as_a_plain_message() -> None:
+    message = {"role": "user", "content": "Q", "kwargs": {"type": "ai", "content": "Other"}}
+    assert _coerce_str([message]) == "Q"
+
+
+@pytest.mark.parametrize(
+    "top_level",
+    [{"role": "assistant"}, {"role": "user", "content": "Top level"}, {"type": "system"}],
+    ids=["role", "content", "type"],
+)
+def test_serialised_message_reads_kwargs_over_top_level_fields(top_level) -> None:
+    message = {**_serialised("HumanMessage", "Q", "human"), **top_level}
+    assert _coerce_str([message]) == "Q"
+
+
+@pytest.mark.parametrize("message_type", [["human"], {"type": "human"}, 1],
+                         ids=["list", "dict", "int"])
+def test_serialised_non_string_type_is_left_out_without_error(message_type) -> None:
+    odd = _serialised("HumanMessage", "Odd", None)
+    odd["kwargs"]["type"] = message_type
+    assert _coerce_str([odd, _serialised("HumanMessage", "Q", "human")]) == "Q"
+
+
 def test_serialised_output_messages_select_last_assistant() -> None:
     messages = [_serialised("AIMessage", "Earlier answer", "ai"),
                 _serialised("AIMessage", [{"type": "text", "text": "Final answer"}], "ai"),

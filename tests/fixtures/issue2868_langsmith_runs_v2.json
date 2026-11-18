@@ -1,0 +1,268 @@
+{
+  "items": [
+    {
+      "query_metadata": null,
+      "id": "01a1ddd9-a9e4-7552-9591-bccf3a669e51",
+      "name": "calculator",
+      "run_type": "tool",
+      "start_time": "2026-11-15T06:16:31.972116Z",
+      "status": "success",
+      "inputs": {
+        "x": 21
+      },
+      "outputs": {
+        "output": 42
+      }
+    },
+    {
+      "query_metadata": null,
+      "id": "01a1ddd9-a9e4-7bee-a428-8c3f2ae2c763",
+      "name": "openai_style_llm",
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.972004Z",
+      "status": "success",
+      "inputs": {
+        "messages": [
+          {
+            "content": "Name another primary color.",
+            "role": "user"
+          }
+        ]
+      },
+      "outputs": {
+        "choices": [
+          {
+            "message": {
+              "content": "Blue is also a primary color.",
+              "role": "assistant"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query_metadata": null,
+      "id": "01a1ddd9-a9e3-733e-8d88-4b705105d1de",
+      "name": "FakeListChatModel",
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.971723Z",
+      "status": "success",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "Translate 'hello' to Spanish.",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Hola.",
+                  "id": "lc_run--01a1ddd9-a9e3-733e-8d88-4b705105d1de-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Hola.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      }
+    },
+    {
+      "query_metadata": null,
+      "id": "01a1ddd9-a9e3-7384-91c5-379975474ed4",
+      "name": "qa_chain",
+      "run_type": "chain",
+      "start_time": "2026-11-15T06:16:31.971536Z",
+      "status": "success",
+      "inputs": {
+        "question": "Translate 'hello' to Spanish."
+      },
+      "outputs": {
+        "output": "Hola."
+      }
+    },
+    {
+      "query_metadata": null,
+      "id": "b11a9e24-4a58-4596-bd2d-cd06fad7a788",
+      "name": "FakeListChatModel",
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.971111Z",
+      "status": "success",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "Name a primary color.",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Red.",
+                  "id": "lc_run--b11a9e24-4a58-4596-bd2d-cd06fad7a788-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Red.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      },
+      "feedback_stats": {
+        "thumbs": {
+          "n": 1,
+          "avg": 0,
+          "stdev": null,
+          "min": null,
+          "max": null,
+          "errors": 0,
+          "comments": null,
+          "sources": [
+            "{\"type\": \"api\"}"
+          ],
+          "values": {},
+          "contains_thread_feedback": false
+        }
+      }
+    },
+    {
+      "query_metadata": null,
+      "id": "ca77fb5c-6d6c-479e-9128-3b616a18ad97",
+      "name": "FakeListChatModel",
+      "run_type": "llm",
+      "start_time": "2026-11-15T06:16:31.945073Z",
+      "status": "success",
+      "inputs": {
+        "messages": [
+          [
+            {
+              "id": [
+                "langchain",
+                "schema",
+                "messages",
+                "HumanMessage"
+              ],
+              "kwargs": {
+                "content": "What is the capital of France?",
+                "type": "human"
+              },
+              "lc": 1,
+              "type": "constructor"
+            }
+          ]
+        ]
+      },
+      "outputs": {
+        "generations": [
+          [
+            {
+              "generation_info": null,
+              "message": {
+                "id": [
+                  "langchain",
+                  "schema",
+                  "messages",
+                  "AIMessage"
+                ],
+                "kwargs": {
+                  "content": "Paris.",
+                  "id": "lc_run--ca77fb5c-6d6c-479e-9128-3b616a18ad97-0",
+                  "invalid_tool_calls": [],
+                  "tool_calls": [],
+                  "type": "ai"
+                },
+                "lc": 1,
+                "type": "constructor"
+              },
+              "text": "Paris.",
+              "type": "ChatGeneration"
+            }
+          ]
+        ],
+        "llm_output": null,
+        "run": null,
+        "type": "LLMResult"
+      },
+      "feedback_stats": {
+        "thumbs": {
+          "n": 1,
+          "avg": 1,
+          "stdev": null,
+          "min": null,
+          "max": null,
+          "errors": 0,
+          "comments": null,
+          "sources": [
+            "{\"type\": \"api\"}"
+          ],
+          "values": {},
+          "contains_thread_feedback": false
+        }
+      }
+    }
+  ],
+  "next_cursor": null
+}

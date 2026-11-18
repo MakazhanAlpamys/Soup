@@ -1,6 +1,8 @@
 """``parse_langsmith`` reads chat model batches and OpenAI-style ``choices`` (#2868)."""
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -157,6 +159,13 @@ def test_generations_keep_priority_over_choices() -> None:
     assert _rows([run]) == [("r", "Q", "From generations", "none")]
 
 
+def test_choices_are_read_before_the_other_output_keys() -> None:
+    run = {"id": "r", "inputs": {"messages": [_human("Q")]},
+           "outputs": {"output": "From output",
+                       "choices": [{"message": {"content": "From choices"}}]}}
+    assert _rows([run]) == [("r", "Q", "From choices", "none")]
+
+
 @pytest.mark.parametrize(
     "choices", [[], [None], [{"message": None}], None],
     ids=["empty", "none-entry", "null-message", "null"],
@@ -164,3 +173,47 @@ def test_generations_keep_priority_over_choices() -> None:
 def test_choices_without_an_answer_give_no_row_and_no_error(choices) -> None:
     run = {"id": "r", "inputs": {"messages": [_human("Q")]}, "outputs": {"choices": choices}}
     assert _rows([run]) == []
+
+
+# Real runs shared by the reporter of #2868, recorded on 2026-11-15 from a test
+# project with langsmith-py 0.14.17: three ``FakeListChatModel`` calls (batch
+# messages, ``generations``) and one ``@traceable(run_type="llm")`` returning an
+# OpenAI-style dict. ``v1`` is ``POST /api/v1/runs/query`` filtered to LLM runs,
+# with full run objects; ``v2`` lists every run of the project, including a
+# chain run and a tool run. Sanitised by the reporter: org and user ids, share
+# token, S3 URLs and ``LANGSMITH_*`` metadata removed, session id replaced.
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+_RECORDED_V1 = _FIXTURES / "issue2868_langsmith_runs_query_v1.json"
+_RECORDED_V2 = _FIXTURES / "issue2868_langsmith_runs_v2.json"
+
+_RECORDED_ROWS = [
+    ("01a1ddd9-a9e4-7bee-a428-8c3f2ae2c763", "Name another primary color.",
+     "Blue is also a primary color.", "none"),
+    ("01a1ddd9-a9e3-733e-8d88-4b705105d1de", "Translate 'hello' to Spanish.", "Hola.", "none"),
+    ("b11a9e24-4a58-4596-bd2d-cd06fad7a788", "Name a primary color.", "Red.", "thumbs_down"),
+    ("ca77fb5c-6d6c-479e-9128-3b616a18ad97", "What is the capital of France?", "Paris.",
+     "thumbs_up"),
+]
+
+
+def test_the_recorded_runs_are_sanitised() -> None:
+    for path in (_RECORDED_V1, _RECORDED_V2):
+        text = path.read_text(encoding="utf-8")
+        for marker in ("lsv2_", "ls__", "Bearer", "Authorization", "share_token", "app_path",
+                       "s3_urls", "LANGSMITH_", "user_id", "/home/", "@"):
+            assert marker not in text
+        runs = json.loads(text)
+        runs = runs.get("runs", runs.get("items"))
+        assert {run.get("session_id", "absent") for run in runs} <= {
+            "00000000-0000-4000-8000-000000000001", "absent"}
+
+
+def test_each_recorded_llm_run_gives_one_row() -> None:
+    runs = json.loads(_RECORDED_V1.read_text(encoding="utf-8"))["runs"]
+    assert _rows(runs) == _RECORDED_ROWS
+
+
+def test_recorded_chain_and_tool_runs_give_no_row() -> None:
+    runs = json.loads(_RECORDED_V2.read_text(encoding="utf-8"))["items"]
+    assert {run["run_type"] for run in runs} == {"llm", "chain", "tool"}
+    assert _rows(runs) == _RECORDED_ROWS
