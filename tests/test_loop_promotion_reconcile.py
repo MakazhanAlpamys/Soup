@@ -308,6 +308,38 @@ class TestKilledBetweenTwoWrites:
         assert sentences == ["text (loop.yaml changed meanwhile: not touched)"]
         assert world.state().canary_active == "other" and world.state().production_version == 1
 
+    def test_a_newer_version_with_the_same_canary_is_not_overwritten(self, world, monkeypatch):
+        world.start_canary()
+        found = reconcile.Mismatch("yaml_behind", 2, "text", adapter="cand")
+        update_state(lambda fresh: replace(fresh, latest_version=3), world.path)
+        monkeypatch.setattr(reconcile, "detect", lambda state, log=None: found)
+
+        sentences = reconcile.finish(world.path, world.log())
+
+        state = world.state()
+        assert sentences == ["text (loop.yaml changed meanwhile: not touched)"]
+        assert state.canary_active == "cand"
+        assert state.production_version == 1 and state.latest_version == 3
+
+    def test_a_log_two_versions_ahead_with_the_running_canary_is_unexplained(self, world):
+        world.start_canary()
+        world.log().version({
+            "schema_version": 1, "id": "v-3", "ts": "2026-11-16T23:41:57+00:00",
+            "from_version": 2, "to_version": 3, "cause": "promote", "actor": "loop",
+            "iteration_id": None, "served_as": "cand", "alias": None, "reason": "x",
+            "source": "soup-loop",
+        })
+        state_before = open(world.path, "rb").read()
+        log_before = open(world.log().path("version"), "rb").read()
+
+        found = reconcile.detect(world.state(), world.log())
+        sentences = reconcile.finish(world.path, world.log())
+
+        assert found.kind == "unexplained"
+        assert sentences == [found.text]
+        assert open(world.path, "rb").read() == state_before
+        assert open(world.log().path("version"), "rb").read() == log_before
+
 
 class TestStatusNamesTheMismatch:
     def _status(self, world):
