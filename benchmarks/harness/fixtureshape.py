@@ -28,10 +28,12 @@ bitsandbytes' own per-M dispatch. For each row the harness records:
     and the gradient difference, reported separately, never averaged.
 
 Three real training shapes (Llama-3.1-8B q_proj 4096x4096 and the Qwen2.5-32B
-q_proj/down_proj 5120x5120 and gate_proj 27648x5120) are measured as controls:
-the record's point is that the window does NOT overlap those shapes. Windows
-are printed as a RESULT per shape, not asserted as H100 numbers: the exact
-M cutoffs are a property of the card and dtype.
+q_proj/down_proj 5120x5120 and gate_proj 27648x5120) are measured as controls.
+The record's point is that the window does not overlap the shapes the feature
+ships for (batch x seq >= 128), not that it never overlaps them at any M: its
+table has 27648x5120 fusing at M <= 32. Windows are printed as a RESULT per
+shape, not asserted as H100 numbers: the exact M cutoffs are a property of the
+card and dtype.
 
 This is the CUDA half of the Reproducing-table row. The CPU half is already
 published as ``fixture_window_cpu.py`` (#1144).
@@ -337,6 +339,9 @@ def run_sweep(args) -> dict:
     except ImportError:
         return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
+    # Read the idle clock BEFORE the sweep loads the card; a clock taken after
+    # the loops is a busy/leftover reading and must not be labelled idle.
+    env = hardware(args.dtype)
     dtype = getattr(torch, args.dtype)
     fixture = [tuple(int(p) for p in s.split("x")) for s in args.fixture_shapes.split(",")]
     controls = [tuple(int(p) for p in s.split("x")) for s in args.control_shapes.split(",")]
@@ -353,7 +358,7 @@ def run_sweep(args) -> dict:
 
     verdict = evaluate(rows)
     return {
-        "env": hardware(args.dtype),
+        "env": env,
         "protocol": {
             "note": "CI fixture vs real training shapes; dequantise+F.linear vs MatMul4Bit",
             "blocksize": BLOCKSIZE, "quant_type": "nf4", "double_quant": True,
