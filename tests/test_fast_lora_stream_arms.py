@@ -32,16 +32,37 @@ per_projection_a
     while the base weights and the LoRA B matrices have the projection's
     output width in their rows.
 
+single_projection_forward_dtype
+    The single-projection ``o_proj`` forward reads ``quant_state.compute_dtype``
+    directly and dequantises the base weight itself, so the existing dtype arm
+    (which patches ``_projection_compute_dtype``) never reaches that forward.
+    This arm overrides that one read with the activation dtype for the duration
+    of the forward.  The forward then records the choice in the saved quant
+    metadata, so the backward follows it as well.
+
+mlp_backward_scaling_order
+    The fused SwiGLU backward scales each LoRA gradient *after* its GEMM
+    (``(grad @ h) * s``); PEFT scales the incoming gradient before the GEMM.
+    This arm builds the MLP Function's backward from the PRODUCTION SOURCE with
+    exactly those six post-GEMM scalings moved before their GEMMs.  It fails
+    closed if the six sites are not found, so a kernel change cannot turn this
+    arm into a silent no-op.  Nothing is copied by hand into this file.
+
 Controls
 --------
 * two runs of the same configuration give the same numbers;
 * every armed run reached its replacement (each arm counts its calls);
 * on a card that runs the fixture at bf16 -- where the row is red -- with no
-  arm the baseline gives the recorded numbers, and with all three arms on
-  together the three names come to a ratio near 1 (at most 1.5 here).
+  arm the baseline gives the recorded numbers.
 
-The report also prints the dtype each base GEMM asked for, so a card owner can
-see which dtypes were in play.
+The "all arms give the PEFT error" premise is FALSE on a native-bf16 card: the
+arms were reached there and did not move any name.  The all-arms ratios are
+therefore printed as a RESULT (with whether the premise held), not asserted --
+a harness control must not claim what the host did not demonstrate.
+
+The report also prints the dtype each base GEMM asked for, including the
+single-projection forward that the old trace omitted, so a card owner can see
+which dtypes were in play.
 
 The row needs CUDA; the dequantisation check runs on the CPU.
 """
@@ -49,7 +70,9 @@ The row needs CUDA; the dequantisation check runs on the CPU.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
+import textwrap
 
 import pytest
 
@@ -75,6 +98,26 @@ ARMS = (
     "base_matmul_dtype_forward_and_backward",
     "scaling_order",
     "per_projection_a",
+    "single_projection_forward_dtype",
+    "mlp_backward_scaling_order",
+)
+
+#: The production MLP backward's post-GEMM LoRA scalings.  Each is replaced by
+#: a pre-GEMM scale of the SAME incoming gradient; the count is asserted so a
+#: source change fails closed instead of silently dropping the arm.
+_MLP_SCALING_SITES = (
+    ("_flatten(_as_dtype(grad_y, hd.dtype)).t() @ _flatten(hd) * sd",
+     "_flatten(_as_dtype(grad_y, hd.dtype) * sd).t() @ _flatten(hd)"),
+    ("torch.matmul(_as_dtype(grad_y, bdl.dtype), bdl) * sd",
+     "torch.matmul(_as_dtype(grad_y, bdl.dtype) * sd, bdl)"),
+    ("_flatten(_as_dtype(grad_g, hg.dtype)).t() @ _flatten(hg) * sg",
+     "_flatten(_as_dtype(grad_g, hg.dtype) * sg).t() @ _flatten(hg)"),
+    ("torch.matmul(_as_dtype(grad_g, bgl.dtype), bgl) * sg",
+     "torch.matmul(_as_dtype(grad_g, bgl.dtype) * sg, bgl)"),
+    ("_flatten(_as_dtype(grad_u, hu.dtype)).t() @ _flatten(hu) * su",
+     "_flatten(_as_dtype(grad_u, hu.dtype) * su).t() @ _flatten(hu)"),
+    ("torch.matmul(_as_dtype(grad_u, bul.dtype), bul) * su",
+     "torch.matmul(_as_dtype(grad_u, bul.dtype) * su, bul)"),
 )
 
 
@@ -130,6 +173,64 @@ def _in_activation_dtype(meta, fallback, calls):
     return fallback
 
 
+def _move_mlp_scaling_before_gemm(source: str) -> tuple[str, int]:
+    """Move each production post-GEMM LoRA scaling before its GEMM.
+
+    Returns the edited source and the number of sites changed.  The caller
+    requires exactly ``len(_MLP_SCALING_SITES)``; a different count means the
+    production kernel changed and this arm must not be trusted.
+    """
+    edited = source
+    count = 0
+    for old, new in _MLP_SCALING_SITES:
+        found = edited.count(old)
+        count += found
+        edited = edited.replace(old, new)
+    return edited, count
+
+
+def _mlp_backward_peft_order(fast_lora_mlp, calls):
+    """Build the MLP Function's backward from its own source, with PEFT's order.
+
+    The six scaling sites are inline in the production backward, so there is no
+    helper to patch.  Reading and editing the installed source at arm-enable
+    time keeps this a reading of the production path: no backward is written by
+    hand here, and a source change that removes a site fails closed.
+    """
+    import torch
+
+    function = fast_lora_mlp._mlp_function()
+    original = inspect.unwrap(function.backward)
+    source = textwrap.dedent(inspect.getsource(original))
+    lines = source.splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.lstrip().startswith("def backward")
+    )
+    body = "\n".join(lines[start:])
+    edited, count = _move_mlp_scaling_before_gemm(body)
+    expected = len(_MLP_SCALING_SITES)
+    if count != expected:
+        raise AssertionError(
+            f"#792 MLP arm found {count} of {expected} scaling sites in the "
+            "production backward; refusing to install an untrusted arm"
+        )
+    # The production backward closes over torch (imported inside _mlp_function),
+    # so the exec namespace needs those cells as well as the module globals.
+    namespace = dict(original.__globals__)
+    for name, cell in zip(original.__code__.co_freevars, original.__closure__ or ()):
+        namespace[name] = cell.cell_contents
+    exec(compile(edited, "<#792 mlp backward arm>", "exec"), namespace)
+    new_backward = namespace["backward"]
+
+    def armed_backward(ctx, grad_y):
+        calls.append("mlp_backward_scaling_order")
+        return new_backward(ctx, grad_y)
+
+    return function, staticmethod(
+        torch.autograd.function.once_differentiable(armed_backward)
+    )
+
+
 @contextlib.contextmanager
 def _arms_enabled(
     arms, monkeypatch, calls: list[str], trace: list[str] | None = None,
@@ -167,6 +268,43 @@ def _arms_enabled(
                 torch.nn.functional.linear, calls, rows if rows is not None else [], max_rows=16
             ),
         )
+    if trace is not None or "single_projection_forward_dtype" in arms:
+        # The single-projection forward reads quant_state.compute_dtype itself,
+        # so the dtype arm above never reaches it.  Trace the read, and for the
+        # arm override it with the activation dtype for the forward only.
+        function = fast_lora._single_projection_function()
+        original_forward = function.forward
+
+        def forward_with_trace(
+            ctx, x, weight, bias, lora_a, lora_b, scaling, quant_state,
+            dropout_p, dropout_training,
+        ):
+            compute_dtype = getattr(quant_state, "compute_dtype", None)
+            if trace is not None:
+                trace.append(
+                    "fast_lora._single_projection_forward("
+                    f"compute_dtype={compute_dtype}, activation_dtype={x.dtype})"
+                )
+            if "single_projection_forward_dtype" in arms and quant_state is not None:
+                calls.append("single_projection_forward_dtype")
+                saved = getattr(quant_state, "compute_dtype", None)
+                quant_state.compute_dtype = x.dtype
+                try:
+                    return original_forward(
+                        ctx, x, weight, bias, lora_a, lora_b, scaling, quant_state,
+                        dropout_p, dropout_training,
+                    )
+                finally:
+                    quant_state.compute_dtype = saved
+            return original_forward(
+                ctx, x, weight, bias, lora_a, lora_b, scaling, quant_state,
+                dropout_p, dropout_training,
+            )
+
+        monkeypatch.setattr(function, "forward", staticmethod(forward_with_trace))
+    if "mlp_backward_scaling_order" in arms:
+        function, armed_backward = _mlp_backward_peft_order(fast_lora_mlp, calls)
+        monkeypatch.setattr(function, "backward", armed_backward)
     if trace is not None:
         for module in modules:
             original = module._dense_weight
@@ -230,6 +368,55 @@ def test_the_rebuilt_quant_state_dequantises_to_the_same_weight(tmp_path):
     assert original.device.type == "cpu"
 
 
+# ─── CPU checks of the arms themselves ──────────────────────────────────────
+
+
+def test_mlp_arm_source_edit_moves_exactly_the_six_scaling_sites():
+    source = "def backward(ctx, grad_y):\n" + "\n".join(
+        f"    {old}" for old, _ in _MLP_SCALING_SITES
+    )
+    edited, count = _move_mlp_scaling_before_gemm(source)
+    assert count == len(_MLP_SCALING_SITES)
+    for old, new in _MLP_SCALING_SITES:
+        assert old not in edited
+        assert new in edited
+
+
+def test_mlp_arm_fails_closed_when_the_kernel_changed():
+    source = "def backward(ctx, grad_y):\n    " + _MLP_SCALING_SITES[0][0]
+    _, count = _move_mlp_scaling_before_gemm(source)
+    assert count == 1 != len(_MLP_SCALING_SITES)
+
+
+def test_mlp_arm_builds_a_backward_from_the_installed_source():
+    from soup_cli.utils import fast_lora_mlp
+
+    calls: list[str] = []
+    function, armed = _mlp_backward_peft_order(fast_lora_mlp, calls)
+    assert function is fast_lora_mlp._mlp_function()
+    assert callable(armed)
+    assert calls == []  # counting happens on call, not at build time
+
+
+def test_all_arms_result_reports_inert_arms_instead_of_asserting():
+    baseline = {name: 3.0 for name in THE_THREE_NAMES}
+    armed = {arm: dict(baseline) for arm in ARMS}
+    inert = _all_arms_result(baseline, armed, dict(baseline))
+    assert inert["premise_holds"] is False
+    assert inert["near_one"] is False
+    assert inert["verdict"] == "not_applicable_arms_inert"
+
+    moved = {arm: dict(baseline) for arm in ARMS}
+    moved["scaling_order"] = {name: 1.1 for name in THE_THREE_NAMES}
+    near = _all_arms_result(baseline, moved, {name: 1.1 for name in THE_THREE_NAMES})
+    assert near["premise_holds"] is True
+    assert near["verdict"] == "near_one"
+
+    far = _all_arms_result(baseline, moved, dict(baseline))
+    assert far["premise_holds"] is True
+    assert far["verdict"] == "not_near_one"
+
+
 # ─── the row, with arms ─────────────────────────────────────────────────────
 
 
@@ -239,6 +426,31 @@ def _ratio_for(ratios: dict, name: str) -> float | None:
         if f".{name}." in key:
             return value
     return None
+
+
+def _all_arms_result(baseline: dict, armed: dict, every: dict) -> dict:
+    """The all-arms control as a RESULT, not an assertion.
+
+    Its old premise ("all arms bring the three names near 1") was never shown
+    on a native-bf16 card, where the arms are reached but inert.  Report what
+    happened: whether any arm moved a name, the every-arm ratios, and the
+    near-one bound -- without turning a true observation into a failure.
+    """
+    premise = any(
+        armed[arm][name] != baseline[name] for arm in armed for name in baseline
+    )
+    near = all(every[name] <= NEAR_ONE for name in baseline)
+    return {
+        "premise_holds": premise,
+        "near_one": near,
+        "near_one_bound": NEAR_ONE,
+        "ratios": dict(every),
+        "verdict": (
+            "not_applicable_arms_inert"
+            if not premise
+            else ("near_one" if near else "not_near_one")
+        ),
+    }
 
 
 def _row_report(tmp_path, monkeypatch, capsys, arms) -> tuple[dict, list[str], list[str]]:
@@ -285,12 +497,15 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
     baseline = report["ratios"]
     armed = {}
     arm_calls = {}
+    per_projection_rows: list[int] = []
     for arm in ARMS:
         arm_report, _, calls, rows = _row_report(
             tmp_path / arm, monkeypatch, capsys, (arm,)
         )
         armed[arm] = arm_report["ratios"]
         arm_calls[arm] = calls
+        if arm == "per_projection_a":
+            per_projection_rows = rows
     every_report, _, every_calls, every_rows = _row_report(
         tmp_path / "every", monkeypatch, capsys, ARMS
     )
@@ -310,7 +525,7 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
         "base_gemm_dtypes": sorted(set(trace)),
         "arm_calls": {arm: calls.count(arm) for arm, calls in arm_calls.items()},
         "every_arm_calls": {arm: every_calls.count(arm) for arm in ARMS},
-        "split_rows": sorted(set(rows)),
+        "split_rows": sorted(set(per_projection_rows)),
         "every_split_rows": sorted(set(every_rows)),
     }
     with capsys.disabled():
@@ -323,17 +538,32 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
 
     # The stacked A is 12 rows for q/k/v and 8 for gate/up: pin that the
     # split actually saw those two shapes, not just one-block rank-4 A's.
-    assert 12 in rows and 8 in rows
+    assert 12 in per_projection_rows and 8 in per_projection_rows
     assert 12 in every_rows and 8 in every_rows
+
+    # Control: the single-projection forward is traced too.  The old trace
+    # listed only the MLP/QKV _dense_weight calls, which is why the o_proj
+    # forward's dtype choice was invisible on the red card.
+    assert any("fast_lora._single_projection_forward(" in line for line in trace)
 
     # Control: the same configuration twice gives the same numbers.
     assert again_report["ratios"] == baseline
 
-    # The red-row controls, where the row is red: the recorded numbers with no
-    # arm, and the PEFT error with all three arms on together.
+    # The red-row baseline control: on a card running the fixture at bf16 the
+    # row must be the recorded one.  This stays an assertion -- a different row
+    # would make every reading below meaningless.
     runs_at_bf16 = any("dtype=torch.bfloat16" in line for line in trace)
     if runs_at_bf16:
         for name, recorded in RECORDED_RATIOS.items():
             assert _ratio_for(baseline, name) == pytest.approx(recorded, abs=1e-5), name
-        for name in THE_THREE_NAMES:
-            assert _ratio_for(every_report["ratios"], name) <= NEAR_ONE, name
+
+    # The old all-arms control asserted that all arms bring the three names
+    # near 1.  That premise was not demonstrated on a native-bf16 card (the
+    # arms were reached and inert), so print the result instead of claiming it.
+    all_arms = _all_arms_result(
+        names(baseline),
+        {arm: names(ratios) for arm, ratios in armed.items()},
+        names(every_report["ratios"]),
+    )
+    with capsys.disabled():
+        print("#792 all-arms " + json.dumps(all_arms))
