@@ -915,16 +915,35 @@ class TestSecurityHardening:
                 _safe_read_text("input.txt", "input", 3)
             assert _safe_read_text("input.txt", "input", 4) == "x"
 
-    @pytest.mark.parametrize("flag", ["--corrections", "--held-out"])
-    def test_gate_file_bom_matches_plain_utf8(self, flag):
-        from soup_cli.commands.ship import _read_gate_file
+    @pytest.mark.parametrize(
+        ("flag", "row", "parser"),
+        [
+            (
+                "--corrections",
+                {"edit_id": "edit-1", "expected": "yes", "original": "no",
+                 "paraphrases": ["question"]},
+                "parse_corrections",
+            ),
+            (
+                "--held-out",
+                {"edit_id": "edit-1", "prompt": "question",
+                 "expected": "yes", "original": "no"},
+                "parse_held_out",
+            ),
+        ],
+    )
+    def test_gate_file_bom_preserves_parsed_rows(self, flag, row, parser):
+        from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
-            Path("plain.jsonl").write_text('{"id": "row-1"}\n', encoding="utf-8")
-            Path("bom.jsonl").write_text('{"id": "row-1"}\n', encoding="utf-8-sig")
-            assert _read_gate_file("bom.jsonl", flag) == _read_gate_file(
-                "plain.jsonl", flag,
-            )
+            content = json.dumps(row) + "\\n"
+            Path("plain.jsonl").write_text(content, encoding="utf-8")
+            Path("bom.jsonl").write_text(content, encoding="utf-8-sig")
+            parse = getattr(ship_cmd, parser)
+            plain = parse(ship_cmd._read_gate_file("plain.jsonl", flag), flag)
+            bom = parse(ship_cmd._read_gate_file("bom.jsonl", flag), flag)
+            assert len(plain) == 1
+            assert bom == plain
 
     def test_config_bom_matches_plain_utf8(self):
         from soup_cli.commands.ship import _parse_ship_config
