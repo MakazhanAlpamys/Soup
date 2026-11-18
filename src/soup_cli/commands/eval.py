@@ -1025,20 +1025,21 @@ def human(
     try:
         prompts = load_prompts(Path(prompts_file))
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
+            console.print(terminal_text(f"Model not found: {mpath}", "red"))
             raise typer.Exit(1)
 
     console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {for_terminal(model_a)}\n"
-        f"Model B: {for_terminal(model_b)}",
+        Text.assemble(
+            ("Human Evaluation", "bold"),
+            f"\nPrompts: {len(prompts)}\nModel A: ", terminal_text(model_a),
+            "\nModel B: ", terminal_text(model_b),
+        ),
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1058,10 +1059,14 @@ def human(
         resp_b = gen_b(prompt_text)
 
         # Display for human judgment
-        console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
-        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
-        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
+        heading = console.render_str(
+            f"--- Prompt {idx + 1}/{len(prompts)} ---", markup=False, emoji=False,
+        )
+        heading.stylize_before("bold")
+        console.print(Text.assemble("\n", heading))
+        console.print(Panel(terminal_text(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(terminal_text(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(terminal_text(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1092,7 +1097,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
+    console.print(Text.assemble("\n", terminal_text(f"Results saved to {output}", "green")))
 
 
 # ─── Helper functions ───
@@ -1289,7 +1294,7 @@ def _display_elo_ratings(results: object) -> None:
         reverse=True,
     ):
         table.add_row(
-            _short_model_name(name),
+            terminal_text(_short_model_name(name, markup=False)),
             f"{rating.rating:.0f}",
             str(rating.wins),
             str(rating.losses),
