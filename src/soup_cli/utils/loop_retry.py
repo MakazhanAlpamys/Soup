@@ -19,10 +19,12 @@ A waiting or held cycle is a skipped iteration whose notes say so (``train_backo
 (``DEPLOY_RETRY_LIMIT``) is separate and unchanged.
 
 A stage of the cycle that RAISES (the cost, harvest, train or gate stage; a locked thumbs
-database, a directory that went away) uses a separate loop-wide ``failed_stage`` record and the
-same waits. Its stable fingerprint is shared across stages, so alternating failures still reach
-the hold; its reason starts with ``stage error:``. The notes then say ``stage_backoff: ...`` or
-``stage_held: ...``.
+database, a directory that went away) and a failed training both count in the loop-wide
+``failed_stage`` streak. The streak records whether it includes a non-training failure: three
+consecutive failures hold the loop only when at least one is from a non-training stage. A
+training-only streak remains subject to ``failed_train``'s dataset-specific retry and hold, so
+changed inputs can train without ``soup loop resume``. The reason starts with ``stage error:``;
+waiting notes say ``stage_backoff: ...`` and a loop hold says ``stage_held: ...``.
 """
 
 from __future__ import annotations
@@ -88,7 +90,7 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
 
 
 def stage_error_fingerprint(stage: str) -> str:
-    """Stable loop-wide fingerprint so errors in different stages share one retry limit."""
+    """Stable fingerprint so failures from different stages share one streak."""
     del stage  # Keep the argument for callers and persisted-state migration.
     return hashlib.sha256(b"loop stage error").hexdigest()
 
@@ -110,8 +112,8 @@ def is_stage_error(failed: Mapping[str, Any]) -> bool:
 def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
     """Why the cycle must not call its stages now (the skip note), or None to go ahead.
 
-    Only a record of a stage that raised is judged here; the hold of a failed training is the
-    train stage's own (it knows the dataset).
+    A failed training's fingerprinted wait/hold is owned by ``failed_train``; this record gates
+    raised stages and a streak that includes a non-training failure.
     """
     if not isinstance(failed, Mapping) or not is_stage_error(failed):
         return None
@@ -119,8 +121,12 @@ def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Opti
     # loop-wide failure streak still counts that cycle, but must not shadow the training retry:
     # doing so prevents the same dataset from being retried after its own wait expires.
     reason = str(failed.get("reason") or "")
-    if reason.startswith("training failed:") or reason.startswith(
-        f"{STAGE_ERROR_PREFIX}the train stage raised TrainingFailed:"
+    if (
+        failed.get("has_non_train_failure") is False
+        and reason.startswith(f"{STAGE_ERROR_PREFIX}the train stage failed:")
+    ) or (
+        failed.get("has_non_train_failure") is not True
+        and reason.startswith(f"{STAGE_ERROR_PREFIX}the train stage raised TrainingFailed:")
     ):
         return None
     # The record is loop-wide in current state. Using its own fingerprint also accepts a legacy
@@ -134,6 +140,8 @@ def after_failure(
     fingerprint: str,
     now: datetime,
     reason: str,
+    *,
+    hold_after_limit: bool = True,
 ) -> "dict[str, Any]":
     """The ``failed_train`` record after one more failure on ``fingerprint``.
 
@@ -142,7 +150,7 @@ def after_failure(
     """
     same = isinstance(previous, Mapping) and previous.get("inputs") == fingerprint
     attempts = int(previous["attempts"]) + 1 if same else 1
-    held = attempts >= ATTEMPT_LIMIT
+    held = attempts >= ATTEMPT_LIMIT and hold_after_limit
     wait = timedelta(seconds=RETRY_DELAYS_SEC[min(attempts, len(RETRY_DELAYS_SEC)) - 1])
     return {
         "inputs": fingerprint,

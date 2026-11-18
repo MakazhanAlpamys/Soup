@@ -630,10 +630,18 @@ def _check_failed_train(record: object) -> None:
 
 def _check_failed_stage(record: object) -> None:
     """Validate the loop-wide failure record for a stage that raised."""
-    _check_failure_record(record, "failed_stage")
+    if not isinstance(record, dict):
+        raise ValueError("failed_stage must be a dict or None")
+    # Older persisted records have no classification flag; accept them as legacy state.
+    has_non_train_failure = record.get("has_non_train_failure")
+    legacy = "has_non_train_failure" not in record
+    core = {key: value for key, value in record.items() if key != "has_non_train_failure"}
+    _check_failure_record(core, "failed_stage")
     assert isinstance(record, dict)
     if not str(record["reason"]).startswith("stage error: "):
         raise ValueError("failed_stage reason must start with 'stage error: '")
+    if not legacy and not isinstance(has_non_train_failure, bool):
+        raise ValueError("failed_stage has_non_train_failure must be bool")
 
 
 def _check_failure_record(record: object, field: str) -> None:

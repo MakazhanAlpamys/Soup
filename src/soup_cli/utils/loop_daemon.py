@@ -404,8 +404,12 @@ def run_once(
     trained_run = False
     train_out: dict = {}
     gate_out: dict = {"gate_verdict": "SKIPPED"}
+    pending_cost_error: Optional[_StageError] = None
     if pending is not None:
         # A candidate trained earlier whose deploy was refused: only the deploy runs again.
+        # Keep a cost-stage exception in the cycle-wide failure streak, but let the deploy retry
+        # proceed because its candidate and verdict are already recorded.
+        pending_cost_error = stage_error
         stage_error = None  # (a cost stage that raised is in the log; the retry goes ahead)
         events.go_live()
         train_out = dict(pending["train"])
@@ -510,6 +514,10 @@ def run_once(
         failure_note = str(train_out.get("failure") or train_out["notes"])
     elif stage_error is not None:
         failure_note = stage_error.text  # a gate that raised, or a deploy that did (not retried)
+    elif pending_cost_error is not None:
+        failure_note = pending_cost_error.text
+    if pending_cost_error is not None and failure_note and failure_note != pending_cost_error.text:
+        failure_note = f"{pending_cost_error.text} | {failure_note}"
     deploy_out = {**deploy_out, **({"notes": failure_note} if deploy_refused else {})}
     ledger_notes = (
         record_plan(plan, iteration_id=iteration_id, until=read_up_to)
@@ -538,6 +546,9 @@ def run_once(
             str(n)
             for n in (
                 *canary_notes,
+                pending_cost_error.text
+                if pending_cost_error is not None and not deploy_refused
+                else None,
                 train_out.get("notes"),
                 gate_out.get("notes"),
                 deploy_out.get("notes"),
@@ -614,7 +625,7 @@ def run_once(
         failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
         failed_stage=_failed_stage_after(
             state,
-            stage_error,
+            pending_cost_error or stage_error,
             held_note,
             train_out,
         ),
@@ -1026,21 +1037,41 @@ def _failed_stage_after(
         }
     if held_note is not None or train_out.get("train_held"):
         return previous
+    failed_stage_name: Optional[str] = None
+    failure_reason: Optional[str] = None
     if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
-        return after_failure(
-            previous,
-            stage_error_fingerprint(stage_error.stage),
-            datetime.now(timezone.utc),
-            stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
+        failed_stage_name = stage_error.stage
+        failure_reason = stage_error_reason(
+            stage_error.stage, stage_error.error_type, stage_error.detail
         )
-    if stage_error is None and train_out.get("failed"):
+    elif stage_error is None and train_out.get("failed"):
+        failed_stage_name = "train"
         reason = str(train_out.get("failure") or train_out.get("notes") or "training failed")
-        return after_failure(
-            previous,
-            stage_error_fingerprint("train"),
-            datetime.now(timezone.utc),
-            stage_error_reason("train", "TrainingFailed", reason),
+        failure_reason = f"stage error: the train stage failed: {reason}"
+    if failed_stage_name is not None and failure_reason is not None:
+        # The streak continues across stage types. A training-only streak remains visible and
+        # counted, but cannot hold the loop: failed_train owns its dataset-specific hold. Once
+        # any non-train stage has failed in the current streak, three failures hold the loop.
+        has_non_train_failure = (
+            failed_stage_name != "train"
+            or bool(previous and previous.get("has_non_train_failure"))
+            or bool(
+                previous
+                and "has_non_train_failure" not in previous
+                and str(previous.get("reason") or "").startswith("stage error:")
+                and not str(previous.get("reason") or "").startswith(
+                    "stage error: the train stage"
+                )
+            )
         )
+        failure = after_failure(
+            previous,
+            stage_error_fingerprint(failed_stage_name),
+            datetime.now(timezone.utc),
+            failure_reason,
+            hold_after_limit=has_non_train_failure,
+        )
+        return {**failure, "has_non_train_failure": has_non_train_failure}
     # No non-deploy failure occurred; this includes clean idle polls and deploy-only retries.
     return None
 
