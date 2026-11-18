@@ -12,8 +12,12 @@ and, when the canary is promoted, the promotion's note and its line in ``version
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -157,6 +161,303 @@ class TestKnownDontShip:
     @pytest.mark.parametrize("name", ["../x", "a/b", "a\\b", "", " ", "x" * 5 + "\n", "-lead"])
     def test_a_name_that_is_not_an_adapter_name_reads_nothing(self, cwd, name):
         assert ls.known_dont_ship(name) is None
+
+
+SHIPPED = "loop-train-ef56ab78"
+VERDICT_FILE_NAME = "manual-sft-1"
+SHIPPED_VERDICT_FILE_NAME = "shipped-sft"
+
+_WINDOWS_ONLY = frozenset({
+    "backslashes", "backslashes-trailing", "mixed-separators", "path-other-case",
+    "absolute-other-case", "junction-inside", "junction-outside",
+})
+
+#: Every way found to name the directory ``.soup-loops/adapters/<name>``: what the plan and the
+#: iteration log write, what tab completion gives, what Windows and a ``..`` detour make of it,
+#: and a link (symlink / junction) that leads there from inside or from outside the loop's tree.
+SPELLINGS = [
+    "path", "dot-slash", "trailing-slash", "dot-leaf", "dotdot-leaf", "dotdot-via-sibling",
+    "dotdot-via-verdicts", "absolute", "absolute-trailing-slash", "backslashes",
+    "backslashes-trailing", "mixed-separators", "path-other-case", "absolute-other-case",
+    "symlink-inside", "symlink-outside", "junction-inside", "junction-outside",
+]
+
+
+def _link(link: Path, target: Path, *, junction: bool) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if junction:
+        done = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, check=False,
+        )
+        if done.returncode != 0:
+            pytest.skip("this box cannot create a directory junction")
+        return
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this box cannot create a directory symlink")
+
+
+def _spell(kind: str, cwd: Path, name: str) -> str:
+    """The argument ``soup loop canary`` is given for the adapter directory ``name``."""
+    if kind in _WINDOWS_ONLY and os.name != "nt":
+        pytest.skip(f"{kind} is a Windows spelling")
+    relative = f".soup-loops/adapters/{name}"
+    absolute = str(cwd / ".soup-loops" / "adapters" / name)
+    adapter_dir = cwd / ".soup-loops" / "adapters" / name
+    spelled = {
+        "bare": name,
+        "path": relative,
+        "dot-slash": f"./{relative}",
+        "trailing-slash": f"{relative}/",
+        "dot-leaf": f"{relative}/.",
+        "dotdot-leaf": f"{relative}/../{name}",
+        "dotdot-via-sibling": f".soup-loops/adapters/other/../{name}",
+        "dotdot-via-verdicts": f".soup-loops/verdicts/../adapters/{name}",
+        "absolute": absolute,
+        "absolute-trailing-slash": absolute + os.sep,
+        "backslashes": relative.replace("/", "\\"),
+        "backslashes-trailing": relative.replace("/", "\\") + "\\",
+        "mixed-separators": f".soup-loops/adapters\\{name}",
+        "path-other-case": relative.upper(),
+        "absolute-other-case": absolute.upper(),
+    }
+    if kind in spelled:
+        return spelled[kind]
+    junction = kind.startswith("junction")
+    if kind.endswith("-inside"):
+        link = cwd / ".soup-loops" / "adapters" / "alias"
+        _link(link, adapter_dir, junction=junction)
+        return ".soup-loops/adapters/alias"
+    link = cwd / "links" / "alias"
+    _link(link, adapter_dir, junction=junction)
+    return "links/alias"
+
+
+def _ship_verdict_file(cwd, name, decision):
+    verdicts = cwd / ".soup-loops" / "verdicts"
+    verdicts.mkdir(parents=True, exist_ok=True)
+    (verdicts / f"{name}.json").write_text(json.dumps({"decision": decision}), encoding="utf-8")
+
+
+def _tree(cwd):
+    """The adapter directories, a sibling directory and the verdicts directory of a loop."""
+    for name in (ADAPTER, VERDICT_FILE_NAME, SHIPPED, SHIPPED_VERDICT_FILE_NAME, "other"):
+        (cwd / ".soup-loops" / "adapters" / name).mkdir(parents=True)
+    (cwd / ".soup-loops" / "verdicts").mkdir(exist_ok=True)
+
+
+@pytest.fixture(params=["iteration log", "verdict file"])
+def dont_ship(request, cwd):
+    """An adapter the loop knows is DON'T SHIP, found in the log or in a verdict file.
+
+    Returns ``(name, why)``: the adapter's name and what ``known_dont_ship`` says about it.
+    """
+    _tree(cwd)
+    if request.param == "iteration log":
+        _write_log(cwd, [_line()])
+        why = (
+            f"its last verdict is DON'T SHIP (iteration {ITERATION}: "
+            "General benchmark(s) regressed past 5.00%)"
+        )
+        return ADAPTER, why
+    _ship_verdict_file(cwd, VERDICT_FILE_NAME, "DON'T SHIP")
+    return VERDICT_FILE_NAME, (
+        f"its verdict file .soup-loops/verdicts/{VERDICT_FILE_NAME}.json says DON'T SHIP"
+    )
+
+
+@pytest.fixture
+def loop_with_verdicts(cwd):
+    """A loop where ``ADAPTER`` and ``VERDICT_FILE_NAME`` are DON'T SHIP; two others are SHIP."""
+    _tree(cwd)
+    _write_log(cwd, [
+        _line(),
+        _line("iter-20261116T120000-cccccccc", decision="SHIP", outcome="canary", adapter=SHIPPED),
+    ])
+    _ship_verdict_file(cwd, VERDICT_FILE_NAME, "DON'T SHIP")
+    _ship_verdict_file(cwd, SHIPPED_VERDICT_FILE_NAME, "SHIP")
+    return cwd
+
+
+def _canary(*args):
+    result = CliRunner().invoke(loop_app, ["canary", *args])
+    return result, _plain(result.output)
+
+
+def _seed_state(cwd, **kwargs):
+    write_state(_state(**kwargs), str(cwd / ".soup" / "loop.yaml"))
+
+
+def _refusal_tail(why):
+    return (
+        f": {why}. A promoted canary answers everyone's requests; pass --allow-dont-ship to "
+        "canary it anyway (the override is recorded)"
+    )
+
+
+class TestEverySpellingOfTheAdapterDirectory:
+    """The refusal must not depend on how the adapter is spelled (smoke P2-S57).
+
+    ``soup loop canary <run>`` was refused, ``soup loop canary .soup-loops/adapters/<run>`` (the
+    spelling tab completion gives, and the one the plan and the iteration log use) was not.
+    """
+
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    def test_the_lookup_sees_through_it(self, cwd, dont_ship, kind):
+        name, why = dont_ship
+
+        assert ls.known_dont_ship(_spell(kind, cwd, name)) == why
+
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    def test_the_command_refuses_it_and_changes_nothing(self, cwd, dont_ship, kind):
+        name, why = dont_ship
+        spelling = _spell(kind, cwd, name)
+        _seed_state(cwd)
+
+        result, text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "refusing to canary" in text
+        assert _refusal_tail(why) in text  # starts at the colon after the path: Rich-fold safe
+        # A longer path is folded mid-word by the console, and a trailing backslash is doubled by
+        # ``for_terminal`` (``rich.markup.escape`` does that so it cannot escape a closing tag).
+        if len(spelling) <= 60 and not spelling.endswith("\\"):
+            assert f"refusing to canary {spelling}{_refusal_tail(why)}" in text
+        state = read_state(str(cwd / ".soup" / "loop.yaml"))
+        assert state.canary_active is None and state.canary_override is None
+        assert not (cwd / ".soup-loops" / "progress.jsonl").exists()
+
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    def test_the_override_accepts_it_and_records_what_was_typed(self, cwd, dont_ship, kind):
+        name, why = dont_ship
+        spelling = _spell(kind, cwd, name)
+        _seed_state(cwd)
+
+        result, _text = _canary(spelling, "--traffic", "5%", "--allow-dont-ship")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        state = read_state(str(cwd / ".soup" / "loop.yaml"))
+        assert state.canary_active == spelling
+        assert state.canary_override == (
+            f"{spelling} was canaried over a DON'T SHIP verdict with --allow-dont-ship ({why})"
+        )
+
+    @pytest.mark.parametrize("kind", ["path", "dot-slash", "absolute", "dotdot-leaf"])
+    def test_a_removed_adapter_directory_is_still_that_adapter(self, cwd, dont_ship, kind):
+        name, why = dont_ship
+        spelling = _spell(kind, cwd, name)
+        (cwd / ".soup-loops" / "adapters" / name).rmdir()
+
+        assert ls.known_dont_ship(spelling) == why
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows folds the case of a path")
+    def test_the_case_of_the_directories_is_folded_when_the_adapter_is_gone(self, cwd, dont_ship):
+        # nothing of the adapters directory exists to give the case back (a hand-run
+        # ``soup ship --output .soup-loops/verdicts/<name>.json`` never made one)
+        name, why = dont_ship
+        shutil.rmtree(cwd / ".soup-loops" / "adapters")
+
+        assert ls.known_dont_ship(f".soup-loops/ADAPTERS/{name}") == why
+
+
+class TestSpellingsThatAreNotTheAdapter:
+    """What the path mapping must leave alone: another adapter, another directory, no verdict."""
+
+    @pytest.mark.parametrize("kind", ["bare", "path", "dot-slash", "trailing-slash", "absolute",
+                                      "dotdot-leaf", "symlink-inside"])
+    @pytest.mark.parametrize("name", [SHIPPED, SHIPPED_VERDICT_FILE_NAME])
+    def test_an_adapter_with_a_ship_verdict_is_accepted(self, loop_with_verdicts, kind, name):
+        cwd = loop_with_verdicts
+        spelling = _spell(kind, cwd, name)
+        _seed_state(cwd)
+
+        assert ls.known_dont_ship(spelling) is None
+        result, text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        state = read_state(str(cwd / ".soup" / "loop.yaml"))
+        assert state.canary_active == spelling and state.canary_override is None
+
+    @pytest.mark.parametrize("target", [ADAPTER, VERDICT_FILE_NAME])
+    @pytest.mark.parametrize("where", [
+        "elsewhere", "./elsewhere", ".soup-loops", ".soup-loops/verdicts",
+        ".soup-loops/adapters-old", ".soup-loops/adapters/other",
+        "other-root/.soup-loops/adapters",
+    ])
+    def test_the_same_last_component_elsewhere_is_a_different_adapter(
+        self, loop_with_verdicts, target, where
+    ):
+        cwd = loop_with_verdicts
+        (cwd / where).mkdir(parents=True, exist_ok=True)
+        spelling = f"{where}/{target}"
+        _seed_state(cwd)
+
+        assert ls.known_dont_ship(spelling) is None
+        result, text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        state = read_state(str(cwd / ".soup" / "loop.yaml"))
+        assert state.canary_active == spelling and state.canary_override is None
+
+    @pytest.mark.parametrize("target", [ADAPTER, VERDICT_FILE_NAME])
+    def test_the_same_last_component_in_an_absolute_path_elsewhere_is_a_different_adapter(
+        self, loop_with_verdicts, target
+    ):
+        cwd = loop_with_verdicts
+        (cwd / "elsewhere").mkdir()
+        spelling = str(cwd / "elsewhere" / target)
+
+        assert ls.known_dont_ship(spelling) is None
+
+    @pytest.mark.parametrize("kind", ["bare", "path", "dot-slash", "absolute"])
+    def test_an_adapter_with_no_verdict_at_all_is_accepted(self, loop_with_verdicts, kind):
+        cwd = loop_with_verdicts
+        (cwd / ".soup-loops" / "adapters" / "never-trained").mkdir()
+        spelling = _spell(kind, cwd, "never-trained")
+        _seed_state(cwd)
+
+        assert ls.known_dont_ship(spelling) is None
+        result, _text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert read_state(str(cwd / ".soup" / "loop.yaml")).canary_override is None
+
+    @pytest.mark.parametrize("spelling", [
+        ".soup-loops/adapters", ".soup-loops/adapters/", ".soup-loops/adapters/.",
+        ".soup-loops/adapters/other/..", ".soup-loops", ".", "..", "./",
+    ])
+    def test_the_adapter_directory_itself_and_its_parents_are_no_adapter(
+        self, loop_with_verdicts, spelling
+    ):
+        assert ls.known_dont_ship(spelling) is None
+
+    def test_a_directory_whose_name_is_no_adapter_name_reads_nothing(self, loop_with_verdicts):
+        cwd = loop_with_verdicts
+        (cwd / ".soup-loops" / "adapters" / "-odd").mkdir()
+        _ship_verdict_file(cwd, "-odd", "DON'T SHIP")
+
+        assert ls.known_dont_ship(".soup-loops/adapters/-odd") is None
+
+    def test_a_path_with_a_nul_byte_is_left_to_the_policy_check(self, loop_with_verdicts):
+        cwd = loop_with_verdicts
+        spelling = f".soup-loops/adapters/{ADAPTER}\x00"
+        _seed_state(cwd)
+
+        assert ls.known_dont_ship(spelling) is None
+        result, text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "invalid canary policy: canary must be a non-empty NUL-free string or None" in text
+
+    @pytest.mark.skipif(os.name != "nt", reason="a drive letter is a Windows thing")
+    def test_a_path_on_another_drive_is_no_adapter_and_raises_nothing(self, loop_with_verdicts):
+        drive = os.path.splitdrive(os.path.realpath("."))[0].upper()
+        other = "Y:" if drive == "Z:" else "Z:"
+
+        assert ls.known_dont_ship(f"{other}\\.soup-loops\\adapters\\{ADAPTER}") is None
 
 
 class TestTheCommand:
