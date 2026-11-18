@@ -365,10 +365,8 @@ def profile_from_config(
     The entry point for a program that wants the estimate without running ``soup train``.
     It builds the same input as the train pre-flight
     (``hardware_fit.hardware_fit_input_from_config``, #2049), with one exception: the
-    pre-flight passes an explicit ``kbit_fp32`` on a CUDA card without bf16 hardware
-    (``commands/train.py``), which this function cannot take. The ``auto_mixed_precision``
-    fp16-pick case (#3044) is decided inside the shared builder, so both paths price
-    fp32 embeddings and head the same way. When the run cannot be priced,
+    pre-flight passes ``kbit_fp32`` on a CUDA card without bf16 hardware
+    (``commands/train.py``), which this function cannot take. When the run cannot be priced,
     the :class:`~soup_cli.utils.hardware_fit.FitUnavailable` naming the field that stops
     it (#2306). ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto``
     resolves on. ``on_hub_request`` is called just before the first request to the
