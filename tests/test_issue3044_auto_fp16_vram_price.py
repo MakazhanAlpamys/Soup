@@ -92,7 +92,6 @@ def test_a_card_without_a_readable_pick_keeps_the_old_answer(monkeypatch, bf16_c
     assert inp.kbit_fp32 is False
 
 
-def test_the_shared_helper_names_the_question():
-    assert hardware_fit._auto_fp16_pick_keeps_fp32(
-        _cfg(), _cfg().training
-    ) is True
+def test_the_shared_helper_names_the_question(bf16_card_picking_fp16):
+    cfg = _cfg()
+    assert hardware_fit._auto_fp16_pick_keeps_fp32(cfg, cfg.training) is True
