@@ -130,7 +130,7 @@ class TestTheScannerSeesWhatItIsMeantTo:
             "view = mmap.mmap(handle, 0)",
             "os.fsync(handle)",
             "os.link(first, second)",
-            "os.symlink(first, second)",
+            "link = make_symlink(first)",
             "path.chmod(0o600)",
             "inode = info.st_ino",
         ],
@@ -326,6 +326,7 @@ class TestTheStepTurnsTheListIntoPytestOptions:
         self, tmp_path: Path
     ) -> None:
         result, _ = _run_step(tmp_path, b"tests/test_a.py\ntests/test_b.py\n")
+        # ansi-ok: the output of a bash script run in a subprocess, not of a Rich console
         assert "::notice title=macOS pull request cell::2 heavy test files" in result.stdout
         assert "nightly, release and manual runs run them on macOS too" in result.stdout
 
@@ -350,6 +351,7 @@ class TestTheStepTurnsTheListIntoPytestOptions:
     ) -> None:
         result, env = _run_step(tmp_path, f"tests/test_ok.py\n{line}\n".encode())
         assert result.returncode != 0, (line, result.stdout, result.stderr)
+        # ansi-ok: the output of a bash script run in a subprocess, not of a Rich console
         assert "::error title=macOS skip list::not a test file name" in result.stdout, line
         assert "pwned" not in env
 
