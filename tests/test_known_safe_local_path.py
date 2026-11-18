@@ -18,6 +18,7 @@ from rich.console import Console
 from soup_cli.utils.trust_remote import (
     KNOWN_SAFE_PREFIXES,
     is_known_safe,
+    model_requires_trust_remote_code,
     resolve_trust_remote_code,
 )
 from tests.conftest import strip_ansi
@@ -97,3 +98,68 @@ def test_not_requested_stays_silent_for_local_directory(workdir, prefix):
 
     assert out is False
     assert text == ""
+
+
+# --- other spellings of a local path (one or two prefixes each) ------------
+
+SPELLING_PREFIXES = ("Qwen/", "meta-llama/")
+
+
+@pytest.mark.parametrize("prefix", SPELLING_PREFIXES)
+def test_trailing_slash_spelling_is_not_known_safe(workdir, prefix):
+    name = f"{prefix}x"
+    _make_local_checkpoint(name)
+
+    assert not is_known_safe(f"{name}/")
+
+
+@pytest.mark.parametrize("prefix", SPELLING_PREFIXES)
+def test_regular_file_is_not_known_safe(workdir, prefix):
+    """``os.path.exists``, not ``isdir``: a file on disk is a local path too."""
+    name = f"{prefix}x"
+    Path(prefix).mkdir()
+    Path(name).write_text("not a checkpoint", encoding="utf-8")
+
+    assert not is_known_safe(name)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("prefix", SPELLING_PREFIXES)
+def test_symlink_to_directory_is_not_known_safe(workdir, prefix):
+    target = workdir / "real-checkpoint"
+    target.mkdir()
+    name = f"{prefix}x"
+    Path(prefix).mkdir()
+    Path(name).symlink_to(target, target_is_directory=True)
+
+    assert not is_known_safe(name)
+
+
+def test_dot_slash_spelling_is_not_known_safe(workdir):
+    """Control: never matched a prefix, before or after."""
+    _make_local_checkpoint("Qwen/x")
+
+    assert not is_known_safe("./Qwen/x")
+
+
+def test_absolute_path_is_not_known_safe(workdir):
+    """Control: never matched a prefix, before or after."""
+    _make_local_checkpoint("Qwen/x")
+
+    assert not is_known_safe(str((workdir / "Qwen" / "x").resolve()))
+
+
+# --- the flag stays the gate -------------------------------------------------
+
+
+def test_local_custom_code_without_the_flag_is_refused(workdir):
+    """Control: the change touches only the panel; the opt-in still decides."""
+    name = "Qwen/x"
+    _make_local_checkpoint(name)
+    requires = model_requires_trust_remote_code(name)
+    assert requires is True
+
+    with pytest.raises(ValueError, match="--trust-remote-code"):
+        resolve_trust_remote_code(
+            name, requested=False, console=None, requires_remote_code=requires
+        )
