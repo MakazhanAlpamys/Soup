@@ -686,8 +686,16 @@ def _read_json_object(path: str) -> dict:
             f"the verdict or evidence file is larger than {MAX_POINTER_FILE_BYTES} bytes"
         )
     try:
-        payload = json.loads(data.decode("utf-8"), parse_constant=_refuse_constant)
-    except (ValueError, RecursionError):  # _LineError is a ValueError too
+        payload = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_no_duplicate_keys,
+            parse_constant=_refuse_constant,
+        )
+    except _LineError as exc:
+        if str(exc) == "repeats a key":
+            raise ValueError("the verdict or evidence file repeats a key") from None
+        raise ValueError("the verdict or evidence file is not valid JSON") from None
+    except (ValueError, RecursionError):
         raise ValueError("the verdict or evidence file is not valid JSON") from None
     if not isinstance(payload, dict):
         raise ValueError("the verdict or evidence file must be a JSON object")
