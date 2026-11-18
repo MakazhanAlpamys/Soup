@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -15,6 +16,11 @@ from soup_cli.data.validator import extended_stats
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
+
+
+def _collapsed(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
+    return " ".join(strip_ansi(text).split())
 
 
 # --- Reverse format conversion tests ---
@@ -229,3 +235,108 @@ def test_stats_missing_file():
     """Stats on nonexistent file should fail."""
     result = runner.invoke(app, ["data", "stats", "nonexistent.jsonl"])
     assert result.exit_code == 1
+
+
+# --- Alpaca refusal at the commands (#2981) ---
+
+
+def _chatml_row(*turns: tuple[str, str]) -> dict:
+    """Build a chatml row from (role, content) turns."""
+    return {"messages": [{"role": role, "content": content} for role, content in turns]}
+
+
+_SINGLE_TURN = _chatml_row(("user", "What is 2+2?"), ("assistant", "4"))
+_TWO_TURNS = _chatml_row(
+    ("user", "What is 2+2?"),
+    ("assistant", "4"),
+    ("user", "And what is 3+3?"),
+    ("assistant", "6"),
+)
+
+
+@pytest.fixture
+def mixed_chatml_file(tmp_path: Path) -> Path:
+    """One single-turn row and one two-turn row, as chatml."""
+    filepath = tmp_path / "mixed.jsonl"
+    with open(filepath, "w") as f:
+        for row in (_SINGLE_TURN, _TWO_TURNS):
+            f.write(json.dumps(row) + "\n")
+    return filepath
+
+
+@pytest.fixture
+def multiturn_chatml_file(tmp_path: Path) -> Path:
+    """Two rows, both with two exchanges, as chatml."""
+    filepath = tmp_path / "multiturn.jsonl"
+    with open(filepath, "w") as f:
+        for row in (_TWO_TURNS, _TWO_TURNS):
+            f.write(json.dumps(row) + "\n")
+    return filepath
+
+
+def test_convert_alpaca_counts_multiturn_row_as_failed(mixed_chatml_file, tmp_path):
+    """A two-turn row is counted as failed, not shortened to its last exchange."""
+    output = str(tmp_path / "converted.jsonl")
+    result = runner.invoke(
+        app, ["data", "convert", str(mixed_chatml_file), "--to", "alpaca", "-o", output]
+    )
+    assert result.exit_code == 0
+    assert "1 rows failed to convert." in _collapsed(result.output)
+
+    with open(output) as f:
+        lines = f.readlines()
+    assert len(lines) == 1
+    only = json.loads(lines[0])
+    assert only["instruction"] == "What is 2+2?"
+    assert only["output"] == "4"
+
+
+def test_convert_alpaca_all_multiturn_rows_fail(multiturn_chatml_file, tmp_path):
+    """When every row has more turns than alpaca holds, convert stops."""
+    output = str(tmp_path / "converted.jsonl")
+    result = runner.invoke(
+        app, ["data", "convert", str(multiturn_chatml_file), "--to", "alpaca", "-o", output]
+    )
+    assert result.exit_code == 1
+    assert "All rows failed to convert." in _collapsed(result.output)
+    assert not Path(output).exists()
+
+
+@patch("soup_cli.commands.data._hf_download_dataset")
+def test_download_alpaca_reports_left_out_rows(mock_download, tmp_path, monkeypatch):
+    """download --format alpaca says how many rows it left out."""
+    monkeypatch.chdir(tmp_path)
+    mock_download.return_value = [_SINGLE_TURN, _TWO_TURNS]
+    output = tmp_path / "downloaded.jsonl"
+
+    result = runner.invoke(
+        app,
+        ["data", "download", "test/dataset", "--format", "alpaca", "-o", str(output)],
+    )
+    assert result.exit_code == 0
+    assert (
+        "1 rows were left out because they do not convert to alpaca."
+        in _collapsed(result.output)
+    )
+
+    lines = output.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 1
+    only = json.loads(lines[0])
+    assert only["instruction"] == "What is 2+2?"
+    assert only["output"] == "4"
+
+
+@patch("soup_cli.commands.data._hf_download_dataset")
+def test_download_alpaca_all_rows_left_out_fails(mock_download, tmp_path, monkeypatch):
+    """When no downloaded row converts to alpaca, download stops with exit 1."""
+    monkeypatch.chdir(tmp_path)
+    mock_download.return_value = [_TWO_TURNS, _TWO_TURNS]
+    output = tmp_path / "downloaded.jsonl"
+
+    result = runner.invoke(
+        app,
+        ["data", "download", "test/dataset", "--format", "alpaca", "-o", str(output)],
+    )
+    assert result.exit_code == 1
+    assert "All rows failed to convert." in _collapsed(result.output)
+    assert not output.exists()

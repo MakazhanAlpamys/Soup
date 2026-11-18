@@ -1278,6 +1278,10 @@ soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
+Alpaca holds one exchange per row, so `soup data convert --to alpaca` counts a
+conversation with more turns than that as failed instead of shortening it to
+its last exchange.
+
 `soup data filter --perplexity` and `--score-only` require torch and transformers
 (install with `pip install "soup-cli[train]"`). If either package cannot be
 imported, the command exits 1 with installation instructions before writing an

@@ -1727,10 +1727,18 @@ def download_dataset(
                     result = messages_to_format(messages, fmt)
                     if result is not None:
                         converted.append(result)
-            if converted:
-                data = converted
+            if not converted:
+                console.print("[red]All rows failed to convert.[/]")
+                raise typer.Exit(1)
+            left_out = len(data) - len(converted)
+            data = converted
+            console.print(
+                f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+            )
+            if left_out:
                 console.print(
-                    f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+                    f"[yellow]{left_out} rows were left out because they do "
+                    f"not convert to {for_terminal(fmt)}.[/]"
                 )
 
     # Apply samples limit if data came from non-streaming path
