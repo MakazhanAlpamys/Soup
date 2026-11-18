@@ -422,10 +422,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
-# .soup/loop.log, and the same waits apply to that stage (5 minutes, 30 minutes, then held until
-# `soup loop resume`); the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy
-# that raises is retried like a refused deploy (three attempts). Ctrl+C and SystemExit still stop
-# the daemon.
+# .soup/loop.log, and raised-stage failures share one loop-wide counter: 5 minutes after the first,
+# 30 minutes after the second, then held until `soup loop resume` after the third, even when stages
+# alternate. This separate retry record does not replace a dataset-specific failed-training retry;
+# the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy that raises is retried
+# like a refused deploy (three attempts). Ctrl+C and SystemExit still stop the daemon.
 # Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
 # so a file in the project directory named like a library is not imported by it, and the loop's
 # JSONL logs are created owner-only (0600) on POSIX; on Windows the folder's permissions apply.

@@ -410,6 +410,14 @@ class TestStatusAndResume:
     def test_status_shows_nothing_without_a_failure(self, cwd):
         assert "train_retry" not in self._status(cwd, _state())
 
+    def test_status_shows_train_and_stage_retries_separately(self, cwd):
+        stage = {**_print(), "reason": "stage error: the harvest stage raised ValueError"}
+
+        text = self._status(cwd, _state(failed_train=_print(), failed_stage=stage))
+
+        assert "train_retry" in text and "failed 1 time on the same inputs" in text
+        assert "stage_retry" in text and "the harvest stage raised ValueError" in text
+
     def test_a_hostile_reason_prints_no_control_bytes(self, cwd):
         # the state refuses control characters, so the reason reaches the terminal clean
         write_state(_state(failed_train=_print()), str(cwd / ".soup" / "loop.yaml"))
@@ -419,13 +427,15 @@ class TestStatusAndResume:
 
     def test_resume_clears_a_hold_on_a_running_loop(self, cwd):
         path = str(cwd / ".soup" / "loop.yaml")
-        write_state(_state(failed_train=_print(attempts=3, held=True)), path)
+        stage = {**_print(attempts=3, held=True), "reason": "stage error: harvest failed"}
+        write_state(_state(failed_train=_print(attempts=3, held=True), failed_stage=stage), path)
 
         result = self._runner().invoke(loop_app, ["resume"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "failed-train hold cleared" in _plain(result.output)
+        assert "retry hold cleared" in _plain(result.output)
         assert read_state(path).failed_train is None
+        assert read_state(path).failed_stage is None
         assert read_state(path).status == "running"
 
     def test_resume_of_a_paused_loop_resumes_and_clears(self, cwd):
@@ -436,7 +446,7 @@ class TestStatusAndResume:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         text = _plain(result.output)
-        assert "loop resumed" in text and "failed-train hold cleared" in text
+        assert "loop resumed" in text and "retry hold cleared" in text
         assert read_state(path).status == "running" and read_state(path).failed_train is None
 
     def test_resume_without_a_hold_is_as_before(self, cwd):

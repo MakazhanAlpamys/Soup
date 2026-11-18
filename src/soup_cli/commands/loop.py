@@ -69,6 +69,7 @@ from soup_cli.utils.loop_log import (
     withdrawn_line,
 )
 from soup_cli.utils.loop_retry import describe as describe_failed_train
+from soup_cli.utils.loop_retry import is_stage_error
 from soup_cli.utils.loop_spawn import python_child_argv
 from soup_cli.utils.loop_state import (
     ALL_LINEAR,
@@ -785,11 +786,23 @@ def status_cmd() -> None:
         table.add_row(
             "last_idle_poll", for_terminal(f"{state.last_idle['at']}: {state.last_idle['reason']}")
         )
-    retry_text = describe_failed_train(state.failed_train)
+    retry_text = describe_failed_train(
+        None if state.failed_train is not None and is_stage_error(state.failed_train)
+        else state.failed_train
+    )
     if retry_text:
         # A training run that failed is not repeated on the same inputs (review 5, F3): it waits,
         # then holds until the data, the recipe or the base model changes, or `resume` clears it.
         table.add_row("train_retry", for_terminal(retry_text))
+    stage_retry = describe_failed_train(state.failed_stage)
+    if (
+        stage_retry is None
+        and state.failed_train is not None
+        and is_stage_error(state.failed_train)
+    ):
+        stage_retry = describe_failed_train(state.failed_train)  # v0.78.0 state compatibility
+    if stage_retry:
+        table.add_row("stage_retry", for_terminal(stage_retry))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("min_new_edits", str(state.min_new_edits))
     table.add_row("min_new_rated", str(state.min_new_rated))
@@ -833,27 +846,28 @@ def pause_cmd() -> None:
 def resume_cmd() -> None:
     """Resume a paused loop (next watch iteration picks up automatically).
 
-    Also clears a failed-train hold (``soup loop status`` shows it as ``train_retry``): the next
-    cycle trains again on the same inputs, whether the loop was paused or running.
+    Also clears remembered train and raised-stage retries (``train_retry`` / ``stage_retry``): the
+    next cycle tries again, whether the loop was paused or running.
     """
     state = _safe_read()
-    held = state.failed_train is not None
+    held = state.failed_train is not None or state.failed_stage is not None
     if state.status == "paused":
         _update(
             lambda fresh: replace(
                 fresh.with_status("running") if fresh.status == "paused" else fresh,
                 failed_train=None,
+                failed_stage=None,
             )
         )
         console.print("[green]loop resumed[/]")
     elif held:
-        _update(lambda fresh: replace(fresh, failed_train=None))
+        _update(lambda fresh: replace(fresh, failed_train=None, failed_stage=None))
     else:
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
     if held:
         console.print(
-            "[green]failed-train hold cleared:[/] the next cycle trains again on the same inputs"
+            "[green]retry hold cleared:[/] the next loop cycle tries again"
         )
 
 

@@ -353,9 +353,15 @@ def run_once(
         )
     # A record of a stage that raised (its back-off or hold) is judged before any stage runs, so a
     # cost stage that keeps raising is not called again either. A deploy retry is not held by it.
+    legacy_stage_failure = (
+        state.failed_train if state.failed_train is not None and is_stage_error(state.failed_train)
+        else None
+    )
     held_note = (
         None if state.pending_deploy is not None
-        else stage_error_hold(state.failed_train, datetime.now(timezone.utc))
+        else stage_error_hold(
+            state.failed_stage or legacy_stage_failure, datetime.now(timezone.utc)
+        )
     )
     stage_error: Optional[_StageError] = None
     estimated = 0.0
@@ -562,6 +568,7 @@ def run_once(
                 or None
             ),
             failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
+            failed_stage=_failed_stage_after(state, stage_error, held_note, pending),
             last_idle={"at": _utc_iso(), "reason": reason},
         )
         return idle_state, _noted(record, log), BudgetDecision(
@@ -603,6 +610,7 @@ def run_once(
         ),
         last_failure=(failure_note or "")[:500] or None,
         failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
+        failed_stage=_failed_stage_after(state, stage_error, held_note, pending),
     )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
@@ -970,20 +978,15 @@ def _failed_train_after(
     retried a deploy leaves it as it is. A custom train stage that reports no fingerprint
     (``train_inputs``) is never held.
 
-    A stage that raised (the cost, harvest, train or gate stage) counts as a failure of its own
-    fingerprint, the stage's name; a cycle that got through every stage clears such a record.
+    Stage exceptions live in ``failed_stage`` so they cannot replace a dataset-specific train
+    failure. Legacy stage-error records in ``failed_train`` are cleared as they are migrated.
     """
+    if state.failed_train is not None and is_stage_error(state.failed_train):
+        return None
     if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
-        return after_failure(
-            state.failed_train,
-            stage_error_fingerprint(stage_error.stage),
-            datetime.now(timezone.utc),
-            stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
-        )
+        return state.failed_train
     if not ran_train_stage or train_out.get("train_held"):
         return state.failed_train
-    if state.failed_train is not None and is_stage_error(state.failed_train):
-        return None  # every stage ran this cycle without raising
     fingerprint = train_out.get("train_inputs")
     if train_out.get("failed") and isinstance(fingerprint, str):
         reason = str(train_out.get("failure") or train_out.get("notes") or "train failed")
@@ -991,6 +994,34 @@ def _failed_train_after(
     if _training_ran(train_out):
         return None
     return state.failed_train
+
+
+def _failed_stage_after(
+    state: LoopState,
+    stage_error: "Optional[_StageError]",
+    held_note: Optional[str],
+    pending_deploy: Optional[Mapping[str, object]],
+) -> Optional[dict]:
+    """Advance, preserve, or clear the loop-wide consecutive stage-error record."""
+    previous = state.failed_stage
+    if previous is None and state.failed_train is not None and is_stage_error(state.failed_train):
+        # v0.78.0 stored stage errors in failed_train with a stage-specific fingerprint.
+        # Normalize only the in-memory record; the next state write emits failed_stage.
+        previous = {
+            **state.failed_train,
+            "inputs": stage_error_fingerprint("legacy"),
+        }
+    if held_note is not None or pending_deploy is not None:
+        return previous
+    if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
+        return after_failure(
+            previous,
+            stage_error_fingerprint(stage_error.stage),
+            datetime.now(timezone.utc),
+            stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
+        )
+    # A cycle made it through the failure-prone stages; start a fresh streak next time.
+    return None
 
 
 def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:

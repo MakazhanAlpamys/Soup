@@ -155,7 +155,8 @@ def test_the_failure_is_remembered_for_the_wait_then_hold_rule(cwd, stage):
 
     new_state, _, _ = run_once(_state(), pipeline.config())
 
-    remembered = new_state.failed_train
+    remembered = new_state.failed_stage
+    assert new_state.failed_train is None
     assert remembered["attempts"] == 1 and remembered["held"] is False
     assert remembered["retry_after"] is not None
     assert remembered["reason"].startswith(f"stage error: the {stage} stage raised ValueError")
@@ -177,13 +178,13 @@ def test_the_same_stage_failing_again_waits_then_holds(cwd, stage):
     assert f"the {stage} stage raised ValueError" in state.last_failure  # still in view
 
     for expected_attempts in (2, 3):
-        state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
         before = len(pipeline.calls)
         state, _, _ = run_once(state, config)
         assert len(pipeline.calls) > before  # the wait was over: it tried again
-        assert state.failed_train["attempts"] == expected_attempts
+        assert state.failed_stage["attempts"] == expected_attempts
 
-    assert state.failed_train["held"] is True and state.failed_train["retry_after"] is None
+    assert state.failed_stage["held"] is True and state.failed_stage["retry_after"] is None
     before = len(pipeline.calls)
     state, _, held = run_once(state, config)
     assert len(pipeline.calls) == before
@@ -198,10 +199,10 @@ def test_the_first_wait_is_five_minutes_and_the_second_thirty(cwd):
     config = pipeline.config()
 
     state, _, _ = run_once(state, config)
-    first = state.failed_train
-    state = replace(state, failed_train={**first, "retry_after": PAST})
+    first = state.failed_stage
+    state = replace(state, failed_stage={**first, "retry_after": PAST})
     state, _, _ = run_once(state, config)
-    second = state.failed_train
+    second = state.failed_stage
 
     def wait_seconds(record):
         last = datetime.fromisoformat(record["last_at"])
@@ -210,26 +211,82 @@ def test_the_first_wait_is_five_minutes_and_the_second_thirty(cwd):
     assert wait_seconds(first) == 300.0 and wait_seconds(second) == 1800.0
 
 
-def test_a_different_stage_failing_starts_the_count_again(cwd):
+def test_a_different_stage_failure_continues_the_loop_wide_count(cwd):
     state = _state()
     state, _, _ = run_once(state, Pipeline(raising="harvest").config())
-    state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
     state, _, _ = run_once(state, Pipeline(raising="gate").config())
 
-    assert state.failed_train["attempts"] == 1
-    assert "the gate stage raised" in state.failed_train["reason"]
+    assert state.failed_stage["attempts"] == 2
+    assert "the gate stage raised" in state.failed_stage["reason"]
+
+
+def test_alternating_stage_errors_reach_the_loop_hold(cwd):
+    state = _state()
+    for stage in ("harvest", "train", "harvest"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        if state.failed_stage is not None and not state.failed_stage["held"]:
+            state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3
+    assert state.failed_stage["held"] is True
+    assert state.failed_stage["retry_after"] is None
+    assert "the harvest stage raised" in state.failed_stage["reason"]
+
+
+def test_stage_error_does_not_replace_pending_train_failure(cwd):
+    train_failure = {
+        "inputs": "a" * 64, "attempts": 2, "last_at": PAST, "retry_after": PAST,
+        "held": False, "reason": "train failed (exit code 1)",
+    }
+
+    state, _, _ = run_once(_state(failed_train=train_failure), Pipeline(raising="harvest").config())
+
+    assert state.failed_train == train_failure
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 1
+
+
+def test_v078_stage_failure_state_is_migrated_without_losing_attempts(cwd):
+    import hashlib
+
+    old_record = {
+        "inputs": hashlib.sha256(b"loop stage error:harvest").hexdigest(), "attempts": 2,
+        "last_at": PAST,
+        "retry_after": PAST, "held": False,
+        "reason": "stage error: the harvest stage raised ValueError",
+    }
+
+    state, _, _ = run_once(_state(failed_train=old_record), Pipeline(raising="train").config())
+
+    assert state.failed_train is None
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3
+    assert state.failed_stage["held"] is True
+    assert "the train stage raised" in state.failed_stage["reason"]
+
+
+def test_v078_state_without_failed_stage_field_loads_with_default(cwd):
+    path = cwd / ".soup" / "loop.yaml"
+    write_state(_state(), str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("failed_stage")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert read_state(str(path)).failed_stage is None
 
 
 def test_a_cycle_that_gets_through_every_stage_clears_the_record(cwd):
     pipeline = Pipeline(raising="harvest")
     state = _state()
     state, _, _ = run_once(state, pipeline.config())
-    state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
     state, _, _ = run_once(state, Pipeline().config())
 
-    assert state.failed_train is None
+    assert state.failed_stage is None
 
 
 def test_a_train_failure_record_is_not_taken_for_a_stage_error(cwd):
@@ -265,10 +322,10 @@ def test_a_raising_harvest_does_not_stop_a_watching_daemon(cwd):
     saved = read_state(str(cwd / ".soup" / "loop.yaml"))
     assert saved.status == "stopped"  # the natural end (max_iterations), not a crash
     assert "the harvest stage raised ValueError" in saved.last_failure
-    assert saved.failed_train["attempts"] == 1
+    assert saved.failed_stage["attempts"] == 1
     assert [line["outcome"] for line in _lines(cwd)] == ["promoted", "failed"]
     assert len([name for name in os.listdir(cwd / ".soup-loops") if name.startswith("iter-")]) == 1
-    assert final_state.failed_train["attempts"] == 1
+    assert final_state.failed_stage["attempts"] == 1
 
 
 def test_the_traceback_goes_to_the_daemon_log(cwd, caplog):
@@ -287,20 +344,20 @@ def test_the_message_is_one_clean_short_line(cwd):
 
     new_state, _, _ = run_once(_state(), pipeline.config())
 
-    reason = new_state.failed_train["reason"]
+    reason = new_state.failed_stage["reason"]
     assert "\n" not in reason and "\x1b" not in reason and len(reason) <= 300
     assert len(new_state.last_failure) <= 500 and "\x1b" not in new_state.last_failure
 
 
 class TestWhatStatusSays:
-    """``soup loop status`` shows the same record in its ``train_retry`` row."""
+    """``soup loop status`` shows training and raised-stage retries independently."""
 
     def test_a_waiting_stage_error_is_described_by_stage(self, cwd):
         from soup_cli.utils.loop_retry import describe
 
         state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
 
-        row = describe(state.failed_train)
+        row = describe(state.failed_stage)
 
         assert row.startswith("waiting: the harvest stage raised ValueError")
         assert "(1 time in a row)" in row and "next attempt after" in row
@@ -313,9 +370,9 @@ class TestWhatStatusSays:
         config = Pipeline(raising="gate").config()
         for _ in range(3):
             state, _, _ = run_once(state, config)
-            state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+            state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
-        row = describe(state.failed_train)
+        row = describe(state.failed_stage)
 
         assert row.startswith("held: the gate stage raised ValueError")
         assert "soup loop resume clears it" in row

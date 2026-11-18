@@ -296,6 +296,9 @@ class LoopState:
     # and why ("not_enough_new_data: ..."), a dict with "at" and "reason". None = no idle
     # poll yet. Last, so adding it shifted no existing positional field; loads as None.
     last_idle: Optional[dict] = None
+    # Consecutive failures from raised loop stages, kept apart from dataset-specific train retry.
+    # State written before this field loads with None.
+    failed_stage: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -493,6 +496,8 @@ class LoopState:
             _check_pending_deploy(self.pending_deploy)
         if self.failed_train is not None:
             _check_failed_train(self.failed_train)
+        if self.failed_stage is not None:
+            _check_failed_stage(self.failed_stage)
         if self.last_idle is not None:
             _check_last_idle(self.last_idle)
         if self.canary_override is not None:
@@ -620,29 +625,42 @@ _FAILED_TRAIN_FINGERPRINT = re.compile(r"[0-9a-f]{64}", re.ASCII)
 
 def _check_failed_train(record: object) -> None:
     """``failed_train`` is the small record ``utils/loop_retry.py`` writes; nothing else."""
+    _check_failure_record(record, "failed_train")
+
+
+def _check_failed_stage(record: object) -> None:
+    """Validate the loop-wide failure record for a stage that raised."""
+    _check_failure_record(record, "failed_stage")
+    assert isinstance(record, dict)
+    if not str(record["reason"]).startswith("stage error: "):
+        raise ValueError("failed_stage reason must start with 'stage error: '")
+
+
+def _check_failure_record(record: object, field: str) -> None:
+    """Validate the shared persisted shape used by retry records."""
     if not isinstance(record, dict):
-        raise ValueError("failed_train must be a dict or None")
+        raise ValueError(f"{field} must be a dict or None")
     if sorted(record) != sorted(_FAILED_TRAIN_KEYS):
-        raise ValueError(f"failed_train must hold exactly {', '.join(_FAILED_TRAIN_KEYS)}")
+        raise ValueError(f"{field} must hold exactly {', '.join(_FAILED_TRAIN_KEYS)}")
     inputs = record["inputs"]
     if not isinstance(inputs, str) or _FAILED_TRAIN_FINGERPRINT.fullmatch(inputs) is None:
-        raise ValueError("failed_train inputs must be a 64-character lowercase hex digest")
+        raise ValueError(f"{field} inputs must be a 64-character lowercase hex digest")
     attempts = record["attempts"]
     if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
-        raise ValueError("failed_train attempts must be an int from 1 to 100")
+        raise ValueError(f"{field} attempts must be an int from 1 to 100")
     if not isinstance(record["held"], bool):
-        raise ValueError("failed_train held must be bool")
+        raise ValueError(f"{field} held must be bool")
     for name in ("last_at", "retry_after"):
         value = record[name]
         if value is None and name == "retry_after":
             continue
-        _require_str(f"failed_train {name}", value, allow_empty=False)
+        _require_str(f"{field} {name}", value, allow_empty=False)
         if len(value) > 64 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-            raise ValueError(f"failed_train {name} must be a short ISO 8601 time")
+            raise ValueError(f"{field} {name} must be a short ISO 8601 time")
     reason = record["reason"]
-    _require_str("failed_train reason", reason, allow_empty=False)
+    _require_str(f"{field} reason", reason, allow_empty=False)
     if len(reason) > 300 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in reason):
-        raise ValueError("failed_train reason must be one short line without control characters")
+        raise ValueError(f"{field} reason must be one short line without control characters")
 
 
 def _check_last_idle(record: object) -> None:

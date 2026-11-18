@@ -19,9 +19,10 @@ A waiting or held cycle is a skipped iteration whose notes say so (``train_backo
 (``DEPLOY_RETRY_LIMIT``) is separate and unchanged.
 
 A stage of the cycle that RAISES (the cost, harvest, train or gate stage; a locked thumbs
-database, a directory that went away) uses the same record and the same waits: its fingerprint is
-the stage's name (``stage_error_fingerprint``) and its reason starts with ``stage error:``. The
-notes then say ``stage_backoff: ...`` or ``stage_held: ...``.
+database, a directory that went away) uses a separate loop-wide ``failed_stage`` record and the
+same waits. Its stable fingerprint is shared across stages, so alternating failures still reach
+the hold; its reason starts with ``stage error:``. The notes then say ``stage_backoff: ...`` or
+``stage_held: ...``.
 """
 
 from __future__ import annotations
@@ -87,12 +88,13 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
 
 
 def stage_error_fingerprint(stage: str) -> str:
-    """The ``failed_train`` fingerprint of a stage that raised: a SHA-256 over its name."""
-    return hashlib.sha256(f"loop stage error:{stage}".encode("utf-8")).hexdigest()
+    """Stable loop-wide fingerprint so errors in different stages share one retry limit."""
+    del stage  # Keep the argument for callers and persisted-state migration.
+    return hashlib.sha256(b"loop stage error").hexdigest()
 
 
 def stage_error_reason(stage: str, error_type: str, detail: str = "") -> str:
-    """The ``failed_train`` reason of a stage that raised: its name and the exception's type.
+    """The failure record reason of a stage that raised: its name and exception type.
 
     ``detail`` (the exception's message) follows when there is one; the record keeps one short
     line (``after_failure`` collapses the whitespace and cuts it).
@@ -113,11 +115,10 @@ def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Opti
     """
     if not isinstance(failed, Mapping) or not is_stage_error(failed):
         return None
-    for stage in STAGE_ERROR_STAGES:
-        note = hold_reason(failed, stage_error_fingerprint(stage), now)
-        if note is not None:
-            return note
-    return None
+    # The record is loop-wide in current state. Using its own fingerprint also accepts a legacy
+    # v0.78.0 per-stage fingerprint while that record is migrated on the next write.
+    fingerprint = failed.get("inputs")
+    return hold_reason(failed, fingerprint if isinstance(fingerprint, str) else None, now)
 
 
 def after_failure(
