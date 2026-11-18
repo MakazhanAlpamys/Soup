@@ -424,6 +424,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # and last chunks, and an unreadable one from its path, so their failures are held too;
 # over the cap a change keeping the size and both ends is not seen, and such a hold ends
 # only with `soup loop resume`.
+# A refused deploy keeps its trained candidate and waits 5 minutes before its second attempt,
+# then 30 minutes before its third. After a third refusal, it holds the candidate until
+# `soup loop resume`; for a SHIP candidate, the data cursor advances on success or that terminal
+# hold, not while the deploy is waiting.
+# `soup loop status` shows the pending deploy's wait or hold.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to

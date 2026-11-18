@@ -68,8 +68,11 @@ from soup_cli.utils.loop_log import (
     version_line,
     withdrawn_line,
 )
-from soup_cli.utils.loop_retry import describe as describe_failed_train
-from soup_cli.utils.loop_retry import is_stage_error
+from soup_cli.utils.loop_retry import (
+    describe as describe_failed_train,
+    describe_deploy_failure,
+    is_stage_error,
+)
 from soup_cli.utils.loop_spawn import python_child_argv
 from soup_cli.utils.loop_state import (
     ALL_LINEAR,
@@ -783,9 +786,11 @@ def status_cmd() -> None:
         # The exit code and stderr tail of a failed training run, or why a deploy was refused.
         table.add_row("last_failure", for_terminal(state.last_failure))
     if state.pending_deploy:
+        deploy_retry_text = describe_deploy_failure(state.failed_deploy)
         table.add_row(
             "pending_deploy",
-            f"attempt {state.pending_deploy.get('attempts', 0)} refused; retried next cycle",
+            deploy_retry_text
+            or f"attempt {state.pending_deploy.get('attempts', 0)} refused; retry is due",
         )
     if state.last_idle:
         # The last poll that found nothing to do: it writes no iteration line, no manifest.
@@ -852,28 +857,51 @@ def pause_cmd() -> None:
 def resume_cmd() -> None:
     """Resume a paused loop (next watch iteration picks up automatically).
 
-    Also clears remembered train and raised-stage retries (``train_retry`` / ``stage_retry``): the
-    next cycle tries again, whether the loop was paused or running.
+    Also clears remembered train, raised-stage, and deploy retries (``train_retry`` / ``stage_retry``
+    / ``deploy_retry``): the next cycle tries again, whether the loop was paused or running.
     """
     state = _safe_read()
     held = state.failed_train is not None or state.failed_stage is not None
+    deploy_held = state.failed_deploy is not None
     if state.status == "paused":
         _update(
             lambda fresh: replace(
                 fresh.with_status("running") if fresh.status == "paused" else fresh,
                 failed_train=None,
                 failed_stage=None,
+                failed_deploy=None,
+                pending_deploy=(
+                    {**fresh.pending_deploy, "attempts": 0}
+                    if fresh.pending_deploy is not None and fresh.failed_deploy is not None
+                    else fresh.pending_deploy
+                ),
             )
         )
         console.print("[green]loop resumed[/]")
-    elif held:
-        _update(lambda fresh: replace(fresh, failed_train=None, failed_stage=None))
+    elif held or deploy_held:
+        _update(
+            lambda fresh: replace(
+                fresh,
+                failed_train=None,
+                failed_stage=None,
+                failed_deploy=None,
+                pending_deploy=(
+                    {**fresh.pending_deploy, "attempts": 0}
+                    if fresh.pending_deploy is not None and fresh.failed_deploy is not None
+                    else fresh.pending_deploy
+                ),
+            )
+        )
     else:
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
     if held:
         console.print(
             "[green]retry hold cleared:[/] the next loop cycle tries again"
+        )
+    if deploy_held:
+        console.print(
+            "[green]deploy hold cleared:[/] the next cycle retries the saved candidate"
         )
 
 
