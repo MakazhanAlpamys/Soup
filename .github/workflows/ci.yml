@@ -180,6 +180,24 @@ concurrency:
 # matrix, as above: the slow cells need it, and what a higher value costs is only a hung
 # job, which the per-test cap below ends first. Splitting the macOS cell into shards would
 # remove the need for it.
+#
+# 2026-11-18: on the macOS cells the two pytest steps go from 90 to 120 minutes and the `test`
+# job from 105 to 135; every other cell keeps 90 and 105. The three limits carry one expression,
+# `matrix.os == 'macos-latest' && <macOS value> || <value of the other cells>`. On commit
+# 14be6a450 (68,291 tests) `test (macos-latest, 3.12)` was stopped by the 90-minute step twice,
+# at 98% of the run and with no failed test (run 44320568935, attempts 1 and 2), and a third run
+# of the same commit passed with its step at 89.8 minutes (run 44320582523). Over the 30 most
+# recent runs with a finished macOS 3.12 job (2026-11-17 09:44Z to 2026-11-18 15:44Z, 32 jobs):
+# 29 passed (median step 69.9 minutes, slowest 89.8), 3 were stopped at 90.2, and 11 steps came
+# within 10 minutes of the limit or went past it. The runner decides: the suite took 12.6
+# minutes on a runner that gave pytest-xdist five workers and about 90 on one that gave it three.
+# 120 is 1.34 times the slowest step that passed and 28 minutes above the 92 that the stopped
+# run would have needed (90 / 0.98); the job keeps its 15 minutes above the step. Linux and
+# Windows are nowhere near: the slowest of their test jobs that day took 50.0 minutes. What
+# this does not fix: the suite is too heavy for the slowest macOS runner, and a step that
+# needs more than 120 minutes is still stopped. The remedy is to move the heaviest test files
+# off the macOS cell (a follow-up issue); this buys the time to do it. The numbers are pinned
+# by tests/test_ci_macos_test_step_limit.py.
 
 jobs:
   # Quick runs, the required cells at approval, the full matrix every night, and
@@ -921,7 +939,9 @@ jobs:
       # is what keeps a required one blocking a merge.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 105
+    # 135 on the macOS cells and 105 on the others: the step limit plus the same 15 minutes
+    # (2026-11-18; see the paragraph above `jobs:`).
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 135 || 105 }}
     env:
       # Force UTF-8 mode on all platforms. Without this, Windows defaults to
       # cp1252 ('charmap'), which fails when importing upstream packages that
@@ -1284,9 +1304,10 @@ jobs:
         # default limit of four restarts per worker (9 failures of one test in that run), which
         # at ten minutes each would outlast the step. `--max-worker-restart=2` bounds it at three
         # tries, 30 minutes, and a one-off wedge still passes on the retry (the run stays red:
-        # the first failure is kept). `timeout-minutes: 90` on the step is the backstop for a
-        # hang neither can see (a worker that never exits). `-o faulthandler_timeout=300`
-        # (pytest's own, no dependency) dumps every thread's stack into the log once a test has
+        # the first failure is kept). `timeout-minutes` on the step (90; 120 on macOS) is the
+        # backstop for a hang neither can see (a worker that never exits).
+        # `-o faulthandler_timeout=300` (pytest's own, no dependency) dumps every thread's stack
+        # into the log once a test has
         # run for five minutes, before the cap above ends it, so a hang leaves its location in
         # the log of the cell that hit it (checked under `-n 2` with a sleeping test: the dump
         # comes from the worker, one per attempt). Why: in the nightly run of 2026-10-20,
@@ -1301,7 +1322,7 @@ jobs:
         # 2026-11-13 note above `jobs:`), so none of the caps can fire on a healthy run. A test
         # that needs longer marks itself `@pytest.mark.timeout(N)`.
         if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && steps.reuse.outputs.cache-hit != 'true'
-        timeout-minutes: 90
+        timeout-minutes: ${{ matrix.os == 'macos-latest' && 120 || 90 }}
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Run unit tests without coverage
         # `id: suite`: the record steps at the end read `steps.suite.outcome`, so a marker is
@@ -1316,7 +1337,7 @@ jobs:
         # The exact opposite of the step above: every cell of a pull request, and every cell
         # of any run but ubuntu / 3.11. The same two caps.
         if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11') && steps.reuse.outputs.cache-hit != 'true'
-        timeout-minutes: 90
+        timeout-minutes: ${{ matrix.os == 'macos-latest' && 120 || 90 }}
         run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
         # The cell that measures coverage, nowhere else: ubuntu / 3.11 of a run that is not a

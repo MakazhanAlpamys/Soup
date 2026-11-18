@@ -61,6 +61,7 @@ from tests.test_ci_full_matrix_on_approval import (
     _triggers,
     _truthy,
 )
+from tests.test_ci_macos_test_step_limit import minutes_in
 
 SMOKE_JOBS = ("mlx-smoke", "pytorch-smoke", "transformers-floor")
 #: The jobs that read `docs_only`, and no other job may.
@@ -88,6 +89,11 @@ SLOWEST_TEST_JOB_MINUTES = 62.6
 
 def _steps(job: str) -> list[dict[str, Any]]:
     return list(_jobs()[job]["steps"])
+
+
+def _test_cells() -> list[dict[str, str]]:
+    """Every cell of every matrix `plan` can hand the `test` job."""
+    return [cell for name in ALL_MATRICES for cell in _cell_dicts(_matrix(name))]
 
 
 def _label(step: dict[str, Any]) -> str:
@@ -566,8 +572,14 @@ class TestTheSmokeJobsSkipOnlyInADocsOnlyRun:
 class TestAHungTestIsCapped:
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_the_test_step_has_a_time_limit_of_its_own(self, step_name: str) -> None:
+        """90 minutes, and a longer one on the macOS cells (120 since 2026-11-18, pinned in
+        tests/test_ci_macos_test_step_limit.py)."""
         step = next(step for step in _steps("test") if step.get("name") == step_name)
-        assert step["timeout-minutes"] == 90
+        for cell in _test_cells():
+            if cell["os"] == "macos-latest":
+                assert minutes_in(step["timeout-minutes"], cell) > 90, cell
+            else:
+                assert minutes_in(step["timeout-minutes"], cell) == 90, cell
 
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_each_test_gets_a_per_test_cap_that_works_on_windows_and_in_a_worker(
@@ -604,21 +616,27 @@ class TestAHungTestIsCapped:
         for step in _steps("test"):
             if step.get("name") in RUN_STEPS:
                 assert _per_test_cap(step) >= 10 * SLOWEST_TEST_SECONDS
-                assert step["timeout-minutes"] >= 1.5 * LONGEST_TEST_STEP_MINUTES
-                assert step["timeout-minutes"] < _jobs()["test"]["timeout-minutes"]
+                for cell in _test_cells():
+                    limit = minutes_in(step["timeout-minutes"], cell)
+                    assert limit >= 1.5 * LONGEST_TEST_STEP_MINUTES, cell
+                    assert limit < minutes_in(_jobs()["test"]["timeout-minutes"], cell), cell
 
     def test_the_job_limit_is_above_every_job_measured_and_above_the_step_limit(self) -> None:
-        """105 minutes: 1.7 times the slowest `test` job of 2026-11-09..12 (62.6 minutes, a
-        macOS cell whose step the old 60-minute limit cut off), with 15 minutes above the
-        90-minute step for checkout, install and the cache warm-up. It was 90, then 60 (with
-        a 45-minute step) until 2026-11-07, then 75 (with a 60-minute step)."""
-        limit = _jobs()["test"]["timeout-minutes"]
-        assert limit == 105
-        assert limit >= 1.5 * SLOWEST_TEST_JOB_MINUTES
-        step_limits = [
-            step["timeout-minutes"] for step in _steps("test") if "timeout-minutes" in step
-        ]
-        assert step_limits and limit >= max(step_limits) + 10
+        """105 minutes (135 on the macOS cells since 2026-11-18): 1.7 times the slowest `test`
+        job of 2026-11-09..12 (62.6 minutes, a macOS cell whose step the old 60-minute limit
+        cut off), with 15 minutes above the 90-minute step for checkout, install and the cache
+        warm-up. It was 90, then 60 (with a 45-minute step) until 2026-11-07, then 75 (with a
+        60-minute step)."""
+        for cell in _test_cells():
+            limit = minutes_in(_jobs()["test"]["timeout-minutes"], cell)
+            assert limit == (135 if cell["os"] == "macos-latest" else 105), cell
+            assert limit >= 1.5 * SLOWEST_TEST_JOB_MINUTES, cell
+            step_limits = [
+                minutes_in(step["timeout-minutes"], cell)
+                for step in _steps("test")
+                if "timeout-minutes" in step
+            ]
+            assert step_limits and limit >= max(step_limits) + 10, cell
 
     def test_no_other_job_passes_the_flag_to_a_pytest_that_may_not_have_the_plugin(self) -> None:
         """mlx-smoke and core-floor install `pytest` alone: `--timeout` there is an error."""

@@ -748,7 +748,8 @@ branch (or starts a subprocess) has to come off it:
 
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit (120 and 135
+minutes on the macOS cells, whose runners are the slowest). A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
