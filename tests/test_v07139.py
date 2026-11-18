@@ -128,6 +128,23 @@ class TestVerdictToEvidence:
 # Part A — CLI --emit-evidence
 # ---------------------------------------------------------------------------
 
+class TestShipEvidenceUtf8Bom:
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_evidence_json_accepts_utf8_with_optional_bom(self, encoding):
+        from soup_cli.commands import ship as ship_cmd
+
+        with runner.isolated_filesystem():
+            Path("evidence.json").write_text(
+                json.dumps(_ship_evidence()), encoding=encoding,
+            )
+            result = runner.invoke(
+                ship_cmd.app,
+                ["--evidence", "evidence.json", "--output", "verdict.json"],
+            )
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            assert Path("verdict.json").exists()
+
+
 class TestEmitEvidenceCli:
     def test_emit_from_evidence_round_trips_through_cli(self):
         """`ship --evidence A --emit-evidence B` then `ship --evidence B` agree."""
