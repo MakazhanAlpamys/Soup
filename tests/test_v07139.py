@@ -129,23 +129,27 @@ class TestVerdictToEvidence:
 # ---------------------------------------------------------------------------
 
 class TestShipEvidenceUtf8Bom:
-    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
-    def test_evidence_json_accepts_utf8_with_optional_bom(self, encoding):
+    def test_evidence_json_bom_matches_plain_utf8_verdict(self):
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
-            Path("evidence.json").write_text(
-                json.dumps(_ship_evidence()), encoding=encoding,
-            )
-            assert ship_cmd._load_evidence("evidence.json") == _ship_evidence()
-            result = runner.invoke(
-                ship_cmd.app,
-                ["--evidence", "evidence.json", "--output", "verdict.json"],
-            )
-            assert result.exit_code == 0, (result.output, repr(result.exception))
-            assert Path("verdict.json").exists()
-            verdict = json.loads(Path("verdict.json").read_text(encoding="utf-8"))
-            assert verdict
+            for encoding, name in (
+                ("utf-8", "plain"),
+                ("utf-8-sig", "bom"),
+            ):
+                Path(f"{name}.json").write_text(
+                    json.dumps(_ship_evidence()), encoding=encoding,
+                )
+                assert ship_cmd._load_evidence(f"{name}.json") == _ship_evidence()
+                result = runner.invoke(
+                    ship_cmd.app,
+                    ["--evidence", f"{name}.json", "--output", f"{name}-verdict.json"],
+                )
+                assert result.exit_code == 0, (result.output, repr(result.exception))
+
+            plain = json.loads(Path("plain-verdict.json").read_text(encoding="utf-8"))
+            bom = json.loads(Path("bom-verdict.json").read_text(encoding="utf-8"))
+            assert bom == plain
 
 
 class TestEmitEvidenceCli:
