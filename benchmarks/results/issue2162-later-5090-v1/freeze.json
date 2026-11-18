@@ -1,0 +1,293 @@
+{
+  "at": "2026-10-27T12:12:03.255155+00:00",
+  "base_commit": "cbae329a97b919474076ee55dfe57db1f0e87b3d",
+  "source_archive_sha256": "881ebe405e947d55ef363a8e7fb95902485d1c202457ef806591a8ec561eccf8",
+  "controller_sha256": "e1219c5673c0aa440caa31c628ec735aeb554bde0bba9d456f31d8f403e0ca17",
+  "audit_sha256": "bce821d41402f17b846411eba81813d4cd90c63f4761fe0fd5689288c9919882",
+  "protocol_sha256": "553795bd82721ef6f0a0e20b3c04d1c32d0726ed4b7a17cc3aafd167e04aeab1",
+  "input_hashes": {
+    "protocol.md": "553795bd82721ef6f0a0e20b3c04d1c32d0726ed4b7a17cc3aafd167e04aeab1",
+    "source-hashes.json": "4a3198e5dd68d14066c99ae16a92e7e4035b6116d9aa458f7515acfd7abfa6a5",
+    "runtime.json": "22d0322727896dcaa8f9557c60b265101fdaf8bf880f3cd77c7e2ea7315a10d4",
+    "requirements.txt": "b6cf44351ca9c78819e6d80bc32a168a218ea363efe50dc2e21ab90b45d9fe91",
+    "material-manifest.json": "2438c5f3b33511541cc95cb20f06b295ebcaaa9a6bd17c45e8bc9ff12cc40c91",
+    "prior-contrasts.json": "a470d0b8782034af5489e0e58e9923c6b535b88fd8c8a5e488bbbab5f25bfd06",
+    "desktop-baseline.json": "aa715b45498536f0cce772c97fbfa3449d1cf33a88cbe8fc1b56371b1145bfe5",
+    "cpu-tests.log": "f42efc1844ad2b2cee2c445d598b279fc291b911556280894f407d314c605fbc",
+    "ruff.log": "a4443afdcfb6d7363adb285762515ccf7cf50473b1a05c20c1a50f6bed4d26b0",
+    "start-amendment.json": "452f22b98b2e28c22825e2696084278706218a6c09ace4179c9ac5f2ce9d250a",
+    "original-freeze.json": "401aeace562e07144d5aea5dec7f2fcc41cfa3cef2f25a4199931a5662d13fc6",
+    "original-protocol.md": "5f1311a61a1c8e219b2c9a8ee45b34bec5c4d68b7ccef38e895f1dab5dd9d613",
+    "publication.json": "8f505f8ee2a313554ae38e6577464294f768620ae39dc422c234f0e5a65de208",
+    "publication-body.md": "02b0c910e1a5caf0e125ed4bec95993598382508c094033f294bf9962f148161",
+    "run-5090-rule-v1-start-now.py": "4de36d01455e35b33b4aa527e0d23ac8f415a01fe3811360d1f99f56d8860174",
+    "audit-5090-rule-v1-start-now.py": "19dbc0f50c90e6e37b66681b659d1595fcf48a36a5d94c3346c5c5db2602ba2b",
+    "thermal-amendment.json": "d269933ea6cc91d65add2377be8861bdf2113f1db46a578f4f66a665b5578fe2",
+    "previous-freeze.json": "157630c09d01ba1cd8e93b14d8597f9b45e183ff2fb90faee99118ced7a2db11",
+    "previous-protocol.md": "ee6afa152974cfc4eb74d5d2235bf9c85527b60562066abf9d8ba6f35ddf75ae",
+    "previous-failure-summary.json": "42ad98229a1e60ecd417a14f1ab701373f6216ebdbcac52f135ee552f1323733",
+    "previous-failure-preservation.json": "b49084e47b0730b43c90b11e77add5cb418e6a1f4162641ae5e3a0e19169b71f",
+    "previous-ledger.json": "2be4b93a17b9ad202a1b60c2ba38ea592139175de1396f713b58388e578deb30",
+    "run-5090-rule-v1-managed-thermal.py": "41ae619c9b45e4e43d9fff71ae95a1071870201428aeffa98d00b5813ea7b007",
+    "audit-5090-rule-v1-managed-thermal.py": "7e87fac7603c7f7cfa5723d20e99edd9f52ae9dcee8651494c470ca122f02640",
+    "performance-amendment.json": "f6df1ed92ea3bf5e69f05167dcc39d99547cc53243add44b8e8d111d5c72e9fe",
+    "turbo-freeze.json": "6afa9e11c7f66625b957ef4bca72d92bb6dda49bb0db098d79f5f2bb0679f21a",
+    "turbo-ledger.json": "a2ea6235d924881c128e823fe03c1179f6039b4af8d1baee4095a6867caf6959",
+    "turbo-failure-preservation.json": "7e3eb73073216942ee230277b8f4f6e721cdfcb076e4d02523b1fa5648eb3628",
+    "run-5090-performance-v1.py": "e1219c5673c0aa440caa31c628ec735aeb554bde0bba9d456f31d8f403e0ca17",
+    "audit-5090-performance-v1.py": "bce821d41402f17b846411eba81813d4cd90c63f4761fe0fd5689288c9919882",
+    "performance_desktop_guard.py": "7a896a75b2641e647c654a4a7ca28eb574156654025f9be492a2455249dce545",
+    "thermal-context-audit.py": "6f88958cbc819b0ad99f530153544d68363b09cbacaf3f9e1884e4889811b9dc"
+  },
+  "gates": [
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "normal",
+      "tag": "gate-native-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "normal",
+      "tag": "gate-qkvo-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "normal",
+      "tag": "gate-mixed-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "profile",
+      "tag": "gate-native-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "profile",
+      "tag": "gate-qkvo-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "profile",
+      "tag": "gate-mixed-profile"
+    }
+  ],
+  "timings": [
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 1,
+      "tag": "block1-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 1,
+      "tag": "block1-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 1,
+      "tag": "block1-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 2,
+      "tag": "block2-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 2,
+      "tag": "block2-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 2,
+      "tag": "block2-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 3,
+      "tag": "block3-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 3,
+      "tag": "block3-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 3,
+      "tag": "block3-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 4,
+      "tag": "block4-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 4,
+      "tag": "block4-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 4,
+      "tag": "block4-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 5,
+      "tag": "block5-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 5,
+      "tag": "block5-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 5,
+      "tag": "block5-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 6,
+      "tag": "block6-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 6,
+      "tag": "block6-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 6,
+      "tag": "block6-native"
+    }
+  ],
+  "confirmation": [
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 1,
+      "tag": "confirm1-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 1,
+      "tag": "confirm1-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 2,
+      "tag": "confirm2-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 2,
+      "tag": "confirm2-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 3,
+      "tag": "confirm3-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 3,
+      "tag": "confirm3-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 4,
+      "tag": "confirm4-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 4,
+      "tag": "confirm4-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 5,
+      "tag": "confirm5-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 5,
+      "tag": "confirm5-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 6,
+      "tag": "confirm6-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 6,
+      "tag": "confirm6-native"
+    }
+  ],
+  "correction_family": 16,
+  "minimum_review_hours": 0,
+  "model_processes_before_publication": 0,
+  "test_command": [
+    "<LOCAL_PYTHON>",
+    "-m",
+    "pytest",
+    "tests/test_stream_mlp_budget.py",
+    "tests/test_stream_mlp_retention.py",
+    "tests/test_stream_projection_retention.py",
+    "tests/test_stream_projection_census.py",
+    "tests/test_stream_projection_exactness.py",
+    "tests/test_stream_projection_timing.py",
+    "tests/test_stream_projection_statistics.py",
+    "tests/test_stream_projection_reallocation.py",
+    "tests/test_stream_projection_scoped.py",
+    "tests/test_stream_rule_checks.py",
+    "tests/test_stream_rule_guard.py",
+    "tests/test_stream_rule_retention.py",
+    "--no-cov",
+    "-q"
+  ],
+  "schedule_amended_from": "401aeace562e07144d5aea5dec7f2fcc41cfa3cef2f25a4199931a5662d13fc6",
+  "operating_conditions_amended_from": "157630c09d01ba1cd8e93b14d8597f9b45e183ff2fb90faee99118ced7a2db11",
+  "thermal_policy": "native-driver-managed",
+  "desktop_guard_sha256": "7a896a75b2641e647c654a4a7ca28eb574156654025f9be492a2455249dce545",
+  "counter_helper_sha256": "6f88958cbc819b0ad99f530153544d68363b09cbacaf3f9e1884e4889811b9dc",
+  "operational_attempt": "5090-performance-v1",
+  "full_repeat_authorized": true
+}

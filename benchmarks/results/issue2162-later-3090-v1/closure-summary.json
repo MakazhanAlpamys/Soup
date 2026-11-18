@@ -1,0 +1,19 @@
+{
+  "verified": true,
+  "evidence_sha256": "b6574e0a07af0fc5a5f6b334b38d36617df0b7d1985b8b603582b5317faf7286",
+  "copies": {
+    "results.md": {
+      "local": "<LOCAL_CAMPAIGN_DIR>/evidence/results.md",
+      "remote": "<LAB_CAMPAIGN_DIR>/local-results.md",
+      "sha256": "d11ba0e26fbb18ed99750bc43cdb27c5743a04b21923129a5921ff2582c09ad4"
+    },
+    "independent-audit.json": {
+      "local": "<LOCAL_CAMPAIGN_DIR>/evidence/independent-audit.json",
+      "remote": "<LAB_CAMPAIGN_DIR>/local-independent-audit.json",
+      "sha256": "5d7dc5b2c447f5f6f8e7193c03bce53922408480f8abba7f63f822741fdbd4f3"
+    }
+  },
+  "primary_passes": true,
+  "confirmation_passes": true,
+  "production_accepted": false
+}

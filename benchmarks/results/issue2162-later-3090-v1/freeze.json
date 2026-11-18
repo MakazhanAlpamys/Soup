@@ -1,0 +1,303 @@
+{
+  "at": "2026-11-08T18:32:40.102145+00:00",
+  "base_commit": "cbae329a97b919474076ee55dfe57db1f0e87b3d",
+  "source_archive_sha256": "57aad6a1433184c0ec353144aa85d3c80e2c35dd13a6bd209c24a15a42f3a4c5",
+  "controller_sha256": "a98d4a5bfec0bf9981720e0ba01878cdf6147f1a3881c94caab1c8999ce4baf9",
+  "audit_sha256": "a621adf462756ec9e4375b4a02f99292239c8ff22236e75321d29732787d20db",
+  "protocol_sha256": "8b9d411481d7061c71105e15464492c319435597d71c72cafef3198f3c4b9541",
+  "helper_hashes": {
+    "audit.py": "a621adf462756ec9e4375b4a02f99292239c8ff22236e75321d29732787d20db",
+    "controller.py": "a98d4a5bfec0bf9981720e0ba01878cdf6147f1a3881c94caab1c8999ce4baf9",
+    "lab_guard.py": "add42238b14f30c5bc46b22901b5eb0478ee90c5c2e8f712de8e7f87250a8be1",
+    "lab_runtime.py": "2bf63916e381bea66b6e94b8424b6e474e23119306dbda68627aecc68b6a94cb",
+    "package.py": "d90481a615b8a87383e5476e6ac83935bbe9afd43f251b25fa8dd33c0b80fca1",
+    "test_lab_guard.py": "208ad42f36ea74c01de34d889f0563fd98443a92efcca78d3ce3510340b76404",
+    "ci-hold.ps1": "b918a19ff31b008cc5f4169e4594089e84b60ccda6c07ce2f9eee2eca5a57769",
+    "ci-restore.ps1": "36b1bcde176a6dd5613998b7c1f82ebfbb2b0f2d39672a294f9bd8fa149d52ad",
+    "run-campaign.ps1": "df8e2ec6ad08969ab48d6e28d3d7e9db979e594b9b8c87488a29e520ee360f05"
+  },
+  "input_hashes": {
+    "protocol.md": "8b9d411481d7061c71105e15464492c319435597d71c72cafef3198f3c4b9541",
+    "runtime.json": "6cbc204b7be4d58878d65b108c087902b99d66fe63e5d5e8fc9aaa78363f1db4",
+    "source-hashes.json": "5e38dc3d3032bf99987ed0523415aad3385058a2902a7fa310d29e44fdaeb7d9",
+    "source-delta.json": "6e8c8cfea7a83738cef5e7922896817aabefa71fdae51ce10cb30b88fef95d36",
+    "preparation-snapshot.json": "538afcd06b0dde89be8d2f362ede57f2f79bdc0801f23e49e15f70a1066c11e9",
+    "material-manifest.json": "913d545738b70c199ee88ed09d6fd001d585ad295278a15fc88fae260e7a8973",
+    "service-baseline.json": "165fcd81a30586956fa4e264eb1034ec4324119c29b69aadd308f3db7ca55f31",
+    "preflight-inferences.json": "5e396105d56dd62e597960e0cb46da839ea24037878bec99e2461862e530897f",
+    "prior-contrasts.json": "9be53595ca6d543bf3e1c00ed08fd22b42402592381543665b5f45d76bbad487",
+    "cpu-tests.log": "fa3c510f8ffbe0da2b8383361c9cc446fa7dcc4016f17bb29bdfaf1e8b7aa3db",
+    "test-command.json": "f6266b85b867a9c7e4d016df002467dc0634d4383807537e525358ba242565dc",
+    "execution-authorization.json": "3e8a2b26f39c45e0bdf4e719c2187b87e69e2d745ca237aa526e6117e539caff",
+    "build-receipt.json": "3e651bb3bf7811ff1bd7fe24beb49a0ae40ad8ccebbbebf2b2e4e3a00aa11f20"
+  },
+  "gates": [
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "normal",
+      "tag": "gate-native-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "normal",
+      "tag": "gate-qkvo-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "normal",
+      "tag": "gate-mixed-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "profile",
+      "tag": "gate-native-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "profile",
+      "tag": "gate-qkvo-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "profile",
+      "tag": "gate-mixed-profile"
+    }
+  ],
+  "timings": [
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 1,
+      "tag": "block1-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 1,
+      "tag": "block1-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 1,
+      "tag": "block1-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 2,
+      "tag": "block2-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 2,
+      "tag": "block2-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 2,
+      "tag": "block2-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 3,
+      "tag": "block3-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 3,
+      "tag": "block3-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 3,
+      "tag": "block3-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 4,
+      "tag": "block4-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 4,
+      "tag": "block4-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 4,
+      "tag": "block4-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 5,
+      "tag": "block5-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 5,
+      "tag": "block5-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 5,
+      "tag": "block5-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 6,
+      "tag": "block6-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 6,
+      "tag": "block6-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 6,
+      "tag": "block6-native"
+    }
+  ],
+  "confirmation": [
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 1,
+      "tag": "confirm1-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 1,
+      "tag": "confirm1-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 2,
+      "tag": "confirm2-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 2,
+      "tag": "confirm2-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 3,
+      "tag": "confirm3-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 3,
+      "tag": "confirm3-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 4,
+      "tag": "confirm4-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 4,
+      "tag": "confirm4-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 5,
+      "tag": "confirm5-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 5,
+      "tag": "confirm5-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 6,
+      "tag": "confirm6-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 6,
+      "tag": "confirm6-native"
+    }
+  ],
+  "orders": [
+    [
+      "qkvo",
+      "mixed",
+      "native"
+    ],
+    [
+      "native",
+      "mixed",
+      "qkvo"
+    ],
+    [
+      "qkvo",
+      "native",
+      "mixed"
+    ],
+    [
+      "mixed",
+      "native",
+      "qkvo"
+    ],
+    [
+      "native",
+      "qkvo",
+      "mixed"
+    ],
+    [
+      "mixed",
+      "qkvo",
+      "native"
+    ]
+  ],
+  "family": 24,
+  "historical_observed": 15,
+  "historical_reserved": 5,
+  "warmup": 10,
+  "measured_updates": 50,
+  "resamples": 10000,
+  "stage_a_seed": 42,
+  "confirmation_seed": 73,
+  "target": "<TARGET_GPU_UUID>",
+  "original_power": 350,
+  "public_wait_seconds": 0,
+  "model_processes_started": 0,
+  "local_finalizer_sha256": "ca96339f0f0a7d12dfed7eea1c0a204729ba0d93a5461bc72d01fb96a50081e9",
+  "execution_mode": "fresh-lab-run-after-controlled-reboot",
+  "supersedes_preparation_freeze_sha256": "5cd96b8290a0ad4011761846ba1aeb1c741de9f31bef50a81fb05049842d55e9"
+}
