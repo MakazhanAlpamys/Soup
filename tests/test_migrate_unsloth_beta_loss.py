@@ -113,6 +113,28 @@ def test_a_grpo_beta_of_zero_turns_the_kl_penalty_off(tmp_path: Path) -> None:
     assert cfg.training.grpo_beta == 0.0
 
 
+def test_a_beta_bound_to_a_module_level_name_is_read(tmp_path: Path) -> None:
+    # The walker resolves a keyword through the notebook's plain assignments.
+    _, cfg = _migrate(tmp_path, "BETA = 0.25\n",
+                      _trainer("GRPOTrainer", "GRPOConfig", "beta=BETA, "))
+    assert cfg.training.grpo_beta == 0.25
+
+
+def test_a_beta_and_loss_type_that_cannot_be_read_are_named_not_guessed(
+    tmp_path: Path,
+) -> None:
+    # An attribute of an object is not a value the walker can read: both keywords are
+    # named in the "not migrated" warning, nothing is guessed, and the migration still
+    # completes (no refusal, so the CLI exits 0).
+    result, cfg = _migrate(tmp_path, _trainer(
+        "GRPOTrainer", "GRPOConfig", "beta=settings.beta, loss_type=settings.loss, "))
+    unmapped = _unmapped(result)
+    assert "beta" in unmapped
+    assert "loss_type" in unmapped
+    assert cfg.task == "grpo"
+    assert cfg.training.grpo_beta == 0.1  # Soup's default, not a guessed value
+
+
 def test_a_simpo_beta_has_no_soup_field_and_is_named(tmp_path: Path) -> None:
     result, cfg = _migrate(tmp_path, _trainer("CPOTrainer", "CPOConfig",
                                               "loss_type='simpo', beta=2.0, "))
