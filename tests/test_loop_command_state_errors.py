@@ -19,6 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 import soup_cli.utils.loop_state as loop_state
+from soup_cli.commands import loop as loop_cmd
 from soup_cli.commands.loop import app
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
@@ -102,3 +103,67 @@ class TestAnInvalidValue:
         assert "Traceback" not in text
         assert read_state(_path(cwd)).trace_dir is None
         assert not Path(_path(cwd) + ".lock").exists()
+
+
+def _deny_access(*_args: object) -> None:
+    raise PermissionError("access denied")
+
+
+def test_status_reports_read_permission_error(cwd, monkeypatch):
+    monkeypatch.setattr(loop_cmd, "read_state", _deny_access)
+
+    result, text = _run("status")
+
+    assert result.exit_code == 1
+    assert text == "cannot read loop.yaml: access denied"
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_pause_reports_update_permission_error(cwd, monkeypatch):
+    write_state(_state(), _path(cwd))
+    monkeypatch.setattr(loop_cmd, "update_state", _deny_access)
+
+    result, text = _run("pause")
+
+    assert result.exit_code == 1
+    assert text == "cannot update loop.yaml: access denied"
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_replace_permission_error_preserves_state_and_removes_temp_file(cwd, monkeypatch):
+    path = Path(_path(cwd))
+    write_state(_state(), str(path))
+    before = path.read_bytes()
+    monkeypatch.setattr(loop_state, "_replace_file", _deny_access)
+
+    result, text = _run("pause")
+
+    assert path.read_bytes() == before
+    assert not list(path.parent.glob(".loop_state_*"))
+    assert result.exit_code == 1
+    assert text == "cannot update loop.yaml: access denied"
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_status_keeps_missing_state_diagnostic(cwd, monkeypatch):
+    def missing() -> None:
+        raise FileNotFoundError("state file missing")
+
+    monkeypatch.setattr(loop_cmd, "read_state", missing)
+    result, text = _run("status")
+
+    assert result.exit_code == 2
+    assert text == "No loop state found. Run soup loop init first. detail: state file missing"
+
+
+def test_pause_keeps_missing_state_diagnostic_during_update(cwd, monkeypatch):
+    write_state(_state(), _path(cwd))
+
+    def missing(_mutate: object) -> None:
+        raise FileNotFoundError("state file missing")
+
+    monkeypatch.setattr(loop_cmd, "update_state", missing)
+    result, text = _run("pause")
+
+    assert result.exit_code == 2
+    assert text == "cannot update loop.yaml: state file missing"
