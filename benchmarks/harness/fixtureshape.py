@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """STEP 13 / #379 — where the CI fixture sits relative to the fused NF4 window.
 
-Reconstruction of the historical scratch script ``fixtureshape.py`` whose
-result is recorded in ``benchmarks/gate-h100-validation.md`` STEP 13. The
-original was never in this repository (#379); the recorded run was on H100 sm90
-(torch 2.13.0+cu130, bitsandbytes 0.50.0). A re-run on another card or stack is
-a new baseline, not a comparison with the record.
+Reconstruction of the METHOD of the historical scratch script ``fixtureshape.py``
+whose result is recorded in ``benchmarks/gate-h100-validation.md`` STEP 13. The
+original was never in this repository (#379), and this is not the bytes that
+were run on it. The other CUDA name of that Reproducing-table row,
+``fixture_window.py``, is not part of this slice and stays unpublished.
+
+Recorded on: H100 sm90, 132 SMs, torch 2.13.0+cu130, bitsandbytes 0.50.0.
+A re-run on another card or stack is a new baseline, not a comparison: the
+fused-kernel cutoffs need bitsandbytes' dispatch on that card, and the record's
+cutoffs are not asserted here.
+
+Which mechanism needs which card: the fused 4-bit GEMM and its M-dependent
+dispatch are CUDA-only; the CPU counterpart (packed-inference rounding) is
+measured by ``fixture_window_cpu.py``, not by this script.
 
 The two shapes in ``tests/test_v07202.py`` (hidden_size=64,
 intermediate_size=64: a 64x64 and a 256x64 linear) are measured against
@@ -364,6 +373,7 @@ def run_sweep(args) -> dict:
 
 
 def run_self_test() -> None:
+    """Check the reconstruction's logic on CPU, not the original run's bytes."""
     import torch
 
     a = torch.tensor([100.0, -2.0, 3.0])
