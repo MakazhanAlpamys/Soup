@@ -133,6 +133,11 @@ text architecture and LoRA attachment are checked on the meta device, with a tin
 decoder's forward/backward pass checked on CPU. Full-weight training, NF4 execution, a
 real pre-training run and memory fit are not checked.
 
+`soup recipes use qwen3.5-0.8b-pretrain` selects `Qwen/Qwen3.5-0.8B-Base` for
+continued pre-training on plaintext rows in `./data/corpus.jsonl`. It inherits the
+2B and 4B recipes' starting settings. CPU checks cover the recipe and its config.
+Full-weight training, NF4 execution, real pre-training and memory fit remain unverified.
+
 `soup recipes use qwen3.5-2b-pretrain` selects `Qwen/Qwen3.5-2B-Base` for continued
 pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the shipped
 `qwen3.5-4b-pretrain` row's, inherited and not tuned for 2B: one epoch, `lr: 1e-4`,
