@@ -3,10 +3,12 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.push import _format_size, _generate_model_card
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -129,3 +131,111 @@ def test_push_no_token(tmp_path: Path, monkeypatch):
     )
     assert result.exit_code == 1
     assert "token" in result.output.lower()
+
+
+# --- --collection is checked before any Hub call (#2824) ---
+
+class _RecordingApi:
+    """A fake ``HfApi`` that records each Hub call in order."""
+
+    def __init__(self, calls: list) -> None:
+        self.calls = calls
+
+    def create_repo(self, **kwargs) -> None:
+        self.calls.append("create_repo")
+
+    def upload_folder(self, **kwargs) -> None:
+        self.calls.append("upload_folder")
+
+    def upload_file(self, **kwargs) -> None:
+        self.calls.append("upload_file")
+
+
+@pytest.fixture
+def hub_calls(tmp_path: Path, monkeypatch) -> list:
+    from soup_cli.utils import hf as hf_utils
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    (tmp_path / "model").mkdir()
+    (tmp_path / "model" / "config.json").write_text("{}", encoding="utf-8")
+    calls: list = []
+
+    def _get_hf_api(**kwargs):
+        calls.append("get_hf_api")
+        return _RecordingApi(calls)
+
+    monkeypatch.setattr(hf_utils, "get_hf_api", _get_hf_api)
+    monkeypatch.setattr(
+        hf_utils, "add_to_collection", lambda **kwargs: calls.append("add_to_collection")
+    )
+    return calls
+
+
+def _push_with(*extra: str):
+    return runner.invoke(app, ["push", "--model", "model", "--repo", "user/model", *extra])
+
+
+@pytest.mark.parametrize(
+    ("slug", "reason"),
+    [
+        ("not a slug!", "must not contain whitespace or null bytes"),
+        ("user/a\x00b-1", "must not contain whitespace or null bytes"),
+        ("user/../x-1", "invalid segments"),
+        ("/user/x-1", "invalid segments"),
+        ("user/x-1/", "invalid segments"),
+        ("user/" + "a" * 300, "too long (max 256 chars)"),
+        ("https://huggingface.co/collections/user/x-1", "must be 'owner/slug-hash'"),
+    ],
+    ids=["whitespace", "nul", "dotdot", "leading-slash", "trailing-slash", "too-long", "url"],
+)
+def test_push_bad_collection_slug_is_refused_before_any_hub_call(
+    hub_calls, monkeypatch, slug, reason
+):
+    from soup_cli.utils import hf as hf_utils
+
+    def _no_token_lookup(**kwargs):
+        raise AssertionError("the token lookup must not run for a bad slug")
+
+    monkeypatch.setattr(hf_utils, "resolve_token", _no_token_lookup)
+    result = _push_with("--collection", slug)
+    output = " ".join(strip_ansi(result.output).split())
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Invalid --collection slug:" in output
+    assert reason in output
+    assert hub_calls == []
+
+
+def test_push_valid_collection_slug_uploads_then_adds_to_the_collection(hub_calls):
+    result = _push_with("--collection", "user/my-models-0123456789abcdef")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert hub_calls == [
+        "get_hf_api", "create_repo", "upload_folder", "upload_file", "add_to_collection",
+    ]
+
+
+def test_push_empty_collection_is_skipped(hub_calls):
+    result = _push_with("--collection", "")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert hub_calls == ["get_hf_api", "create_repo", "upload_folder", "upload_file"]
+
+
+@pytest.mark.parametrize(
+    ("hub", "token_var"),
+    [("modelscope", "MODELSCOPE_API_TOKEN"), ("modelers", "MODELERS_TOKEN")],
+)
+def test_push_non_hf_hub_still_ignores_collection(hub_calls, monkeypatch, hub, token_var):
+    uploads: list = []
+    monkeypatch.setattr(
+        "soup_cli.utils.hubs.upload_repo", lambda hub, repo, **kwargs: uploads.append(hub)
+    )
+    monkeypatch.setenv(token_var, "hub_token")
+
+    result = _push_with("--hub", hub, "--collection", "not a slug!")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert uploads == [hub]
+    assert hub_calls == []
