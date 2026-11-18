@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.commands._common import refuse_output_over_input
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -97,6 +97,7 @@ def validate(
         "--min-valid-fraction",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
 ):
@@ -788,6 +789,8 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
     """Random sampling without replacement."""
+    if num <= 0:
+        return []
     rng = random.Random(seed)
     num = min(num, len(data))
     return rng.sample(data, num)
@@ -800,6 +803,8 @@ def _sample_diverse(
 
     Falls back to random sampling if sklearn is not available.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -870,6 +875,8 @@ def _sample_hard(data: list[dict], num: int) -> list[dict]:
 
     Longer texts tend to be more complex / challenging.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -894,11 +901,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
@@ -919,6 +926,17 @@ def sample_data(
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
         raise typer.Exit(1)
+
+    if num is not None and num <= 0:
+        console.print("[red]--n must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if pct is not None:
+        import math as _math
+
+        if not _math.isfinite(pct) or not (0.0 < pct <= 100.0):
+            console.print("[red]--pct must be a finite number in (0, 100].[/]")
+            raise typer.Exit(1)
 
     if strategy not in ("random", "diverse", "hard"):
         console.print(
