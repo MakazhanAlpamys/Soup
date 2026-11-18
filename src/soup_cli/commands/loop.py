@@ -216,14 +216,19 @@ def _paraphraser_from_flags(
     return checked, model
 
 
+def _plural(count: int, word: str) -> str:
+    """``1 new edit`` / ``8 new edits``: the count with a singular-or-plural noun."""
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
 def _train_method_note(state: LoopState) -> str:
     """The init panel lines under ``train_method`` (empty for dpo and kto), newline-ended."""
     if state.train_method != "sft":
         return ""
     note = (
         f"{SFT_TRAINS_ON}\n"
-        f"with a feedback log, training starts at {state.min_new_edits} new edits "
-        f"or {state.min_new_rated} new rated answers\n"
+        f"with a feedback log, training starts at {_plural(state.min_new_edits, 'new edit')} "
+        f"or {_plural(state.min_new_rated, 'new rated answer')}\n"
     )
     if state.sft_recipe:
         own = tuple(key for key in SFT_RECIPE_KEYS if key in state.sft_recipe)
@@ -621,7 +626,12 @@ def init_cmd(
     paraphraser_endpoint, paraphraser_model = _paraphraser_from_flags(
         paraphraser_endpoint, paraphraser_model
     )
-    from soup_cli.utils.loop_stages import check_verify_eval, resolve_base_model_source
+    from soup_cli.utils.loop_stages import (
+        check_verify_eval,
+        ensure_adapters_dir,
+        resolve_base_model_source,
+    )
+    from soup_cli.utils.owner_only_dir import OwnerOnlyError
 
     verify_method = verify.strip().lower().replace("-", "_")
     try:
@@ -647,6 +657,14 @@ def init_cmd(
             f"[yellow]warning:[/] base model unknown ({for_terminal(exc)}); "
             "soup loop watch --pre-wired refuses until it is known"
         )
+    try:
+        # The loop deploys through `soup serve --adapter-dir .soup-loops/adapters`,
+        # which refuses a missing directory (#3034). Create it before loop.yaml so
+        # a failure here leaves no half-initialized loop behind.
+        ensure_adapters_dir()
+    except OwnerOnlyError as exc:
+        console.print(f"[red]init failed:[/] {for_terminal(str(exc))}")
+        raise typer.Exit(code=2)
     try:
         state, path = init_state(
             served_model=served_model,
