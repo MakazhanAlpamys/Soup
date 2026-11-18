@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -161,6 +162,11 @@ def train(
         console.print(f"[red]Input file not found:[/] {input_path}")
         raise typer.Exit(1)
     output_path = Path(output_real)
+    if output_path.exists() and not output_path.is_dir():
+        console.print(
+            f"[red]Output path is not a directory:[/] {for_terminal(output)}", emoji=False
+        )
+        raise typer.Exit(1)
 
     try:
         from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
