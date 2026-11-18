@@ -789,8 +789,10 @@ def status_cmd() -> None:
         deploy_retry_text = describe_deploy_failure(state.failed_deploy)
         table.add_row(
             "pending_deploy",
-            deploy_retry_text
-            or f"attempt {state.pending_deploy.get('attempts', 0)} refused; retry is due",
+            for_terminal(
+                deploy_retry_text
+                or f"attempt {state.pending_deploy.get('attempts', 0)} refused; retry is due"
+            ),
         )
     if state.last_idle:
         # The last poll that found nothing to do: it writes no iteration line, no manifest.

@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from soup_cli.utils.loop_daemon import WatchConfig, run_once
 from soup_cli.utils.loop_retry import DEPLOY_FAILURE_FINGERPRINT
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
@@ -122,6 +124,100 @@ def test_v078_state_without_failed_deploy_field_loads_with_default(tmp_path, mon
     assert read_state(str(path)).pending_deploy == pending
 
 
+def test_v078_pending_candidate_attempt_seeds_deploy_backoff(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    pending = {
+        "train": {"run_id": "run-legacy", "adapter_path": "out/legacy"},
+        "gate": {"gate_verdict": "OK"},
+        "attempts": 1,
+        "cursor_ts": CURSOR,
+        "iteration_id": "iter-legacy",
+    }
+    state = LoopState(
+        served_model="base", eval_suite="e.json", baseline="b", status="running",
+        pending_deploy=pending,
+    )
+    config = WatchConfig(
+        state_path=str(tmp_path / ".soup" / "loop.yaml"),
+        iteration_dir=str(tmp_path / ".soup-loops"),
+        deploy_fn=lambda *_: REFUSED,
+        cost_fn=lambda _state: 0.0,
+    )
+
+    retried, _, _ = run_once(
+        state, config, now=datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert retried.failed_deploy["attempts"] == 2
+    assert retried.failed_deploy["retry_after"] == "2026-11-18T12:30:00+00:00"
+    assert retried.pending_deploy["attempts"] == 2
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {},
+        {"inputs": "not-a-fingerprint", "attempts": 1, "last_at": "t",
+         "retry_after": "t", "held": False, "reason": "deploy refused"},
+        {"inputs": DEPLOY_FAILURE_FINGERPRINT, "attempts": True, "last_at": "t",
+         "retry_after": "t", "held": False, "reason": "deploy refused"},
+        {"inputs": DEPLOY_FAILURE_FINGERPRINT, "attempts": 1, "last_at": "t",
+         "retry_after": "t", "held": False, "reason": "deploy refused", "extra": 1},
+    ],
+)
+def test_malformed_failed_deploy_state_is_refused(bad):
+    with pytest.raises((ValueError, TypeError), match="failed_deploy"):
+        LoopState(
+            served_model="base", eval_suite="e.json", baseline="b", status="running",
+            failed_deploy=bad,
+        )
+
+
+@pytest.mark.parametrize(
+    ("held", "retry_delta", "expected"),
+    [
+        (False, 5, "waiting:"),
+        (False, -5, "due:"),
+        (True, None, "held:"),
+    ],
+)
+def test_status_pending_deploy_reports_waiting_due_and_held(
+    tmp_path, monkeypatch, held, retry_delta, expected
+):
+    monkeypatch.chdir(tmp_path)
+    from typer.testing import CliRunner
+
+    from soup_cli.commands.loop import app
+
+    now = datetime.now(timezone.utc)
+    pending = {
+        "train": {"run_id": "run-1", "adapter_path": "out/a1"},
+        "gate": {"gate_verdict": "OK"}, "attempts": 1, "cursor_ts": CURSOR,
+        "iteration_id": "iter-status",
+    }
+    failed = {
+        "inputs": DEPLOY_FAILURE_FINGERPRINT, "attempts": 1,
+        "last_at": now.isoformat(),
+        "retry_after": None if retry_delta is None else
+        (now + timedelta(minutes=retry_delta)).isoformat(),
+        "held": held, "reason": "HTTP [bold red]503[/]",
+    }
+    write_state(
+        LoopState(
+            served_model="base", eval_suite="e.json", baseline="b", status="running",
+            pending_deploy=pending, failed_deploy=failed,
+        ),
+        str(tmp_path / ".soup" / "loop.yaml"),
+    )
+
+    result = CliRunner().invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "pending_deploy" in result.output and expected in result.output
+    # The refusal is untrusted terminal text; Rich markup must remain literal.
+    assert "[bold red]503[/]" in result.output
+
+
 def test_restarted_daemon_deploys_saved_candidate_when_server_recovers(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state_path = str(tmp_path / ".soup" / "loop.yaml")
@@ -206,6 +302,7 @@ def test_resume_clears_deploy_hold_but_keeps_candidate(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["resume"])
 
     assert result.exit_code == 0, result.output
+    assert "deploy hold cleared" in result.output
     resumed = read_state(path)
     assert resumed.failed_deploy is None
     assert resumed.pending_deploy is not None

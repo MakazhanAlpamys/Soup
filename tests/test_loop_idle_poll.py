@@ -15,6 +15,7 @@ import json
 import os
 import re
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from typer.testing import CliRunner
@@ -185,9 +186,15 @@ class TestWhatDidSomethingStillGetsItsLine:
             deploy_fn=lambda s, o: {"deployed": False, "failed": True, "notes": "serve restarting"},
         )
         state = _state()
+        start = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
 
-        state, _, decision = run_once(state, config, log=LoopLog(str(cwd / ".soup-loops")))
-        state, _, retried = run_once(state, config, log=LoopLog(str(cwd / ".soup-loops")))
+        state, _, decision = run_once(
+            state, config, log=LoopLog(str(cwd / ".soup-loops")), now=start
+        )
+        state, _, retried = run_once(
+            state, config, log=LoopLog(str(cwd / ".soup-loops")),
+            now=start + timedelta(minutes=5),
+        )
 
         assert decision.proceed and retried.proceed
         assert state.pending_deploy is not None
@@ -238,7 +245,9 @@ class TestStatusAndState:
         write_state(replace(_state(), last_idle=value), path)
 
         assert read_state(path).last_idle == value
-        assert list(LoopState.__dataclass_fields__)[-2:] == ["last_idle", "failed_stage"]
+        assert list(LoopState.__dataclass_fields__)[-3:] == [
+            "last_idle", "failed_stage", "failed_deploy"
+        ]
 
     @pytest.mark.parametrize(
         "bad",
