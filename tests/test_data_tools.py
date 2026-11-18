@@ -281,7 +281,7 @@ def test_convert_alpaca_counts_multiturn_row_as_failed(mixed_chatml_file, tmp_pa
         app, ["data", "convert", str(mixed_chatml_file), "--to", "alpaca", "-o", output]
     )
     assert result.exit_code == 0
-    assert "1 rows failed to convert." in _collapsed(result.output)
+    assert "1 rows failed to convert." in " ".join(strip_ansi(result.output).split())
 
     with open(output) as f:
         lines = f.readlines()
@@ -316,7 +316,7 @@ def test_download_alpaca_reports_left_out_rows(mock_download, tmp_path, monkeypa
     assert result.exit_code == 0
     assert (
         "1 rows were left out because they do not convert to alpaca."
-        in _collapsed(result.output)
+        in " ".join(strip_ansi(result.output).split())
     )
 
     lines = output.read_text(encoding="utf-8").strip().split("\n")
