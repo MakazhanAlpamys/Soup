@@ -143,7 +143,9 @@ def test_toxicity_with_a_finite_threshold_still_writes_its_rows(workdir):
 
 # --- #2997: data filter and tui ---------------------------------------------
 
-_COHERENCE_REFUSED = [*_NAN_SPELLINGS, "inf", "-inf", "Infinity", "1e999"]
+_COHERENCE_REFUSED = [
+    *_NAN_SPELLINGS, "inf", "-inf", "Infinity", "1e999", "1.5", "-0.5",
+]
 _PERPLEXITY_REFUSED = [*_NAN_SPELLINGS, "-inf", "-Infinity", "-1e999", "-1"]
 _PERPLEXITY_ACCEPTED = ["50", "inf", "Infinity", "1e999"]
 _REFRESH_REFUSED = [

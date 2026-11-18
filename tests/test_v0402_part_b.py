@@ -49,9 +49,10 @@ class TestDataFlagAliases:
         assert "--train" in _plain(result.output)
 
     def test_filter_min_coherence_alias(self):
-        # The range metavar widens the options table, so an 80-column console
-        # ellipsizes the name cell to "--coherence,--min-co...". Pin the width
-        # like the other help tests, which _plain's docstring assumes.
+        # Typer appends the range to the metavar cell, widening the options
+        # table past 80 columns; Rich then ellipsizes the name cell to
+        # "--coherence,--min-co...". Pin the width like the other help tests,
+        # which _plain's docstring assumes.
         result = CliRunner(env={"COLUMNS": "200"}).invoke(
             app, ["data", "filter", "--help"]
         )
