@@ -15,7 +15,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -167,42 +166,41 @@ SHIPPED = "loop-train-ef56ab78"
 VERDICT_FILE_NAME = "manual-sft-1"
 SHIPPED_VERDICT_FILE_NAME = "shipped-sft"
 
-_WINDOWS_ONLY = frozenset({
-    "backslashes", "backslashes-trailing", "mixed-separators", "path-other-case",
-    "absolute-other-case", "junction-inside", "junction-outside",
-})
+#: A Windows-only spelling: backslashes, the case Windows keeps, a junction. A junction needs no
+#: privilege (unlike a symlink), so there is nothing to probe for: it is made or the test fails.
+_ON_WINDOWS = pytest.mark.skipif(os.name != "nt", reason="a Windows-only spelling of the path")
 
 #: Every way found to name the directory ``.soup-loops/adapters/<name>``: what the plan and the
 #: iteration log write, what tab completion gives, what Windows and a ``..`` detour make of it,
 #: and a link (symlink / junction) that leads there from inside or from outside the loop's tree.
+#: A symlink spelling is skipped only where this account cannot create one (``tests/conftest.py``).
 SPELLINGS = [
     "path", "dot-slash", "trailing-slash", "dot-leaf", "dotdot-leaf", "dotdot-via-sibling",
-    "dotdot-via-verdicts", "absolute", "absolute-trailing-slash", "backslashes",
-    "backslashes-trailing", "mixed-separators", "path-other-case", "absolute-other-case",
-    "symlink-inside", "symlink-outside", "junction-inside", "junction-outside",
+    "dotdot-via-verdicts", "absolute", "absolute-trailing-slash",
+    pytest.param("backslashes", marks=_ON_WINDOWS),
+    pytest.param("backslashes-trailing", marks=_ON_WINDOWS),
+    pytest.param("mixed-separators", marks=_ON_WINDOWS),
+    pytest.param("path-other-case", marks=_ON_WINDOWS),
+    pytest.param("absolute-other-case", marks=_ON_WINDOWS),
+    pytest.param("symlink-inside", marks=pytest.mark.requires_symlink),
+    pytest.param("symlink-outside", marks=pytest.mark.requires_symlink),
+    pytest.param("junction-inside", marks=_ON_WINDOWS),
+    pytest.param("junction-outside", marks=_ON_WINDOWS),
 ]
 
 
 def _link(link: Path, target: Path, *, junction: bool) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     if junction:
-        done = subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-            capture_output=True, check=False,
-        )
-        if done.returncode != 0:
-            pytest.skip("this box cannot create a directory junction")
-        return
-    try:
+        import _winapi  # Windows only: the junction spellings are skipped elsewhere
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
         os.symlink(target, link, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("this box cannot create a directory symlink")
 
 
 def _spell(kind: str, cwd: Path, name: str) -> str:
     """The argument ``soup loop canary`` is given for the adapter directory ``name``."""
-    if kind in _WINDOWS_ONLY and os.name != "nt":
-        pytest.skip(f"{kind} is a Windows spelling")
     relative = f".soup-loops/adapters/{name}"
     absolute = str(cwd / ".soup-loops" / "adapters" / name)
     adapter_dir = cwd / ".soup-loops" / "adapters" / name
@@ -365,8 +363,10 @@ class TestEverySpellingOfTheAdapterDirectory:
 class TestSpellingsThatAreNotTheAdapter:
     """What the path mapping must leave alone: another adapter, another directory, no verdict."""
 
-    @pytest.mark.parametrize("kind", ["bare", "path", "dot-slash", "trailing-slash", "absolute",
-                                      "dotdot-leaf", "symlink-inside"])
+    @pytest.mark.parametrize("kind", [
+        "bare", "path", "dot-slash", "trailing-slash", "absolute", "dotdot-leaf",
+        pytest.param("symlink-inside", marks=pytest.mark.requires_symlink),
+    ])
     @pytest.mark.parametrize("name", [SHIPPED, SHIPPED_VERDICT_FILE_NAME])
     def test_an_adapter_with_a_ship_verdict_is_accepted(self, loop_with_verdicts, kind, name):
         cwd = loop_with_verdicts
