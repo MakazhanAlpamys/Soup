@@ -857,8 +857,9 @@ def pause_cmd() -> None:
 def resume_cmd() -> None:
     """Resume a paused loop (next watch iteration picks up automatically).
 
-    Also clears remembered train, raised-stage, and deploy retries (``train_retry`` / ``stage_retry``
-    / ``deploy_retry``): the next cycle tries again, whether the loop was paused or running.
+    Clears remembered train, raised-stage, and deploy retries (``train_retry`` / ``stage_retry`` /
+    ``deploy_retry``). A deploy hold keeps its saved candidate; the next cycle retries that
+    candidate instead of harvesting or training again, whether the loop was paused or running.
     """
     state = _safe_read()
     held = state.failed_train is not None or state.failed_stage is not None

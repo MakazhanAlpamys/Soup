@@ -96,8 +96,18 @@ def test_refused_deploy_waits_five_then_thirty_minutes_and_holds_after_three(
 def test_v078_state_without_failed_deploy_field_loads_with_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / ".soup" / "loop.yaml"
+    pending = {
+        "train": {"run_id": "run-legacy", "adapter_path": "out/legacy"},
+        "gate": {"gate_verdict": "OK"},
+        "attempts": 1,
+        "cursor_ts": CURSOR,
+        "iteration_id": "iter-legacy",
+    }
     write_state(
-        LoopState(served_model="base", eval_suite="e.json", baseline="b", status="running"),
+        LoopState(
+            served_model="base", eval_suite="e.json", baseline="b", status="running",
+            pending_deploy=pending,
+        ),
         str(path),
     )
     import json
@@ -106,7 +116,64 @@ def test_v078_state_without_failed_deploy_field_loads_with_default(tmp_path, mon
     data.pop("failed_deploy")
     path.write_text(json.dumps(data), encoding="utf-8")
 
-    assert read_state(str(path)).failed_deploy is None
+    loaded = read_state(str(path))
+    assert loaded.failed_deploy is None
+    assert loaded.pending_deploy == pending
+    assert read_state(str(path)).pending_deploy == pending
+
+
+def test_restarted_daemon_deploys_saved_candidate_when_server_recovers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state_path = str(tmp_path / ".soup" / "loop.yaml")
+    write_state(
+        LoopState(served_model="base", eval_suite="e.json", baseline="b", status="running"),
+        state_path,
+    )
+    calls = {"cost": 0, "harvest": 0, "train": 0, "deploy": 0}
+
+    def deploy(_state, _out):
+        calls["deploy"] += 1
+        if calls["deploy"] == 1:
+            return REFUSED
+        return {"deployed": True, "failed": False, "notes": "HTTP 200"}
+
+    config = WatchConfig(
+        state_path=state_path,
+        iteration_dir=str(tmp_path / ".soup-loops"),
+        harvest_fn=lambda _state: calls.__setitem__("harvest", calls["harvest"] + 1)
+        or {"pairs_harvested": 3, "traces_collected": 3, "cursor_ts": CURSOR},
+        train_fn=lambda _state, _harvest: calls.__setitem__("train", calls["train"] + 1)
+        or {"run_id": "run-1", "skipped": False, "adapter_path": "out/a1"},
+        gate_fn=lambda *_: {"gate_verdict": "OK"},
+        deploy_fn=deploy,
+        cost_fn=lambda _state: calls.__setitem__("cost", calls["cost"] + 1) or 0.0,
+    )
+    start = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+
+    state, _, _ = run_once(read_state(state_path), config, now=start)
+    write_state(state, state_path)
+    saved_candidate = state.pending_deploy
+    assert saved_candidate is not None
+
+    # Recreate the process state from disk on each poll: the service is unavailable
+    # longer than the old three-poll retry window, then recovers at the scheduled retry.
+    for minute in range(1, 5):
+        restarted = read_state(state_path)
+        state, _, decision = run_once(restarted, config, now=start + timedelta(minutes=minute))
+        write_state(state, state_path)
+        assert not decision.proceed
+        assert state.pending_deploy == saved_candidate
+        assert calls == {"cost": 1, "harvest": 1, "train": 1, "deploy": 1}
+
+    state, shipped, decision = run_once(
+        read_state(state_path), config, now=start + timedelta(minutes=5)
+    )
+    assert decision.proceed
+    assert shipped.shipped is True
+    assert state.pending_deploy is None
+    assert state.failed_deploy is None
+    assert state.attempt_cursor_ts == CURSOR
+    assert calls == {"cost": 2, "harvest": 1, "train": 1, "deploy": 2}
 
 
 def test_resume_clears_deploy_hold_but_keeps_candidate(tmp_path, monkeypatch):
