@@ -1595,7 +1595,7 @@ class TestGateFiles:
         run_id = world.records[-1].run_id
         directory = ".soup-loops/verdicts"
         assert [part.replace("\\", "/") for part in world.ship.argv] == [
-            sys.executable.replace("\\", "/"), "-m", "soup_cli.cli", "ship",
+            sys.executable.replace("\\", "/"), "-P", "-m", "soup_cli.cli", "ship",
             "--base", "org/base",
             "--adapter", f".soup-loops/adapters/{run_id}",
             "--task-eval", "tasks.jsonl",

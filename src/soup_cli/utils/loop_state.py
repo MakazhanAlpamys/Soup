@@ -97,6 +97,11 @@ _MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the state file
 # The data cursor is epoch seconds up to the year 9999 (datetime.max): `soup loop status`
 # prints it as a date, and a larger value is a typo that would stop all learning.
 MAX_CURSOR_TS = 253402300799.0
+# The most a dollar amount in loop.yaml (`monthly_budget_usd`, `spent_this_month_usd`) can be.
+# `soup loop status` and the budget check convert it to a float, which a JSON integer of a few
+# hundred digits cannot survive (OverflowError); `soup loop watch --monthly-budget` itself stops
+# at 1,000,000. Compared without float(), so a huge int is a refusal, not an overflow.
+MAX_USD_AMOUNT = 1e15
 _DEFAULT_STATE_DIR = ".soup"
 _DEFAULT_STATE_FILENAME = "loop.yaml"
 
@@ -319,15 +324,25 @@ class LoopState:
             v = self.canary_traffic_pct
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ValueError("canary_traffic_pct must be numeric or None")
-            if not (0.0 <= float(v) <= 100.0):
+            if not (0 <= v <= 100):  # no float(): a huge int would overflow (false for NaN)
                 raise ValueError("canary_traffic_pct must be in [0, 100]")
         if self.monthly_budget_usd is not None:
             v = self.monthly_budget_usd
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-                raise ValueError("monthly_budget_usd must be >= 0 or None")
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not (0 <= v <= MAX_USD_AMOUNT)  # no float(); false for NaN too
+            ):
+                raise ValueError(
+                    f"monthly_budget_usd must be in [0, {int(MAX_USD_AMOUNT)}] or None"
+                )
         v = self.spent_this_month_usd
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-            raise ValueError("spent_this_month_usd must be >= 0")
+        if (
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not (0 <= v <= MAX_USD_AMOUNT)  # no float(); false for NaN too
+        ):
+            raise ValueError(f"spent_this_month_usd must be in [0, {int(MAX_USD_AMOUNT)}]")
         if self.max_runs_per_day is not None:
             v = self.max_runs_per_day
             if isinstance(v, bool) or not isinstance(v, int) or v < 1:
@@ -354,7 +369,7 @@ class LoopState:
         if (
             isinstance(v, bool)
             or not isinstance(v, (int, float))
-            or not (0.0 < float(v) <= 100.0)
+            or not (0 < v <= 100)  # no float(): a huge int would overflow (false for NaN)
         ):
             raise ValueError("deploy_traffic_pct must be in (0, 100]")
         for fname in (
