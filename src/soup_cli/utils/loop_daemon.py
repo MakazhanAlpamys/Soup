@@ -568,7 +568,9 @@ def run_once(
                 or None
             ),
             failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
-            failed_stage=_failed_stage_after(state, stage_error, held_note, pending),
+            failed_stage=_failed_stage_after(
+                state, stage_error, held_note, pending, clean_cycle=False,
+            ),
             last_idle={"at": _utc_iso(), "reason": reason},
         )
         return idle_state, _noted(record, log), BudgetDecision(
@@ -610,7 +612,21 @@ def run_once(
         ),
         last_failure=(failure_note or "")[:500] or None,
         failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
-        failed_stage=_failed_stage_after(state, stage_error, held_note, pending),
+        failed_stage=_failed_stage_after(
+            state,
+            stage_error,
+            held_note,
+            pending,
+            clean_cycle=(
+                stage_error is None
+                and held_note is None
+                and pending is None
+                and trained_run
+                and not train_out.get("failed")
+                and not train_out.get("train_held")
+                and gate_out.get("gate_verdict") in ("OK", "MAJOR")
+            ),
+        ),
     )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
@@ -1001,8 +1017,15 @@ def _failed_stage_after(
     stage_error: "Optional[_StageError]",
     held_note: Optional[str],
     pending_deploy: Optional[Mapping[str, object]],
+    *,
+    clean_cycle: bool,
 ) -> Optional[dict]:
-    """Advance, preserve, or clear the loop-wide consecutive stage-error record."""
+    """Advance, preserve, or clear the loop-wide consecutive stage-error record.
+
+    A streak resets only after training actually ran and the gate produced a decided verdict
+    without an exception. Non-raising training failures, training holds, idle polls, and pending
+    deploy retries preserve the streak; they are not evidence of a clean cycle.
+    """
     previous = state.failed_stage
     if previous is None and state.failed_train is not None and is_stage_error(state.failed_train):
         # v0.78.0 stored stage errors in failed_train with a stage-specific fingerprint.
@@ -1020,7 +1043,9 @@ def _failed_stage_after(
             datetime.now(timezone.utc),
             stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
         )
-    # A cycle made it through the failure-prone stages; start a fresh streak next time.
+    if not clean_cycle:
+        return previous
+    # Only a successfully trained and decided cycle starts a fresh streak.
     return None
 
 

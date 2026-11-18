@@ -440,14 +440,17 @@ class TestStatusAndResume:
 
     def test_resume_of_a_paused_loop_resumes_and_clears(self, cwd):
         path = str(cwd / ".soup" / "loop.yaml")
-        write_state(_state(status="paused", failed_train=_print()), path)
+        stage = {**_print(attempts=2), "reason": "stage error: the harvest stage raised ValueError"}
+        write_state(_state(status="paused", failed_train=_print(), failed_stage=stage), path)
 
         result = self._runner().invoke(loop_app, ["resume"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         text = _plain(result.output)
         assert "loop resumed" in text and "retry hold cleared" in text
-        assert read_state(path).status == "running" and read_state(path).failed_train is None
+        resumed = read_state(path)
+        assert resumed.status == "running"
+        assert resumed.failed_train is None and resumed.failed_stage is None
 
     def test_resume_without_a_hold_is_as_before(self, cwd):
         path = str(cwd / ".soup" / "loop.yaml")
