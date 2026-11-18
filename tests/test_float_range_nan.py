@@ -19,11 +19,13 @@ command (3 for the ``GateCommand`` ``data validate``, Click's 2 elsewhere).
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 import pytest
 import typer
 
 from soup_cli.cli import app
+from soup_cli.commands._common import refuse_nan
 from soup_cli.utils.typer_compat import UsageError, is_group, is_option
 from tests.conftest import make_cli_runner, strip_ansi
 
@@ -155,7 +157,7 @@ _RANGED = _ranged_float_options()
 _RANGED_IDS = [f"{path} {param.opts[-1]}" for path, _, param in _RANGED]
 
 
-def test_the_walker_sees_the_six_options():
+def test_the_walker_sees_the_ranged_options():
     seen = {(path, param.opts[-1]) for path, _, param in _RANGED}
 
     assert {
@@ -165,6 +167,7 @@ def test_the_walker_sees_the_six_options():
         ("data decontaminate", "--threshold"),
         ("data score", "--threshold"),
         ("data forge", "--uncertainty-threshold"),
+        ("sweep", "--early-stop"),
     } <= seen
 
 
@@ -184,3 +187,34 @@ def test_every_ranged_float_option_lets_a_finite_value_and_none_through(path, co
 
     assert param.process_value(ctx, str(low)) == low
     assert param.process_value(ctx, None) is None
+
+
+# --- the range in the nan refusal is worded as Click words it (#3006) ----------
+
+
+def _range_shown(result) -> str:
+    """The range in a refusal such as ``... is not in the range x>=1.0.``."""
+    text = _plain(result)
+    assert " is not in the range " in text, result.output
+    return text.split(" is not in the range ", 1)[1].split(".", 1)[0].rstrip()
+
+
+@pytest.mark.parametrize(
+    ("bounds", "outside"),
+    [({"min": 0.0, "max": 1.0}, "1.5"), ({"min": 1.0}, "0.5"), ({"max": 1.0}, "1.5")],
+    ids=["two-sided", "lower-bound-only", "upper-bound-only"],
+)
+def test_the_nan_refusal_words_the_range_as_click_does(workdir, bounds, outside):
+    probe = typer.Typer()
+
+    @probe.command()
+    def main(
+        value: Optional[float] = typer.Option(None, "--value", callback=refuse_nan, **bounds),
+    ) -> None:
+        """A one-option command with the bounds under test."""
+
+    click_says = make_cli_runner().invoke(probe, ["--value", outside])
+    refuse_nan_says = make_cli_runner().invoke(probe, ["--value", "nan"])
+
+    assert click_says.exit_code == refuse_nan_says.exit_code == 2
+    assert _range_shown(refuse_nan_says) == _range_shown(click_says)

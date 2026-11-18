@@ -34,15 +34,16 @@ def refuse_output_over_input(
 
 
 def _describe_range(kind: object) -> str:
-    """A Click range as Click words it, e.g. ``0.0<=x<=1.0``."""
+    """A Click range as Click words it: ``0.0<=x<=1.0``, or ``x>=1.0`` with one bound (#3006)."""
     low = getattr(kind, "min", None)
     high = getattr(kind, "max", None)
-    text = "x"
-    if low is not None:
-        text = f"{low}{'<' if getattr(kind, 'min_open', False) else '<='}{text}"
-    if high is not None:
-        text = f"{text}{'<' if getattr(kind, 'max_open', False) else '<='}{high}"
-    return text
+    low_open = getattr(kind, "min_open", False)
+    high_open = getattr(kind, "max_open", False)
+    if high is None:
+        return "x" if low is None else f"x{'>' if low_open else '>='}{low}"
+    if low is None:
+        return f"x{'<' if high_open else '<='}{high}"
+    return f"{low}{'<' if low_open else '<='}x{'<' if high_open else '<='}{high}"
 
 
 def refuse_nan(param: typer.CallbackParam, value: Optional[float]) -> Optional[float]:
