@@ -352,6 +352,22 @@ The capture writer follows a write-last manifest protocol on one filesystem:
 If grouped publication fails, the previous available group is restored or no group is
 visible. A manifest without all matching payloads is corruption, never a partial success.
 
+The internal `admit_teacher_expert_shard` reader accepts one `available` shard at a
+time. Pass the expected plan, the capture root, a shard ID to locate the directory, and
+the canonical SHA-256 of its `available` manifest. Admission checks the full publication
+chain, identity, and `capture.jsonl` before returning the manifest and an immutable
+sequence of tokens parsed from the same bytes whose hash was checked. Plan and manifest
+files are limited to 8,388,608 bytes each. The payload is limited to 67,108,864 bytes and
+100,000 rows. Linked files or directories inside the capture root are refused.
+
+For MLX captures, also pass the trusted request SHA-256, including the trailing LF.
+Admission reads the controller's `.workers/<transaction_id>/result.json` with
+`verify_mlx_capture_record`. It ties the controller's record of successful process exit
+to the dispatched request, the matching worker nonce and receipt, and the same published
+manifest. Each of these control files is limited to 8,388,608 bytes. Admission only
+reads capture metadata and token rows. Reservation, consumption and checkpoint writes
+belong to the later controller.
+
 Resume decisions are closed and deterministic:
 
 | Observed state | Integrity/fingerprints | Action |
