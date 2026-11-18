@@ -467,6 +467,8 @@ def run_iterative_dpo(
 
     for rnd in plan.rounds:
         prompts = _load_prompts(rnd.prompts_path)
+        if not prompts:
+            raise ValueError(f"prompts file {rnd.prompts_path!r} has no usable prompts")
         sampled = sample_fn(
             base_model=plan.base_model,
             adapter_path=sample_adapter,

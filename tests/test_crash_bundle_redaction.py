@@ -1165,6 +1165,16 @@ LADDER_STEP_LIMIT = 10  # 4x more text: linear is about 4x the time, quadratic a
 LADDER_NOISE_FLOOR = 0.02  # seconds; timings below this are noise
 STEP_FLOOR = 0.25  # seconds a step may always take, whatever its size
 CASE_DEADLINE = 90  # seconds: past this the whole run is aborted with a traceback
+# A busy host slows the big steps and leaves the small ones alone: a 10 ms run fits inside one
+# quiet moment of a shared runner, a 250 ms run does not. Two hosted runners (macOS, Windows)
+# took 5x and 3x the linear time at the 256 KiB step, three runs in a row, for patterns whose
+# time grows with an exponent of 1.00 to 1.06 from 64 KiB to 1 MiB on a quiet machine, with no
+# step at 256 KiB (``redact_text`` does not cut its input; ``crash`` does, before calling it).
+# So a step over its bound is measured again, with a growing pause, before it is called slow:
+# a busy spell ends, a quadratic pattern is slow every time.
+STEP_PAUSES = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0)  # before attempt 2, 3, ... 8
+STEP_RETRY_BUDGET = 6.0  # seconds of attempts, after the first, one step may spend
+ABORT_FACTOR = 4  # one attempt this many times over the step's absolute bound is slow, not noise
 
 
 @pytest.fixture
@@ -1197,27 +1207,44 @@ def _repeat(unit: str):
     return lambda size: unit * (size // len(unit) + 1)
 
 
-def _assert_scales_linearly(make_text, label: str) -> str:
-    """Time ``redact_text`` up the ladder; fail at the first step that grows too fast."""
+def _best_time(redact, text: str, acceptable: float, hard_limit: float, pauses) -> float:
+    """The fastest of the attempts to run ``redact(text)``; attempts stop once one is within
+    ``acceptable``, once one is more than ``ABORT_FACTOR`` times ``hard_limit`` (a pattern that
+    slow is not a paused runner, and must not be run again and again), or when the budget or
+    the pauses run out."""
+    best = float("inf")
+    spent = 0.0
+    for attempt in range(len(pauses) + 1):
+        # the key-name cache would turn a repeat of the same text, or a bigger text that starts
+        # with the same names, into hits: every attempt pays for its own names
+        is_secret_key.cache_clear()
+        start = time.perf_counter()
+        redact(text)
+        took = time.perf_counter() - start
+        best = min(best, took)
+        if best <= acceptable or took > ABORT_FACTOR * hard_limit:
+            break
+        spent += took
+        if attempt == len(pauses) or spent > STEP_RETRY_BUDGET:
+            break
+        time.sleep(pauses[attempt])
+    return best
+
+
+def _assert_scales_linearly(make_text, label: str, redact=None, pauses=STEP_PAUSES) -> str:
+    """Time ``redact`` (``redact_text``) up the ladder; fail at the first step that is too slow."""
+    redact = redact or redact_text
     timings: list[float] = []
     text = ""
     for size in LADDER:
         text = make_text(size)
-        acceptable = max(_time_bound(size), STEP_FLOOR)
+        hard_limit = max(_time_bound(size), STEP_FLOOR)
+        acceptable = hard_limit
         if timings:
             acceptable = min(acceptable, LADDER_STEP_LIMIT * max(timings[-1], LADDER_NOISE_FLOOR))
-        # one run; a run over its bound is repeated twice and the best one counts, because a
-        # paused CI runner is not a slow pattern (a slow pattern is slow all three times)
-        best = float("inf")
-        for _attempt in range(3):
-            start = time.perf_counter()
-            redact_text(text)
-            best = min(best, time.perf_counter() - start)
-            if best <= acceptable:
-                break
-        timings.append(best)
+        timings.append(_best_time(redact, text, acceptable, hard_limit, pauses))
         # every step has its own bound: a case never climbs the whole ladder to fail
-        assert timings[-1] < max(_time_bound(size), STEP_FLOOR), (label, size, timings[-1])
+        assert timings[-1] < hard_limit, (label, size, timings[-1])
         if len(timings) > 1:
             limit = LADDER_STEP_LIMIT * max(timings[-2], LADDER_NOISE_FLOOR)
             assert timings[-1] <= limit, (label, size, [round(t, 4) for t in timings])
@@ -1239,6 +1266,110 @@ def test_the_helpers_that_keep_a_failing_perf_test_cheap_work():
     assert _leaked("a b c", "b", "x") == ["b"]
     assert len(_repeat("ab")(11)) >= 11
     assert _assert_scales_linearly(_repeat("hf_"), "hf prefixes").startswith("hf_")
+
+
+# The ladder is an instrument, and it is checked like one: stand-ins whose cost is exactly
+# known (they spin for a set time, so the verdict does not depend on the speed of the host)
+# have to be failed or passed by it.
+
+def _spin(seconds: float) -> None:
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        pass
+
+
+def _x_text(size: int) -> str:
+    return "x" * size
+
+
+def _stand_in(per_char: float = 0.0, per_char_squared: float = 0.0, extra=None):
+    """A stand-in for ``redact_text`` that costs ``per_char * n + per_char_squared * n**2``
+    seconds, plus ``extra(n, calls)`` when given; ``.calls`` lists the sizes it was run on."""
+    calls: list[int] = []
+
+    def redact(text: str) -> None:
+        calls.append(len(text))
+        seconds = per_char * len(text) + per_char_squared * len(text) ** 2
+        _spin(seconds + (extra(len(text), calls) if extra else 0.0))
+
+    redact.calls = calls
+    return redact
+
+
+def _fails_with(redact, pauses=(0.0, 0.0, 0.0), label="stand-in") -> str:
+    with pytest.raises(AssertionError) as info:
+        _assert_scales_linearly(_x_text, label, redact=redact, pauses=pauses)
+    return str(info.value)
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_fails_a_quadratic_stand_in_at_the_first_step_that_grows_too_fast():
+    # 4 ms, 13 ms (inside the noise floor), 215 ms at 64 KiB: 16x for 4x the text; the
+    # whole ladder stays far inside the absolute bounds, so only the step ratio can see it
+    redact = _stand_in(per_char_squared=5e-11)
+    message = _fails_with(redact, label="quadratic")
+    assert message.startswith("('quadratic', 65536, "), message[:80]
+    assert max(redact.calls) == 64 << 10  # it stopped there: 256 KiB was never run
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_fails_a_quadratic_that_only_shows_at_the_last_step():
+    # 43 ms at 64 KiB (fine), 0.69 s at 256 KiB: this is the step the hosted runners failed
+    redact = _stand_in(per_char_squared=1e-11)
+    message = _fails_with(redact, pauses=(0.0,), label="late quadratic")
+    assert message.startswith(f"('late quadratic', {LADDER[-1]}, "), message[:80]
+    # and a step that stays slow is measured a bounded number of times, then reported
+    assert redact.calls.count(LADDER[-1]) == 2
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_stops_measuring_a_slow_step_when_its_budget_is_spent(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "STEP_RETRY_BUDGET", 0.0)
+    redact = _stand_in(per_char_squared=1e-11)
+    _fails_with(redact, pauses=(0.0,) * 7, label="budget")
+    assert redact.calls.count(LADDER[-1]) == 1  # 8 attempts were allowed
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_fails_a_linear_stand_in_that_is_too_slow_per_character():
+    redact = _stand_in(per_char=2.5e-5)  # 0.1 s at 4 KiB, 0.41 s at 16 KiB: over the 0.27 s bound
+    message = _fails_with(redact, label="slow linear")
+    assert message.startswith(f"('slow linear', {LADDER[1]}, "), message[:80]
+    assert max(redact.calls) == LADDER[1]
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_does_not_fail_a_linear_pattern_that_met_a_busy_host_at_the_last_step():
+    def busy_host(size, calls):
+        # the first three runs of the 256 KiB step are slowed down about 8x, the fourth is not
+        return 0.36 if size == LADDER[-1] and calls.count(size) <= 3 else 0.0
+
+    redact = _stand_in(per_char=2e-7, extra=busy_host)
+    _assert_scales_linearly(_x_text, "busy host", redact=redact)  # the production pauses
+    assert redact.calls.count(LADDER[-1]) == 4
+    assert redact.calls.count(LADDER[0]) == 1  # a step inside its bound is run once
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_does_not_run_a_hopelessly_slow_step_again(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "STEP_FLOOR", 0.01)  # the 4 KiB bound: 0.067 s
+    redact = _stand_in(per_char=7e-5)  # 0.29 s at 4 KiB: more than ABORT_FACTOR x the bound
+    message = _fails_with(redact, label="hopeless")
+    assert message.startswith(f"('hopeless', {LADDER[0]}, "), message[:80]
+    assert redact.calls == [LADDER[0]]
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_every_timed_run_starts_with_an_empty_key_name_cache():
+    seen: list[int] = []
+
+    def redact(text: str) -> None:
+        seen.append(is_secret_key.cache_info().currsize)
+        is_secret_key("somewhere_token")
+
+    is_secret_key("left_over_token")
+    _assert_scales_linearly(_x_text, "cache", redact=redact, pauses=(0.0,))
+    assert seen == [0] * len(LADDER)
 
 
 @pytest.mark.usefixtures("perf_watchdog")
@@ -1278,6 +1409,9 @@ ADVERSARIAL = {
     "slack prefixes": _repeat("xoxb-"),
     "jwt prefixes": _repeat("eyJ"),
     "jwt dots": _repeat("eyJabcdef."),
+    "jwt dashed chain": _repeat("eyJ-eyJ_"),
+    "jwt two long parts": lambda size: "eyJ" + "a" * (size // 2) + ".eyJ" + "a" * (size // 2),
+    "jwt long parts between dots": _repeat("eyJ" + "a" * 3000 + ".eyJ" + "b" * 3000 + "."),
     "bearer words": _repeat("Bearer "),
     "bearer then spaces": lambda size: "bearer" + " " * size,
     "authorization words": _repeat("authorization: "),
