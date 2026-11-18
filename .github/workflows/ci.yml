@@ -940,6 +940,24 @@ jobs:
       # (2026-11-15): a pull request's ubuntu / 3.12, the cell a quick run has and an approval
       # run repeats. See the first step and tests/test_ci_suite_result_reuse.py.
       REUSE_CELL: ${{ github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' }}
+      # 2026-11-17: caps oneDNN (the CPU backend of torch's bfloat16 matmuls) below its
+      # bfloat16 and AMX instruction sets, on the Windows cells only. On a minority of Windows
+      # hosts a worker dies with `Windows fatal exception: code 0xc000001d` (illegal
+      # instruction) in a bfloat16 `F.linear` and pytest-xdist then aborts the run at about 46%
+      # of the suite. Three jobs (2026-11-14, 2026-11-16, 2026-11-17) crashed in the same two
+      # tests; the one whose host was printed ran on an `INTEL(R) XEON(R) PLATINUM 8573C`
+      # (Emerald Rapids, which has AVX-512 bfloat16 and AMX), but four other jobs on that CPU
+      # model passed, so the model name alone does not decide it. A HYPOTHESIS, not a known
+      # fix: oneDNN picks a bfloat16 / AMX kernel the virtual machine does not really run.
+      # oneDNN's ISA values, lowest first: AVX2, AVX2_VNNI, AVX512_CORE (AVX-512 BW/VL/DQ),
+      # AVX512_CORE_VNNI, AVX512_CORE_BF16, then the AMX ones; AVX512_CORE is the highest that
+      # leaves out VNNI, bfloat16 and AMX. Cost: oneDNN's bfloat16 and int8 CPU kernels in
+      # the Windows cells run on the plain AVX-512 path (slower, same results). An empty value,
+      # which every other cell gets, is "not set" to oneDNN (checked with oneDNN 3.12, the
+      # one torch 2.14 bundles). The step "Print the host CPU" prints the value and the ISA
+      # oneDNN reports, so a later crash says whether the cap was in force.
+      # tests/test_ci_windows_onednn_isa_cap.py pins the cells.
+      ONEDNN_MAX_CPU_ISA: ${{ matrix.os == 'windows-latest' && 'AVX512_CORE' || '' }}
     steps:
       # 2026-11-15: a green `test (ubuntu-latest, 3.12)` of a pull request is not run twice for
       # one merge commit. The quick run records a marker when its cell ends green; when a
@@ -1059,6 +1077,10 @@ jobs:
         # suite. The runner image and the packages were the same in good and bad runs; the log
         # never named the CPU. This step names it, so the next bad run says which host class
         # it was. It changes nothing, never fails the job and cannot hold a runner for long.
+        # 2026-11-17: also prints the job's ONEDNN_MAX_CPU_ISA (see `env:` of this job), whether
+        # torch sees the bfloat16 and AMX units, and the ISA oneDNN reports once a primitive is
+        # created (ONEDNN_VERBOSE only in the last command): "Intel AVX-512" when the cap holds,
+        # "... bfloat16 support" or "... AMX" when it does not, on a host that has them.
         continue-on-error: true
         timeout-minutes: 5
         shell: pwsh
@@ -1066,6 +1088,10 @@ jobs:
           Write-Output "PROCESSOR_IDENTIFIER=$env:PROCESSOR_IDENTIFIER"
           Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List
           python -c "import torch; print('torch cpu capability:', torch.backends.cpu.get_cpu_capability())"
+          Write-Output "ONEDNN_MAX_CPU_ISA=$env:ONEDNN_MAX_CPU_ISA"
+          python -c "import torch; print('torch sees avx512_bf16:', torch.cpu._is_avx512_bf16_supported(), 'amx_tile:', torch.cpu._is_amx_tile_supported())"
+          $env:ONEDNN_VERBOSE = "1"
+          python -c "import torch; torch.mkldnn_convolution(torch.randn(1, 3, 8, 8), torch.randn(4, 3, 3, 3), None, (0, 0), (1, 1), (1, 1), 1)" 2>&1 | Select-String -SimpleMatch "info,cpu,isa"
       - name: Warm HF Hub cache (models the tests load)
         if: env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'
         # Pre-download the models the unit tests load, with retries, so a
