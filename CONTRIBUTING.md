@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (179 recipes)
+  recipes/            - Ready-made configs for popular models (181 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -697,6 +697,44 @@ docs-only: `test (ubuntu-latest, 3.12)` runs the whole suite as always, and the
 other test cells and the three smoke jobs still report, as success, without
 running a step. If the file list cannot be read, or is not the whole list, the
 full set runs. A push, the nightly run and a release branch are never docs-only.
+
+**A maintainer can run the approval matrix by hand.** `gh workflow run ci.yml
+--ref <branch> -f matrix=approval` starts the four required test cells and the
+smoke jobs on the pinned stack, as a pull request labelled `ci:full` runs them,
+plus the jobs only a run that is not a pull request has (`type-check`,
+`torchao-contract`, `typer-vendored`); coverage is measured in `test
+(ubuntu-latest, 3.11)` as in every such run. The default is still the nightly
+matrix (seven cells, newest upstream stack), which the schedule and a dispatch
+without the input run. Measured on 2026-11-12..15: nine full-matrix dispatches on
+one integration branch cost 3,404 job-minutes, and the approval matrix leaves out
+about 95 of the 215 minutes of such a run. On a pull request's branch the dispatch
+tests the branch tip, not its merge with `main`, and does not replace the label
+run: the pull request's required checks come from its own pull-request run alone.
+
+**A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
+the approval run of a pull request check out the same merge commit:
+`github.sha` of a pull-request run is the merge commit GitHub built when the run
+was created, and adding `ci:full` does not rebuild it (14 of 14 sampled pairs, up
+to six hours apart, logged the same `HEAD is now at ... Merge <head> into
+<main>`). So the approval run's cell would test exactly what the quick run
+tested, and when that run ended green the approval run reuses its result instead
+of repeating it. The quick run's cell leaves a few bytes in the Actions cache
+under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
+the runner and the Python version, with no prefix match), and the approval run's
+cell looks for that key before it does anything else. On a hit it runs no other
+step and still reports `test (ubuntu-latest, 3.12)` as success under the same
+name; the log says which run the result came from. Misses, where the suite runs
+as before: a new push, or anything that makes GitHub rebuild the merge commit (a
+close and reopen, say), because the key names another commit; a first run that
+was red or cancelled; a cache lookup that failed (it is optional and bounded to
+five minutes); and every other cell, which always runs at approval. A moved
+`main` alone is not a miss: the label run tests the same merge commit the quick
+run did, which is what it would have tested without the cache. To force a fresh
+suite on that commit, delete the marker and re-run the job: find it with
+`gh cache list --key suite-green-v1- --ref refs/pull/<number>/merge`, delete it
+with `gh cache delete suite-green-v1-<merge sha>-ubuntu-latest-3.12 --ref
+refs/pull/<number>/merge`, then re-run the job (`gh run rerun <run id> --job
+<job id>`).
 
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the

@@ -155,6 +155,10 @@ like code. Requires `[train]`.
 
 ## Canaries (`soup data canary insert|check`)
 
+The canary commands display paths, diagnostics and exposure-table secrets literally,
+with terminal controls and bidi marks removed from the display. Dataset/manifest/report
+contents, scoring inputs, verdicts and secret-file permissions remain unchanged.
+
 Prove whether a model memorized your data — for leak detection and provenance.
 
 ```bash

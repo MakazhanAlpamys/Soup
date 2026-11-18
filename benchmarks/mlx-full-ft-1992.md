@@ -69,11 +69,9 @@ the assert-based check is retained in `verification.json`.
 - Complete versions, source/test hashes, commands and exit codes:
   [current environment](evidence/issue1992/current/environment.json),
   [floor environment](evidence/issue1992/floor/environment.json).
-- The twelve detailed case records live under `benchmarks/evidence/issue1992/current/`
-  and `benchmarks/evidence/issue1992/floor/` in the evidence follow-up. They retain
-  fixture hashes, data, config, per-tensor deltas and reload results. The follow-up
-  uses relative fixture and output paths and verifies the resolved config hashes.
-  [Evidence PR #2821](https://github.com/MakazhanAlpamys/Soup/pull/2821/files)
+- The twelve case records retain fixture hashes, data, config, per-tensor deltas,
+  and reload results. [Current runtime](evidence/issue1992/current/) and
+  [dependency floor](evidence/issue1992/floor/).
 
 ## Native observations
 
@@ -161,3 +159,13 @@ PYTHONPATH=src python scripts/generate_recipe_snapshot.py
 
 Repeat the feature command in an isolated environment with `mlx==0.31.2`,
 `mlx-lm==0.31.3` and `transformers==5.16.1` to exercise the declared floor.
+
+To reproduce the committed records, replace the temporary base and output paths
+with `./base` and `./trained` in `config.base`, `config.output`,
+`metadata.model`, and `training.output_dir`, then write `config` with
+`model_dump(mode="json", exclude_defaults=True)` to omit default-valued keys.
+Validate that compact `config` with `SoupConfig.model_validate` at the source SHA
+above and resolve its defaults with `model_dump(mode="json")`.
+Serialize the resolved config with `json.dumps(resolved, sort_keys=True,
+separators=(",", ":"))` and store the SHA-256 hex digest of the UTF-8 bytes in
+`resolved_config_sha256`.

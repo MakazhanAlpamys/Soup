@@ -16,7 +16,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.commands._common import refuse_output_over_input
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 
 console = Console()
 
@@ -76,7 +76,7 @@ def score(
     ),
     threshold: float = typer.Option(
         0.8, "--threshold",
-        min=0.0, max=1.0,
+        min=0.0, max=1.0, callback=refuse_nan,
         help="Decontamination overlap threshold.",
     ),
 ):
@@ -174,7 +174,7 @@ def decontaminate(
         help="Output JSONL of rows that survived decontamination.",
     ),
     threshold: float = typer.Option(
-        0.8, "--threshold", min=0.0, max=1.0,
+        0.8, "--threshold", min=0.0, max=1.0, callback=refuse_nan,
         help="Minimum n-gram overlap ratio for removing a row.",
     ),
     n: int = typer.Option(
@@ -266,7 +266,7 @@ def toxicity(
         help="Output JSONL file for rows meeting the threshold.",
     ),
     threshold: float = typer.Option(
-        0.05, "--threshold", min=0.0, max=1.0,
+        0.05, "--threshold", min=0.0, max=1.0, callback=refuse_nan,
         help="Rows meeting the abuse-keyword threshold are kept.",
     ),
 ):

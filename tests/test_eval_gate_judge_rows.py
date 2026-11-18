@@ -1,4 +1,4 @@
-"""Judge JSONL validates row shape and prompt type before that row's generation."""
+"""Judge JSONL validates row shape and prompt type before any row reaches generation."""
 
 from __future__ import annotations
 
@@ -123,6 +123,22 @@ def test_valid_missing_and_empty_prompts_are_preserved(
     assert calls["generate"] == [prompt] and len(calls["judge"]) == 1
 
 
+def test_valid_multi_row_file_preserves_order_and_score(calls: dict[str, list]) -> None:
+    rows = [
+        '{"prompt": "first", "category": "safety"}',
+        '{"prompt": "second"}',
+        '{"prompt": "third", "category": "helpfulness"}',
+        '{"prompt": "fourth"}',
+    ]
+    Path("prompts.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    score = gate._run_judge_task(
+        task(), lambda value: calls["generate"].append(value) or "synthetic",
+    )
+    assert score == 1.0
+    assert calls["generate"] == ["first", "second", "third", "fourth"]
+    assert len(calls["judge"]) == 4
+
+
 def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, list]) -> None:
     Path("prompts.jsonl").write_text(
         '{"prompt":"valid"}\n\n{"prompt":17}\n', encoding="utf-8",
@@ -130,7 +146,17 @@ def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, li
     with pytest.raises(ValueError) as caught:
         gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
     assert str(caught.value) == expected_message("prompt", "int")
-    assert calls == {"generate": ["valid"], "judge": []}
+    assert calls == {"generate": [], "judge": []}
+
+
+def test_bad_row_at_end_of_longer_file_makes_zero_generations(calls: dict[str, list]) -> None:
+    lines = [f'{{"prompt":"valid_{i}"}}' for i in range(20)]
+    lines.append('{"prompt":17}')
+    Path("prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
+    assert str(caught.value) == expected_message("prompt", "int", line=21)
+    assert calls == {"generate": [], "judge": []}
 
 
 def test_cli_invalid_input_does_not_replace_baseline(calls: dict[str, list]) -> None:
