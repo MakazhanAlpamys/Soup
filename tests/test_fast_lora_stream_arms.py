@@ -48,6 +48,14 @@ mlp_backward_scaling_order
     closed if the six sites are not found, so a kernel change cannot turn this
     arm into a silent no-op.  Nothing is copied by hand into this file.
 
+    LIMIT: this fixture has r=4 and alpha=8, so the scaling is 2.0.  Multiplying
+    by 2 is exact and commutes with a GEMM's rounding: ``(grad @ h) * s`` and
+    ``(grad * s) @ h`` are the same bits.  "Reached, nothing moved" here rules
+    out only the PLACEMENT of the scaling for this fixture; it cannot distinguish
+    anything else.  The arm is informative at a scaling that is not a power of
+    two (alpha=6 gives 1.5), which would be a separately labelled configuration
+    whose baseline is not the recorded row.
+
 Controls
 --------
 * two runs of the same configuration give the same numbers;
@@ -388,7 +396,25 @@ def test_mlp_arm_fails_closed_when_the_kernel_changed():
     assert count == 1 != len(_MLP_SCALING_SITES)
 
 
+def test_mlp_arm_fails_closed_at_install_time(monkeypatch):
+    """Deleting the raise must be caught: a missing site cannot become a no-op."""
+    import sys
+
+    pytest.importorskip("torch")
+    from soup_cli.utils import fast_lora_mlp
+
+    original = tuple(_MLP_SCALING_SITES)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_MLP_SCALING_SITES",
+        original + (("a site that cannot occur", "replacement"),),
+    )
+    with pytest.raises(AssertionError, match="found 6 of 7"):
+        _mlp_backward_peft_order(fast_lora_mlp, [])
+
+
 def test_mlp_arm_builds_a_backward_from_the_installed_source():
+    pytest.importorskip("torch")
     from soup_cli.utils import fast_lora_mlp
 
     calls: list[str] = []
@@ -552,7 +578,11 @@ def test_the_arms_move_the_three_names(tmp_path, monkeypatch, capsys):
     # The red-row baseline control: on a card running the fixture at bf16 the
     # row must be the recorded one.  This stays an assertion -- a different row
     # would make every reading below meaningless.
-    runs_at_bf16 = any("dtype=torch.bfloat16" in line for line in trace)
+    # Key on the _dense_weight lines only.  The new single-projection trace
+    # also contains "dtype=torch.bfloat16" and must not widen this gate.
+    runs_at_bf16 = any(
+        "_dense_weight(" in line and "dtype=torch.bfloat16" in line for line in trace
+    )
     if runs_at_bf16:
         for name, recorded in RECORDED_RATIOS.items():
             assert _ratio_for(baseline, name) == pytest.approx(recorded, abs=1e-5), name
