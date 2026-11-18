@@ -95,6 +95,8 @@ def mix(
     ),
 ) -> None:
     """BETA: search mixtures with a synthetic offline proxy, or measured --live runs."""
+    import yaml
+
     from soup_cli.utils.data_mix import (
         build_optimization_plan,
         load_mix_recipe,
@@ -115,8 +117,6 @@ def mix(
         raise typer.Exit(code=2)
 
     if apply_recipe is not None:
-        import yaml
-
         try:
             data_block = load_mix_recipe(apply_recipe)
         except (ValueError, FileNotFoundError, TypeError, yaml.YAMLError) as exc:
@@ -222,7 +222,7 @@ def mix(
 
         try:
             validate_proxy_config(base_yaml)
-        except (ValueError, TypeError, OSError) as exc:
+        except (ValueError, TypeError, OSError, yaml.YAMLError) as exc:
             console.print(
                 f"[red]live proxy validation failed: {for_terminal(exc)}[/red]", emoji=False
             )
@@ -251,7 +251,8 @@ def mix(
         raise typer.Exit(code=2) from exc
     if not report.candidates or not math.isfinite(report.best_eval_loss):
         advice = (
-            "Check the base config and training/evaluation errors, then retry."
+            "Check training and evaluation errors. If final-step validation is missing, "
+            "remove training.eval_steps to evaluate each epoch."
             if live else "Check the synthetic proxy outputs, then retry."
         )
         console.print(

@@ -106,6 +106,19 @@ def test_live_preflight_rejects_before_optimizer_or_subprocess(
     assert "\x9b" not in output and "\u202e" not in output
 
 
+def test_live_preflight_reports_malformed_base_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    Path("soup.yaml").write_text("base: [\n", encoding="utf-8")
+    optimizer = Mock()
+    monkeypatch.setattr("soup_cli.utils.data_mix.run_mix_optimizer", optimizer)
+
+    result = _mix("--live", "--base-yaml", "soup.yaml")
+
+    assert result.exit_code == 2, (result.output, result.exception)
+    assert "live proxy validation failed" in strip_ansi(result.output)
+    optimizer.assert_not_called()
+    assert not Path("recipe.yaml").exists()
+
+
 def test_live_preflight_runs_before_valid_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
