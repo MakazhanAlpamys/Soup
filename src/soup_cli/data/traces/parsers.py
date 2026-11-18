@@ -305,33 +305,34 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
         # utf-8-sig strips a leading BOM (common on Windows-written JSONL);
         # plain utf-8 left the BOM on line 1, so json.loads failed and the
         # first record of every BOM'd file was silently dropped.
-        for line in file_path.read_text(encoding="utf-8-sig").splitlines():
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            # A line written by a newer schema is not guessed at (docs/loop-formats.md).
-            if not _known_schema_version(event):
-                continue
-            prompt = _serve_prompt(event)
-            output = str(event.get("response") or event.get("output") or "")
-            if not prompt or not output:
-                continue
-            ts = parse_ts(event.get("ts"))
-            if ts_is_in_the_future(ts, now):
-                future += 1
-                continue
-            signal = _record_signal(event)
-            yield Trace(
-                trace_id=str(event.get("id") or file_path.stem),
-                prompt=prompt, output=output, signal=signal,
-                edited_output=_edited_output(event),
-                ts=ts,
-            )
+        with file_path.open(encoding="utf-8-sig", newline="\n") as source:
+            for line in source:
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                # A line written by a newer schema is not guessed at (docs/loop-formats.md).
+                if not _known_schema_version(event):
+                    continue
+                prompt = _serve_prompt(event)
+                output = str(event.get("response") or event.get("output") or "")
+                if not prompt or not output:
+                    continue
+                ts = parse_ts(event.get("ts"))
+                if ts_is_in_the_future(ts, now):
+                    future += 1
+                    continue
+                signal = _record_signal(event)
+                yield Trace(
+                    trace_id=str(event.get("id") or file_path.stem),
+                    prompt=prompt, output=output, signal=signal,
+                    edited_output=_edited_output(event),
+                    ts=ts,
+                )
     if future:
         logger.warning(
             "%d trace line(s) skipped: ts more than 24 h in the future (a later line would "
