@@ -83,9 +83,11 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     if not path.suffix:
         try:
             from datasets import load_dataset_builder
-            builder = load_dataset_builder(train_path)
-            size = builder.info.splits["train"].num_examples
-            return int(size * split), False
+
+            splits = load_dataset_builder(train_path).info.splits
+            if splits is not None:
+                size = splits["train"].num_examples
+                return int(size * split), False
         except (OSError, ValueError, KeyError, ImportError):
             pass
 
