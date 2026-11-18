@@ -115,6 +115,14 @@ def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Opti
     """
     if not isinstance(failed, Mapping) or not is_stage_error(failed):
         return None
+    # A failed training run has its own fingerprinted retry/hold in ``failed_train``. The
+    # loop-wide failure streak still counts that cycle, but must not shadow the training retry:
+    # doing so prevents the same dataset from being retried after its own wait expires.
+    reason = str(failed.get("reason") or "")
+    if reason.startswith("training failed:") or reason.startswith(
+        f"{STAGE_ERROR_PREFIX}the train stage raised TrainingFailed:"
+    ):
+        return None
     # The record is loop-wide in current state. Using its own fingerprint also accepts a legacy
     # v0.78.0 per-stage fingerprint while that record is migrated on the next write.
     fingerprint = failed.get("inputs")
