@@ -90,3 +90,120 @@ def test_control_different_text_under_output_is_drift_exit_three(files) -> None:
     out = _plain(result.output)
     assert result.exit_code == 3, (result.exit_code, out)
     assert "DRIFT" in out
+
+
+@pytest.mark.parametrize("side", ["reference", "live"])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_first_row_counts_toward_drift_verdict(tmp_path, monkeypatch, side, encoding) -> None:
+    monkeypatch.chdir(tmp_path)
+    rows = '{"output": "first"}\r\n{"output": "second"}\r\n'
+    for name in ("reference", "live"):
+        data = rows.encode(encoding if name == side else "utf-8")
+        (tmp_path / f"{name}.jsonl").write_bytes(data)
+
+    result = CliRunner().invoke(app, [
+        "drift-alarm", "--reference", "reference.jsonl", "--live", "live.jsonl",
+    ])
+
+    out = _plain(result.output)
+    assert result.exit_code == 0, (result.exit_code, out)
+    assert "KL: 0.0000" in out
+    assert "n_reference: 2" in out
+    assert "n_live: 2" in out
+
+
+@pytest.mark.parametrize(
+    ("reference_texts", "live_texts", "offending_side"),
+    [
+        ([" ", "\t\n"], ["words"], "reference"),
+        (["words"], [" ", "\t\n"], "live"),
+        ([" "], ["\t"], "reference"),
+    ],
+    ids=["tokenless-reference", "tokenless-live", "both-tokenless"],
+)
+@pytest.mark.parametrize("swapped_names", [False, True])
+def test_readable_but_tokenless_input_is_refused(
+    tmp_path, monkeypatch, reference_texts, live_texts, offending_side, swapped_names,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    names = ("live.jsonl", "ref.jsonl") if swapped_names else ("ref.jsonl", "live.jsonl")
+    reference = _write(tmp_path / names[0], "output", reference_texts)
+    live = _write(tmp_path / names[1], "output", live_texts)
+    offending_name = reference if offending_side == "reference" else live
+
+    with pytest.raises(ValueError) as exc:
+        run_drift_check(reference_path=reference, live_path=live, threshold=0.2)
+    message = _plain(str(exc.value))
+    assert offending_side in message.lower()
+    assert offending_name in message
+    assert "token" in message.lower()
+    assert "0 readable" not in message.lower()
+
+    result = CliRunner().invoke(app, ["drift-alarm", "--reference", reference, "--live", live])
+    out = _plain(result.output)
+    assert result.exit_code == 1, (result.exit_code, out)
+    assert offending_side in out.lower()
+    assert offending_name in out
+    assert "token" in out.lower()
+    assert "0 readable" not in out.lower()
+    assert "KL:" not in out
+    assert "OK" not in out.split()
+    assert "DRIFT" not in out.split()
+
+
+@pytest.mark.parametrize("side", ["reference", "live"])
+def test_unreadable_rows_keep_the_zero_readable_diagnostic(tmp_path, monkeypatch, side) -> None:
+    monkeypatch.chdir(tmp_path)
+    reference = _write(
+        tmp_path / "ref.jsonl", "completion" if side == "reference" else "output", ["words"]
+    )
+    live = _write(tmp_path / "live.jsonl", "completion" if side == "live" else "output", ["words"])
+    offending_name = reference if side == "reference" else live
+
+    with pytest.raises(ValueError) as exc:
+        run_drift_check(reference_path=reference, live_path=live, threshold=0.2)
+    message = _plain(str(exc.value))
+    assert side in message.lower()
+    assert offending_name in message
+    assert "0 readable" in message.lower()
+    assert all(key in message for key in ("output", "response", "text"))
+
+    result = CliRunner().invoke(app, ["drift-alarm", "--reference", reference, "--live", live])
+    out = _plain(result.output)
+    assert result.exit_code == 1, (result.exit_code, out)
+    assert side in out.lower()
+    assert offending_name in out
+    assert "0 readable" in out.lower()
+    assert all(key in out for key in ("output", "response", "text"))
+    assert "KL:" not in out
+    assert "OK" not in out.split()
+    assert "DRIFT" not in out.split()
+
+
+@pytest.mark.parametrize(
+    ("live_text", "exit_code", "verdict"),
+    [("same words", 0, "OK"), ("different tokens", 3, "DRIFT")],
+)
+def test_mixed_blank_and_nonblank_rows_keep_counts_and_verdict(
+    tmp_path, monkeypatch, live_text, exit_code, verdict,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    reference = _write(tmp_path / "ref.jsonl", "output", [" ", "same words", "\t"])
+    live = _write(tmp_path / "live.jsonl", "output", ["\n", live_text])
+
+    report = run_drift_check(reference_path=reference, live_path=live, threshold=0.2)
+    assert report.n_reference == 3
+    assert report.n_live == 2
+    assert report.drift_detected is (exit_code == 3)
+    if exit_code == 0:
+        assert report.kl_divergence == 0.0
+    else:
+        assert report.kl_divergence > 0.2
+
+    result = CliRunner().invoke(app, ["drift-alarm", "--reference", reference, "--live", live])
+    out = _plain(result.output)
+    assert result.exit_code == exit_code, (result.exit_code, out)
+    assert verdict in out
+    assert "KL:" in out
+    assert "n_reference: 3" in out
+    assert "n_live: 2" in out

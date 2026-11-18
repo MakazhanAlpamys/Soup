@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _make_jsonl(path: Path, count: int, field: str = "category"):
     """Create a JSONL file with count rows, optional category field."""
@@ -262,6 +264,138 @@ class TestDataSplitEdgeCases:
             ["data", "split", str(data_file), "--val", "20", "--absolute"],
         )
         assert result.exit_code != 0
+
+
+class TestStratifiedSplitExactCounts:
+    """Regression coverage for exact global stratified split counts (#2806)."""
+
+    @pytest.mark.parametrize(
+        ("val", "test", "absolute", "expected"),
+        [
+            (1, 1, True, (88, 1, 1)),
+            (20, 10, True, (60, 20, 10)),
+            (8, 5, False, (79, 7, 4)),
+        ],
+    )
+    def test_exact_global_counts_and_row_conservation(
+        self, tmp_path, val, test, absolute, expected
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 90)
+        args = [
+            "data", "split", str(data_file),
+            "--val", str(val),
+            "--test", str(test),
+            "--stratify", "category",
+            "--seed", "42",
+        ]
+        if absolute:
+            args.append("--absolute")
+
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+
+        train = _read_jsonl(tmp_path / "data_train.jsonl")
+        val_rows = _read_jsonl(tmp_path / "data_val.jsonl")
+        test_rows = _read_jsonl(tmp_path / "data_test.jsonl")
+        assert (len(train), len(val_rows), len(test_rows)) == expected
+
+        all_text = [
+            row["text"] for split in (train, val_rows, test_rows) for row in split
+        ]
+        assert len(all_text) == len(set(all_text)) == 90
+        assert set(all_text) == {f"sample {index}" for index in range(90)}
+
+    def test_small_strata_respect_capacity_and_redistribute(self):
+        from soup_cli.commands.data import _stratified_split
+
+        rows = [
+            {"id": 0, "category": "one"},
+            {"id": 1, "category": "two"},
+            {"id": 2, "category": "two"},
+            *({"id": index, "category": "large"} for index in range(3, 10)),
+        ]
+
+        train, val, test = _stratified_split(
+            rows, 3, 2, "category", seed=11
+        )
+
+        assert (len(train), len(val), len(test)) == (5, 3, 2)
+        capacities = {"one": 1, "two": 2, "large": 7}
+        for category, capacity in capacities.items():
+            assert sum(
+                row["category"] == category for row in val + test
+            ) <= capacity
+        assert sum(row["category"] == "large" for row in val + test) == 3
+        all_ids = [row["id"] for split in (train, val, test) for row in split]
+        assert sorted(all_ids) == list(range(len(rows)))
+        assert len(all_ids) == len(set(all_ids))
+
+    def test_same_seed_is_deterministic(self):
+        from soup_cli.commands.data import _stratified_split
+
+        rows = [
+            {"id": index, "category": f"cat_{index % 4}"}
+            for index in range(40)
+        ]
+
+        first = _stratified_split(rows, 7, 5, "category", seed=29)
+        second = _stratified_split(rows, 7, 5, "category", seed=29)
+
+        assert first == second
+
+    def test_largest_remainder_ties_use_stable_group_order(self):
+        from soup_cli.commands.data import _stratified_split
+
+        rows = [
+            {"id": index, "category": "first" if index < 2 else "second"}
+            for index in range(4)
+        ]
+
+        _, val, test = _stratified_split(rows, 1, 0, "category", seed=3)
+
+        assert len(val) == 1
+        assert val[0]["category"] == "first"
+        assert test == []
+
+    def test_semantic_stratification_uses_exact_shared_allocation(
+        self, tmp_path, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_command
+
+        data_file = tmp_path / "semantic.jsonl"
+        _make_jsonl(data_file, 90)
+        labels = [f"cluster_{index % 3}" for index in range(90)]
+        monkeypatch.setattr(
+            data_command,
+            "_get_semantic_labels",
+            lambda data, num_clusters, seed=None: labels,
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "data", "split", str(data_file),
+                "--val", "1", "--test", "1", "--absolute",
+                "--stratify-semantic", "--seed", "5",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        train = _read_jsonl(tmp_path / "semantic_train.jsonl")
+        val = _read_jsonl(tmp_path / "semantic_val.jsonl")
+        test = _read_jsonl(tmp_path / "semantic_test.jsonl")
+        assert (len(train), len(val), len(test)) == (88, 1, 1)
+        all_text = [row["text"] for split in (train, val, test) for row in split]
+        assert len(all_text) == len(set(all_text)) == 90
+        assert set(all_text) == {f"sample {index}" for index in range(90)}
 
 
 # ─── Security Tests ──────────────────────────────────────────────────────

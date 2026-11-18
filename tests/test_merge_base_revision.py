@@ -116,10 +116,11 @@ def test_low_memory_merge_downloads_the_recorded_commit(
     result = merge_cli.invoke("--low-memory", *args)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert len(merge_cli.calls) == 1
-    kind, base, kwargs = merge_cli.calls[0]
-    assert (kind, base) == ("snapshot", BASE)
-    assert kwargs.get("revision") == RECORDED
+    # The index and support files, then the weights (#2856): both on the recorded commit.
+    assert len(merge_cli.calls) == 2
+    for kind, base, kwargs in merge_cli.calls:
+        assert (kind, base) == ("snapshot", BASE)
+        assert kwargs.get("revision") == RECORDED
     assert json.loads((merge_cli.root / "merged/loaded-revision.json").read_text()) == RECORDED
     assert f"Base revision: {RECORDED} (recorded run)" in _plain(result.output)
 
