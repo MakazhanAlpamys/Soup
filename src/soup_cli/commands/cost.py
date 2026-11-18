@@ -79,8 +79,10 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
         except (OSError, ValueError, KeyError):
             pass
 
-    # HF dataset (only if not a local file path with extension)
-    if not path.suffix:
+    # Match training's route for Hub names, including names such as OpenHermes-2.5.
+    from soup_cli.data.loader import _classify_train_entry
+
+    if _classify_train_entry(train_path) == "hub" and not (path.suffix and path.is_file()):
         try:
             from datasets import load_dataset_builder
 
