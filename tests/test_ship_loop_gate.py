@@ -801,22 +801,26 @@ def test_a_text_field_exactly_at_its_limit_is_accepted():
     assert (len(held_edit.edit_id), len(held_edit.prompt)) == (256, 20000)
 
 
-def test_a_json_integer_over_the_digit_limit_is_refused_by_file_and_line(monkeypatch):
+def test_a_json_integer_over_the_digit_limit_is_refused_by_file_and_line():
     # The decoder raises a plain ValueError, not a JSONDecodeError, at the
     # interpreter's integer digit limit; the row still names file and line.
-    limit = sys.get_int_max_str_digits()
-    row = '{"edit_id":' + "9" * (limit + 1) + "}"
-    with pytest.raises(GateInputError) as raised:
-        parse_corrections(jsonl(GOOD_CORRECTION, row), "--corrections c.jsonl")
-    assert str(raised.value) == (
-        "--corrections c.jsonl line 2: invalid JSON: integer exceeds the digit limit"
-    )
-    held_row = '{"edit_id":' + "9" * (limit + 1) + "}"
-    with pytest.raises(GateInputError) as raised:
-        parse_held_out(jsonl(GOOD_HELD_OUT, held_row), "--held-out h.jsonl")
-    assert str(raised.value) == (
-        "--held-out h.jsonl line 2: invalid JSON: integer exceeds the digit limit"
-    )
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        row = '{"edit_id":' + "9" * 641 + "}"
+        with pytest.raises(GateInputError) as raised:
+            parse_corrections(jsonl(GOOD_CORRECTION, row), "--corrections c.jsonl")
+        assert str(raised.value) == (
+            "--corrections c.jsonl line 2: invalid JSON: integer exceeds the digit limit"
+        )
+        held_row = '{"edit_id":' + "9" * 641 + "}"
+        with pytest.raises(GateInputError) as raised:
+            parse_held_out(jsonl(GOOD_HELD_OUT, held_row), "--held-out h.jsonl")
+        assert str(raised.value) == (
+            "--held-out h.jsonl line 2: invalid JSON: integer exceeds the digit limit"
+        )
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 def test_too_many_rows_is_refused_at_the_row_over_the_limit(monkeypatch):
