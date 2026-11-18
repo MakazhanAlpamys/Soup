@@ -305,7 +305,7 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
         # utf-8-sig strips a leading BOM (common on Windows-written JSONL);
         # plain utf-8 left the BOM on line 1, so json.loads failed and the
         # first record of every BOM'd file was silently dropped.
-        with file_path.open(encoding="utf-8-sig", newline="\n") as source:
+        with file_path.open(encoding="utf-8-sig") as source:
             for line in source:
                 if not line.strip():
                     continue
