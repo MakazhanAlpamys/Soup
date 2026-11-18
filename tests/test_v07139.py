@@ -916,8 +916,8 @@ class TestSecurityHardening:
         from soup_cli.commands.ship import _read_gate_file
 
         with runner.isolated_filesystem():
-            Path("plain.jsonl").write_text('{"id": "row-1"}\\n', encoding="utf-8")
-            Path("bom.jsonl").write_text('{"id": "row-1"}\\n', encoding="utf-8-sig")
+            Path("plain.jsonl").write_text('{"id": "row-1"}\n', encoding="utf-8")
+            Path("bom.jsonl").write_text('{"id": "row-1"}\n', encoding="utf-8-sig")
             assert _read_gate_file("bom.jsonl", flag) == _read_gate_file(
                 "plain.jsonl", flag,
             )
