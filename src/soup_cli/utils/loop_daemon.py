@@ -1460,12 +1460,19 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
             ),
             config.state_path,
         )
-    except (OSError, ValueError):
-        # Transient (the lock was held, the drive blinked): run on without
-        # the promotion — the next cycle re-reads the file and the final
-        # write retries the status, exactly as a failed iteration save does.
+    except TimeoutError:
+        # Transient (the state lock was held): run on without the promotion —
+        # the next cycle re-reads the file and the final write retries the
+        # status, exactly as a failed iteration save does. A missing or
+        # invalid `loop.yaml` is not transient: it raises as it did before
+        # the `update_state` start-up write (#3055), through the arm that
+        # restores the signal handlers first.
         _LOG.warning("watch: the start-up status could not be written", exc_info=True)
-        state = read_state(config.state_path)
+        try:
+            state = read_state(config.state_path)
+        except BaseException:
+            _restore_signal_handlers(previous_handlers)
+            raise
     except BaseException:
         _restore_signal_handlers(previous_handlers)
         raise

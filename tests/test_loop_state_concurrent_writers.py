@@ -173,14 +173,13 @@ class TestSecondWriterDuringAnIteration:
 
 
 class TestStartUpPromotion:
-    def test_a_pause_that_lands_between_the_start_up_read_and_write_is_not_lost(
+    def test_a_pause_that_lands_after_the_first_read_of_watch_survives_the_start_up(
         self, cwd, monkeypatch
     ):
-        """#3041 — `watch()` read `loop.yaml`, promoted `stopped` to `running` and wrote
-        its whole copy back without the lock: a `soup loop pause` that landed in that
-        millisecond was overwritten from the stale pre-pause read. The promotion now
-        goes through `update_state`, which re-reads under the lock, so the pause
-        survives the start-up write."""
+        """#3041 — `watch()`'s start-up promotion of `stopped` to `running` went
+        through `update_state`, which re-reads `loop.yaml` under the lock, so a
+        `soup loop pause` that lands after the first read of the state survives:
+        the old start-up write of the stale pre-pause copy undid it."""
         write_state(replace(_promoted_state(), status="stopped"), _path(cwd))
 
         real_read_state = loop_daemon.read_state
