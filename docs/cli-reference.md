@@ -2733,6 +2733,7 @@ Subcommands:
 - [`canary`](#soup-loop-canary)
 - [`init`](#soup-loop-init)
 - [`pause`](#soup-loop-pause)
+- [`prune`](#soup-loop-prune)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
 - [`rollback`](#soup-loop-rollback)
@@ -2799,6 +2800,18 @@ Pause the watch daemon at the next iteration boundary.
 Usage: `soup loop pause`
 
 Takes no options or arguments.
+
+### `soup loop prune`
+
+Show a retention plan; remove loop artifacts only with --yes.
+
+Usage: `soup loop prune [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
+| `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
 
 ### `soup loop replay`
 

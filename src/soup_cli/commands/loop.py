@@ -68,10 +68,15 @@ from soup_cli.utils.loop_log import (
     version_line,
     withdrawn_line,
 )
-from soup_cli.utils.loop_retry import (
-    describe as describe_failed_train,
+from soup_cli.utils.loop_prune import (
+    DEFAULT_KEEP_LOG_LINES,
+    DEFAULT_KEEP_RUNS,
+    build_prune_plan,
+    daemon_is_running,
+    execute_prune,
 )
 from soup_cli.utils.loop_retry import (
+    describe as describe_failed_train,
     describe_deploy_failure,
     is_stage_error,
 )
@@ -720,6 +725,47 @@ def init_cmd(
             title="soup loop init",
         )
     )
+
+
+@app.command("prune")
+def prune_cmd(
+    yes: bool = typer.Option(
+        False, "--yes", help="Delete the listed files; otherwise only show the plan."
+    ),
+    keep_runs: int = typer.Option(
+        DEFAULT_KEEP_RUNS, "--keep-runs", min=1,
+        help="Keep at least this many recent loop runs (default: 20).",
+    ),
+    keep_log_lines: int = typer.Option(
+        DEFAULT_KEEP_LOG_LINES, "--keep-log-lines", min=1,
+        help="Keep this many newest lines in each loop JSONL log (default: 10000).",
+    ),
+) -> None:
+    """Show a retention plan; remove loop artifacts only with --yes."""
+    try:
+        if daemon_is_running():
+            console.print("[red]cannot prune while the loop daemon is running[/]")
+            raise typer.Exit(code=2)
+        plan = build_prune_plan(keep_runs=keep_runs, keep_log_lines=keep_log_lines)
+        if not plan:
+            console.print("[green]nothing to prune[/]")
+            return
+        for entry in plan:
+            verb = "trim" if entry.reason.startswith("trim ") else "remove"
+            action = f"{verb} ({entry.reason})"
+            console.print(f"{action}: {for_terminal(entry.path)}")
+        if not yes:
+            console.print(f"dry run: {len(plan)} change(s); rerun with --yes to apply")
+            return
+        # Close the race with a daemon that started while the dry-run plan was being built.
+        if daemon_is_running():
+            console.print("[red]cannot prune while the loop daemon is running[/]")
+            raise typer.Exit(code=2)
+        count = execute_prune(plan, keep_log_lines=keep_log_lines)
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]prune refused:[/] {for_terminal(str(exc))}")
+        raise typer.Exit(code=2)
+    console.print(f"[green]pruned {count} item(s)[/]")
 
 
 @app.command("status")

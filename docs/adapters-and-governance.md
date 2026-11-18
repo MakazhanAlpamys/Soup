@@ -660,6 +660,21 @@ happens only after generation returns or raises. Such crashes remain invisible t
 the canary verdict unless external restart monitoring detects them.
 
 
+### Retaining loop artifacts
+
+`.soup-loops/` contains generated runs and append-only logs. Use `soup loop prune` to inspect a
+retention plan; it is a dry run unless `--yes` is supplied. The defaults retain the 20 newest
+iterations and run artifacts, the artifacts needed by the active production/canary state and
+the latest 20 version transitions, and the newest 10,000 lines in each loop log. Pair datasets
+are kept when a retained iteration-log entry refers to them. Source traces and feedback are
+never pruned. The command refuses to run while the loop daemon is active.
+
+```bash
+soup loop prune
+soup loop prune --keep-runs 40 --keep-log-lines 20000
+soup loop prune --yes
+```
+
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
 
 Surgical factual patches WITHOUT a full fine-tuning loop. Hospital data team correcting a misattributed drug interaction, lab fixing a wrong historical date, security team responding to a hallucinated CVE — all one CLI invocation.
