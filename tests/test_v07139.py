@@ -894,6 +894,45 @@ class TestSecurityHardening:
             with pytest.raises(ValueError, match="exceeds"):
                 _safe_read_text("big.txt", "big", 10)
 
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_safe_read_text_strips_optional_bom(self, encoding):
+        from soup_cli.commands.ship import _safe_read_text
+
+        with runner.isolated_filesystem():
+            Path("input.txt").write_text("plain text", encoding=encoding)
+            assert _safe_read_text("input.txt", "input", 100) == "plain text"
+
+    def test_safe_read_text_bom_counts_toward_byte_cap(self):
+        from soup_cli.commands.ship import _safe_read_text
+
+        with runner.isolated_filesystem():
+            Path("input.txt").write_text("x", encoding="utf-8-sig")
+            with pytest.raises(ValueError, match="exceeds"):
+                _safe_read_text("input.txt", "input", 3)
+            assert _safe_read_text("input.txt", "input", 4) == "x"
+
+    @pytest.mark.parametrize("flag", ["--corrections", "--held-out"])
+    def test_gate_file_bom_matches_plain_utf8(self, flag):
+        from soup_cli.commands.ship import _read_gate_file
+
+        with runner.isolated_filesystem():
+            Path("plain.jsonl").write_text('{"id": "row-1"}\\n', encoding="utf-8")
+            Path("bom.jsonl").write_text('{"id": "row-1"}\\n', encoding="utf-8-sig")
+            assert _read_gate_file("bom.jsonl", flag) == _read_gate_file(
+                "plain.jsonl", flag,
+            )
+
+    def test_config_bom_matches_plain_utf8(self):
+        from soup_cli.commands.ship import _parse_ship_config
+
+        with runner.isolated_filesystem():
+            Path("plain.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
+            Path("bom.yaml").write_text(_CONFIG_MIN, encoding="utf-8-sig")
+            plain_cfg, plain_ship = _parse_ship_config("plain.yaml")
+            bom_cfg, bom_ship = _parse_ship_config("bom.yaml")
+            assert plain_cfg == bom_cfg
+            assert plain_ship == bom_ship
+
     def test_safe_hash_file_skips_oversize(self):
         from soup_cli.commands.ship import _safe_hash_file
 
