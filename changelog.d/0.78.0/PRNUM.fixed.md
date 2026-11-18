@@ -1,1 +1,0 @@
-- `--trust-remote-code` now shows its warning panel for a local directory whose path starts with an allowlisted org, such as `Qwen/my-merge`, which was treated as a trusted Hub repo id and ran its custom code without the panel (#3008 by @Adul23 in #PRNUM).
