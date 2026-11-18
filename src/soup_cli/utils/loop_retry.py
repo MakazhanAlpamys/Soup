@@ -20,10 +20,11 @@ A waiting or held cycle is a skipped iteration whose notes say so (``train_backo
 
 A stage of the cycle that RAISES (the cost, harvest, train or gate stage; a locked thumbs
 database, a directory that went away) and a failed training both count in the loop-wide
-``failed_stage`` streak. The streak records whether it includes a non-training failure: three
-consecutive failures hold the loop only when at least one is from a non-training stage. A
-training-only streak remains subject to ``failed_train``'s dataset-specific retry and hold, so
-changed inputs can train without ``soup loop resume``. The reason starts with ``stage error:``;
+``failed_stage`` streak. A raised non-deploy stage, including a raised train stage, makes three
+consecutive failures hold the loop. A streak made only of returned failed-training results stays
+subject to ``failed_train``'s dataset-specific retry and hold, so changed inputs can train without
+``soup loop resume``. The persisted ``has_non_train_failure`` flag keeps its historical name; it
+marks whether the streak contains a raised stage. The reason starts with ``stage error:``;
 waiting notes say ``stage_backoff: ...`` and a loop hold says ``stage_held: ...``.
 """
 
@@ -112,8 +113,8 @@ def is_stage_error(failed: Mapping[str, Any]) -> bool:
 def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
     """Why the cycle must not call its stages now (the skip note), or None to go ahead.
 
-    A failed training's fingerprinted wait/hold is owned by ``failed_train``; this record gates
-    raised stages and a streak that includes a non-training failure.
+    A returned failed training's fingerprinted wait/hold is owned by ``failed_train``; this
+    record gates raised stages, including a raised train stage.
     """
     if not isinstance(failed, Mapping) or not is_stage_error(failed):
         return None
@@ -207,6 +208,14 @@ def describe(failed: Optional[Mapping[str, Any]], now: Optional[datetime] = None
         base = f"{detail} ({attempts} time{plural} in a row)"
     else:
         base = f"failed {attempts} time{plural} on the same inputs ({failed.get('reason')})"
+    if (
+        is_stage_error(failed)
+        and failed.get("has_non_train_failure") is False
+        and str(failed.get("reason") or "").startswith(
+            f"{STAGE_ERROR_PREFIX}the train stage failed:"
+        )
+    ):
+        return f"counted: {base}; training retry is shown in train_retry"
     if failed.get("held"):
         until = (
             "soup loop resume clears it" if is_stage_error(failed)

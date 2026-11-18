@@ -423,11 +423,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
 # .soup/loop.log, and non-deploy failures share one loop-wide streak: 5 minutes after the first,
-# 30 minutes after the second, then held after the third only if the streak includes a
-# non-training-stage failure, even when stages alternate. Training failures also count in that
-# streak. The state tracks whether it includes a non-training failure: a training-only streak
-# never holds the loop; `failed_train` still owns its dataset-specific retry and hold, so a changed
-# dataset can run without `soup loop resume`. This
+# 30 minutes after the second, then held after the third if the streak includes a raised non-deploy
+# stage, including a raised train stage, even when stages alternate. Returned training failures
+# also count in that streak, but a streak made only of those does not hold the loop: `failed_train`
+# still owns its dataset-specific retry and hold, so a changed dataset can run without
+# `soup loop resume`. This
 # retry record does not replace the dataset-specific training retry; waiting notes start
 # `stage_backoff:` or `stage_held:`. A deploy that raises is retried like a refused deploy (three
 # attempts). Ctrl+C and SystemExit still stop the daemon. The streak counts consecutive cycles

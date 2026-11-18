@@ -1049,11 +1049,11 @@ def _failed_stage_after(
         reason = str(train_out.get("failure") or train_out.get("notes") or "training failed")
         failure_reason = f"stage error: the train stage failed: {reason}"
     if failed_stage_name is not None and failure_reason is not None:
-        # The streak continues across stage types. A training-only streak remains visible and
-        # counted, but cannot hold the loop: failed_train owns its dataset-specific hold. Once
-        # any non-train stage has failed in the current streak, three failures hold the loop.
-        has_non_train_failure = (
-            failed_stage_name != "train"
+        # The persisted field name is historical: any raised stage exception (including train)
+        # makes the streak eligible for the loop-wide hold. A returned failed-training result
+        # alone stays governed by failed_train's dataset-specific hold.
+        has_raised_stage = (
+            stage_error is not None
             or bool(previous and previous.get("has_non_train_failure"))
             or bool(
                 previous
@@ -1069,9 +1069,9 @@ def _failed_stage_after(
             stage_error_fingerprint(failed_stage_name),
             datetime.now(timezone.utc),
             failure_reason,
-            hold_after_limit=has_non_train_failure,
+            hold_after_limit=has_raised_stage,
         )
-        return {**failure, "has_non_train_failure": has_non_train_failure}
+        return {**failure, "has_non_train_failure": has_raised_stage}
     # No non-deploy failure occurred; this includes clean idle polls and deploy-only retries.
     return None
 
