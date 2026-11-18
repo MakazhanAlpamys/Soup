@@ -2265,6 +2265,21 @@ def _check_task_rows_target(
         _fail(str(exc), _EXIT_USAGE)
 
 
+def _windows_name(path: str) -> str:
+    """The name Windows gives ``path``: case folded, real path, and without the trailing dots
+    and spaces it drops from each part of a name (``x.json.`` and ``x.json `` are ``x.json``).
+
+    ``realpath`` keeps those characters while the file does not exist, and ``samefile`` needs
+    both files to exist, so two outputs that are not there yet and differ only by them were not
+    seen as one file. Off Windows a trailing dot or space belongs to the name and is kept.
+    """
+    name = os.path.normcase(os.path.realpath(path))
+    if os.name != "nt":
+        return name
+    drive, rest = os.path.splitdrive(name)
+    return drive + os.sep.join(part.rstrip(" .") for part in rest.split(os.sep))
+
+
 def _refuse_output_that_is_an_input(
     *,
     output: Optional[str],
@@ -2284,9 +2299,11 @@ def _refuse_output_that_is_an_input(
     would destroy the evidence it had just read, and a live run would evaluate both models and
     then replace the user's task file or config. The check is by real path (``realpath`` and
     ``normcase``, plus ``samefile``: a link, a hard link or a case difference on Windows is the
-    same file) and runs before anything is read, loaded or written. A ``--baseline`` or
-    ``--reward-fn`` that is not a file (a ``registry://`` id, a built-in reward name) is not a
-    path and is not compared.
+    same file; on Windows also a trailing dot or space, see :func:`_windows_name`). It runs
+    before any model loads and before anything is written: the config and the gate's files are
+    read first, to know what the run is; ``--evidence`` and the task file are not. A
+    ``--baseline`` or ``--reward-fn`` that is not a file (a ``registry://`` id, a built-in
+    reward name) is not a path and is not compared.
     """
     if not output and not emit_evidence:
         return
@@ -2301,10 +2318,22 @@ def _refuse_output_that_is_an_input(
     ]
     written = [(flag, value) for flag, value in (
         ("--output", output), ("--emit-evidence", emit_evidence)) if value]
+    pairs = [
+        (in_flag, in_path, out_flag, out_path)
+        for out_flag, out_path in written for in_flag, in_path in inputs
+    ]
+    if output and emit_evidence:
+        pairs.append(("--output", output, "--emit-evidence", emit_evidence))
     try:
         ensure_distinct_paths(inputs, written)
         if output and emit_evidence:
             ensure_distinct_paths([("--output", output)], [("--emit-evidence", emit_evidence)])
+        for in_flag, in_path, out_flag, out_path in pairs:
+            if _windows_name(in_path) == _windows_name(out_path):
+                raise ValueError(
+                    f"{out_flag} {quote_path(out_path)} is the same file as "
+                    f"{in_flag} {quote_path(in_path)}; choose a different {out_flag}"
+                )
     except ValueError as exc:
         _fail(str(exc), _EXIT_USAGE)
 
@@ -2627,7 +2656,8 @@ def ship(
             )
     threshold = _validate_threshold_flag(forgetting_threshold)
     noise_floor = _validate_noise_floor_flag(noise_floor)
-    # Before anything is read, loaded or run: an output may not replace one of the inputs.
+    # Before any model loads and before anything is written: an output may not replace one of
+    # the inputs.
     _refuse_output_that_is_an_input(
         output=output, emit_evidence=emit_evidence, evidence=evidence, task_eval=task_eval,
         config=config, corrections=corrections, held_out=held_out, baseline=baseline,

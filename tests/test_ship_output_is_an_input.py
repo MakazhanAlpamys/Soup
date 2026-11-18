@@ -8,7 +8,10 @@ with every input file the run was given (``--evidence``, ``--task-eval`` as give
 from ``--config``, ``--config``, ``--corrections``, ``--held-out``, a ``--baseline`` file, a
 ``--reward-fn`` file) and with the other output, by real path (``realpath`` and ``normcase``, so
 a case difference on Windows, a link or a hard link is the same file), and the run is refused by
-name before anything is read, loaded or written. The task-rows file keeps its own check.
+name before any model loads and before anything is written (the config, the corrections and the
+held-out file are read first, to know what the run is). The task-rows file keeps its own check.
+Windows also drops a trailing dot or space from a name, so two outputs that do not exist yet and
+differ only by those are one file there.
 """
 
 from __future__ import annotations
@@ -193,3 +196,96 @@ def test_a_symlink_to_an_input_is_the_same_file(root):
 
     assert result.exit_code == 3, (_plain(result.output), repr(result.exception))
     assert (root / name).read_text(encoding="utf-8") == content
+
+
+# --- names that Windows makes equal, for files that do not exist yet ---------------------------
+# ``realpath`` keeps a trailing dot or space when the file is not there, and ``samefile`` needs both
+# files to exist, so ``--output x.json --emit-evidence x.json.`` passed the comparison and Win32
+# then wrote both to ``x.json``. Inputs always exist (the OS resolves their spelling), so this is
+# the outputs against each other.
+
+WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="only Windows drops a trailing dot or space from a name"
+)
+
+
+@WINDOWS_ONLY
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "x.json.", "x.json..", "x.json...", "x.json ", "x.json. ", "X.JSON.", "./x.json.",
+        "sub/../x.json.",
+    ],
+    ids=["dot", "two dots", "three dots", "space", "dot and space", "case and dot", "dot-slash",
+         "parent"],
+)
+def test_two_outputs_that_differ_only_by_a_trailing_dot_or_space_are_one_file_on_windows(
+    root, spelling
+):
+    (root / "ev.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ship", "--evidence", "ev.json", "--output", "x.json", "--emit-evidence", spelling],
+    )
+
+    out = _plain(result.output)
+    assert result.exit_code == 3, (out, repr(result.exception))
+    assert "--emit-evidence" in out and "is the same file as --output 'x.json'" in out, out
+    assert "choose a different --emit-evidence" in out
+    assert not (root / "x.json").exists()  # nothing was written
+
+
+@WINDOWS_ONLY
+def test_the_output_and_the_evidence_it_would_replace_are_one_file_whatever_the_spelling(root):
+    name, content, _ = _prepare(root, "--evidence")
+
+    for spelling in (name + ".", name + " ", name.upper() + "."):
+        result = runner.invoke(app, ["ship", "--evidence", name, "--output", spelling])
+
+        assert result.exit_code == 3, (spelling, _plain(result.output), repr(result.exception))
+        assert "is the same file as --evidence" in _plain(result.output), spelling
+    assert (root / name).read_text(encoding="utf-8") == content
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="on POSIX a trailing dot is another name")
+def test_a_trailing_dot_is_another_file_on_posix(root):
+    (root / "ev.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ship", "--evidence", "ev.json", "--output", "x.json", "--emit-evidence", "x.json."],
+    )
+
+    assert "is the same file as" not in _plain(result.output)
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "same"),
+    [
+        ("x.json", "x.json.", True),
+        ("x.json", "x.json ", True),
+        ("x.json", "x.json. . ", True),
+        ("a/x.json", "a/x.json.", True),
+        ("dir./x.json", "dir/x.json", True),  # each part of the name, not only the last
+        ("x.json", "y.json", False),
+        ("x.json", "x.jsonl", False),
+        ("x.json", "x.js on", False),  # a space inside a name is part of it
+        ("x.json", ".x.json", False),  # a leading dot is part of it
+    ],
+)
+def test_the_windows_name_drops_the_trailing_dots_and_spaces_of_each_part(
+    monkeypatch, first, second, same
+):
+    from soup_cli.commands import ship
+
+    monkeypatch.setattr(ship.os, "name", "nt")
+
+    assert (ship._windows_name(first) == ship._windows_name(second)) is same
+
+
+def test_the_name_is_left_alone_off_windows(monkeypatch):
+    from soup_cli.commands import ship
+
+    monkeypatch.setattr(ship.os, "name", "posix")
+
+    assert ship._windows_name("x.json.") != ship._windows_name("x.json")
+    assert ship._windows_name("x.json ") != ship._windows_name("x.json")
