@@ -122,6 +122,78 @@ class TestSoupServeParser:
         assert traces[0].prompt == "What?"
 
 
+    @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085"])
+    def test_unicode_separator_inside_jsonl_string(self, tmp_path, separator):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        expected_prompt = f"Prompt{separator}still prompt"
+        expected_response = f"Answer{separator}still answer"
+        rows = [
+            {
+                "id": "first", "prompt": expected_prompt,
+                "response": expected_response, "signal": "thumbs_up",
+            },
+            {
+                "id": "second", "prompt": "Next prompt",
+                "response": "Next answer", "signal": "thumbs_down",
+            },
+        ]
+        (trace_dir / "serve.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [
+            (trace.trace_id, trace.prompt, trace.output, trace.signal)
+            for trace in traces
+        ] == [
+            ("first", expected_prompt, expected_response, "thumbs_up"),
+            ("second", "Next prompt", "Next answer", "thumbs_down"),
+        ]
+
+    @pytest.mark.parametrize("line_ending", [b"\r\n", b"\r"], ids=["crlf", "cr"])
+    def test_jsonl_carriage_return_line_endings(self, tmp_path, line_ending):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        rows = [
+            {"id": "first", "prompt": "Q1", "response": "A1"},
+            {"id": "second", "prompt": "Q2", "response": "A2"},
+        ]
+        (trace_dir / "serve.jsonl").write_bytes(
+            line_ending.join(json.dumps(row).encode("utf-8") for row in rows)
+            + line_ending
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [(t.trace_id, t.prompt, t.output) for t in traces] == [
+            ("first", "Q1", "A1"),
+            ("second", "Q2", "A2"),
+        ]
+
+    def test_utf8_bom_and_malformed_jsonl_lines(self, tmp_path):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        record = {"id": "valid", "prompt": "Question", "response": "Answer"}
+        (trace_dir / "serve.jsonl").write_text(
+            json.dumps(record) + "\nnot json\n", encoding="utf-8-sig",
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [(t.trace_id, t.prompt, t.output) for t in traces] == [
+            ("valid", "Question", "Answer"),
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Pair builder
 # ---------------------------------------------------------------------------
