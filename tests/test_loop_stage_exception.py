@@ -46,10 +46,14 @@ class Pipeline:
         raising: "str | None" = None,
         error: "BaseException | None" = None,
         train_result: "dict | None" = None,
+        gate_verdict: str = "OK",
+        deploy_result: "dict | None" = None,
     ):
         self.raising = raising
         self.error = error or ValueError(LOCKED)
         self.train_result = train_result
+        self.gate_verdict = gate_verdict
+        self.deploy_result = deploy_result
         self.calls: "list[str]" = []
 
     def _step(self, name: str):
@@ -69,11 +73,11 @@ class Pipeline:
 
     def gate(self, state, trained):
         self._step("gate")
-        return {"gate_verdict": "OK"}
+        return {"gate_verdict": self.gate_verdict}
 
     def deploy(self, state, trained):
         self._step("deploy")
-        return {"deployed": True}
+        return self.deploy_result or {"deployed": True}
 
     def cost(self, state):
         self._step("cost")
@@ -272,22 +276,63 @@ def test_training_retry_after_stage_error_keeps_its_own_attempts_and_hold(cwd):
     state, _, _ = run_once(state, failed_training.config())
 
     assert state.failed_train["attempts"] == 3 and state.failed_train["held"] is True
+    assert state.failed_stage is not None and state.failed_stage["attempts"] == 2
+
+
+def test_train_failure_harvest_error_and_failed_train_retry_reach_loop_hold(cwd):
+    failed_train = {
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state, _, _ = run_once(_state(), Pipeline(train_result=failed_train).config())
     assert state.failed_stage is not None and state.failed_stage["attempts"] == 1
 
+    state = replace(
+        state,
+        failed_stage={**state.failed_stage, "retry_after": PAST},
+        failed_train={**state.failed_train, "retry_after": PAST},
+    )
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage is not None and state.failed_stage["attempts"] == 2
 
-@pytest.mark.parametrize("train_result", [
-    {"run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
-     "failure": "train failed", "notes": "train failed"},
-    {"run_id": None, "skipped": True, "train_held": True, "notes": "training held"},
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+    state, _, _ = run_once(state, Pipeline(train_result=failed_train).config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3 and state.failed_stage["held"] is True
+    assert state.failed_train["attempts"] == 2
+
+
+def test_idle_polls_between_raised_errors_clear_the_streak(cwd):
+    idle_train = {"run_id": None, "skipped": True, "notes": "not enough new data"}
+    for stage in ("harvest", "train", "gate"):
+        state, _, _ = run_once(_state(), Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        assert state.failed_stage["attempts"] == 1 and state.failed_stage["held"] is False
+
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+        state, _, _ = run_once(state, Pipeline(train_result=idle_train).config())
+        assert state.failed_stage is None
+
+    state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
+    assert state.failed_stage["attempts"] == 1 and state.failed_stage["held"] is False
+
+
+@pytest.mark.parametrize(("train_result", "expected_attempts"), [
+    ({"run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+      "failure": "train failed", "notes": "train failed"}, 2),
+    ({"run_id": None, "skipped": True, "train_held": True, "notes": "training held"}, 1),
 ])
-def test_non_clean_training_cycle_does_not_reset_stage_error_streak(cwd, train_result):
+def test_training_failure_counts_but_training_hold_preserves_stage_streak(
+    cwd, train_result, expected_attempts
+):
     state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
     state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
     state, _, _ = run_once(state, Pipeline(train_result=train_result).config())
 
     assert state.failed_stage is not None
-    assert state.failed_stage["attempts"] == 1
+    assert state.failed_stage["attempts"] == expected_attempts
 
 
 def test_v078_stage_failure_state_is_migrated_without_losing_attempts(cwd):
@@ -354,6 +399,7 @@ def test_v078_held_stage_error_file_roundtrips_runs_no_stage_and_shows_status(cw
     result = CliRunner().invoke(loop_app, ["status"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "stage_retry" in result.output and "held" in result.output.lower()
+    assert "train_retry" not in result.output
 
 
 def test_a_cycle_that_gets_through_every_stage_clears_the_record(cwd):
@@ -377,6 +423,38 @@ def test_clean_cycle_resets_streak_before_a_new_stage_failure(cwd):
     state, _, _ = run_once(state, Pipeline(raising="harvest").config())
     assert state.failed_stage["attempts"] == 1
     assert state.failed_stage["held"] is False
+
+
+def test_non_ok_gate_clears_stage_streak_without_counting_as_failure(cwd):
+    state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    state, _, _ = run_once(state, Pipeline(gate_verdict="DON'T SHIP").config())
+
+    assert state.failed_stage is None
+
+
+def test_pending_deploy_retry_clears_stage_streak_and_keeps_deploy_retry(cwd):
+    refused = {"deployed": False, "failed": True, "notes": "serve refused candidate"}
+    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config())
+    assert state.pending_deploy is not None
+    state = replace(
+        state,
+        failed_stage={
+            "inputs": "a" * 64,
+            "attempts": 1,
+            "last_at": PAST,
+            "retry_after": PAST,
+            "held": False,
+            "reason": "stage error: the harvest stage raised ValueError",
+        },
+    )
+
+    state, _, _ = run_once(state, Pipeline(deploy_result=refused).config())
+
+    assert state.pending_deploy is not None
+    assert state.pending_deploy["attempts"] == 2
+    assert state.failed_stage is None
 
 
 @pytest.mark.parametrize(

@@ -238,7 +238,7 @@ class TestStatusAndState:
         write_state(replace(_state(), last_idle=value), path)
 
         assert read_state(path).last_idle == value
-        assert list(LoopState.__dataclass_fields__)[-1] == "last_idle"
+        assert list(LoopState.__dataclass_fields__)[-2:] == ["last_idle", "failed_stage"]
 
     @pytest.mark.parametrize(
         "bad",

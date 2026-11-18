@@ -569,7 +569,7 @@ def run_once(
             ),
             failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
             failed_stage=_failed_stage_after(
-                state, stage_error, held_note, pending, clean_cycle=False,
+                state, stage_error, held_note, train_out,
             ),
             last_idle={"at": _utc_iso(), "reason": reason},
         )
@@ -616,16 +616,7 @@ def run_once(
             state,
             stage_error,
             held_note,
-            pending,
-            clean_cycle=(
-                stage_error is None
-                and held_note is None
-                and pending is None
-                and trained_run
-                and not train_out.get("failed")
-                and not train_out.get("train_held")
-                and gate_out.get("gate_verdict") in ("OK", "MAJOR")
-            ),
+            train_out,
         ),
     )
     if shipped and deploy_out.get("canary_active"):
@@ -1016,15 +1007,14 @@ def _failed_stage_after(
     state: LoopState,
     stage_error: "Optional[_StageError]",
     held_note: Optional[str],
-    pending_deploy: Optional[Mapping[str, object]],
-    *,
-    clean_cycle: bool,
+    train_out: Mapping[str, object],
 ) -> Optional[dict]:
-    """Advance, preserve, or clear the loop-wide consecutive stage-error record.
+    """Advance, preserve, or clear the loop-wide consecutive non-deploy failure record.
 
-    A streak resets only after training actually ran and the gate produced a decided verdict
-    without an exception. Non-raising training failures, training holds, idle polls, and pending
-    deploy retries preserve the streak; they are not evidence of a clean cycle.
+    Raised non-deploy stages and failed training count as failed cycles. Any cycle with no such
+    failure clears the streak, including idle polls, non-OK verdicts, and pending-deploy retries.
+    A stage back-off or the training stage's own hold skips work and preserves the streak. Deploy
+    failures use their separate retry record and never add to this streak.
     """
     previous = state.failed_stage
     if previous is None and state.failed_train is not None and is_stage_error(state.failed_train):
@@ -1034,7 +1024,7 @@ def _failed_stage_after(
             **state.failed_train,
             "inputs": stage_error_fingerprint("legacy"),
         }
-    if held_note is not None or pending_deploy is not None:
+    if held_note is not None or train_out.get("train_held"):
         return previous
     if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
         return after_failure(
@@ -1043,9 +1033,15 @@ def _failed_stage_after(
             datetime.now(timezone.utc),
             stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
         )
-    if not clean_cycle:
-        return previous
-    # Only a successfully trained and decided cycle starts a fresh streak.
+    if stage_error is None and train_out.get("failed"):
+        reason = str(train_out.get("failure") or train_out.get("notes") or "training failed")
+        return after_failure(
+            previous,
+            stage_error_fingerprint("train"),
+            datetime.now(timezone.utc),
+            stage_error_reason("train", "TrainingFailed", reason),
+        )
+    # No non-deploy failure occurred; this includes clean idle polls and deploy-only retries.
     return None
 
 

@@ -427,9 +427,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # alternate. This separate retry record does not replace a dataset-specific failed-training retry;
 # the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy that raises is retried
 # like a refused deploy (three attempts). Ctrl+C and SystemExit still stop the daemon.
-# A raised-stage streak resets only after training actually runs and the gate returns a decided
-# OK or MAJOR verdict without a stage exception. A non-raising training failure, a training hold,
-# an idle poll, or a pending deploy retry preserves the streak. `soup loop status` shows the
+# The streak counts consecutive cycles ending in a raised non-deploy stage or failed training.
+# Any cycle with no failure clears it, including an idle poll and a non-OK gate. A cycle skipped by
+# the stage back-off or the training stage's own hold preserves it. Pending deploy retries do not
+# add a failure and clear the streak if nothing else failed; deploy failures use their own record.
+# `soup loop status` shows the
 # loop-wide record in `stage_retry`; `soup loop resume` clears both `stage_retry` and `train_retry`.
 # Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
 # so a file in the project directory named like a library is not imported by it, and the loop's
