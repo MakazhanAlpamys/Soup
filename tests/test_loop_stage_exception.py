@@ -318,6 +318,22 @@ def test_idle_polls_between_raised_errors_clear_the_streak(cwd):
     assert state.failed_stage["attempts"] == 1 and state.failed_stage["held"] is False
 
 
+def test_three_raised_errors_separated_by_clean_idle_polls_never_hold(cwd):
+    idle_train = {"run_id": None, "skipped": True, "notes": "not enough new data"}
+    state = _state()
+
+    for stage in ("harvest", "train", "gate"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        assert state.failed_stage["attempts"] == 1
+        assert state.failed_stage["held"] is False
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+        state, _, _ = run_once(state, Pipeline(train_result=idle_train).config())
+        assert state.failed_stage is None
+
+    assert state.failed_stage is None
+
+
 @pytest.mark.parametrize(("train_result", "expected_attempts"), [
     ({"run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
       "failure": "train failed", "notes": "train failed"}, 2),
@@ -421,6 +437,22 @@ def test_clean_cycle_resets_streak_before_a_new_stage_failure(cwd):
     assert state.failed_stage is None
 
     state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage["attempts"] == 1
+    assert state.failed_stage["held"] is False
+
+
+def test_two_failures_clean_cycle_then_failure_starts_a_new_streak(cwd):
+    state = _state()
+    for stage in ("harvest", "gate"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    state, _, _ = run_once(state, Pipeline().config())
+    assert state.failed_stage is None
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage is not None
     assert state.failed_stage["attempts"] == 1
     assert state.failed_stage["held"] is False
 
