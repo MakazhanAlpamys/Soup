@@ -395,7 +395,7 @@ def _safe_read_text(path: str, field: str, max_bytes: int) -> str:
         fd = os.open(path, flags)
     except OSError as exc:
         raise ValueError(f"{field} unreadable: {type(exc).__name__}") from exc
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > max_bytes:
             raise ValueError(f"{field} exceeds {max_bytes} bytes")
         return handle.read()
