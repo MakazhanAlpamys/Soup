@@ -286,6 +286,10 @@ def test_the_name_is_left_alone_off_windows(monkeypatch):
     from soup_cli.commands import ship
 
     monkeypatch.setattr(ship.os, "name", "posix")
+    # The host's own realpath must not decide this: on Windows, from Python 3.13, it already
+    # drops a trailing dot or space of a file that does not exist, so the two names would be
+    # one before the branch under test is reached.
+    monkeypatch.setattr(ship.os.path, "realpath", lambda path: str(path))
 
     assert ship._windows_name("x.json.") != ship._windows_name("x.json")
     assert ship._windows_name("x.json ") != ship._windows_name("x.json")
