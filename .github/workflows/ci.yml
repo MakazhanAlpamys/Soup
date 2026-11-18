@@ -196,8 +196,21 @@ concurrency:
 # Windows are nowhere near: the slowest of their test jobs that day took 50.0 minutes. What
 # this does not fix: the suite is too heavy for the slowest macOS runner, and a step that
 # needs more than 120 minutes is still stopped. The remedy is to move the heaviest test files
-# off the macOS cell (a follow-up issue); this buys the time to do it. The numbers are pinned
-# by tests/test_ci_macos_test_step_limit.py.
+# off the macOS cell, which the next paragraph does for pull requests; the limits stay as they
+# are because the nightly, release and manual macOS cells still run the whole suite. The
+# numbers are pinned by tests/test_ci_macos_test_step_limit.py.
+#
+# 2026-11-19: the macOS cell of a PULL REQUEST no longer runs 26 heavy test files that carry no
+# platform branch (the step "Leave the heavy platform-neutral test files to the other cells",
+# the list in .github/ci/macos-pr-skip.txt). On the log of one green job of commit 14be6a450
+# the suite took 88.1 minutes and 262.3 worker-minutes on macOS (3 xdist workers) against 25.6
+# and 100.9 on Linux (4 workers); the listed files were 125.6 of those 262.3 (47.9%) and 17.4
+# of Linux's 100.9, so the macOS cell of a pull request should take about 46 minutes on a
+# 3-worker runner instead of 88. Linux and Windows cells of the same pull-request run still run
+# every file; so does every cell of the nightly, release, push and manual runs, macOS included.
+# What it gives up: a failure that exists only on macOS and only in a listed file shows in the
+# next nightly run instead of at approval. The rule and the list are pinned by
+# tests/test_ci_macos_pr_skip_list.py.
 
 jobs:
   # Quick runs, the required cells at approval, the full matrix every night, and
@@ -1225,6 +1238,43 @@ jobs:
         with:
           path: ${{ runner.temp }}/hf-cache
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Leave the heavy platform-neutral test files to the other cells
+        # 2026-11-19: the macOS cell of a PULL REQUEST does not run the files in
+        # .github/ci/macos-pr-skip.txt: a pytest option, `--ignore=<file>` for each, handed over
+        # through `PYTEST_ADDOPTS` (pytest reads it on every OS, so the two test steps below stay
+        # as they were). Why: that cell is the slowest one by far (median 62.7 minutes, up to 90 on
+        # a runner that gives xdist three workers; Linux 25.6) and 26 files that carry no platform
+        # branch took 125.6 of its 262.3 worker-minutes (17.4 of Linux's 100.9). The `if:` is the
+        # whole rule and is pinned by tests/test_ci_macos_pr_skip_list.py: macOS AND a pull request.
+        # Linux and Windows cells of the same run, and every cell of the nightly, release, push and
+        # manual runs, run the whole suite; so does `test (macos-latest, ...)` there. What this
+        # gives up: a failure that exists only on macOS (arm64) and only in one of these files
+        # shows in the next nightly run instead of at approval.
+        # Bash on every runner (3.2 on macOS: no `mapfile`, no `${var,,}`), `set -eo pipefail`, no
+        # `continue-on-error`: a list line that is not one test file name fails the cell, and only
+        # a file name is ever put into the option (the list is data: it must not be able to hand
+        # pytest another option).
+        if: env.RUN_SUITE == 'true' && github.event_name == 'pull_request' && matrix.os == 'macos-latest' && steps.reuse.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          args=""
+          count=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            line=${line%$'\r'}
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            if ! printf '%s\n' "$line" | grep -Eq '^tests/test_[A-Za-z0-9_]+\.py$'; then
+              echo "::error title=macOS skip list::not a test file name: $line"
+              exit 1
+            fi
+            args="$args --ignore=$line"
+            count=$((count + 1))
+          done < .github/ci/macos-pr-skip.txt
+          echo "PYTEST_ADDOPTS=${args# }" >> "$GITHUB_ENV"
+          echo "::notice title=macOS pull request cell::${count} heavy test files that carry no platform branch are left to the Linux and Windows cells of this pull request; the nightly, release and manual runs run them on macOS too"
       - name: Run unit tests with coverage
         # One worker per logical CPU and one test FILE per worker (`loadfile`):
         # the tests of a file keep their order and their module-level state, and
