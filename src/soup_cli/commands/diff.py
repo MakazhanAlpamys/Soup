@@ -102,6 +102,10 @@ def diff(
             console.print(f"[red]Prompts path is not a file: {for_terminal(prompts_path)}[/]")
             raise typer.Exit(1)
 
+        from soup_cli.commands._common import refuse_output_over_input
+
+        refuse_output_over_input([("--prompts", prompts)], [("--output", output)], console=console)
+
     # Collect prompts
     try:
         file_prompts = _collect_prompts(prompts, None) if prompts is not None else None
