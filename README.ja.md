@@ -92,40 +92,37 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.2 — v0.77.1 以降の `main` をそのまま切り出したリリース：プルリクエスト 159 件、うち 153 件は
-メンテナー以外の 30 人によるものです。** 大半は修正ですが、新機能と、v0.77.1 が受け入れていたものを
-拒否することがある 2 つの規則も含みます。サーバーや `task: sft` の設定をアップグレードする前に
-[v0.77.2 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)を読んでください。0.76.x から移行する場合は、まず
+**v0.78.0 — v0.77.2 以降の `main` をそのまま切り出したリリース：プルリクエスト 271 件、うち 218 件は
+メンテナー以外の 48 人によるものです。** 新機能と、v0.77.2 が受け入れていた入力を拒否する規則を
+いくつか含みます。設定やスクリプトをアップグレードする前に
+[v0.78.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)を読んでください。0.76.x から移行する場合は、まず
 `soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **`soup profile --model <id>` は `soup.yaml` なしで「収まるか」に答えます。** モデルの
-  `config.json` から実行の見積もりを出し、`--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer`、
-  `--gradient-checkpointing` で形が決まります。Apple Silicon では Metal のワーキングセットと比較します。
-  `soup plan` と `soup apply` は `--minillm-on-policy` を受け付けます。
-- **Apple Silicon での学習が増えました。** `preference_loss: dpo`、`orpo`、`simpo` を指定した
-  `task: preference` はネイティブ MLX トレーナーで動き、MLX GRPO は 4 ビットの `mlx-community`
-  ベースで学習でき、MLX Adafactor は設定された学習率とスケジュールに従います。
-- **新しい DPO レシピが 2 つ：** `qwen3.5-0.8b-dpo` と `qwen3.5-27b-dpo`。
-- **VRAM の見積もりが実測に近づきました。** optimizer ステップを独立したフェーズとして扱い、
-  PRM ステップには 1 位置分の logits を計上し、分割された FSDP / ZeRO の実行はカードごとに見積もり、
-  `stream_loss_chunk` のステップには最終層の再計算を計上し、Unsloth の LoRA ターゲットはそのローダーが
-  選ぶとおりに扱います。
-- **黙った上書きと空の結果が減りました。** より多くのコマンドが、入力を指す `--output` を拒否します
-  （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
-  拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
-  未フィルターのファイルを書く代わりに失敗します。
-- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、PPO は要求されると方策に
-  gradient checkpointing を適用し（4 ビット・8 ビットでもクラッシュしなくなり）、`soup merge` は
-  アダプターを学習したときのベースのコミットを読み込みます。
-- **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
-  テキストを保ったまま、端末制御文字を取り除いて表示します。
+- **継続学習ループ。** `soup serve` はすべての回答に ID を付け、それに対するフィードバック
+  （高評価・評価点・修正）を受け取ります。`soup loop` はそのフィードバックから候補を学習し、
+  `soup ship --gate loop-v2` で判定し、カナリアとして動かし、自動でロールバックします。
+- **`soup ship` が数値の内訳を示します。** タスクごとの改善/悪化/変化なしの件数、行ごとの監査ファイル、
+  自分で用意した関数で採点する `--task-mode reward --reward-fn`（`.py` ファイルが実行されます）、
+  アダプターがベースをどれだけ変えるか、2 つのアダプターを比べる `--base-adapter`。
+- **新しいコマンド。** `soup eval retention`（モデルのバージョン間の忘却）、`soup data leakage`
+  （学習と評価の重複）、`soup docs search`（オフライン）、`soup prune-layer-cache`、
+  `soup eval quant-check --performance`。
+- **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
+  前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
+- **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
+  取り込み、ストリーミングしたベースでの BCO、IPO、`task: preference` の学習。
+- **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
+  チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
+  表示します。
+- **新しいレシピ 8 件**（合計 181 件）と、Qwen2 QLoRA SFT 向けの Triton カーネルライブラリ（設定キーなし）。
+- **テキストを入力どおりに表示。** さらに数十のコマンドが、パスと名前を、角括弧と `:name:` のテキストを
+  保ったまま、端末制御文字を取り除いて表示します。
 
-**知っておくべき挙動の変更。** `soup serve --tool-auth-token` は `A-Z`、`a-z`、`0-9`、`_`、`-` からなる
-16〜128 文字でなければなりません（そうでなければ終了コード 2）。`task: sft` は、`reasoning_effort`、
-`train_on_eot`、`use_flash_attn`、`use_liger` を、それらを一度も適用していなかった画像・音声・MLX・
-Unsloth・RAFT・事前トークナイズ済みの経路で拒否します。`soup completions` のスクリプトは再生成が必要です。
-`soup data from-traces --signal thumbs_up`、MLX Adafactor、`soup merge`、VRAM の事前チェックは、
-v0.77.1 と異なる結果になることがあります。
+**知っておくべき挙動の変更。** `training` の数値フィールドへの真偽値は拒否されます。`--push-as` は
+リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
+`moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
+`soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
+変わることがあります。`soup ship` が書き出す証拠ファイルはバージョン 2 で、v0.77.x は拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
