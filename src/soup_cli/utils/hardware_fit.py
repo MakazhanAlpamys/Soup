@@ -579,6 +579,31 @@ def hardware_fit_input_from_config(
     return result if isinstance(result, HardwareFitInput) else None
 
 
+def _auto_fp16_pick_keeps_fp32(cfg: Any, tcfg: Any) -> bool:
+    """Whether an ``auto_mixed_precision`` fp16 pick keeps fp32 non-quantised weights.
+
+    ``trainer/sft.py``'s ``_kbit_compute_dtype`` resolves the same pick and passes
+    ``prefer_fp16=not bf16`` to ``kbit_compute_dtype``. On a bf16 card whose pick is
+    fp16 (a quirk family such as Qwen2.5), that keeps peft's fp32 embeddings, norms
+    and head; the estimate must price them or it under-counts by about two bytes
+    per embedding and head parameter (#3044). ``False`` when there is no pick to
+    read, so callers that cannot see a card keep their previous answer.
+    """
+    if not getattr(tcfg, "auto_mixed_precision", False):
+        return False
+    try:
+        import torch
+
+        major, minor = torch.cuda.get_device_capability()
+        cc = float(f"{major}.{minor}")
+        from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+        mode = pick_mixed_precision(str(getattr(cfg, "base", "") or ""), cc)
+    except (ImportError, RuntimeError, AssertionError, OSError, TypeError, ValueError):
+        return False
+    return mode != "bf16"
+
+
 def hardware_fit_input_or_reason(
     cfg: Any,
     *,
@@ -693,7 +718,11 @@ def hardware_fit_input_or_reason(
             fused_loss=fused_loss,
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
-            kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
+            kbit_fp32=bool(
+                kbit_fp32
+                or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))
+                or _auto_fp16_pick_keeps_fp32(cfg, tcfg)
+            ),
             **distill,
         )
     except (ValueError, TypeError, ArithmeticError):
