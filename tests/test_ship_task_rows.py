@@ -1,80 +1,4 @@
 """`soup ship` writes one line per judged task row, so a verdict can be audited row by row.
-@pytest.mark.parametrize("key", ["task_win", "task"])
-@pytest.mark.parametrize("equal", [False, True], ids=["different", "equal"])
-@pytest.mark.parametrize("location", ["pointer", "count", "unused"])
-def test_parent_json_refuses_repeated_keys_at_any_depth(tmp_path, key, equal, location):
-    path = Path(_write_pair(tmp_path, key=key, n=1))
-    text = path.read_text(encoding="utf-8")
-    if location == "pointer":
-        first = "v.task-rows.jsonl" if equal else "missing.task-rows.jsonl"
-        text = text.replace('"task_rows":', f'"task_rows": "{first}", "task_rows":')
-    elif location == "count":
-        first = 1 if equal else 2
-        text = text.replace('"n": 1', f'"n": {first}, "n": 1')
-    else:
-        first = 1 if equal else 2
-        text = text.replace('{"' + key + '"', f'{{"unused": [{{"secret": {first}, '
-                            f'"secret": 1}}], "{key}"')
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError) as exc:
-        load_task_rows_for(str(path))
-    assert _plain(str(exc.value)) == "the verdict or evidence file repeats a key"
-
-
-@pytest.mark.parametrize("key", ["task_win", "task"])
-def test_parent_json_unique_keys_still_load_and_wrong_count_is_named(tmp_path, key):
-    path = Path(_write_pair(tmp_path, key=key, n=1))
-    assert len(load_task_rows_for(str(path)).rows) == 1
-    text = path.read_text(encoding="utf-8").replace('"n": 1', '"n": 2')
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError) as exc:
-        load_task_rows_for(str(path))
-    assert _plain(str(exc.value)) == "task-rows has 1 rows but the evidence says n = 2"
-
-
-@pytest.mark.parametrize("key", ["task_win", "task"])
-@pytest.mark.parametrize("equal", [False, True], ids=["different", "equal"])
-@pytest.mark.parametrize("location", ["pointer", "count", "unused"])
-def test_parent_json_refuses_repeated_keys_at_any_depth(tmp_path, key, equal, location):
-    path = Path(_write_pair(tmp_path, key=key, n=1))
-    text = path.read_text(encoding="utf-8")
-    if location == "pointer":
-        first = "v.task-rows.jsonl" if equal else "missing.task-rows.jsonl"
-        text = text.replace('"task_rows":', f'"task_rows": "{first}", "task_rows":')
-    elif location == "count":
-        first = 1 if equal else 2
-        text = text.replace('"n": 1', f'"n": {first}, "n": 1')
-    else:
-        first = 1 if equal else 2
-        text = text.replace('{"' + key + '"', f'{{"unused": [{{"secret": {first}, '
-                            f'"secret": 1}}], "{key}"')
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError) as exc:
-        load_task_rows_for(str(path))
-    assert _plain(str(exc.value)) == "the verdict or evidence file repeats a key"
-
-
-@pytest.mark.parametrize("key", ["task_win", "task"])
-def test_parent_json_unique_keys_still_load_and_wrong_count_is_named(tmp_path, key):
-    path = Path(_write_pair(tmp_path, key=key, n=1))
-    assert len(load_task_rows_for(str(path)).rows) == 1
-    text = path.read_text(encoding="utf-8").replace('"n": 1', '"n": 2')
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError) as exc:
-        load_task_rows_for(str(path))
-    assert _plain(str(exc.value)) == "task-rows has 1 rows but the evidence says n = 2"
-
-
-def test_parent_json_non_finite_number_remains_invalid_json(tmp_path):
-    path = tmp_path / "verdict.json"
-    path.write_text('{"unused": NaN}', encoding="utf-8")
-    with pytest.raises(ValueError) as exc:
-        load_task_rows_for(str(path))
-    assert _plain(str(exc.value)) == "the verdict or evidence file is not valid JSON"
-
-
-
-
 
 With ``--output verdict.json`` (and only then: ``--emit-evidence`` alone writes nothing new) a
 live ``--task-mode metric`` or ``judge_score`` run also writes ``verdict.task-rows.jsonl`` next to
@@ -876,6 +800,47 @@ def _write_pair(tmp_path, *, pointer="v.task-rows.jsonl", key="task_win", n=3, b
 def test_the_file_is_found_through_the_pointer_of_a_verdict_or_of_evidence(tmp_path, key):
     loaded = load_task_rows_for(_write_pair(tmp_path, key=key))
     assert len(loaded.rows) == 3
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
+@pytest.mark.parametrize("equal", [False, True], ids=["different", "equal"])
+@pytest.mark.parametrize("location", ["pointer", "count", "unused"])
+def test_parent_json_refuses_repeated_keys_at_any_depth(tmp_path, key, equal, location):
+    path = Path(_write_pair(tmp_path, key=key, n=1))
+    text = path.read_text(encoding="utf-8")
+    if location == "pointer":
+        first = "v.task-rows.jsonl" if equal else "missing.task-rows.jsonl"
+        text = text.replace('"task_rows":', f'"task_rows": "{first}", "task_rows":')
+    elif location == "count":
+        first = 1 if equal else 2
+        text = text.replace('"n": 1', f'"n": {first}, "n": 1')
+    else:
+        first = 1 if equal else 2
+        text = text.replace('{"' + key + '"', f'{{"unused": [{{"secret": {first}, '
+                            f'"secret": 1}}], "{key}"')
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "the verdict or evidence file repeats a key"
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
+def test_parent_json_unique_keys_still_load_and_wrong_count_is_named(tmp_path, key):
+    path = Path(_write_pair(tmp_path, key=key, n=1))
+    assert len(load_task_rows_for(str(path)).rows) == 1
+    text = path.read_text(encoding="utf-8").replace('"n": 1', '"n": 2')
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "task-rows has 1 rows but the evidence says n = 2"
+
+
+def test_parent_json_non_finite_number_remains_invalid_json(tmp_path):
+    path = tmp_path / "verdict.json"
+    path.write_text('{"unused": NaN}', encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "the verdict or evidence file is not valid JSON"
 
 
 def test_a_pointer_that_names_nothing_or_nothing_in_this_directory_is_refused(tmp_path):
