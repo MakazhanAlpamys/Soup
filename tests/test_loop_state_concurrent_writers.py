@@ -9,10 +9,12 @@ re-reads the file under it and applies ONLY the fields its iteration changed
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import threading
 from dataclasses import fields, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -51,6 +53,30 @@ def _promoted_state() -> LoopState:
         previous_production_name="v1", previous_production_adapter="v1",
         previous_production_version=1,
     )
+
+
+def _run_together(worker, count: int = 4, timeout: float = 120.0) -> list:
+    """Run ``worker`` on ``count`` threads and return what they raised.
+
+    A thread that dies on an exception is otherwise only a pytest warning, and a join without a
+    timeout turns a stuck lock into a hung job: both are reported as a failure here.
+    """
+    errors: list = []
+
+    def guarded():
+        try:
+            worker()
+        except BaseException as exc:  # noqa: BLE001 - reported to the test, not swallowed
+            errors.append(exc)
+
+    threads = [threading.Thread(target=guarded, daemon=True) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout)
+    stuck = [thread for thread in threads if thread.is_alive()]
+    assert not stuck, f"{len(stuck)} of {count} writer threads still running after {timeout}s"
+    return errors
 
 
 def _config(root: Path, *, during_train) -> WatchConfig:
@@ -280,12 +306,7 @@ class TestStateLock:
                         overlap.append(len(inside))
                     inside.pop()
 
-        threads = [threading.Thread(target=worker) for _ in range(4)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-
+        assert _run_together(worker) == []
         assert overlap == []
 
     def test_concurrent_updates_all_land(self, cwd):
@@ -298,12 +319,7 @@ class TestStateLock:
                     _path(cwd),
                 )
 
-        threads = [threading.Thread(target=bump) for _ in range(4)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-
+        assert _run_together(bump) == []
         assert read_state(_path(cwd)).iteration_count == 20
 
 
@@ -391,6 +407,18 @@ class TestEveryWriterTakesTheLock:
 
 
 class TestMergeStateNeverWritesAStaleCopy:
+    @pytest.fixture(autouse=True)
+    def _the_clock_moves_a_second_on_every_stamp(self, monkeypatch):
+        """Every write stamps ``updated_at`` to the second. Real time makes two writes land one
+        second apart only now and then; this makes it so every time, so a test that depends on
+        the clock fails on every run instead of one run in a few hundred."""
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ticks = itertools.count()
+        monkeypatch.setattr(
+            loop_state, "_utc_now_iso",
+            lambda: (start + timedelta(seconds=next(ticks))).isoformat(),
+        )
+
     def _conflict(self, cwd):
         """The file moved on (a manual promotion to version 5) while the iteration ran; the
         iteration's own ``latest_version=3`` cannot be applied next to it."""
@@ -408,7 +436,10 @@ class TestMergeStateNeverWritesAStaleCopy:
         merged = merge_state(base, new, _path(cwd))
 
         on_disk = read_state(_path(cwd))
-        assert on_disk == merged
+        # Every field but ``updated_at``: the write stamps that one to the second, while
+        # ``merged`` still carries the stamp of the read it was built on, so the two differ
+        # whenever a second boundary falls between them (nightly 2026-11-18, ubuntu / 3.13).
+        assert replace(on_disk, updated_at="") == replace(merged, updated_at="")
         assert (on_disk.production_name, on_disk.production_version) == ("v5", 5)
         assert on_disk.latest_version == 5
 

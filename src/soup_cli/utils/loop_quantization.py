@@ -24,10 +24,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from typing import Optional
 
-from soup_cli.utils.loop_spawn import child_popen_kwargs
+from soup_cli.utils.loop_spawn import child_popen_kwargs, python_child_argv
 
 #: bf16: two bytes per parameter.
 BYTES_PER_PARAM = 2
@@ -92,7 +91,7 @@ def free_vram_bytes() -> Optional[int]:
     A timeout, a failure to start, a non-zero exit, output that is not one JSON line with an
     int ``free`` of at least 0, no CUDA device and no torch are all None.
     """
-    argv = [sys.executable, "-c", PROBE_SCRIPT]
+    argv = python_child_argv("-c", PROBE_SCRIPT)
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
             argv,

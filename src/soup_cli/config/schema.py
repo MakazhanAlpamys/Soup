@@ -822,7 +822,7 @@ class DataConfig(BaseModel):
             "Add these tokens to the tokenizer vocab + resize embeddings on "
             "transformers backend and MLX text SFT (`quantization: none`). "
             "Cap 10_000 entries; per-token <= 256 chars; no duplicates. "
-            "(v0.42.0 Part E, #1994)"
+            "(v0.42.0, #1994)"
         ),
     )
     new_special_tokens: Optional[List[str]] = Field(
@@ -830,7 +830,7 @@ class DataConfig(BaseModel):
         description=(
             "Like add_new_tokens but registered as additional_special_tokens "
             "so they are not split by the tokenizer. Supported on transformers "
-            "backend and MLX text SFT (`quantization: none`). (v0.42.0 Part E, #1994)"
+            "backend and MLX text SFT (`quantization: none`). (v0.42.0, #1994)"
         ),
     )
     resize_vocab: bool = Field(

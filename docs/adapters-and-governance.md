@@ -393,7 +393,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
 # daemon itself at each watch cycle, without stopping. A foreground watch rotates
 # nothing. The PID file is created exclusively before the daemon is spawned, so two --detach started at once cannot both win. While the PID file names a live process a second --detach is
-# refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
+# refused (exit 2, naming the pid and the file), and so is a foreground `soup loop watch`
+# (it only reads the file and never writes it, so two foreground watches in two terminals are
+# not guarded against each other); a stale file, whose process is gone or
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
 # when it exits normally, but only if the file still holds its own pid; a killed child
@@ -417,6 +419,16 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
 # of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
 # train_retry row.
+# A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
+# directory that went away) does not stop the daemon. The cycle is recorded as failed with the
+# stage's name and the exception's type in last_failure and the iteration, the traceback goes to
+# .soup/loop.log, and the same waits apply to that stage (5 minutes, 30 minutes, then held until
+# `soup loop resume`); the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy
+# that raises is retried like a refused deploy (three attempts). Ctrl+C and SystemExit still stop
+# the daemon.
+# Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
+# so a file in the project directory named like a library is not imported by it, and the loop's
+# JSONL logs are created owner-only (0600) on POSIX; on Windows the folder's permissions apply.
 soup loop watch --detach
 
 # A poll that finds nothing to train (not enough new feedback, a wait, a hold) writes no
@@ -440,7 +452,10 @@ soup loop status
 # answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
 # it and it becomes the router's stable side), MAJOR withdraws it and production
 # never changed. A promotion is written in this order: the server switch (if the
-# server refuses, nothing is recorded as promoted), then .soup/loop.yaml (atomic, under
+# server refuses, nothing is recorded as promoted and the cycle ends there: nothing is
+# harvested or trained on top of the refused canary, no counter moves, no data cursor
+# advances, `soup loop status` shows the refusal as `last_failure` and the next poll asks
+# the server again), then .soup/loop.yaml (atomic, under
 # the lock, at the moment of the promotion, not when the cycle ends: the cycle goes on
 # into the next harvest, train and ship), then versions.jsonl and the iteration's
 # closing line. loop.yaml decides which version is production. A watch that was
@@ -551,7 +566,7 @@ quality verdict is `MAJOR` when the canary's negative share exceeds stable's by 
 five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
 false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
 `OK` at the minimum means no significant regression was found, not that the canary is
-proven equal, and a gap of five points on a few dozen ratings is often chance. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
+proven equal, and a gap of five points on a few dozen ratings is often chance. **Feedback text is training data:** the edits that reach the loop through `soup serve --feedback-log` are trained on as they are and are what the loop-v2 gate checks the candidate against; whoever can post to `POST /v1/feedback` steers the next model, which on a loopback server without `--tool-auth-token` is every local user and process. On a shared machine start `soup serve` with `--tool-auth-token`, and see [Serving and export](serving-and-export.md#response-ids-and-feedback) for what the loop does and does not check before it trains on feedback. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
 ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
 canary against). The two verdicts
 combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is
@@ -801,12 +816,14 @@ soup adapters branches
 
 | Strategy | Math | Use case |
 |----------|------|----------|
-| `linear` | Weighted average per layer | Baseline; tasks share a basis |
+| `linear` | Weighted merge per layer; each input's own delta scales by its weight | Baseline; tasks share a basis |
 | `ties` | Trim by density → elect majority sign → disjoint average | Conflicting task adapters (Yadav et al. 2023) |
 | `dare` | Random drop with `density` + rescale `1/density`, then average | Sparse-merge; reduces parameter interference (Yu et al. 2024) |
 | `svd` | Linear-merge → low-rank reconstruction via SVD (`--rank`) | Constrain effective rank of the merged delta |
 
 The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` truncates the merged result and does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
+
+**How `--weights` is applied.** Weights are normalised to sum to 1 (`7,3` is `0.7,0.3`; the default is equal weights). A LoRA's delta is `ΔW = B·A`, so `linear`, `dare` and `svd` scale each input's `lora_A` and `lora_B` (and `lora_embedding_A` / `lora_embedding_B`) by `√cᵢ`: each input's own term is `cᵢ` times its delta, so `--weights 0.7,0.3` keeps 0.7 and 0.3 of the two deltas and equal weights keep half of each of two inputs. Other tensors, such as a DoRA magnitude vector or the `lora_B.bias` that PEFT saves with `lora_bias=True`, take `cᵢ`. This is the rule of the same-rank path of `soup adapters arithmetic`, and like it a factor-wise merge also adds cross terms `√(cᵢcⱼ)·Bᵢ·Aⱼ` between inputs; for the exact weighted sum of the deltas use `soup adapters arithmetic ... --rank N`, which concatenates the factors. `dare` applies its `1/density` rescale on top, and `ties` is not weighted this way: its disjoint average divides by the weights that agree. Before v0.78.0 both factors took `cᵢ`, so an input's own term was `cᵢ²` times its delta (0.49 and 0.09 for `0.7,0.3`; a quarter of each for an equal-weight pair).
 
 **Defaults & safety:**
 
