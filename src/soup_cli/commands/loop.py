@@ -107,6 +107,9 @@ def _safe_read() -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]loop state invalid:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
+    except OSError as exc:
+        console.print(f"[red]cannot read loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1)
 
 
 def _update(mutate) -> LoopState:
@@ -127,6 +130,9 @@ def _update(mutate) -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]invalid loop setting:[/] {for_terminal(exc)}; loop.yaml unchanged")
         raise typer.Exit(code=2)
+    except OSError as exc:
+        console.print(f"[red]cannot update loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1)
 
 
 #: What an sft loop trains on, said at init (the default method, so it is spelled out).
