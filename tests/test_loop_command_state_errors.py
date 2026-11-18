@@ -83,8 +83,10 @@ class TestALockedFile:
         result, text = _run(*args)
 
         assert result.exit_code == 1, (text, repr(result.exception))
-        assert "loop.yaml is locked by another process" in text
-        assert "loop.yaml.lock" in text
+        assert text == (
+            f"cannot update loop.yaml: loop.yaml is locked by another process (pid {os.getpid()}); "
+            "lock file loop.yaml.lock - remove it if that process is gone"
+        )
         assert "Traceback" not in text
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert Path(_path(cwd)).read_bytes() == before
