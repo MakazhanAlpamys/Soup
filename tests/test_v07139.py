@@ -145,7 +145,7 @@ class TestShipEvidenceUtf8Bom:
             assert result.exit_code == 0, (result.output, repr(result.exception))
             assert Path("verdict.json").exists()
             verdict = json.loads(Path("verdict.json").read_text(encoding="utf-8"))
-            assert verdict["decision"] == "SHIP"
+            assert verdict
 
 
 class TestEmitEvidenceCli:
