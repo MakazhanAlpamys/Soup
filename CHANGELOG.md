@@ -635,7 +635,7 @@ the oversized value is not printed. Reported by @Keshemir.
 
 - The loop-v2 verdict reader no longer raises on oversized integers in optional evidence. (#2971, reported by @taljeon, by @1DMB1 in #2979)
 
-- `soup loop canary` refuses an adapter whose last verdict was DON'T SHIP also when it is given as a path to the adapter's directory in `.soup-loops/adapters` (the spelling tab completion gives); it used to accept the path form without `--allow-dont-ship` and refuse only the bare name. (#3002)
+- `soup loop canary` refuses an adapter whose last verdict was DON'T SHIP, whether it is named by its run name or by the path to its directory in `.soup-loops/adapters`; pass `--allow-dont-ship` to canary it anyway. v0.77.2 had no such check, so a script that canaries such an adapter by hand needs the flag now. (#2897, #3002)
 
 ### Security
 
