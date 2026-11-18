@@ -1714,6 +1714,13 @@ def train(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
+        if cloud_submit and dry_run:
+            console.print(
+                "[red]--dry-run cannot be combined with --cloud-submit:[/] "
+                "drop --cloud-submit to preview the plan."
+            )
+            raise typer.Exit(2)
+
         # #1430 and #1884: these CLI options cannot act on the remote command.
         dropped = [
             flag
@@ -1738,7 +1745,6 @@ def train(
                 ("--capture-activations", capture_activations is not None),
                 ("--track-energy", track_energy),
                 ("--energy-out", energy_out is not None),
-                ("--dry-run", cloud_submit and dry_run),
             )
             if on
         ]

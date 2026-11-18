@@ -144,7 +144,10 @@ def test_cloud_refuses_features_with_their_companions(tmp_path, monkeypatch, pri
         ("runpod", runpod, "_RUNPOD_SUBMIT_OVERRIDE"),
     ],
 )
-def test_cloud_submit_dry_run_refusal(tmp_path, monkeypatch, backend, module, override):
+@pytest.mark.parametrize("extra_flags", [[], ["--wandb"]], ids=["dry-run", "with-unsupported-flag"])
+def test_cloud_submit_dry_run_refusal(
+    tmp_path, monkeypatch, backend, module, override, extra_flags,
+):
     monkeypatch.chdir(tmp_path)
     _setup_config(tmp_path)
 
@@ -158,16 +161,17 @@ def test_cloud_submit_dry_run_refusal(tmp_path, monkeypatch, backend, module, ov
     monkeypatch.setattr(module, override, fake_submit)
 
     cmd = ["train", "--config", "soup.yaml", "--cloud", backend, "--cloud-submit", "--dry-run"]
-    result = CliRunner().invoke(app, cmd)
-    assert result.exit_code == 2
+    result = CliRunner().invoke(app, [*cmd, *extra_flags])
+    assert result.exit_code == 2, result.output
     assert (
         not submit_called
     ), "submit seam must never be called when --dry-run is passed with --cloud-submit"
     assert not (tmp_path / f"soup_{backend}_app.py").exists()
 
     plain = _plain(result.output)
-    assert "--dry-run" in plain
-    assert "not supported with --cloud" in plain
+    assert "--dry-run cannot be combined with --cloud-submit:" in plain
+    assert "drop --cloud-submit to preview the plan." in plain
+    assert "drop the flag" not in plain
 
 
 def test_plan_only_allows_dry_run(tmp_path, monkeypatch):
