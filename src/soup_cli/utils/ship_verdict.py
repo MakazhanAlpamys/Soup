@@ -36,7 +36,9 @@ Public surface
   ``verdict_from_evidence`` (the canonical evidence reader),
   ``verdict_to_dict``, ``verdict_to_evidence`` (the inverse of the ``--evidence``
   reader — makes ``soup ship`` output replayable as input, #312),
-  ``numerics_family`` / ``numerics_from_evidence`` (the #367 judge-numerics stamp).
+  ``numerics_family`` / ``numerics_from_evidence`` (the #367 judge-numerics stamp),
+  ``apply_loop_gate`` (``--gate loop-v2``: the corrections and held-out checks decide, see
+  ``utils/ship_loop_gate.py``).
 """
 
 from __future__ import annotations
@@ -63,6 +65,15 @@ from soup_cli.utils.config_bounds import (
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
     has_control_character,
+)
+from soup_cli.utils.ship_loop_gate import (
+    CorrectionsCheck,
+    HeldOutCheck,
+    LoopGate,
+    decide_loop_gate,
+    gate_lines,
+    gate_reason,
+    held_out_note,
 )
 from soup_cli.utils.terminal import strip_control as for_terminal
 
@@ -611,6 +622,14 @@ class ShipVerdict:
     #: ``None`` for a verdict that was not produced by a live run and whose evidence did not
     #: record it (a file of version 1). Never part of the decision.
     judged: Optional[Judged] = None
+    #: ``soup ship --base-adapter``: the LoRA adapter the BEFORE side was loaded with
+    #: (before = base + this adapter). ``None`` means the before side is the bare base
+    #: model, which is every verdict not produced by a live ``--base-adapter`` run.
+    base_adapter: Optional[str] = None
+    #: ``soup ship --gate loop-v2``: what the gate measured (the corrections and held-out checks)
+    #: and whether the canary settles a DON'T SHIP. ``None`` for every verdict not produced under
+    #: the gate, which keeps their output unchanged.
+    loop_gate: Optional[LoopGate] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1182,6 +1201,35 @@ def decide_ship(
     )
 
 
+def apply_loop_gate(
+    verdict: ShipVerdict, corrections: CorrectionsCheck, held_out: HeldOutCheck,
+) -> ShipVerdict:
+    """Decide ``--gate loop-v2`` from the plain ``decide_ship`` verdict of the same run.
+
+    ``decide_ship`` is three rules: the general suites measured (``missing_baseline``), the task
+    win (``task_win``) and no benchmark regressed (``regression``). Under the gate the suites keep
+    their two rules exactly as they are (a benchmark is compared against the noise floor when one
+    was measured, because ``verdict.benchmark_deltas`` is already canonical), the task win stops
+    deciding and stays on the verdict as information, and the corrections and held-out checks
+    decide in its place: SHIP iff check 1 passed AND check 2 is not a fail AND the suites hold.
+    """
+    if not isinstance(verdict, ShipVerdict):
+        raise TypeError("verdict must be a ShipVerdict instance")
+    if not verdict.benchmark_deltas:
+        suites_failed_rule: Optional[str] = FAILED_MISSING_BASELINE
+    elif any(item.regressed for item in verdict.benchmark_deltas):
+        suites_failed_rule = FAILED_REGRESSION
+    else:
+        suites_failed_rule = None
+    decision = decide_loop_gate(corrections, held_out, suites_failed_rule=suites_failed_rule)
+    return replace(
+        verdict,
+        decision=DECISION_SHIP if decision.ship else DECISION_DONT_SHIP,
+        failed_rule=decision.failed_rule,
+        loop_gate=LoopGate(corrections, held_out, decision.canary_decides),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reason strings (shared by rubric + panel)
 # ---------------------------------------------------------------------------
@@ -1192,6 +1240,31 @@ def _regressed_names(verdict: ShipVerdict) -> List[str]:
 
 def _failed_rule_explanation(verdict: ShipVerdict) -> str:
     """One-line, human-readable reason for the failed rule (or a SHIP note)."""
+    if verdict.loop_gate is not None:
+        # The task win does not decide under the gate, so "even though the task improved" and
+        # "task did not improve" would both be wrong here.
+        if verdict.failed_rule is None:
+            note = held_out_note(verdict.loop_gate.held_out)
+            if verdict.loop_gate.held_out.outcome == "not_measured":
+                return (
+                    f"Corrections learned and no general benchmark regressed past "
+                    f"{verdict.forgetting_threshold:.2%}; the {note}."
+                )
+            return (
+                "Corrections learned, no held-out edit significantly worse, and no general "
+                f"benchmark regressed past {verdict.forgetting_threshold:.2%}."
+                + (f" Note: {note}." if note else "")
+            )
+        reason = gate_reason(verdict.failed_rule, verdict.loop_gate)
+        if reason is not None:
+            return reason
+        if verdict.failed_rule == FAILED_REGRESSION:
+            names = _regressed_names(verdict)
+            joined = ", ".join(names) if names else "(unknown)"
+            return (
+                f"General benchmark(s) regressed past {verdict.forgetting_threshold:.2%}: "
+                f"{joined}."
+            )
     if verdict.failed_rule is None:
         return (
             "Task improved AND no general benchmark regressed past "
@@ -1413,6 +1486,8 @@ def format_ship_rubric(verdict: ShipVerdict, *, public: bool = False) -> str:
     won_str = "won" if win.won else "no win"
     parts: List[str] = []
     parts.append(f"Decision:    {verdict.decision}")
+    if verdict.loop_gate is not None:
+        parts.append(f"Gate:        {verdict.loop_gate.gate}")
     if verdict.numerics is not None:
         parts.append(f"Judge numerics: {verdict.numerics}")
     else:
@@ -1424,6 +1499,7 @@ def format_ship_rubric(verdict: ShipVerdict, *, public: bool = False) -> str:
     parts.append(
         f"Leg 1 task win ({win.mode}): "
         f"{win.base:.4f} -> {win.tuned:.4f}  [{won_str}]"
+        + ("  (information only)" if verdict.loop_gate is not None else "")
     )
     reward = reward_line(win, public=public)
     if reward is not None:
@@ -1444,6 +1520,9 @@ def format_ship_rubric(verdict: ShipVerdict, *, public: bool = False) -> str:
     if verdict.adapter_change is not None:
         parts.append("")
         parts.extend(adapter_change_lines(verdict.adapter_change))
+    if verdict.loop_gate is not None:
+        parts.append("")
+        parts.extend(gate_lines(verdict.loop_gate))
     parts.append("")
     if verdict.failed_rule is not None:
         parts.append(f"Failed rule: {verdict.failed_rule}")
@@ -1475,6 +1554,9 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
         f"{escape(verdict.numerics) if verdict.numerics is not None else 'unstamped'}"
         "[/]"
     )
+    if verdict.base_adapter is not None:
+        # The path comes from the command line: markup-escape it AND strip control bytes.
+        header += f"\n[dim]Base adapter: {escape(for_terminal(verdict.base_adapter))}[/]"
     reward = reward_line(win)
     if reward is not None:
         # reward_line stripped the control bytes (the name is user input); escape the markup.
@@ -1529,6 +1611,13 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
                 text = "[yellow]" + text + "[/]"
             parts.append(text)
         parts.append("")
+    if verdict.loop_gate is not None:
+        parts.extend([
+            f"[bold]Gate {escape(verdict.loop_gate.gate)}[/] "
+            "[dim](the task win above is information only)[/]",
+            *(f"  {escape(line)}" for line in gate_lines(verdict.loop_gate)),
+            "",
+        ])
     parts.append(footer)
     body = Group(*parts)
     return Panel(body, title="soup ship", border_style=style)
@@ -2282,8 +2371,21 @@ def verdict_to_dict(
         "numerics": verdict.numerics,
         "adapter_change": _adapter_change_dict(verdict.adapter_change),
         "judged": None if verdict.judged is None else _judged_dict(verdict.judged),
+        "base_adapter": verdict.base_adapter,
         "task_rows": task_rows,
     }
+    if verdict.loop_gate is not None:
+        # Only under ``--gate loop-v2``: the keys of the loop iteration format's
+        # ``verdict.corrections`` / ``verdict.held_out`` and the canary hand-over.
+        data["gate"] = verdict.loop_gate.gate
+        data["corrections"] = verdict.loop_gate.corrections.to_dict()
+        data["held_out"] = verdict.loop_gate.held_out.to_dict()
+        data["canary_decides"] = verdict.loop_gate.canary_decides
+        # In words, so a SHIP is never read as "the held-out edits passed" (None = checked).
+        data["held_out_note"] = held_out_note(verdict.loop_gate.held_out)
+        data["reason"] = (
+            None if verdict.decision == DECISION_SHIP else _failed_rule_explanation(verdict)
+        )
     return data
 
 

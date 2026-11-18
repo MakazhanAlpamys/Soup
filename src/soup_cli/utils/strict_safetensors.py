@@ -195,6 +195,78 @@ def find_unsafe_weight_files_shallow(model_dir: str) -> Tuple[str, ...]:
     return tuple(sorted(offenders))
 
 
+#: The extensions of pickle / PyTorch-classic weight files: loading one runs code.
+PICKLE_WEIGHT_EXTENSIONS = frozenset({".bin", ".pt", ".pth", ".pkl", ".pickle", ".ckpt"})
+
+
+def _read_head(path: str, size: int = 4) -> "bytes | None":
+    """The first ``size`` bytes of ``path``; ``None`` when it cannot be read."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(size)
+    except OSError:
+        return None
+
+
+def _is_pickle_weight(path: str, ext: str) -> bool:
+    """True for a weight file that a loader would unpickle.
+
+    A pickle extension is the signal by itself, with one exception: an empty file, or one
+    that starts with a NUL byte, is not a pickle stream (no pickle opcode is 0x00, and
+    ``pickle.load`` stops with "invalid load key"), so it can run nothing. A
+    ``.safetensors`` file is a pickle in disguise when it starts with a zip archive or a
+    pickle protocol 2-5 marker; a truncated or garbled safetensors header is NOT.
+    """
+    head = _read_head(path)
+    if ext in PICKLE_WEIGHT_EXTENSIONS:
+        return head is None or not (head == b"" or head[:1] == b"\x00")
+    if ext == SAFETENSORS_EXTENSION and head is not None:
+        return head.startswith(_ZIP_MAGIC) or any(
+            head.startswith(prefix) for prefix in _PICKLE_MAGIC_PREFIXES
+        )
+    return False
+
+
+def find_pickle_weight_files_shallow(model_dir: str) -> Tuple[str, ...]:
+    """Pickle-format *loadable* weight files at the TOP LEVEL of ``model_dir``.
+
+    The narrow sibling of :func:`find_unsafe_weight_files_shallow`, for a caller that wants
+    to refuse real pickles and nothing else (``soup ship``): the same scope (top level, weight
+    filenames only), but a ``.safetensors`` file that is unreadable, truncated or has a bad
+    header is NOT reported, because that is a broken file, not a code-execution vector.
+    """
+    if not isinstance(model_dir, str) or not model_dir:
+        raise ValueError("model_dir must be a non-empty str")
+    if not os.path.isdir(model_dir):
+        return ()
+
+    offenders: list[str] = []
+    for filename in os.listdir(model_dir):
+        full = os.path.join(model_dir, filename)
+        if not os.path.isfile(full) or not _is_loadable_weight_name(filename):
+            continue
+        ext = os.path.splitext(filename)[1].lower()
+        if _is_pickle_weight(full, ext):
+            offenders.append(full)
+    return tuple(sorted(offenders))
+
+
+def assert_no_pickle_top_level_weights(model_dir: str) -> None:
+    """Raise ``ValueError`` if ``model_dir`` has loadable pickle-format weights.
+
+    Narrower than :func:`assert_safe_top_level_weights`: an invalid safetensors header does
+    not raise (see :func:`find_pickle_weight_files_shallow`).
+    """
+    offenders = find_pickle_weight_files_shallow(model_dir)
+    if offenders:
+        names = ", ".join(os.path.basename(path) for path in offenders)
+        raise ValueError(
+            f"unsafe weight file (pickle / PyTorch-classic): {names}. A pickle runs code "
+            "when it is loaded. Re-save the adapter as safetensors, e.g. "
+            "save_pretrained(..., safe_serialization=True)."
+        )
+
+
 def assert_safe_top_level_weights(model_dir: str) -> None:
     """Raise ``ValueError`` if ``model_dir`` has loadable pickle weights.
 
