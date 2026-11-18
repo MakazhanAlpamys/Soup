@@ -122,8 +122,43 @@ class TestFingerprint:
 
         assert sft != kto
 
-    def test_an_unreadable_dataset_has_none(self, tmp_path):
-        assert retry.train_inputs_fingerprint(_state(), str(tmp_path / "missing"), "sft") is None
+    def test_an_unreadable_dataset_is_still_fingerprinted(self, tmp_path):
+        # #3043: an unreadable dataset now has a path-keyed fingerprint, so its
+        # failure is held instead of retried on every poll.  It is not None.
+        missing = str(tmp_path / "missing")
+        first = retry.train_inputs_fingerprint(_state(), missing, "sft")
+        again = retry.train_inputs_fingerprint(_state(), missing, "sft")
+        assert first is not None and first == again
+        assert first != retry.train_inputs_fingerprint(_state(), str(tmp_path / "other"), "sft")
+
+    def test_a_large_dataset_is_fingerprinted_from_its_size_and_ends(self, tmp_path, monkeypatch):
+        # A 256 MiB file is not needed: lower the cap and the head/tail chunk.
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        monkeypatch.setattr(retry, "_READ_CHUNK", 16)
+        one = tmp_path / "big.jsonl"
+        one.write_bytes(b"A" * 64 + b"middle" * 20 + b"Z" * 64)
+        copy = tmp_path / "copy.jsonl"
+        copy.write_bytes(one.read_bytes())
+
+        left = retry.train_inputs_fingerprint(_state(), str(one), "sft")
+        right = retry.train_inputs_fingerprint(_state(), str(copy), "sft")
+        assert left is not None and left == right
+
+        changed_tail = tmp_path / "tail.jsonl"
+        changed_tail.write_bytes(one.read_bytes()[:-1] + b"Q")
+        assert retry.train_inputs_fingerprint(_state(), str(changed_tail), "sft") != left
+
+        changed_middle = tmp_path / "middle.jsonl"
+        changed_middle.write_bytes(b"A" * 64 + b"other!" * 20 + b"Z" * 64)
+        assert retry.train_inputs_fingerprint(_state(), str(changed_middle), "sft") == left
+
+    def test_a_large_dataset_failure_is_held_not_retried_forever(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        big = tmp_path / "big.jsonl"
+        big.write_bytes(b"A" * 200)
+        fingerprint = retry.train_inputs_fingerprint(_state(), str(big), "sft")
+        record = retry.after_failure(None, fingerprint, NOW, "train failed")
+        assert retry.hold_reason(record, fingerprint, NOW + timedelta(seconds=1)) is not None
 
 
 class TestAfterFailure:

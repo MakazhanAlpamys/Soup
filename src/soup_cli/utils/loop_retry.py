@@ -6,8 +6,11 @@ dataset rebuilt byte for byte: four attempts in 35 s, each with its own ``iter-*
 Now a failure is remembered in ``loop.yaml`` (``failed_train``) against a fingerprint of what the
 run was made of:
 
-- the dataset the harvest built (its bytes), the training method, the base model and the
-  recipe the loop trains with (for sft the effective ``sft_recipe``);
+- the dataset the harvest built (its bytes; a file over ``_MAX_DATASET_BYTES`` is
+  fingerprinted from its size and its head and tail, and an unreadable one from its
+  path, so either failure is held rather than retried on every poll — #3043), the
+  training method, the base model and the recipe the loop trains with (for sft the
+  effective ``sft_recipe``);
 - the same fingerprint again after a failure waits: ``RETRY_DELAYS_SEC`` after the first
   failure, longer after the second, and after ``ATTEMPT_LIMIT`` failures the loop HOLDS: no new
   attempt until the inputs change (new feedback makes a new dataset; ``soup loop set base_model``
@@ -62,20 +65,36 @@ def _parse(text: object) -> Optional[datetime]:
 
 
 def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optional[str]:
-    """A SHA-256 over the dataset bytes, the method, the base and the recipe; None if unreadable.
+    """A SHA-256 over the dataset bytes, the method, the base and the recipe.
 
     ``state`` is the ``LoopState`` (its ``base_model`` / ``served_model`` and, for sft, its
-    effective recipe). The dataset path is not part of it, only what the file holds.
+    effective recipe). The dataset path is not part of it, only what the file holds, so a
+    byte-identical copy fingerprints the same wherever it sits.
+
+    A dataset over ``_MAX_DATASET_BYTES`` is not read whole: its exact size and a head
+    and tail hash are used instead. A dataset that cannot be read gets a fingerprint
+    keyed on its path, so its failures are held like any others instead of being
+    retried on every poll forever; once it becomes readable the content fingerprint
+    replaces that key and training resumes. ``None`` is reserved for a caller that has
+    no dataset path at all.
     """
     digest = hashlib.sha256()
     try:
-        if os.path.getsize(data_path) > _MAX_DATASET_BYTES:
-            return None
-        with open(data_path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
-                digest.update(chunk)
+        size = os.path.getsize(data_path)
+        if size > _MAX_DATASET_BYTES:
+            with open(data_path, "rb") as handle:
+                head = handle.read(_READ_CHUNK)
+                handle.seek(max(0, size - _READ_CHUNK))
+                tail = handle.read(_READ_CHUNK)
+            digest.update(f"large:{size}:".encode())
+            digest.update(head)
+            digest.update(tail)
+        else:
+            with open(data_path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
+                    digest.update(chunk)
     except OSError:
-        return None
+        digest.update(f"unreadable:{os.path.abspath(os.path.normpath(data_path))}:".encode())
     recipe = state.effective_sft_recipe() if method == "sft" else None
     identity = {
         "method": method,
