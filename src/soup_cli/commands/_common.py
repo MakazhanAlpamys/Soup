@@ -46,16 +46,19 @@ def _describe_range(kind: object) -> str:
 
 
 def refuse_nan(param: typer.CallbackParam, value: Optional[float]) -> Optional[float]:
-    """Refuse NaN on a ranged float option, as Click refuses ``inf`` (#2906).
+    """Refuse NaN on a float option, as Click refuses ``inf`` (#2906, #2997).
 
     ``typer.Option(min=..., max=...)`` on a float becomes a Click ``FloatRange``,
     which checks ``value < min`` and ``value > max``; both are false for NaN, and
     ``float()`` reads ``nan`` in any case and with a sign. Pass it as the option's
     ``callback``: it runs after Click's conversion, on the number, before the
     command reads anything, and raises Click's out-of-range usage error, so each
-    command keeps its own usage exit code. ``None`` (an unset ``Optional``)
-    passes through.
+    command keeps its own usage exit code. An option without a range says what to
+    pass instead, because ``_describe_range`` has no bounds to name. ``None`` (an
+    unset ``Optional``) passes through.
     """
     if value is None or not math.isnan(value):
         return value
+    if getattr(param.type, "min", None) is None and getattr(param.type, "max", None) is None:
+        raise typer.BadParameter("nan is not a finite number.")
     raise typer.BadParameter(f"nan is not in the range {_describe_range(param.type)}.")

@@ -14,11 +14,19 @@ A shared callback now refuses NaN after Click's conversion, on the number
 (Python reads ``nan`` in any case and with a sign), as the usage error Click
 gives ``inf``: same message, same option name, and the usage exit code of each
 command (3 for the ``GateCommand`` ``data validate``, Click's 2 elsewhere).
+
+#2997 adds ``data filter --perplexity/--coherence`` and ``tui --refresh``. The
+filter options get the ranges their help names (coherence 0.0-1.0, perplexity
+at least 0.0), so only NaN needs the callback there; ``inf`` stays a valid
+perplexity ("no row is above the limit"). ``--refresh`` has no Click range, so
+the callback names a finite number, and the command keeps its own 0.25-10.0
+check and message.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 import typer
@@ -133,6 +141,104 @@ def test_toxicity_with_a_finite_threshold_still_writes_its_rows(workdir):
     assert len((workdir / "kept.jsonl").read_text(encoding="utf-8").splitlines()) == 2
 
 
+# --- #2997: data filter and tui ---------------------------------------------
+
+_COHERENCE_REFUSED = [*_NAN_SPELLINGS, "inf", "-inf", "Infinity", "1e999"]
+_PERPLEXITY_REFUSED = [*_NAN_SPELLINGS, "-inf", "-Infinity", "-1e999", "-1"]
+_PERPLEXITY_ACCEPTED = ["50", "inf", "Infinity", "1e999"]
+_REFRESH_REFUSED = [
+    (spelling, "nan is not a finite number.") for spelling in _NAN_SPELLINGS
+] + [
+    (spelling, "--refresh must be between 0.25 and 10.0")
+    for spelling in ["inf", "-inf", "Infinity", "1e999"]
+]
+
+
+def _filter_rows(workdir):
+    rows = [
+        {"text": "The quick brown fox jumps over the lazy dog every single morning."},
+        {"text": "asdf qwer zxcv"},
+        {"text": "Machine learning models learn patterns from training data."},
+    ]
+    path = workdir / "rows.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize("value", _COHERENCE_REFUSED)
+def test_filter_refuses_coherence_outside_its_stated_range(workdir, value):
+    result = _invoke(["data", "filter", "missing.jsonl", "--coherence", value,
+                      "--output", "kept.jsonl"])
+
+    assert result.exit_code == 2, result.output
+    assert "--coherence" in _plain(result), result.output
+    assert not (workdir / "kept.jsonl").exists()
+
+
+@pytest.mark.parametrize("value", _PERPLEXITY_REFUSED)
+def test_filter_refuses_perplexity_nan_infinities_and_negatives(workdir, value):
+    result = _invoke(["data", "filter", "missing.jsonl", "--perplexity", value,
+                      "--output", "kept.jsonl"])
+
+    assert result.exit_code == 2, result.output
+    assert "--perplexity" in _plain(result), result.output
+    assert not (workdir / "kept.jsonl").exists()
+
+
+@pytest.mark.parametrize("value", _PERPLEXITY_ACCEPTED)
+def test_filter_accepts_perplexity_infinity_as_no_limit(workdir, value):
+    result = _invoke(["data", "filter", "missing.jsonl", "--perplexity", value,
+                      "--output", "kept.jsonl"])
+
+    # Past validation, stopped only by the missing input: inf is not a usage error.
+    assert result.exit_code == 1, result.output
+    assert "File not found" in _plain(result), result.output
+
+
+@pytest.mark.parametrize(("value", "kept"), [("0.0", 3), ("0.5", 3), ("1.0", 0)])
+def test_filter_keeps_finite_coherence_results(workdir, value, kept):
+    path = _filter_rows(workdir)
+
+    result = _invoke(["data", "filter", path, "--coherence", value,
+                      "--output", "kept.jsonl"])
+
+    assert result.exit_code == 0, result.output
+    assert len((workdir / "kept.jsonl").read_text(encoding="utf-8").splitlines()) == kept
+
+
+@pytest.mark.parametrize(("value", "shown"), _REFRESH_REFUSED, ids=[c[0] for c in _REFRESH_REFUSED])
+def test_tui_refresh_refuses_non_finite_before_the_import(workdir, monkeypatch, value, shown):
+    monkeypatch.setitem(sys.modules, "soup_cli.tui_app", None)
+
+    result = _invoke(["tui", "--refresh", value])
+
+    assert result.exit_code == 2, result.output
+    text = _plain(result)
+    assert "--refresh" in text, result.output
+    assert shown in text, result.output
+    assert "Textual is not installed" not in text, result.output
+
+
+@pytest.mark.parametrize("value", ["0.25", "10.0"])
+def test_tui_refresh_keeps_finite_bounds(workdir, monkeypatch, value):
+    monkeypatch.setitem(sys.modules, "soup_cli.tui_app", None)
+
+    result = _invoke(["tui", "--refresh", value])
+
+    assert result.exit_code == 1, result.output
+    assert "Textual is not installed." in _plain(result), result.output
+
+
+@pytest.mark.parametrize("value", ["0.24", "10.1"])
+def test_tui_refresh_keeps_its_bounds_message(workdir, monkeypatch, value):
+    monkeypatch.setitem(sys.modules, "soup_cli.tui_app", None)
+
+    result = _invoke(["tui", "--refresh", value])
+
+    assert result.exit_code == 2, result.output
+    assert "--refresh must be between 0.25 and 10.0" in _plain(result), result.output
+
+
 # --- every ranged float option in the app ------------------------------------
 
 
@@ -155,7 +261,7 @@ _RANGED = _ranged_float_options()
 _RANGED_IDS = [f"{path} {param.opts[-1]}" for path, _, param in _RANGED]
 
 
-def test_the_walker_sees_the_six_options():
+def test_the_walker_sees_the_ranged_options():
     seen = {(path, param.opts[-1]) for path, _, param in _RANGED}
 
     assert {
@@ -165,6 +271,8 @@ def test_the_walker_sees_the_six_options():
         ("data decontaminate", "--threshold"),
         ("data score", "--threshold"),
         ("data forge", "--uncertainty-threshold"),
+        ("data filter", "--ppl"),
+        ("data filter", "--min-coherence"),
     } <= seen
 
 
