@@ -192,6 +192,11 @@ def profile_result(
         "logits_memory_gb": round(breakdown.logits_gb, 2),
         "dequant_memory_gb": round(breakdown.dequant_gb, 2),
         "optimizer_step_memory_gb": round(breakdown.optimizer_step_gb, 2),
+        # #2909: task distill's frozen teacher, its divergence over the vocabulary, and
+        # with distill_mode: sequence how far the teacher's generation exceeds training.
+        "teacher_memory_gb": round(breakdown.teacher_gb, 2),
+        "distill_memory_gb": round(breakdown.distill_gb, 2),
+        "teacher_generation_memory_gb": round(breakdown.teacher_generation_gb, 2),
         "overhead_gb": round(breakdown.overhead_gb, 2),
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
@@ -411,9 +416,24 @@ def profile_from_config(
         gpu_memory_gb=gpu_memory_gb,
         on_hub_request=on_hub_request,
     )
+    notes: list[str] = []
+    if isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model":
+        # #2909: a teacher the estimate cannot price; the student still can be, as in the
+        # train pre-flight, so the estimate is the student's alone and a note says why.
+        notes.append(
+            f"The teacher is not priced: {inp.reason}. The estimate is the student's alone, "
+            "so it understates the run's peak."
+        )
+        inp = hardware_fit_input_or_reason(
+            cfg,
+            allow_network=allow_network,
+            profile_defaults=True,
+            gpu_memory_gb=gpu_memory_gb,
+            on_hub_request=on_hub_request,
+            price_teacher=False,
+        )
     if isinstance(inp, FitUnavailable):
         return inp
-    notes: list[str] = []
     if caller_shape is not None:
         if not inp.shape.guessed:
             notes.append(
