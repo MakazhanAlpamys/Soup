@@ -1,5 +1,6 @@
 """Refused deploys back off, survive restarts and hold only after three attempts."""
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,6 +11,11 @@ from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
 CURSOR = 1_800_000_000.0
 REFUSED = {"deployed": False, "failed": True, "notes": "HTTP 503: serve restarting"}
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
 
 
 def test_refused_deploy_waits_five_then_thirty_minutes_and_holds_after_three(
@@ -213,9 +219,10 @@ def test_status_pending_deploy_reports_waiting_due_and_held(
     result = CliRunner().invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert "pending_deploy" in result.output and expected in result.output
+    plain = _plain(result.output)
+    assert "pending_deploy" in plain and expected in plain
     # The refusal is untrusted terminal text; Rich markup must remain literal.
-    assert "[bold red]503[/]" in result.output
+    assert "[bold red]503[/]" in plain
 
 
 def test_restarted_daemon_deploys_saved_candidate_when_server_recovers(tmp_path, monkeypatch):
@@ -302,7 +309,7 @@ def test_resume_clears_deploy_hold_but_keeps_candidate(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["resume"])
 
     assert result.exit_code == 0, result.output
-    assert "deploy hold cleared" in result.output
+    assert "deploy hold cleared" in _plain(result.output)
     resumed = read_state(path)
     assert resumed.failed_deploy is None
     assert resumed.pending_deploy is not None
