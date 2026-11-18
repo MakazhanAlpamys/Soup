@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import soup_cli.utils.loop_daemon as loop_daemon
 import soup_cli.utils.loop_state as loop_state
 from soup_cli.cli import app
 from soup_cli.utils.loop_daemon import WatchConfig, watch
@@ -169,6 +170,34 @@ class TestSecondWriterDuringAnIteration:
 
         final = read_state(_path(cwd))
         assert final.iteration_count == 1 and final.production_name == "v2"
+
+
+class TestStartUpPromotion:
+    def test_a_pause_that_lands_between_the_start_up_read_and_write_is_not_lost(
+        self, cwd, monkeypatch
+    ):
+        """#3041 — `watch()` read `loop.yaml`, promoted `stopped` to `running` and wrote
+        its whole copy back without the lock: a `soup loop pause` that landed in that
+        millisecond was overwritten from the stale pre-pause read. The promotion now
+        goes through `update_state`, which re-reads under the lock, so the pause
+        survives the start-up write."""
+        write_state(replace(_promoted_state(), status="stopped"), _path(cwd))
+
+        real_read_state = loop_daemon.read_state
+        fired: list[bool] = []
+
+        def read_with_a_pause_landing(path=None):
+            state = real_read_state(path)
+            if not fired:  # a pause lands right after the daemon first looked at the state
+                fired.append(True)
+                update_state(lambda fresh: fresh.with_status("paused"), path)
+            return state
+
+        monkeypatch.setattr(loop_daemon, "read_state", read_with_a_pause_landing)
+
+        watch(_config(cwd, during_train=lambda: None))
+
+        assert read_state(_path(cwd)).status == "paused"
 
 
 # ---------------------------------------------------------------------------

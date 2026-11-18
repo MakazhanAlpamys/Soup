@@ -87,7 +87,6 @@ from soup_cli.utils.loop_state import (
     merge_state,
     read_state,
     update_state,
-    write_state,
 )
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -1447,14 +1446,26 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     # v0.71.4 #177 — chain Registry entries across iterations so the loop
     # forms a real lineage DAG (parent links to the prior iteration's entry).
     prev_registry_id: Optional[str] = None
+    state: Optional[LoopState] = None
     try:
-        state = read_state(config.state_path)
         # Only promote `stopped` → `running` automatically; `paused` must
         # survive a `soup loop watch` invocation so a SIGTERM + restart
         # cycle does not silently un-pause the daemon (code-review HIGH #2).
-        if state.status == "stopped":
-            state = state.with_status("running")
-            write_state(state, config.state_path)
+        # #3041 — under the lock and onto the file's CURRENT contents, so a
+        # `soup loop pause` that lands in that millisecond is not overwritten
+        # from this stale copy.
+        state = update_state(
+            lambda current: (
+                current.with_status("running") if current.status == "stopped" else current
+            ),
+            config.state_path,
+        )
+    except (OSError, ValueError):
+        # Transient (the lock was held, the drive blinked): run on without
+        # the promotion — the next cycle re-reads the file and the final
+        # write retries the status, exactly as a failed iteration save does.
+        _LOG.warning("watch: the start-up status could not be written", exc_info=True)
+        state = read_state(config.state_path)
     except BaseException:
         _restore_signal_handlers(previous_handlers)
         raise
