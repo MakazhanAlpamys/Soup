@@ -1,4 +1,4 @@
-"""Regression coverage for issue #2895's DAPO global-token normalization."""
+"""Regression coverage for DAPO global-token normalization."""
 
 import logging
 
