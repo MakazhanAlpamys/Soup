@@ -77,6 +77,10 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
     retried on every poll forever; once it becomes readable the content fingerprint
     replaces that key and training resumes. ``None`` is reserved for a caller that has
     no dataset path at all.
+
+    Limit: over the cap, a change that keeps the size and both ends of the file is
+    not seen, so such a hold ends only with ``soup loop resume``; the full hash below
+    the cap has no such blind spot.
     """
     digest = hashlib.sha256()
     try:

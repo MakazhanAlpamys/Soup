@@ -418,7 +418,10 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # after the second, and after the third the loop holds. A held loop trains again when the inputs
 # change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
 # of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
-# train_retry row.
+# train_retry row. A dataset over 256 MiB is fingerprinted from its size and its first
+# and last chunks, and an unreadable one from its path, so their failures are held too;
+# over the cap a change keeping the size and both ends is not seen, and such a hold ends
+# only with `soup loop resume`.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
