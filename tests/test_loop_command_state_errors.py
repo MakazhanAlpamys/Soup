@@ -132,6 +132,25 @@ def test_pause_reports_update_permission_error(cwd, monkeypatch):
     assert isinstance(result.exception, SystemExit)
 
 
+@pytest.mark.parametrize(
+    ("command", "function", "operation"),
+    [("status", "read_state", "read"), ("pause", "update_state", "update")],
+)
+def test_permission_error_is_rendered_as_safe_text(cwd, monkeypatch, command, function, operation):
+    write_state(_state(), _path(cwd))
+
+    def deny(*_args: object) -> None:
+        raise PermissionError("[bold red]x[/] \x1b[31m")
+
+    monkeypatch.setattr(loop_cmd, function, deny)
+    result, text = _run(command)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "\x1b" not in result.output
+    assert text == f"cannot {operation} loop.yaml: [bold red]x[/] [31m"
+
+
 def test_replace_permission_error_preserves_state_and_removes_temp_file(cwd, monkeypatch):
     path = Path(_path(cwd))
     write_state(_state(), str(path))
