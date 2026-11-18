@@ -137,12 +137,15 @@ class TestShipEvidenceUtf8Bom:
             Path("evidence.json").write_text(
                 json.dumps(_ship_evidence()), encoding=encoding,
             )
+            assert ship_cmd._load_evidence("evidence.json") == _ship_evidence()
             result = runner.invoke(
                 ship_cmd.app,
                 ["--evidence", "evidence.json", "--output", "verdict.json"],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
             assert Path("verdict.json").exists()
+            verdict = json.loads(Path("verdict.json").read_text(encoding="utf-8"))
+            assert verdict["decision"] == "SHIP"
 
 
 class TestEmitEvidenceCli:
