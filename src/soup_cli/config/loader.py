@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.text import Text
 
-from soup_cli.config.deprecation import SoupConfigDeprecationWarning, deadline_clause
+from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
@@ -181,16 +181,17 @@ def _print_validation_errors(errors: list) -> None:
     ``ValueError``, which API callers read. Both parts can quote config keys or
     values from the file, so each goes through :func:`terminal_text`.
 
-    A deprecated-value refusal (#759) at field level is also the message alone:
-    its text is the v0.76 warning's, which had no location and so starts with
-    the field's dotted path, and ``<loc>: `` in front would name the field twice
+    A field-level refusal whose text already names its field is the message
+    alone: the text starts with the field's dotted path (the v0.76 warning's
+    form, and #3030's `training.eval_gate.baseline` refusal), and
+    ``<loc>: `` in front would name the field twice
     (``data -> remove_unused_columns: data.remove_unused_columns: ...``).
     """
     for err in errors:
         loc = " -> ".join(str(part) for part in err["loc"])
         msg = err["msg"].removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
         dotted = ".".join(str(part) for part in err["loc"])
-        if loc and msg.startswith(f"{dotted}: ") and deadline_clause() in msg:
+        if loc and msg.startswith(f"{dotted}: "):
             loc = ""
         if loc:
             console.print(
