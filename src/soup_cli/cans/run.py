@@ -90,15 +90,14 @@ def _output_problem(output: object, experiment: object = None) -> Optional[str]:
 
     ``soup train`` writes the checkpoints, logs and final model to ``output`` joined with
     ``experiment_name`` (when the config sets one), resolved against the directory
-    ``soup can run`` was started in. The can's config is written by whoever packed the
-    can, so a directory that resolves outside the working directory (an absolute path,
-    ``..`` in either value, a symlink, a Windows drive-relative spelling, a network share
-    or a device) would put the run's files in any directory the user can write to.
-    A network share or device path is refused as text, without being resolved: resolving
-    it would already reach the host it names. Otherwise ``is_under_cwd`` resolves symlinks
+    ``soup can run`` was started in. A can runs inside the working directory: a run
+    directory that resolves outside it (an absolute path, ``..`` in either value, a
+    symlink, a Windows drive-relative spelling, a network share or a device) is refused.
+    A network share or device path is judged as text, without being resolved: resolving it
+    would already reach the host it names. Otherwise ``is_under_cwd`` resolves symlinks
     and compares with ``os.path.commonpath``. A value that is not text is refused too: the
-    loader would turn a YAML ``!!binary`` value into text, so it cannot be left for the
-    loader to judge.
+    config loader accepts a YAML ``!!binary`` value as text, so the value is judged here
+    rather than left to the loader.
     """
     if not isinstance(output, str):
         return (

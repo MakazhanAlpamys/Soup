@@ -55,13 +55,12 @@ def _name_key(name: str) -> str:
 def _check_members(tar: tarfile.TarFile) -> None:
     """Refuse a can whose members are not one file or directory per name.
 
-    ``inspect_can`` and ``read_config`` read a member by its exact name while
-    ``extract_can`` writes all of them, so an archive holding two members that resolve to
-    the same entry (see :func:`_name_key`) would show one file to the checks and hand
-    another to the code that runs. Every reader of a can calls this first. Also refused:
-    a link, a device or any other member that is not a regular file or a directory (``soup
-    can pack`` never writes one), a member below a file member, and more members than
-    :data:`MAX_EXTRACT_MEMBERS`. Iterates lazily, so the count stops the header scan early.
+    Every reader of a can calls this first, so the member a command reads by name is the
+    one file that extraction writes under that name: two members that resolve to the same
+    entry (see :func:`_name_key`) are refused. Also refused: a link, a device or any other
+    member that is not a regular file or a directory (``soup can pack`` never writes one),
+    a member below a file member, and more members than :data:`MAX_EXTRACT_MEMBERS`.
+    Iterates lazily, so the count stops the header scan early.
     """
     first_name: dict[str, str] = {}
     files: set[str] = set()
