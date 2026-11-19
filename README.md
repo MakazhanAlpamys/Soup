@@ -91,40 +91,37 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.77.2 — a cut of `main` after v0.77.1: 159 pull requests, 153 of them from 30 people outside
-the maintainer.** Most of it is fixes. It also adds features and two rules that can refuse what
-v0.77.1 accepted, so read the
-[v0.77.2 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) before
-upgrading a server or a `task: sft` config. Coming from 0.76.x, run `soup doctor --config soup.yaml`
-first and read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
+**v0.78.0 — a cut of `main` after v0.77.2: 271 pull requests, 218 of them from 48 people outside
+the maintainer.** It adds features and several rules that refuse input v0.77.2 accepted, so read the
+[v0.78.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) before
+upgrading a config or a script. Coming from 0.76.x, run `soup doctor --config soup.yaml` first and
+read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **`soup profile --model <id>` answers "will it fit?" without a `soup.yaml`.** It prices the run
-  from the model's `config.json`, shaped by `--seq`, `--batch`, `--method`, `--lora-r`,
-  `--optimizer` and `--gradient-checkpointing`; on Apple Silicon it compares with Metal's working
-  set. `soup plan` and `soup apply` take `--minillm-on-policy`.
-- **More training on Apple Silicon.** `task: preference` with `preference_loss: dpo`, `orpo` or
-  `simpo` runs the native MLX trainer, MLX GRPO trains on 4-bit `mlx-community` bases, and MLX
-  Adafactor follows the configured learning rate and schedule.
-- **Two new DPO recipes,** `qwen3.5-0.8b-dpo` and `qwen3.5-27b-dpo`.
-- **Closer VRAM estimates.** The optimizer step is its own phase, a PRM step is charged the logits
-  of one position, a sharded FSDP or ZeRO run is priced per card, a `stream_loss_chunk` step its
-  last layer's recompute, and Unsloth's LoRA targets as its loader picks them.
-- **Fewer silent overwrites and empty results.** More commands refuse an `--output` that names an
-  input (`soup data ingest`, `persona-mix`, `generate` and others); `soup ship --adapter` refuses an
-  adapter that changes nothing; `soup distill-prompt`, `soup data evolve`, `gen-magpie` and
-  `filter --perplexity` fail instead of writing an empty or unfiltered file.
-- **Preference and RL fixes.** `data.max_length` holds again for SimPO and KTO, PPO checkpoints its
-  policy when asked (and no longer crashes under 4-bit and 8-bit), and `soup merge` loads the base
-  commit the adapter was trained on.
-- **Text shown as typed.** Dozens of commands print paths, names and messages with brackets and
-  `:name:` text kept and terminal control characters removed.
+- **A continual-learning loop.** `soup serve` gives every answer an id and takes feedback on it
+  (thumbs, ratings, edits); `soup loop` trains a candidate from that feedback, judges it with
+  `soup ship --gate loop-v2`, runs it as a canary and rolls back on its own.
+- **`soup ship` shows what its number is made of.** Better/worse/same counts per task, a per-row
+  audit file, `--task-mode reward --reward-fn` to score with a function you supply (a `.py` file is
+  executed), how much the adapter changes the base, and `--base-adapter` to compare two adapters.
+- **New commands.** `soup eval retention` (forgetting across model versions), `soup data leakage`
+  (train/eval overlap), `soup docs search` (offline), `soup prune-layer-cache`, and
+  `soup eval quant-check --performance`.
+- **More on Apple Silicon.** Native MLX chat, merge, selective loss masks, preprocessing caches,
+  vocabulary expansion, RoPE extension and dense Llama SFT.
+- **Layer streaming does more.** A forward-only inference mode, pre-quantised NF4 import, and BCO,
+  IPO and `task: preference` training on a streamed base.
+- **VRAM estimates that fit short rows.** A padded SFT run is priced by its longest row, 8-bit
+  checkpointing, cuBLAS workspaces and a distillation teacher are charged, and the pre-flight says
+  why a fit is not checked.
+- **8 new recipes** (181 in all), and a Triton kernel library for Qwen2 QLoRA SFT (no config key).
+- **Text shown as typed.** Dozens more commands print paths and names with brackets and `:name:`
+  text kept and terminal control characters removed.
 
-**Behaviour changes to know.** `soup serve --tool-auth-token` must be 16 to 128 characters of
-`A-Z`, `a-z`, `0-9`, `_` and `-` (exit 2 otherwise). `task: sft` refuses `reasoning_effort`,
-`train_on_eot`, `use_flash_attn` and `use_liger` on the vision, audio, MLX, Unsloth, RAFT and
-pre-tokenised paths that never applied them. Scripts from `soup completions` need regenerating.
-`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` and the VRAM pre-flight can
-give a different result than on v0.77.1.
+**Behaviour changes to know.** A boolean in a numeric `training` field is refused. `--push-as`
+creates the repository private (`--push-public` to change that). An enabled eval gate on MLX,
+`prm`, `unlearn` or `moe_lora_routing` is refused. `soup serve --max-tokens` stops at 16384.
+`soup adapters merge` weights and the `tool_call_args_subset` score changed, so merges and ship
+verdicts can differ. Evidence files written by `soup ship` are version 2, which v0.77.x refuses.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 

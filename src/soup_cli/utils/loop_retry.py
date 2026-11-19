@@ -17,6 +17,11 @@ run was made of:
 A waiting or held cycle is a skipped iteration whose notes say so (``train_backoff: ...`` or
 ``train_held: ...``), and ``soup loop status`` shows the ``train_retry`` row. The deploy retry
 (``DEPLOY_RETRY_LIMIT``) is separate and unchanged.
+
+A stage of the cycle that RAISES (the cost, harvest, train or gate stage; a locked thumbs
+database, a directory that went away) uses the same record and the same waits: its fingerprint is
+the stage's name (``stage_error_fingerprint``) and its reason starts with ``stage error:``. The
+notes then say ``stage_backoff: ...`` or ``stage_held: ...``.
 """
 
 from __future__ import annotations
@@ -34,6 +39,10 @@ RETRY_DELAYS_SEC = (300.0, 1800.0)
 ATTEMPT_LIMIT = len(RETRY_DELAYS_SEC) + 1
 
 _REASON_CHARS = 300
+#: The stages whose exception is remembered (a deploy has its own retry).
+STAGE_ERROR_STAGES = ("cost", "harvest", "train", "gate")
+#: A ``failed_train`` reason that starts this way is a stage that raised, not a failed training.
+STAGE_ERROR_PREFIX = "stage error: "
 _MAX_DATASET_BYTES = 256 * 1024 * 1024
 _READ_CHUNK = 1024 * 1024
 
@@ -77,6 +86,40 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
     return digest.hexdigest()
 
 
+def stage_error_fingerprint(stage: str) -> str:
+    """The ``failed_train`` fingerprint of a stage that raised: a SHA-256 over its name."""
+    return hashlib.sha256(f"loop stage error:{stage}".encode("utf-8")).hexdigest()
+
+
+def stage_error_reason(stage: str, error_type: str, detail: str = "") -> str:
+    """The ``failed_train`` reason of a stage that raised: its name and the exception's type.
+
+    ``detail`` (the exception's message) follows when there is one; the record keeps one short
+    line (``after_failure`` collapses the whitespace and cuts it).
+    """
+    text = f"{STAGE_ERROR_PREFIX}the {stage} stage raised {error_type}"
+    return f"{text}: {detail}" if detail else text
+
+
+def is_stage_error(failed: Mapping[str, Any]) -> bool:
+    return str(failed.get("reason") or "").startswith(STAGE_ERROR_PREFIX)
+
+
+def stage_error_hold(failed: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
+    """Why the cycle must not call its stages now (the skip note), or None to go ahead.
+
+    Only a record of a stage that raised is judged here; the hold of a failed training is the
+    train stage's own (it knows the dataset).
+    """
+    if not isinstance(failed, Mapping) or not is_stage_error(failed):
+        return None
+    for stage in STAGE_ERROR_STAGES:
+        note = hold_reason(failed, stage_error_fingerprint(stage), now)
+        if note is not None:
+            return note
+    return None
+
+
 def after_failure(
     previous: Optional[Mapping[str, Any]],
     fingerprint: str,
@@ -112,6 +155,15 @@ def hold_reason(
         return None
     attempts = failed.get("attempts")
     times = "1 time" if attempts == 1 else f"{attempts} times"
+    if is_stage_error(failed):
+        detail = str(failed.get("reason"))[len(STAGE_ERROR_PREFIX):]
+        seen = f"{detail} ({times}, last {failed.get('last_at')})"
+        if failed.get("held"):
+            return f"stage_held: {seen}; not retrying until soup loop resume clears it"
+        retry_after = _parse(failed.get("retry_after"))
+        if retry_after is not None and now < retry_after:
+            return f"stage_backoff: {seen}; next attempt after {failed.get('retry_after')}"
+        return None
     seen = (
         f"the same inputs failed {times} "
         f"(last {failed.get('last_at')}: {failed.get('reason')})"
@@ -133,12 +185,17 @@ def describe(failed: Optional[Mapping[str, Any]], now: Optional[datetime] = None
         return None
     attempts = failed.get("attempts")
     plural = "" if attempts == 1 else "s"
-    base = f"failed {attempts} time{plural} on the same inputs ({failed.get('reason')})"
+    if is_stage_error(failed):
+        detail = str(failed.get("reason"))[len(STAGE_ERROR_PREFIX):]
+        base = f"{detail} ({attempts} time{plural} in a row)"
+    else:
+        base = f"failed {attempts} time{plural} on the same inputs ({failed.get('reason')})"
     if failed.get("held"):
-        return (
-            f"held: {base}; no new attempt until the data, the recipe or the base model "
-            "changes, or soup loop resume clears it"
+        until = (
+            "soup loop resume clears it" if is_stage_error(failed)
+            else "the data, the recipe or the base model changes, or soup loop resume clears it"
         )
+        return f"held: {base}; no new attempt until {until}"
     moment = now or datetime.now(timezone.utc)
     retry_after = _parse(failed.get("retry_after"))
     if retry_after is not None and moment < retry_after:
