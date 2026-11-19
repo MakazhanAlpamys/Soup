@@ -418,12 +418,14 @@ def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
         (f"{MODULE}.lora_A.{name}.weight", f"{MODULE}.lora_B.{name}.weight")
         for name in ("default", second_name)
     ]
+    # Same module and name as the first weight pair; only the factor kind differs.
+    pairs.append((f"{MODULE}.lora_embedding_A.default", f"{MODULE}.lora_embedding_B.default"))
     for folder, slot in (("a", 0), ("b", 1)):
         rank = slot + 1
         tensors = {}
         for pair_index, (a_key, b_key) in enumerate(pairs):
             tensors.update(
-                _unit(slot, 2 * pair_index + slot, rank=rank, dim=4, a_key=a_key, b_key=b_key)
+                _unit(slot, 2 * pair_index + slot, rank=rank, dim=6, a_key=a_key, b_key=b_key)
             )
         _write(folder, tensors, rank=rank)
 
@@ -434,8 +436,15 @@ def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
     assert result.exit_code == 0, _plain(result.output)
     written = _load("out")
     assert set(written) == {key for pair in pairs for key in pair}
-    np.testing.assert_allclose(_delta(written, *pairs[0]), np.diag([0.7, -0.3, 0, 0]), atol=1e-6)
-    np.testing.assert_allclose(_delta(written, *pairs[1]), np.diag([0, 0, 0.7, -0.3]), atol=1e-6)
+    expected_diagonals = (
+        [0.7, -0.3, 0, 0, 0, 0],
+        [0, 0, 0.7, -0.3, 0, 0],
+        [0, 0, 0, 0, 0.7, -0.3],
+    )
+    for pair, diagonal in zip(pairs, expected_diagonals, strict=True):
+        np.testing.assert_allclose(
+            _delta(written, *pair), np.diag(diagonal), atol=1e-6, err_msg=pair[0]
+        )
 
 
 @pytest.mark.parametrize("c", [0.25, 4.0, -4.0])
