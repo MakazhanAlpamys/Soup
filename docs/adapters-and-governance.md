@@ -403,9 +403,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # (POSIX) or process group without a console (Windows), with stdin on the null device, so
 # closing the terminal or Ctrl+C there does not reach it. There is no `stop` command yet.
 # A loop.yaml that is gone or invalid stops the daemon with a reason in its log and exit 1; a
-# permission denial or a locked file is retried next cycle. The commands that write loop.yaml
-# (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
-# is invalid (exit 2). The train and ship children write their output to
+# permission denial or a locked file is retried next cycle. The status, pause, resume, set,
+# canary, and rollback commands print one diagnostic and exit 1 if a loop.yaml read or update
+# error such as permission denial persists after any I/O retries. A writer lock timeout still
+# exits 1; a missing state file or invalid state or setting still exits 2. The train and ship
+# children write their output to
 # .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
 # train_log, verify_log); only the last lines go into a failure note. On Windows every child
 # the loop starts (train, ship, and the short probes for free VRAM and for the tokenizer) gets
