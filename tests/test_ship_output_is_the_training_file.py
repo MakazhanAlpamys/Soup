@@ -57,14 +57,15 @@ def root(tmp_path, monkeypatch) -> Path:
 
 
 def _ship(*args: str):
-    # wide enough that a long temporary path is not wrapped inside the refusal
-    return runner.invoke(app, ["ship", *args], env={"COLUMNS": "1000"})
+    return runner.invoke(app, ["ship", *args])
 
 
 def _assert_refused(result, line: str, root: Path, name: str = "train.jsonl") -> None:
     out = _plain(result.output)
     assert result.exit_code == 3, (out, repr(result.exception))
-    assert line in out, out
+    # Rich may fold an absolute path in the middle of a component, so the whole line is
+    # compared with its whitespace removed.
+    assert "".join(line.split()) in "".join(out.split()), out
     assert (root / name).read_text(encoding="utf-8") == TRAIN  # the training file is untouched
 
 
