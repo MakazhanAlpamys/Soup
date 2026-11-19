@@ -80,6 +80,7 @@ def complete_training(tmp_path, monkeypatch):
     return complete
 
 
+@pytest.mark.parametrize("quantization,dequantize", [("none", False), ("4bit", True)])
 @pytest.mark.parametrize("task,training", [
     ("sft", {}), ("dpo", {}), ("orpo", {}), ("simpo", {}), ("kto", {}), ("grpo", {}),
     ("preference", {"preference_loss": "dpo"}),
@@ -87,12 +88,15 @@ def complete_training(tmp_path, monkeypatch):
     ("preference", {"preference_loss": "simpo"}),
     ("sft", {"stop_reason": "loss_watchdog"}),
 ])
-def test_mlx_lora_commands_select_native_consumers(complete_training, task, training):
-    output = complete_training(task=task, **training)
+def test_mlx_lora_commands_select_native_consumers(
+    complete_training, task, training, quantization, dequantize,
+):
+    output = complete_training(task=task, quantization=quantization, **training)
     chat = _offered_params(output, "Quick test:", "Push to HF:", "chat")
     merge = _offered_params(output, "Merge LoRA:", "Export GGUF:", "merge")
     assert (chat["backend"], chat["model"]) == ("mlx", "./saved")
     assert (merge["backend"], merge["adapter"]) == ("mlx", "./saved")
+    assert merge["dequantize"] is dequantize
 
 
 @pytest.mark.parametrize("stop_reason", [None, "loss_watchdog"])
@@ -110,6 +114,7 @@ def test_transformers_suggestions_keep_the_default_consumers(complete_training):
     merge = _offered_params(output, "Merge LoRA:", "Export GGUF:", "merge")
     assert (chat["backend"], chat["model"]) == ("transformers", "./saved")
     assert (merge["backend"], merge["adapter"]) == ("transformers", "./saved")
+    assert merge["dequantize"] is False
     assert "--backend" not in output
 
 

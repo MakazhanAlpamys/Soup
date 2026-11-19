@@ -2753,13 +2753,19 @@ def train(
 
     # Report
     backend_hint = " --backend mlx" if cfg.backend == "mlx" else ""
+    dequantize_hint = (
+        " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
+    )
     merge_hint = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
+            f"{dequantize_hint}"
+        )
     )
 
     console.print(
