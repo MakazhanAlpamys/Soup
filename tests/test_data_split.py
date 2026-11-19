@@ -348,6 +348,21 @@ class TestStratifiedSplitExactCounts:
 
         assert first == second
 
+    def test_no_remainder_ties_preserve_v0780_split(self) -> None:
+        from soup_cli.commands.data import _stratified_split
+
+        rows = [
+            *({"id": index, "category": "large"} for index in range(7)),
+            *({"id": index, "category": "medium"} for index in range(7, 9)),
+            {"id": 9, "category": "small"},
+        ]
+        train, val, test = _stratified_split(rows, 2, 1, "category", seed=42)
+
+        # Neither pass has tied remainders. These ordered IDs come from v0.78.0.
+        assert [row["id"] for row in train] == [4, 2, 6, 0, 5, 7, 9]
+        assert [row["id"] for row in val] == [3, 8]
+        assert [row["id"] for row in test] == [1]
+
     @pytest.mark.parametrize(
         ("rows_per_group", "val_count", "test_count"),
         [
