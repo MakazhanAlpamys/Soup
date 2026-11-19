@@ -174,9 +174,9 @@ def list_runs(
 @app.command()
 def show(
     run_id: str = typer.Argument(..., help="Run ID (or prefix) to show"),
-    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
+    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show training curves"),
 ):
-    """Show detailed info about a specific run, including loss curve."""
+    """Show run details and available loss and GRPO reward curves."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
@@ -281,11 +281,12 @@ def show(
             )
         console.print(eval_table)
 
-    # Loss curve
     if plot:
         metrics = tracker.get_metrics(run["run_id"])
         if metrics:
             _plot_loss_curve(metrics)
+            if run.get("task") == "grpo":
+                _plot_grpo_reward_curves(metrics)
 
 
 @app.command(short_help="Compare two local training runs side by side.")
@@ -798,6 +799,36 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         xlabel="Step",
         ylabel="Loss",
     )
+
+
+def _plot_grpo_reward_curves(metrics: list[dict]) -> None:
+    """Plot the recorded GRPO reward summaries against their logging steps."""
+    try:
+        import plotext as plt
+    except ImportError:
+        # The loss curve already prints the installation hint.
+        return
+
+    from soup_cli.experiment.reward_columns import finite_reward
+    from soup_cli.utils.plotext_compat import render_line
+
+    train = [row for row in metrics if row.get("kind") == "train"]
+    for key, label, title in (
+        ("reward", "Mean reward", "GRPO Mean Training Reward"),
+        ("reward_std", "Reward std. dev.", "GRPO Training Reward Std. Dev."),
+    ):
+        steps = []
+        values = []
+        for row in train:
+            value = finite_reward(row.get(key))
+            if value is not None:
+                steps.append(row["step"])
+                values.append(value)
+        if steps:
+            render_line(
+                plt, steps, values, console=console, label=label, title=title,
+                xlabel="Step", ylabel=label,
+            )
 
 
 @app.command(name="curriculum-curve")

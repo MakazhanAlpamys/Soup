@@ -876,6 +876,52 @@ def test_soup_runs_show_prints_a_single_reward_once(tracker, monkeypatch):
     assert "│ Reward: 0.5000 (1 step) │" in text.splitlines()
 
 
+def test_soup_runs_show_plots_grpo_training_reward_at_logged_steps(tracker, monkeypatch):
+    run_id = _start(tracker, "run_grpo_plots", task="grpo")
+    tracker.log_metrics(run_id, step=30, loss=1.0, reward=-0.25, kind="train")
+    tracker.log_metrics(run_id, step=10, loss=2.0, reward=0.0, reward_std=0.0, kind="train")
+    tracker.log_metrics(run_id, step=15, loss=1.5, kind="train")
+    tracker.log_metrics(run_id, step=20, reward=0.9, reward_std=0.4, kind="eval")
+    tracker.log_metrics(run_id, step=40, reward=0.8, reward_std=0.2, kind="summary")
+    tracker.close()
+    curves = {}
+
+    def record_line(_plotext, steps, values, *, title, **_options):
+        curves[title] = (steps, values)
+
+    monkeypatch.setattr("soup_cli.utils.plotext_compat.render_line", record_line)
+    _run_cli(["runs", "show", run_id], monkeypatch)
+
+    assert curves == {
+        "Training Loss": ([10, 15, 30], [2.0, 1.5, 1.0]),
+        "GRPO Mean Training Reward": ([10, 30], [0.0, -0.25]),
+        "GRPO Training Reward Std. Dev.": ([10], [0.0]),
+    }
+
+
+@pytest.mark.parametrize(
+    ("task", "reward", "flags", "expect_mean"),
+    [
+        ("grpo", 0.0, [], True),
+        ("grpo", 0.0, ["--no-plot"], False),
+        ("grpo", None, [], False),
+        ("dpo", 0.0, [], False),
+    ],
+)
+def test_soup_runs_show_omits_unavailable_grpo_reward_curves(
+    tracker, monkeypatch, task, reward, flags, expect_mean
+):
+    run_id = _start(tracker, "run_reward_visibility", task=task)
+    tracker.log_metrics(run_id, step=10, loss=0.5, reward=reward, kind="train")
+    tracker.close()
+
+    text = _run_cli(["runs", "show", run_id, *flags], monkeypatch)
+
+    assert ("Training Loss" in text) == (not flags)
+    assert ("GRPO Mean Training Reward" in text) == expect_mean
+    assert "GRPO Training Reward Std. Dev." not in text
+
+
 def test_soup_runs_compare_adds_reward_rows_when_either_run_has_a_reward(tracker, monkeypatch):
     _golden_run(tracker, "run_grpo", 1.0, task="grpo", rewards=[0.1, 0.4, 0.8])
     _golden_run(tracker, "run_sft_b", 0.5)

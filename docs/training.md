@@ -1655,6 +1655,11 @@ a diagnostic heuristic, not a quality threshold: it neither stops training nor
 changes rewards or gradients. Evaluation/summary logs do not count as new
 measurements. MLX's existing logging is unchanged.
 
+Use `soup runs show <run_id>` to chart the recorded mean training reward and
+the standard deviation for each GRPO logging step. Each chart uses the
+measurements available for that metric. These are stored summaries of reward
+over each logging window. Pass `--no-plot` for run details without the charts.
+
 ```bash
 # Create a reasoning config
 soup init --template reasoning
