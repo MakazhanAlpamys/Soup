@@ -54,9 +54,13 @@ def test_name_and_tag_still_resolve(one_entry, ref):
 def test_delete_of_a_bare_scheme_keeps_the_entry(one_entry):
     result = runner.invoke(app, ["registry", "delete", "registry://", "--yes"])
     assert result.exit_code != 0, strip_ansi(result.output)
+    assert "Registry entry not found: registry://" in " ".join(strip_ansi(result.output).split())
     assert _count() == 1
     with RegistryStore() as store:
         assert store.get(one_entry) is not None
+    listed = runner.invoke(app, ["registry", "list"], env={"COLUMNS": "200"})
+    assert listed.exit_code == 0
+    assert "model" in strip_ansi(listed.output)
 
 
 def test_show_of_a_bare_scheme_is_not_found(one_entry):
