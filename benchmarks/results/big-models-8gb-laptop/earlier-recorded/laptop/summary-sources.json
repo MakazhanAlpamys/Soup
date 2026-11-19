@@ -1,0 +1,53 @@
+{
+  "what": "SHA-256 of the original files that summary-q32.json, summary-m128.json, summary-m512.json and summary-m512-untrimmed-attempt.json were read from (worker result.json, guard summary.json, guard samples.jsonl). Those originals are not copied here; each summary was produced by re-reading them.",
+  "q32": {
+    "train": {
+      "run_dir": "nf4_stream32/results/train-01",
+      "result.json": "38fd8cfccf8e78253ddfe31cccefec7bd21db94f14e2eb9f30fefbb7fbc1d57e",
+      "guard summary.json": "e87c41b07a7145b08ae2ac4edbd39e54cca2a0fa831adf81c58572b51a836694",
+      "guard samples.jsonl": "b637000ebc2362c3a815fedeb7f399a9b9b00dc273374f8c1e950df35ba48f26"
+    },
+    "reload": {
+      "run_dir": "nf4_stream32/results/reload-01",
+      "result.json": "fbbaa4785e9a77589537c698f2bd12c0050a9683ed8219a3887148af856a2037",
+      "guard summary.json": "aad4b445cec589e621c5601dd998714678fa8c81b020a5c2bb34be23cdaea5a0",
+      "guard samples.jsonl": "052a083df5eca2fa330b3949e32f7c99ce39315c4499cb8fcf2f6254e9048546"
+    }
+  },
+  "m128": {
+    "train": {
+      "run_dir": "dense123_train34/results/train-02",
+      "result.json": "40e64d8fd28885f6f24b437a7bfc3d6825885646cac1e5cc1657cf87e5e6d779",
+      "guard summary.json": "c34e7c28aea6b20a12f7b8d9c8cbd3c53d5f85c08bbb2aaa249ead3e5ec33e5d",
+      "guard samples.jsonl": "921636fa3bbad94972da3dc5ba710c0ed26b78fb0ac9df60545a27d23af0c2ea"
+    },
+    "reload": {
+      "run_dir": "dense123_train34/results/reload-02",
+      "result.json": "ae0cdb4fd4b136f8d8cf04402edc1f2fc52719b0959ff10409283cdef70f7ea0",
+      "guard summary.json": "5006dd626c67b0bb66ff378548bebca1bf3554bbf5478ff0fe50fc8bb3ec1110",
+      "guard samples.jsonl": "6e7edb06d30555281f320cdb38b399f3447f2be26b38ed1f0e223fc143b283a2"
+    }
+  },
+  "m512": {
+    "train": {
+      "run_dir": "dense123_packed35/results/full512-train-02",
+      "result.json": "25ee2707df2bae8299862ff8f028c4ac7713ec6671b69b7bd0349f751d362a68",
+      "guard summary.json": "2cc1bf0776d42f69aff11d1f45aa91f7dcf3533f54a6c8134a7d334aea98723f",
+      "guard samples.jsonl": "599e204088c213033782d92d602c89b1cb466151dae60428b315a4eef2e1b950"
+    },
+    "reload": {
+      "run_dir": "dense123_packed35/results/full512-reload-02",
+      "result.json": "f8dc6a8f14cff282d0130ccd6159e33cf497467935154f53f3d1f9122fe618a2",
+      "guard summary.json": "595a1a0773ac74b04cf8ca29aec965fface0575faad5b7f1c6301e93434ebd72",
+      "guard samples.jsonl": "14c25a6f93f147b7d3d4e5e297dfdb1b6865e52faa97ffc4889cec8149c929eb"
+    }
+  },
+  "m512-untrimmed-attempt": {
+    "train": {
+      "run_dir": "dense123_packed35/results/full512-train-01",
+      "result.json": "902fc960c49eff6ae85dd15c77731cd37ea1617680d98c43d6c1423de4a3228e",
+      "guard summary.json": "0e6d79fd8930ea758093833aa97cb6fe02d5c350d888b21b80406e7919cd2f77",
+      "guard samples.jsonl": "0e72ed528da685130837aec7b6210f5d16c090d5514ca563f0a39d68481d2cf0"
+    }
+  }
+}

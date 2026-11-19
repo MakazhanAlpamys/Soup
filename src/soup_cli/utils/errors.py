@@ -5,8 +5,9 @@ import traceback
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console(stderr=True)
 
@@ -15,6 +16,12 @@ console = Console(stderr=True)
 # `[train]` extra. A missing one of these surfaces this single, actionable fix.
 # The `\\[` escapes the literal `[` for Rich markup (it renders as `[train]`).
 _TRAIN_FIX = "Training needs the \\[train] extra. Run: pip install \"soup-cli\\[train]\""
+
+_CPU_OOM_MESSAGE = "The CPU allocator could not reserve memory for a tensor."
+_CPU_OOM_FIX = (
+    "Free memory by closing other programs, add swap (Linux) or enlarge the "
+    "page file (Windows), or use a smaller model."
+)
 
 # Map known error patterns to (short message, fix suggestion)
 ERROR_MAP = [
@@ -36,6 +43,20 @@ ERROR_MAP = [
             "(keeps effective batch size); lower data.max_length; "
             "enable gradient_checkpointing, use 4bit quantization, or use a smaller model."
         ),
+    ),
+    # CPU allocator refused a request (#2154): after the GPU entries, so a CUDA
+    # message still gets the GPU hint. torch words it two ways (c10's alloc_cpu.cpp):
+    # "can't allocate memory" from posix_memalign (Linux, macOS), "not enough memory"
+    # on Windows, Android and mimalloc builds.
+    (
+        "DefaultCPUAllocator: can't allocate memory",
+        _CPU_OOM_MESSAGE,
+        _CPU_OOM_FIX,
+    ),
+    (
+        "DefaultCPUAllocator: not enough memory",
+        _CPU_OOM_MESSAGE,
+        _CPU_OOM_FIX,
     ),
     # Missing optional deps
     (
@@ -357,13 +378,13 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
 
     if matched is not None:
         error_msg, fix = matched
-        console.print(f"\n[bold red]Error:[/] {for_terminal(error_msg)}")
+        console.print(Text.assemble("\n", ("Error:", "bold red"), f" {strip_control(error_msg)}"))
         console.print(f"[green]Fix:[/] {fix}")
         if verbose:
             console.print()
             console.print(
                 Panel(
-                    for_terminal(traceback.format_exc()),
+                    Text(strip_control(traceback.format_exc())),
                     title="[dim]Full Traceback[/]",
                     border_style="dim",
                 )
@@ -371,13 +392,19 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
         return
 
     # Unknown error — show type + message
-    console.print(f"\n[bold red]Error:[/] {for_terminal(exc_type)}: {for_terminal(exc_str)}")
+    console.print(
+        Text.assemble(
+            "\n",
+            ("Error:", "bold red"),
+            f" {strip_control(exc_type)}: {strip_control(exc_str)}",
+        )
+    )
     console.print("[dim]Run with --verbose for the full traceback.[/]")
     if verbose:
         console.print()
         console.print(
             Panel(
-                for_terminal(traceback.format_exc()),
+                Text(strip_control(traceback.format_exc())),
                 title="[dim]Full Traceback[/]",
                 border_style="dim",
             )

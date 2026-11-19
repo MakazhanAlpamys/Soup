@@ -21,6 +21,7 @@ run.
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +62,13 @@ def _is_number(value: Any) -> bool:
     # which refuses both -- ValueError for NaN, OverflowError for inf, raised
     # out of the command (#763 review). A number the arithmetic cannot use is
     # not a number for this purpose.
+    #
+    # An int past the double range is such a number too, and `math.isfinite`
+    # says so by raising OverflowError while converting it -- the very error
+    # this guard exists to prevent (#2370). The bound is checked before the
+    # conversion, so the guard returns False for it.
+    if isinstance(value, int) and abs(value) > sys.float_info.max:
+        return False
     return math.isfinite(value)
 
 
@@ -327,14 +335,19 @@ def _lora_params(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return params
 
 
-def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
+# scale * sqrt(rank) for alpha 5 is 5.000000000000001. _cmp uses ==.
+_RSLO_ALPHA_DECIMALS = 9
+
+
+def _ran_alpha(record: Dict[str, Any], *, use_rslora: bool = False) -> Optional[float]:
     """The alpha a run used, from whichever shape its writer chose.
 
-    PEFT stores `lora_alpha` directly. MLX stores **`scale`**, which is
-    `alpha / rank` -- there is no `alpha` key at all. Reading one and hoping
-    is how this returned `unknown` for every real MLX adapter: the fixture
-    invented an `alpha` key, the fixture passed, and a live run on Metal
-    showed `lora_parameters = {"rank": 4, "scale": 2.0, ...}`.
+    PEFT stores `lora_alpha` directly. MLX stores **`scale`** and no `alpha`
+    key. Plain LoRA writes `scale = alpha / rank`. When `use_rslora` is set,
+    MLX writes `scale = alpha / sqrt(rank)` instead (#1853). Reading one and
+    hoping is how this returned `unknown` for every real MLX adapter: the
+    fixture invented an `alpha` key, the fixture passed, and a live run on
+    Metal showed `lora_parameters = {"rank": 4, "scale": 2.0, ...}`.
     """
     direct = record.get("lora_alpha")
     if direct is not None:
@@ -348,6 +361,14 @@ def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
         # raised `TypeError` out of the command. Either way the record carries
         # no readable alpha, which is `unknown`, never agreement.
         return None
+    if use_rslora:
+        # rank <= 0 is unusable for rsLoRA: math.sqrt raises ValueError on a
+        # negative, and a non-positive rank is never a trained rsLoRA shape.
+        # Unreadable values stay `unknown` (via None), never an exception out
+        # of `soup adapters audit` (#2255 review).
+        if rank <= 0:
+            return None
+        return round(scale * math.sqrt(rank), _RSLO_ALPHA_DECIMALS)
     return scale * rank
 
 
@@ -371,7 +392,9 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     one run that most needs reporting -- #683 itself, handed a clean bill by
     the command written to catch it.
     """
-    asked = bool(data.get("train_on_responses_only", True))
+    asked = bool(data.get("train_on_responses_only", True)) or bool(
+        data.get("train_on_messages_with_train_field", False)
+    )
     prefix_mask = record.get("mask_prompt")
     token_mask = record.get("response_token_mask")
 
@@ -513,7 +536,13 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
             ran_r = params.get("rank")
         rows.append(_cmp("lora.r", lora["r"], ran_r))
     if "alpha" in lora:
-        rows.append(_cmp("lora.alpha", lora["alpha"], _ran_alpha(record)))
+        rows.append(
+            _cmp(
+                "lora.alpha",
+                lora["alpha"],
+                _ran_alpha(record, use_rslora=lora.get("use_rslora") is True),
+            )
+        )
 
     # #342 — gradient watchdog skip fraction.  Only GRPO runs carry the
     # watchdog; elsewhere the row could never be known.

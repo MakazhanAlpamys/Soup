@@ -393,6 +393,56 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
     assert not leaked, f"infer --device cpu --cuda-graphs pulled in {leaked}"
 
 
+def test_cuda_graphs_recorded_base_refusal_is_light(tmp_path):
+    """A local adapter's recorded base is refused before torch is imported (#1817)."""
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    (base_dir / "config.json").write_text(
+        '{"model_type": "qwen2", "quantization_config": {"bits": 4}}', encoding="utf-8"
+    )
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    (adapter_dir / "adapter_config.json").write_text(
+        '{"peft_type": "LORA", "base_model_name_or_path": "%s"}' % base_dir.as_posix(),
+        encoding="utf-8",
+    )
+    prompt_file = tmp_path / "prompts.jsonl"
+    prompt_file.write_text('{"prompt": "hello"}\n', encoding="utf-8")
+    # CUDA "present", so the device check passes and the file checks are what refuse.
+    cuda_code = (
+        "import soup_cli.utils.cuda_graphs as _cg\n"
+        "_cg._is_cuda_available_light = lambda: True"
+    )
+    expected_msg = (
+        "CUDA graph decoding currently requires an unquantized model. Omit --cuda-graphs."
+    )
+
+    exit_code, leaked, output = _invoke_with_probe(
+        ["bench", "infer", str(adapter_dir), "--backend", "transformers", "--cuda-graphs"],
+        monkey_patch_code=cuda_code,
+    )
+    assert exit_code == 1
+    assert expected_msg in _plain(output)
+    assert not leaked, f"bench infer recorded-base refusal pulled in {leaked}"
+
+    exit_code, leaked, output = _invoke_with_probe(
+        [
+            "infer",
+            "--model",
+            str(adapter_dir),
+            "--input",
+            str(prompt_file),
+            "--output",
+            str(tmp_path / "out.jsonl"),
+            "--cuda-graphs",
+        ],
+        monkey_patch_code=cuda_code,
+    )
+    assert exit_code == 1
+    assert expected_msg in _plain(output)
+    assert not leaked, f"infer recorded-base refusal pulled in {leaked}"
+
+
 def test_check_steps_warmup_logic():
     """check_steps_warmup helper catches steps <= warmup without pulling in torch."""
     from soup_cli.bench.train_run import check_steps_warmup

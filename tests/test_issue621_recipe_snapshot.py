@@ -95,7 +95,11 @@ def _live_baseline() -> dict[str, object]:
 
 def _resolve_flat(name: str) -> dict[str, object]:
     from soup_cli.config.loader import load_config_from_string
+    from tests.recipe_contracts import load_catalog_config
 
+    if RECIPES[name].unavailable_reason:
+        assert load_catalog_config(RECIPES[name]) is None
+        return {"$unavailable": RECIPES[name].unavailable_reason}
     return flatten(load_config_from_string(RECIPES[name].yaml_str).model_dump(mode="json"))
 
 

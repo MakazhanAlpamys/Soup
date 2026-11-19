@@ -254,8 +254,14 @@ def plan_modal_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_modal_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
     """Build a :class:`CloudPlan` from a cwd-contained ``soup.yaml``.
+
+    ``config_yaml`` is the text to embed: the caller passes the *effective*
+    config, with every CLI override applied, so the remote run trains what the
+    local run said it would (#1430). Reading ``config_path`` is the fallback
+    for a direct caller.
 
     Reads the config (cwd-containment + symlink rejection), renders the
     Modal stub, and returns the plan (stub text + planned ``modal run``
@@ -264,8 +270,9 @@ def plan_modal_run(
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
@@ -329,10 +336,19 @@ def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
         raise RuntimeError(
             "Modal SDK not installed. Run `pip install \"soup-cli[modal]\"`."
         ) from exc
+    from soup_cli.utils.tool_paths import find_tool
+
+    modal_cli = find_tool("modal")
+    if modal_cli is None:
+        raise RuntimeError(
+            "Modal CLI `modal` was not found on PATH. Install it with "
+            "`pip install \"soup-cli[modal]\"`, make sure its scripts directory "
+            "is on PATH, then re-run with --cloud-submit."
+        )
     import subprocess
 
     proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        ["modal", "run", plan.stub_path],
+        [modal_cli, "run", plan.stub_path],
         check=False,
     )
     return proc.returncode

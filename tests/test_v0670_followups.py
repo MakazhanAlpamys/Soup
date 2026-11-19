@@ -383,7 +383,6 @@ class TestSourceWiringRegressions:
             encoding="utf-8"
         )
         # The bisect subprocess call site
-        # Must NOT use shell=True; must use shlex.split + shlex.quote
+        # Native splitting and literal checkpoint argv are exercised by the CLI tests.
+        # This guard still prevents an accidental switch to shell execution.
         assert "shell=True" not in src
-        # Must include shlex.quote pattern for the {ckpt} substitution
-        assert "shlex.quote" in src

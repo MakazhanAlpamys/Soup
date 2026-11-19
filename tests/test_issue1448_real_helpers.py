@@ -52,10 +52,18 @@ def _tensorrt_modules():
     return {name: _module(name) for name in names}
 
 
+#: Where the export finds trtllm-build; no other external program is found.
+_TRTLLM_BUILD = "/fake-bin/trtllm-build"
+
+
+def _find_tool(name, path=None):
+    return _TRTLLM_BUILD if name == "trtllm-build" else None
+
+
 def _fake_run(argv, **_kwargs):
     # convert_checkpoint fills <out>/checkpoint, trtllm-build fills <out>/engine
     out = Path(argv[argv.index("--output_dir") + 1])
-    _write(out / ("rank0.engine" if argv[0] == "trtllm-build" else "rank0.safetensors"), 4000)
+    _write(out / ("rank0.engine" if argv[0] == _TRTLLM_BUILD else "rank0.safetensors"), 4000)
     return subprocess.CompletedProcess(argv, 0, "", "")
 
 
@@ -119,6 +127,7 @@ def test_every_format_attaches_what_its_helper_returned(tmp_path, monkeypatch, f
          patch("soup_cli.utils.save_formats.export_torchao", _torchao), \
          patch("soup_cli.utils.gguf_quant.export_advanced_gguf", _gguf), \
          patch("soup_cli.utils.bitnet.export_bitnet_gguf", _gguf), \
+         patch("soup_cli.utils.tool_paths.find_tool", _find_tool), \
          patch("soup_cli.commands.export._find_llama_cpp", return_value=Path("llama")):
         output = "out.gguf" if fmt in ("gguf-ud", "bitnet", "tq1_0") else f"out_{fmt}"
         result = runner.invoke(

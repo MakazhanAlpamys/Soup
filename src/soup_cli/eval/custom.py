@@ -7,11 +7,12 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
-from soup_cli.eval.generation import generate_outputs
+from soup_cli.eval.generation import iter_outputs
 from soup_cli.utils.final_answer import answers_match, parse_completion, parse_reference
 from soup_cli.utils.safe_regex import check_config_regex
+from soup_cli.utils.ship_progress import track
 
 MAX_EVAL_TASKS = 10_000
 MAX_REGEX_PATTERN_LEN = 1_000
@@ -43,6 +44,9 @@ class EvalResult:
     output: str
     score: float
     matched: bool
+    #: True when the generation for this task raised (or returned no text) and the row was
+    #: scored as wrong without an answer. An empty answer is NOT a failure.
+    failed: bool = False
 
 
 @dataclass
@@ -91,59 +95,68 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
     if not path.suffix.lower() == ".jsonl":
         raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
 
-    tasks: list[EvalTask] = []
     with open(path, encoding="utf-8") as fh:
-        for line_num, line in enumerate(fh, 1):
-            line = line.strip()
-            if not line:
-                continue
+        return parse_eval_task_lines(fh, path)
 
-            if len(tasks) >= MAX_EVAL_TASKS:
-                raise ValueError(
-                    f"Eval file exceeds maximum of {MAX_EVAL_TASKS} tasks "
-                    f"(stopped at line {line_num})"
-                )
 
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_num}: {exc}"
-                ) from exc
+def parse_eval_task_lines(lines: Iterable[str], source: object) -> list[EvalTask]:
+    """Parse the JSONL lines of an eval file (``source`` only names it in messages).
 
-            if not isinstance(row, dict):
-                raise ValueError(
-                    f"Line {line_num}: expected JSON object, got {type(row).__name__}"
-                )
+    ``load_eval_tasks`` feeds it the open file; a caller that already holds the bytes
+    (it hashed them) parses those same bytes instead of opening the path a second time.
+    """
+    tasks: list[EvalTask] = []
+    for line_num, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
 
-            if "prompt" not in row:
-                raise ValueError(
-                    f"Line {line_num}: missing required field 'prompt'"
-                )
+        if len(tasks) >= MAX_EVAL_TASKS:
+            raise ValueError(
+                f"Eval file exceeds maximum of {MAX_EVAL_TASKS} tasks "
+                f"(stopped at line {line_num})"
+            )
 
-            scoring = row.get("scoring", "exact")
-            if not isinstance(scoring, str) or scoring not in VALID_SCORING:
-                raise ValueError(
-                    f"Line {line_num}: invalid scoring '{scoring}', "
-                    f"must be one of: {', '.join(sorted(VALID_SCORING))}"
-                )
-            expected = str(row.get("expected", ""))
-            if scoring == "answer":
-                require_single_answer(expected, f"Line {line_num}")
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON on line {line_num}: {exc}"
+            ) from exc
 
-            tasks.append(EvalTask(
-                prompt=str(row["prompt"]),
-                expected=expected,
-                category=str(row.get("category", "default")),
-                scoring=scoring,
-                metadata={
-                    k: v for k, v in row.items()
-                    if k not in ("prompt", "expected", "category", "scoring")
-                },
-            ))
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"Line {line_num}: expected JSON object, got {type(row).__name__}"
+            )
+
+        if "prompt" not in row:
+            raise ValueError(
+                f"Line {line_num}: missing required field 'prompt'"
+            )
+
+        scoring = row.get("scoring", "exact")
+        if not isinstance(scoring, str) or scoring not in VALID_SCORING:
+            raise ValueError(
+                f"Line {line_num}: invalid scoring '{scoring}', "
+                f"must be one of: {', '.join(sorted(VALID_SCORING))}"
+            )
+        expected = str(row.get("expected", ""))
+        if scoring == "answer":
+            require_single_answer(expected, f"Line {line_num}")
+
+        tasks.append(EvalTask(
+            prompt=str(row["prompt"]),
+            expected=expected,
+            category=str(row.get("category", "default")),
+            scoring=scoring,
+            metadata={
+                k: v for k, v in row.items()
+                if k not in ("prompt", "expected", "category", "scoring")
+            },
+        ))
 
     if not tasks:
-        raise ValueError(f"No eval tasks found in {path}")
+        raise ValueError(f"No eval tasks found in {source}")
 
     return tasks
 
@@ -405,7 +418,12 @@ def score_task(task: EvalTask, output: str) -> EvalResult:
 
     if task.scoring == "tool_call_args_subset":
         similarity = tool_call_args_subset(output, task.expected)
-        matched = similarity >= 0.5
+        # Matched only at full credit (#2811): the name and the arguments are
+        # worth 0.5 each, so a 0.5 threshold counted a call with every argument
+        # wrong, or to the wrong tool, as Correct. `score` keeps the partial
+        # credit, which the eval gate, quant_check, deploy_measure and
+        # cmaes_merge average.
+        matched = similarity >= 1.0
         return EvalResult(
             task=task, output=output, score=similarity, matched=matched,
         )
@@ -437,11 +455,11 @@ def run_eval(
         generate_fn = _create_default_generator(model_path)
 
     results: list[EvalResult] = []
-    outputs = generate_outputs(generate_fn, [task.prompt for task in tasks])
-    for task, output in zip(tasks, outputs):
+    outputs = iter_outputs(generate_fn, [task.prompt for task in tasks])
+    for task, output in track(zip(tasks, outputs), len(tasks)):
         result = (
             score_task(task, output) if output is not None
-            else EvalResult(task=task, output="", score=0.0, matched=False)
+            else EvalResult(task=task, output="", score=0.0, matched=False, failed=True)
         )
         results.append(result)
 

@@ -272,6 +272,31 @@ class TestTheHelpersStripBidiAndInvisibleFormatCharacters:
         word = "".join(chr(code) for code in codes)
         assert for_terminal(word) == word
 
+    @pytest.mark.parametrize(
+        "code", BIDI_AND_INVISIBLE_CODES, ids=[f"{code:#06x}" for code in BIDI_AND_INVISIBLE_CODES]
+    )
+    def test_the_strip_runs_before_the_escape(self, code: int) -> None:
+        # Escaping first would leave the backslash before the format character,
+        # not before ``[``; stripping afterwards would then turn the escaped
+        # tag back into live markup.
+        from soup_cli.utils.terminal import for_terminal
+
+        buffer = StringIO()
+        _plain_console(buffer).print(for_terminal(BACKSLASH + chr(code) + "[bold]x[/bold]"))
+        assert buffer.getvalue().rstrip("\n") == BACKSLASH + "[bold]x[/bold]"
+
+    def test_plain_right_to_left_text_is_left_intact(self) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        hebrew = "".join(chr(code) for code in (0x5E9, 0x5DC, 0x5D5, 0x5DD))
+        arabic = "".join(chr(code) for code in (0x645, 0x631, 0x62D, 0x628, 0x627))
+        text = f"{hebrew} {arabic}"
+        assert strip_control(text) == text
+        assert for_terminal(text) == text
+        buffer = StringIO()
+        _plain_console(buffer).print(for_terminal(text))
+        assert buffer.getvalue().rstrip("\n") == text
+
     @pytest.mark.parametrize("code", [0x200A, 0x2030, 0x2060, 0x2065, 0x206A], ids=hex)
     def test_neighbouring_code_points_are_not_swept_up(self, code: int) -> None:
         from soup_cli.utils.terminal import strip_control

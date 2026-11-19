@@ -11,8 +11,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -71,6 +72,9 @@ def infer(
         "--output",
         "-o",
         help="Path to output JSONL file for results",
+    ),
+    backend: str = typer.Option(
+        "transformers", "--backend", help="Text backend: transformers or mlx",
     ),
     base: Optional[str] = typer.Option(
         None,
@@ -157,6 +161,24 @@ def infer(
     ),
 ):
     """Run batch inference on a JSONL file of prompts."""
+    from soup_cli.utils.mlx_generation import reject_native_adapter, validate_native_options
+
+    if backend not in ("transformers", "mlx"):
+        raise typer.BadParameter("--backend must be transformers or mlx")
+    try:
+        if backend == "mlx":
+            if asr_language is not None or asr_task is not None or audio_dir is not None:
+                raise ValueError("MLX text generation does not accept ASR options")
+            validate_native_options(
+                temperature=temperature, max_tokens=max_tokens, device=device, hub=hub,
+                task=task, batch_size=batch_size, cuda_graphs=cuda_graphs,
+            )
+        else:
+            reject_native_adapter(model)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any resolution.
     if hub and hub != "hf":
         from soup_cli.utils.hubs import apply_hub_to_cli_model
@@ -253,7 +275,7 @@ def infer(
             raise typer.Exit(1) from exc
 
     # Detect device
-    if not device:
+    if not device and backend != "mlx":
         from soup_cli.utils.gpu import detect_device
 
         device, _ = detect_device()
@@ -263,7 +285,7 @@ def infer(
             f"Model:    [bold]{model_ref}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
-            f"Device:   [bold]{device}[/]\n"
+            f"Device:   [bold]{'mlx' if backend == 'mlx' else device}[/]\n"
             f"Tokens:   [bold]{max_tokens}[/]\n"
             f"Temp:     [bold]{temperature}[/]",
             title="Batch Inference",
@@ -272,13 +294,26 @@ def infer(
 
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
-    model_obj, tokenizer = _load_model(
-        model_ref,
-        base,
-        device,
-        trust_remote_code,
-        is_local=(model_kind == "local"),
-    )
+    if backend == "mlx":
+        from soup_cli.utils.mlx_generation import generate_native, load_native_model
+
+        try:
+            model_obj, tokenizer = load_native_model(
+                model_ref, base, trust_remote_code=trust_remote_code,
+            )
+        except (ImportError, OSError, ValueError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        generate_one = generate_native
+    else:
+        model_obj, tokenizer = _load_model(
+            model_ref,
+            base,
+            device,
+            trust_remote_code,
+            is_local=(model_kind == "local"),
+        )
+        generate_one = _generate
     if cuda_graphs is True:
         from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
 
@@ -334,7 +369,7 @@ def infer(
                 messages = [{"role": "user", "content": prompt_batch[0]}]
                 try:
                     generated = [
-                        _generate(
+                        generate_one(
                             model_obj,
                             tokenizer,
                             messages,
@@ -643,14 +678,10 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Quote the dataset-derived filename first, then escape and
-            # control-strip it (repr() after the escape would double the
-            # escape's backslash and make a tag live again); the exception,
-            # whose message embeds that filename, is escaped too.
-            name = for_terminal(repr(Path(str(audio)).name))
-            console.print(
-                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
-            )
+            name = repr(Path(str(audio)).name)
+            console.print(Text.assemble(
+                "Skipped ", terminal_text(name), ": ", terminal_text(exc), style="yellow",
+            ))
             continue
         rec = {"audio": audio, "transcription": hyp}
         ref = row.get("text")
@@ -663,11 +694,11 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(repr(Path(str(audio)).name))
-                console.print(
-                    f"[yellow]Metric skipped for {name}: "
-                    f"{for_terminal(str(exc))}[/]"
-                )
+                name = repr(Path(str(audio)).name)
+                console.print(Text.assemble(
+                    "Metric skipped for ", terminal_text(name), ": ", terminal_text(exc),
+                    style="yellow",
+                ))
             else:
                 rec["reference"] = ref
                 rec["wer"] = row_wer
@@ -687,11 +718,13 @@ def _infer_asr(
 
     atomic_write_text("\n".join(out_lines) + "\n", output_file, field="--output")
 
-    summary = f"Transcribed [bold]{len(out_lines)}[/] clip(s) -> {output_file}"
+    summary = Text.assemble(
+        "Transcribed ", (str(len(out_lines)), "bold"), " clip(s) -> ", terminal_text(output_file),
+    )
     if skipped:
-        summary += f"  ([yellow]{skipped} skipped[/])"
+        summary.append("  (").append(f"{skipped} skipped", style="yellow").append(")")
     if refs:
-        summary += f"\nCorpus WER: [bold]{corpus_wer(refs, hyps):.3f}[/]"
+        summary.append("\nCorpus WER: ").append(f"{corpus_wer(refs, hyps):.3f}", style="bold")
     console.print(Panel(summary, title="[bold green]ASR Complete![/]"))
 
 
@@ -780,7 +813,7 @@ def _load_model(
             base_model,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
@@ -788,7 +821,7 @@ def _load_model(
             model_path,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
 
     model_obj.eval()

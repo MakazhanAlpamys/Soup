@@ -30,6 +30,16 @@ runner = CliRunner()
 _OLLAMA = "soup_cli.utils.ollama"
 
 
+@pytest.fixture(autouse=True)
+def _ollama_is_installed(monkeypatch):
+    """The ollama CLI counts as installed, whether or not this machine has it: the
+    tests below fake its replies through ``subprocess.run``."""
+    monkeypatch.setattr(
+        "soup_cli.utils.tool_paths.find_tool",
+        lambda name, path=None: "/usr/local/bin/ollama" if name == "ollama" else None,
+    )
+
+
 # ─── validate_model_name ───
 
 

@@ -400,6 +400,23 @@ def test_a_rubric_contributes_names_and_descriptions_only(tmp_path, monkeypatch)
     assert "helpfulness" not in prompt  # the default criteria are replaced
 
 
+def test_ranking_rubric_refuses_duplicate_criteria(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = Path("rubric.yaml")
+    path.write_text(
+        yaml.safe_dump({
+            "criteria": [
+                {"name": "quality", "description": "Response quality"},
+                {"name": " Quality ", "description": "Another quality criterion"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicates criterion"):
+        gj.rubric_criteria(str(path))
+
+
 def test_max_tokens_reaches_the_judge(monkeypatch):
     judge = FakeJudge(default=by_content)
     reward = _reward(monkeypatch, judge, num_generations=2, grpo_judge_max_tokens=77)
@@ -519,6 +536,16 @@ def _unusable_reason(reply: str) -> str:
     with pytest.raises(ValueError) as caught:
         gj.parse_rank_reply(reply, 4)
     return f"the reply is not a usable ranking: {caught.value}"
+
+
+def test_cut_preserves_a_reason_at_the_limit():
+    reason = "x" * 200
+    assert gj._cut(reason) == reason
+
+
+def test_cut_truncates_a_reason_above_the_limit():
+    reason = "x" * 200 + "y"
+    assert gj._cut(reason) == "x" * 200 + "..."
 
 
 def test_a_long_reason_is_cut_in_the_logged_warning(monkeypatch, caplog):
@@ -643,6 +670,37 @@ def test_more_than_one_process_is_refused(monkeypatch):
 
 
 # --- load-time refusals ------------------------------------------------------
+
+
+def test_one_judge_field_without_judge_rank_reads_in_the_singular():
+    """It read "training.grpo_judge only apply to ..." (v0.77.0 release smoke)."""
+    with pytest.raises(ValueError) as caught:
+        _config(reward_fn="accuracy", grpo_judge_max_calls=_DROP)
+    assert str(caught.value) == (
+        ": Value error, training.grpo_judge only applies to training.reward_fn judge_rank; "
+        "got reward_fn='accuracy'. Add judge_rank to reward_fn or remove it."
+    )
+
+
+def test_two_judge_fields_without_judge_rank_read_in_the_plural():
+    with pytest.raises(ValueError) as caught:
+        _config(reward_fn="accuracy")
+    assert str(caught.value) == (
+        ": Value error, training.grpo_judge, training.grpo_judge_max_calls only apply to "
+        "training.reward_fn judge_rank; got reward_fn='accuracy'. Add judge_rank to "
+        "reward_fn or remove them."
+    )
+
+
+def test_a_refused_judge_url_names_the_field_once():
+    """The URL refusal was prefixed with "grpo_judge: " under a location that
+    already names the field: "training -> grpo_judge: grpo_judge: judge_model ..."."""
+    with pytest.raises(ValueError) as caught:
+        _config(grpo_judge="http://judge.example.com/m")
+    assert str(caught.value) == (
+        "training -> grpo_judge: Value error, judge_model 'http://judge.example.com/m' "
+        "uses unsupported scheme"
+    )
 
 
 @pytest.mark.parametrize(

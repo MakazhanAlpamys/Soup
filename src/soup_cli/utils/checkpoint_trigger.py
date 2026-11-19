@@ -39,11 +39,11 @@ def trigger_path(output_dir: str) -> str:
 def should_save_now(output_dir: str) -> bool:
     """Return True iff the trigger file exists. Never raises on missing dir."""
     try:
-        path = trigger_path(output_dir)
+        trigger_path(output_dir)
     except (TypeError, ValueError):
         return False
     try:
-        return os.path.isfile(path)
+        return stat.S_ISREG(os.lstat(os.path.join(output_dir, TRIGGER_FILENAME)).st_mode)
     except OSError:
         return False
 
@@ -55,10 +55,13 @@ def consume_trigger(output_dir: str) -> bool:
     step doesn't re-save.
     """
     try:
-        path = trigger_path(output_dir)
+        trigger_path(output_dir)
     except (TypeError, ValueError):
         return False
     try:
+        path = os.path.join(output_dir, TRIGGER_FILENAME)
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return False
         os.remove(path)
         return True
     except FileNotFoundError:

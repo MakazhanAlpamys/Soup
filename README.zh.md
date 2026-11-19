@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -91,49 +91,32 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 
 ## 最新动态
 
-**v0.76.0——Soup 接受却从未应用的设置，现在会直接中止加载。**
-那些经过校验、写进文档，却没有被它们声称要配置的路径上的任何代码读取的选项，现在会在加载时被拒绝，
-并指出设置名以及该怎么改；其余的会发出警告，并指明将拒绝它们的版本。以前能加载的配置现在可能
-无法加载：请先运行 `soup doctor --config soup.yaml`。
+**v0.78.0——基于 v0.77.2 之后 `main` 的一次发布：271 个拉取请求，其中 218 个来自维护者之外的 48 位
+贡献者。** 它新增了功能，以及若干条会拒绝 v0.77.2 所接受输入的规则，因此在升级配置或脚本之前，
+请先阅读 [v0.78.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)。从 0.76.x 升级时，请先运行
+`soup doctor --config soup.yaml`，并阅读 [v0.77.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)。
 
-- **破坏性变更：从未生效的设置在加载时被拒绝。** 其中包括
-  `training.quantization_aware: true`（它从未真正运行过量化感知训练）、`training.use_longlora`、
-  `training.ebft_variant`、`training.gdpo_variant`、没有任何初始化流程读取它时的
-  `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers 后端上
-  文本 `sft` / `tts` 路径之外）、`auto_mixed_precision`（`sft` / `tts` 之外），以及另外七个
-  没有 unsloth 初始化流程的任务上的 `backend: unsloth`。每条报错都会指出字段名以及该怎么改。
-  `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的配置项，现在加载时发出警告，
-  从 v0.77 起被拒绝。
-- **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留作验证、排除在训练之外，
-  但 transformers 后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
-  `training.eval_steps` 每 N 步评估一次，并记录验证集损失；运行时间会增加百分之几。
-  **对 `grpo`、`ppo` 和 `online_dpo` 是破坏性变更：** 默认不再把行留作验证（`data.val_split`
-  会被忽略并给出提示），因此每一行都参与训练。
-- **破坏性变更：每个非标准的 `grpo_variant` 都会应用 `grpo_beta` KL 惩罚。** `gspo`、`dapo`、
-  `dr_grpo`、`bnpo`、`two_sided` 和 `rft` 以前会校验 `grpo_beta` 然后把它丢掉，因此已有的 variant
-  配置无法复现此前的运行结果。`grpo_beta: 0` 现在无 KL 运行，并跳过参考模型的前向传播。
-- **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘存储层，并且可以跨 NVMe 驱动器做条带化。**
-  在一个比内存还大的 36 GB、70B 形态的 NF4 存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
-  从同步读取的 110.5 s 降到 16.2-17.3 s，而借助 `SOUP_LAYER_STREAM_STRIPE_DIRS` 跨两块驱动器后，
-  从 17.4 s 降到 9.97 s（持续负载探测：两轮，1.28x 和 1.41x，没有正式判定；
-  [记录](benchmarks/probe-rtx5070-two-drive-sustained.md)）。能装进内存的存储在内存层上仍然更快，
-  `stream_source: auto` 会选择它。需显式开启（`stream_layers: true`），仍是 BETA；
-  记录：[直接 I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
-  [条带化](benchmarks/gate-two-drive-striping.md)。
-- **新命令和新选项。** `soup adapters check` 扫描 LoRA adapter 是否存在静默失效；
-  `soup bench train` 训练固定步数，若模型没有在训练则以退出码 1 退出
-  （它覆盖 transformers 后端上的 `task: sft`；`soup bench` 现在是一个命令组，`soup bench infer`
-  就是原来的推理基准测试）；`soup data clean` 清洗并修复数据集，且不会改动输入文件；
-  `soup recipes verify` 在 meta 设备上检查（不下载任何权重）每个随附配方都能挂载 LoRA adapter；
-  `soup rewind` 指出造成 loss 尖峰的数据集行。`soup infer` 新增需显式开启的 `--batch-size` 和实验性的
-  `--cuda-graphs`（需要 PyTorch 2.14 或更新版本；在一台 RTX 5070 Laptop 上，未绑定 CPU 核心，
-  Qwen2.5-1.5B 以 FP16 运行，开启后最慢的一次运行，其解码速度也比未开启时最快的一次快 2.9x）。
-  `soup ab` 运行双侧、对方差稳健的检验，`soup adapters sign --backend sigstore` 和
-  `soup attest emit --sign sigstore` 使用 Sigstore 免密钥 OIDC 签名
-  （`pip install "soup-cli[sigstore]"`）。
+- **持续学习循环。** `soup serve` 为每个回答分配一个 ID 并接收对它的反馈（点赞、评分、修改）；
+  `soup loop` 用这些反馈训练候选模型，用 `soup ship --gate loop-v2` 评判，作为金丝雀（canary）运行，
+  并自动回滚。
+- **`soup ship` 展示其数字的构成。** 每个任务的更好/更差/不变计数、逐行审计文件、用你提供的函数打分的
+  `--task-mode reward --reward-fn`（会执行一个 `.py` 文件）、适配器对基座的改动幅度，以及用于比较
+  两个适配器的 `--base-adapter`。
+- **新命令。** `soup eval retention`（跨模型版本的遗忘）、`soup data leakage`（训练与评估的重叠）、
+  `soup docs search`（离线）、`soup prune-layer-cache` 以及 `soup eval quant-check --performance`。
+- **Apple Silicon 上支持更多。** 原生 MLX 对话、合并、选择性损失掩码、预处理缓存、词表扩展、
+  RoPE 扩展和稠密 Llama SFT。
+- **分层流式能做更多。** 仅前向的推理模式、预量化 NF4 的导入，以及在流式基座上的 BCO、IPO 和
+  `task: preference` 训练。
+- **更贴合短行的 VRAM 估算。** 带填充的 SFT 运行按其最长一行估算，计入 8 位的检查点、cuBLAS 工作区和
+  蒸馏教师模型，预检还会说明为什么没有检查是否放得下。
+- **8 个新配方**（共 181 个），以及用于 Qwen2 QLoRA SFT 的 Triton 内核库（没有配置键）。
+- **文本按输入原样显示。** 又有数十个命令在显示路径和名称时保留方括号和 `:name:` 文本，并移除终端控制字符。
 
-> 仅支持 Python **3.11–3.13**。在 3.14+ 上，pip 过去会解析到未测试过的 PyTorch
-> wheel，在 Soup 运行之前就崩在原生扩展里。
+**需要了解的行为变化。** `training` 的数值字段中的布尔值会被拒绝。`--push-as` 创建的仓库默认为私有
+（用 `--push-public` 改变）。在 MLX、`prm`、`unlearn` 或 `moe_lora_routing` 上启用 eval gate 会被拒绝。
+`soup serve --max-tokens` 上限为 16384。`soup adapters merge` 的权重和 `tool_call_args_subset` 的得分
+发生了变化，因此合并和 ship 的结论可能不同。`soup ship` 写出的证据文件为第 2 版，v0.77.x 会拒绝它。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 
@@ -331,7 +314,7 @@ Llama 3.x/4、Qwen 2.5/3、Gemma 3、Mistral、Mixtral、DeepSeek R1/V3、Phi-4 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # 或在本地构建
 ```
 

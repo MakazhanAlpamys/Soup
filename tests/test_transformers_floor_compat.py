@@ -1,10 +1,9 @@
 """Transformers floor policy and model-load keyword compatibility.
 
 The declared floor is Transformers 5.16.1 for Qwen4-Exp; the dedicated CI cell
-also pins Torch 2.5.1 and TRL 0.29 so the normal newest-version matrix cannot
-hide a floor regression. The historical #478 static guard remains:
-Soup continues using the backward-compatible ``torch_dtype=`` spelling at model
-load sites throughout the supported Transformers 5.x range.
+also pins Torch 2.6.0 and TRL 0.29 so the normal newest-version matrix cannot
+hide a floor regression. Transformers model loaders use ``dtype=`` throughout
+the supported 5.x range; the historical ``torch_dtype=`` spelling is deprecated.
 
 Unsloth's ``FastLanguageModel.from_pretrained(..., dtype=)`` and Soup wrapper
 kwargs that are not Transformers load APIs are out of scope.
@@ -106,7 +105,7 @@ def _attr_parts(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def _is_dtype_guarded_model_load(call: ast.Call) -> bool:
+def _is_dtype_guarded_model_load(call: ast.Call, aliases: set[str] | None = None) -> bool:
     """True for model loads governed by the Transformers dtype contract."""
     parts = _attr_parts(call.func)
     if len(parts) < 2:
@@ -115,23 +114,137 @@ def _is_dtype_guarded_model_load(call: ast.Call) -> bool:
         return False
     model_class = parts[-2]
     return (
-        model_class.startswith("AutoModel")
+        model_class in (aliases or ())
+        or model_class.startswith("AutoModel")
         or model_class == "AutoProcessor"
         or model_class.endswith(_MODEL_LOAD_CLASS_SUFFIXES)
     )
 
 
-def find_post_floor_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
-    """Return ``file:line`` hits for ``dtype=`` on guarded model load/config calls."""
-    tree = ast.parse(source, filename=filename)
-    hits: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_dtype_guarded_model_load(node):
+def _scope_nodes(scope: ast.AST):
+    """Walk one lexical scope without mixing identically named kwargs in nested scopes."""
+    yield scope
+    for child in ast.iter_child_nodes(scope):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
-        for kw in node.keywords:
-            if kw.arg == "dtype":
-                hits.append(f"{filename}:{node.lineno}")
-    return hits
+        yield from _scope_nodes(child)
+
+
+def _local_bindings(nodes: list[ast.AST]) -> dict[str, list[ast.AST]]:
+    """Collect assignments in one lexical scope, including annotated dictionaries."""
+    bindings: dict[str, list[ast.AST]] = {}
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                bindings.setdefault(node.target.id, []).append(node.value)
+    return bindings
+
+
+def _loader_aliases(bindings: dict[str, list[ast.AST]]) -> set[str]:
+    """Follow local aliases until no additional Transformers loaders are found."""
+    aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, values in bindings.items():
+            if name in aliases:
+                continue
+            for value in values:
+                probe = ast.Call(
+                    func=ast.Attribute(value=value, attr="from_pretrained"),
+                    args=[],
+                    keywords=[],
+                )
+                if _is_dtype_guarded_model_load(probe, aliases):
+                    aliases.add(name)
+                    changed = True
+                    break
+    return aliases
+
+
+def _deprecated_kwargs_lines(
+    value: ast.AST,
+    bindings: dict[str, list[ast.AST]],
+    nodes: list[ast.AST],
+    seen: frozenset[str] = frozenset(),
+) -> set[int]:
+    """Return deprecated-key lines reachable through a local kwargs expression."""
+    lines: set[int] = set()
+    if isinstance(value, ast.Dict):
+        for key, item in zip(value.keys, value.values):
+            if isinstance(key, ast.Constant) and key.value == "torch_dtype":
+                lines.add(key.lineno)
+            elif key is None:
+                lines.update(_deprecated_kwargs_lines(item, bindings, nodes, seen))
+    elif isinstance(value, ast.Name) and value.id not in seen:
+        seen = seen | {value.id}
+        for bound in bindings.get(value.id, []):
+            lines.update(_deprecated_kwargs_lines(bound, bindings, nodes, seen))
+        for node in nodes:
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == value.id
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == "torch_dtype"
+            ):
+                lines.add(node.lineno)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "update"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == value.id
+            ):
+                for item in node.args:
+                    lines.update(_deprecated_kwargs_lines(item, bindings, nodes, seen))
+                for kw in node.keywords:
+                    if kw.arg == "torch_dtype":
+                        lines.add(kw.lineno)
+                    elif kw.arg is None:
+                        lines.update(_deprecated_kwargs_lines(kw.value, bindings, nodes, seen))
+    elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        if value.func.id == "dict":
+            for kw in value.keywords:
+                if kw.arg == "torch_dtype":
+                    lines.add(kw.lineno)
+                elif kw.arg is None:
+                    lines.update(_deprecated_kwargs_lines(kw.value, bindings, nodes, seen))
+    return lines
+
+
+def find_deprecated_torch_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
+    """Find direct and locally constructed deprecated model-load keyword arguments.
+
+    This lexical guard does not follow dictionary union/augassign, setdefault, partials,
+    cross-scope/attribute/helper-returned dictionaries, pipeline calls or library config kwargs.
+    It covers the load forms currently in src, not arbitrary Python data flow.
+    """
+    tree = ast.parse(source, filename=filename)
+    hits: set[int] = set()
+    scopes = [tree] + [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda))
+    ]
+    for scope in scopes:
+        nodes = list(_scope_nodes(scope))
+        bindings = _local_bindings(nodes)
+        aliases = _loader_aliases(bindings)
+        for node in nodes:
+            if not isinstance(node, ast.Call) or not _is_dtype_guarded_model_load(node, aliases):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "torch_dtype":
+                    hits.add(node.lineno)
+                elif kw.arg is None:
+                    hits.update(_deprecated_kwargs_lines(kw.value, bindings, nodes))
+    return [f"{filename}:{line}" for line in sorted(hits)]
 
 
 def iter_production_hits() -> list[str]:
@@ -139,7 +252,7 @@ def iter_production_hits() -> list[str]:
     for path in sorted(SRC_ROOT.rglob("*.py")):
         rel = path.relative_to(REPO_ROOT).as_posix()
         hits.extend(
-            find_post_floor_dtype_kwargs(
+            find_deprecated_torch_dtype_kwargs(
                 path.read_text(encoding="utf-8"),
                 filename=rel,
             )
@@ -190,70 +303,68 @@ def _run_transformers_floor_version_check(
 
 
 class TestTransformersFloorDtypeGuard:
-    def test_no_production_transformers_model_load_uses_dtype_kwarg(self):
+    def test_no_production_transformers_model_load_uses_torch_dtype_kwarg(self):
         hits = iter_production_hits()
         assert hits == [], (
-            "Transformers model from_pretrained / from_config calls must use torch_dtype= "
-            "(kept across Soup's Transformers 5.x range). Use of dtype= at these "
-            "sites must be an explicit whole-policy migration "
-            f"(#478). Offending sites: {hits}"
+            "Transformers model from_pretrained / from_config calls must use dtype=, "
+            f"not deprecated torch_dtype=. Offending sites: {hits}"
         )
 
-    def test_scanner_flags_a_deliberate_dtype_mutation(self):
-        """CONTROL: a broken scanner that always returns [] would greenwash #478."""
+    def test_scanner_flags_a_deliberate_torch_dtype_mutation(self):
+        """A broken scanner must not hide reintroduced deprecated spelling."""
         bad = (
             "from transformers import AutoModelForCausalLM\n"
-            "AutoModelForCausalLM.from_pretrained('x', dtype='auto')\n"
+            "AutoModelForCausalLM.from_pretrained('x', torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="mutation.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="mutation.py")
         assert hits == ["mutation.py:2"]
 
     def test_scanner_flags_concrete_conditional_generation_class(self):
         bad = (
             "from transformers import WhisperForConditionalGeneration\n"
-            "WhisperForConditionalGeneration.from_pretrained('x', dtype='auto')\n"
+            "WhisperForConditionalGeneration.from_pretrained('x', torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="whisper.py")
         assert hits == ["whisper.py:2"]
 
     def test_scanner_flags_concrete_speech_seq2seq_class(self):
         bad = (
             "from transformers import WhisperForSpeechSeq2Seq\n"
-            "WhisperForSpeechSeq2Seq.from_pretrained('x', dtype='auto')\n"
+            "WhisperForSpeechSeq2Seq.from_pretrained('x', torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="whisper.py")
         assert hits == ["whisper.py:2"]
 
     def test_scanner_flags_concrete_image_text_to_text_class(self):
         bad = (
             "from transformers import Qwen2VLForImageTextToText\n"
-            "Qwen2VLForImageTextToText.from_config(cfg, dtype='auto')\n"
+            "Qwen2VLForImageTextToText.from_config(cfg, torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="vision.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="vision.py")
         assert hits == ["vision.py:2"]
 
     def test_scanner_flags_concrete_token_classification_class(self):
         bad = (
             "from transformers import BertForTokenClassification\n"
-            "BertForTokenClassification.from_pretrained('x', dtype='auto')\n"
+            "BertForTokenClassification.from_pretrained('x', torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="tokens.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="tokens.py")
         assert hits == ["tokens.py:2"]
 
     def test_scanner_flags_concrete_masked_lm_class(self):
         bad = (
             "from transformers import BertForMaskedLM\n"
-            "BertForMaskedLM.from_config(cfg, dtype='auto')\n"
+            "BertForMaskedLM.from_config(cfg, torch_dtype='auto')\n"
         )
-        hits = find_post_floor_dtype_kwargs(bad, filename="masked_lm.py")
+        hits = find_deprecated_torch_dtype_kwargs(bad, filename="masked_lm.py")
         assert hits == ["masked_lm.py:2"]
 
-    def test_scanner_allows_torch_dtype(self):
+    def test_scanner_allows_dtype(self):
         good = (
             "from transformers import AutoModelForCausalLM\n"
-            "AutoModelForCausalLM.from_pretrained('x', torch_dtype='auto')\n"
+            "AutoModelForCausalLM.from_pretrained('x', dtype='auto')\n"
         )
-        assert find_post_floor_dtype_kwargs(good, filename="ok.py") == []
+        assert find_deprecated_torch_dtype_kwargs(good, filename="ok.py") == []
 
     def test_scanner_ignores_unsloth_and_non_auto_model_apis(self):
         noise = (
@@ -262,16 +373,77 @@ class TestTransformersFloorDtypeGuard:
             "torch.zeros(3, dtype=torch.float16)\n"
             "load_model_and_tokenizer('x', dtype='auto')\n"
         )
-        assert find_post_floor_dtype_kwargs(noise, filename="noise.py") == []
+        assert find_deprecated_torch_dtype_kwargs(noise, filename="noise.py") == []
 
     def test_scanner_sees_from_config_and_qualified_names(self):
         src = (
             "import transformers\n"
-            "transformers.AutoModelForCausalLM.from_config(cfg, dtype=x)\n"
-            "AutoModelForSequenceClassification.from_pretrained('m', dtype=y)\n"
+            "transformers.AutoModelForCausalLM.from_config(cfg, torch_dtype=x)\n"
+            "AutoModelForSequenceClassification.from_pretrained('m', torch_dtype=y)\n"
         )
-        hits = find_post_floor_dtype_kwargs(src, filename="q.py")
+        hits = find_deprecated_torch_dtype_kwargs(src, filename="q.py")
         assert hits == ["q.py:2", "q.py:3"]
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            "kwargs = {'torch_dtype': 'auto'}",
+            "kwargs = dict(torch_dtype='auto')",
+            "kwargs = {}; kwargs['torch_dtype'] = 'auto'",
+            "kwargs = {}; kwargs.update(torch_dtype='auto')",
+            "kwargs = {}; kwargs.update({'torch_dtype': 'auto'})",
+            "base = {'torch_dtype': 'auto'}; kwargs = {**base}",
+        ],
+    )
+    def test_scanner_follows_local_load_dictionary(self, setup):
+        source = setup + "\nAutoModel.from_pretrained('m', **kwargs)\n"
+        assert find_deprecated_torch_dtype_kwargs(source, filename="kwargs.py")
+
+    def test_scanner_follows_an_annotated_load_dictionary(self):
+        source = (
+            "kwargs: dict = {'torch_dtype': 'auto'}\n"
+            "AutoModel.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:1"]
+
+    def test_scanner_terminates_on_a_self_referencing_dictionary(self):
+        source = (
+            "kwargs = {'torch_dtype': 'auto'}\n"
+            "kwargs = {**kwargs, 'trust_remote_code': True}\n"
+            "AutoModel.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:1"]
+
+    def test_scanner_follows_a_selected_auto_model_loader(self):
+        source = (
+            "loader = AutoModelForCausalLM\n"
+            "chosen = loader\n"
+            "kwargs = {'torch_dtype': 'auto'}\n"
+            "chosen.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:3"]
+
+    def test_scanner_flags_inline_unpack(self):
+        source = "AutoModel.from_config(cfg, **{'torch_dtype': 'auto'})\n"
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:1"]
+
+    def test_scanner_preserves_checkpoint_fields_and_other_apis(self):
+        source = (
+            "config = {'torch_dtype': 'bfloat16'}\n"
+            "kwargs = {'dtype': 'auto'}\n"
+            "AutoModel.from_pretrained('m', config=config, **kwargs)\n"
+            "PeftModel.from_pretrained(base, 'adapter', torch_dtype='auto')\n"
+            "FastLanguageModel.from_pretrained('m', torch_dtype='auto')\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == []
+
+    def test_scanner_does_not_mix_identical_names_in_different_functions(self):
+        source = (
+            "def checkpoint():\n    kwargs = {'torch_dtype': 'bfloat16'}\n    return kwargs\n"
+            "def load():\n    kwargs = {'dtype': 'auto'}\n"
+            "    return AutoModel.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == []
 
 
 class TestFloorConstraintAndWorkflowPins:
@@ -333,14 +505,14 @@ class TestFloorConstraintAndWorkflowPins:
 @pytest.mark.parametrize(
     "snippet,expect_hit",
     [
-        ("AutoModel.from_pretrained(m, dtype=t)", True),
-        ("AutoModelForVision2Seq.from_pretrained(m, dtype=t)", True),
-        ("AutoModelForCausalLM.from_config(c, dtype=t)", True),
-        ("AutoModelForCausalLM.from_pretrained(m, torch_dtype=t)", False),
+        ("AutoModel.from_pretrained(m, torch_dtype=t)", True),
+        ("AutoModelForVision2Seq.from_pretrained(m, torch_dtype=t)", True),
+        ("AutoModelForCausalLM.from_config(c, torch_dtype=t)", True),
+        ("AutoModelForCausalLM.from_pretrained(m, dtype=t)", False),
     ],
 )
 def test_scanner_parametrized_shapes(snippet: str, expect_hit: bool):
-    hits = find_post_floor_dtype_kwargs(snippet + "\n", filename="p.py")
+    hits = find_deprecated_torch_dtype_kwargs(snippet + "\n", filename="p.py")
     assert bool(hits) is expect_hit
 
 

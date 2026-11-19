@@ -1,0 +1,42 @@
+host RAM available at start: 112.59 GB of 274.4 GB
+GPU: NVIDIA GeForce RTX 3090
+  python: 3.13.7
+  soup-cli: 0.76.0
+  commit: e05b6f6db42f9cc804fdece2b6eb812432d6aabd-dirty
+  torch: 2.14.1+cu130
+  bitsandbytes: 0.50.2
+  transformers: 5.19.0
+  peft: 0.21.2
+  trl: 0.29.1
+  accelerate: 1.15.0
+weights resolved -> D:\Soup-2050-v1\model (0.0 s)
+param split (safetensors headers): decoder 6.980 B, embed 0.134 B, lm_head-in-file 0.134 B, tied=False; GFLOP/token = 6*decoder + 4*lm_head = 42.41
+shards ready in 0.0 s -> D:\Soup-2050-v1\source\.local2050\mistral-nf4-shards
+streamed model built in 1.6 s | store 4.14 GB pinned
+trainable LoRA params: 6,815,744
+warm-up done (10 steps, last loss 9.9024) � measuring
+
+================ MEASURED ROW (#361 protocol) ================
+weights:            D:\Soup-2050-v1\model
+source commit:      e05b6f6db42f9cc804fdece2b6eb812432d6aabd-dirty
+quant/dtype:        nf4 / bfloat16 / double_quant=True
+LoRA:               r=16 alpha=32 on q_proj,v_proj
+seq x batch:        512 x 1 | buffers 2
+steps:              10 warm-up + 50 measured
+store:              4.14 GB pinned
+tok/s:              870.0
+step time:          median 589 ms | min 586 | max 590 | stdev 1 ms
+loss:               first 9.7388 -> last 0.1217
+peak VRAM:          1.57 GB allocated (1.63 GB reserved)
+GPU util / SM clock: 99% / 1875 MHz (median of 50 samples, max temp 52 C)
+SM clock now:       1845 MHz
+GFLOP/token:        42.41 (decoder C=6 + lm_head C=4, embed 0)
+eff TFLOPS:         36.90
+shard build:        0.0 s | model build: 1.6 s
+versions:           {"python": "3.13.7", "soup-cli": "0.76.0", "commit": "e05b6f6db42f9cc804fdece2b6eb812432d6aabd-dirty", "torch": "2.14.1+cu130", "bitsandbytes": "0.50.2", "transformers": "5.19.0", "peft": "0.21.2", "trl": "0.29.1", "accelerate": "1.15.0"}
+================================================================
+row written -> D:\Soup-2050-v1\evidence-v1\s512-qkv-pairs\p0-B.json
+
+--- stderr ---
+W1023 10:46:13.517000 8000 Lib\site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!

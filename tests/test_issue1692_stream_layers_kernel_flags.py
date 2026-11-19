@@ -12,8 +12,9 @@ RESIDENT setup:
 
 A streamed run goes to ``_setup_streaming_transformers`` (the streamed branch of
 ``SFTTrainerWrapper.setup``), whose model is built by
-``AutoModelForCausalLM.from_config(...)`` in ``build_meta_skeleton``
-(``utils/layer_stream_runtime.py``) with no attention argument and no Liger patch.
+``AutoModelForCausalLM.from_config(...)`` in ``_skeleton_from_config``, called by
+``build_meta_skeleton`` (``utils/layer_stream_runtime.py``), with no attention argument
+and no Liger patch.
 ``_liger_applied`` is never set there, so ``use_liger_kernel`` misses
 ``TrainingArguments`` too.
 

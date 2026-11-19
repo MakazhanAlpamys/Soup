@@ -190,6 +190,49 @@ def test_check_names_only_the_page_that_lost_a_row(
     assert "docs/cli-reference.md" not in out, out
 
 
+def test_check_catches_a_description_written_on_a_page_by_hand(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    pages: dict[str, str],
+) -> None:
+    """#2706 wrote a multi-line paragraph under ``soup runs compare`` on the CLI page and
+    left the command's help alone. The structure check reads no wording, so it passes
+    that page; only the byte-exact check fails it, and its message must send the author
+    to the code, because a sentence on the page is replaced at the next regeneration."""
+    _mirror(tmp_path, pages)
+    monkeypatch.setattr(gen, "_REPO_ROOT", tmp_path)
+    page = tmp_path / gen.CLI_PAGE
+    lines = page.read_bytes().decode("utf-8").split("\n")
+    usage = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("Usage: `soup ")
+        and lines[i - 1] == ""
+        and lines[i - 2] != ""
+        and not lines[i - 2].startswith("#")
+    )
+    lines[usage - 2 : usage - 1] = [
+        lines[usage - 2],
+        "A sentence the command's help does not carry,",
+        "wrapped over two lines by hand.",
+    ]
+    page.write_bytes("\n".join(lines).encode("utf-8"))
+
+    assert gen.main(["--check-structure"]) == 0, capsys.readouterr().out
+    capsys.readouterr()
+
+    assert gen.main(["--check"]) == 1
+    out = _plain(capsys.readouterr().out)
+    assert "docs/cli-reference.md is stale" in out, out
+    assert "docs/config-reference.md" not in out, out
+    assert f"first difference at line {usage}" in out, out
+    assert "A sentence the command's help does not carry," in out, out
+    assert "edit the command's docstring or help=" in out, out
+    assert "not the page" in out, out
+    assert out.endswith("Run `python scripts/gen_reference_docs.py` and commit the result."), out
+
+
 def test_check_fails_when_the_schema_gains_a_field(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -405,6 +448,31 @@ def test_every_row_states_its_own_fields_default_and_bounds(config_page: str) ->
                     bounds += 1
                     assert f"`{sign} {bound!r}`" in cells["constraints"], (path, cells)
     assert required >= 1 and scalars >= 250 and bounds >= 100, (required, scalars, bounds)
+
+
+#: The sentence every staged key's row ends with (#808), as a reader sees it.
+_STAGED_NOTE = "Refused at load when set away from its default (v{version}, #808)."
+
+
+@pytest.mark.parametrize("source", ["rendered", "committed"])
+def test_every_staged_key_says_it_is_refused(config_page: str, source: str) -> None:
+    """A staged key passes the schema and is then refused by the loader (#808), so a
+    field description does not say so by itself. Every key ``STAGED_FIELDS`` lists
+    says it, and no other key does. The committed page is read too: the structure
+    check leaves the description column out, so only this test holds it there."""
+    from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION, STAGED_FIELDS
+
+    if source == "rendered":
+        page = config_page
+    else:
+        page = (_ROOT / gen.CONFIG_PAGE).read_text(encoding="utf-8")
+    note = _STAGED_NOTE.format(version=STAGED_FIELD_REJECTION_VERSION)
+    descriptions = {cells[0]: cells[4] for cells in _rows(page.splitlines()) if len(cells) == 5}
+    staged = sorted(f"`{section}.{name}`" for section, name in STAGED_FIELDS)
+
+    assert len(staged) >= 31, staged
+    assert [key for key in staged if not descriptions[key].endswith(note)] == []
+    assert sorted(key for key, text in descriptions.items() if note in text) == staged
 
 
 def test_a_field_added_to_the_schema_gets_a_full_row() -> None:

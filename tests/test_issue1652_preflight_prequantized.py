@@ -25,6 +25,7 @@ from rich.text import Text
 from soup_cli.commands import train as train_mod
 from soup_cli.commands.train import _build_hardware_fit_input, _hardware_fit_preflight
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.utils import hardware_fit
 from soup_cli.utils.hardware_fit import (
     _BYTES_PER_PARAM_BY_QUANT,
     HardwareFitInput,
@@ -63,8 +64,22 @@ class _Console:
         self.printed.append(renderable)
 
 
+@pytest.fixture(autouse=True)
+def inside_the_calibrated_range(monkeypatch):
+    """These tests are about how each quantization is priced and how the panel reads.
+
+    Their 20B base is outside the range the estimate was fitted on, where the gate
+    warns instead of refusing (``tests/test_hardware_fit_envelope.py``), so the range
+    check is told the run is inside it.
+    """
+    monkeypatch.setattr(hardware_fit, "outside_calibrated_range", lambda inp, **kwargs: ())
+
+
 @pytest.fixture
 def console(monkeypatch):
+    # Offline, so the line printed before a Hub request (#2306) is not among the
+    # renderables counted here.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     fake = _Console()
     monkeypatch.setattr(train_mod, "console", fake)
     return fake
@@ -211,7 +226,7 @@ class TestAnFp8BaseOnceLoaded:
         base, params = fp8_checkpoint
         model = transformers.AutoModelForCausalLM.from_pretrained(
             base,
-            torch_dtype="auto",  # what Soup passes for a frozen base
+            dtype="auto",  # what Soup passes for a frozen base
             quantization_config=build_quantization_config_for_loader(
                 tcfg=_cfg("fp8").training, base=base
             ),
@@ -246,8 +261,10 @@ class TestTheGate:
 
 
 def test_a_packed_base_fits_where_the_same_base_unquantized_does_not(console):
-    # 24 GB: 11 GB of gptq weights fit, 40 GB of bf16 weights do not.
-    card = {"memory_total_bytes": int(24e9)}
+    # 40 GB: 11 GB of gptq weights fit, 40 GB of bf16 weights do not. Since #2049 the
+    # estimate also prices this 2048-token run's activations (about 19 GB without
+    # checkpointing), so the card is the 40 GB one, not a 24 GB one.
+    card = {"memory_total_bytes": int(40e9)}
     _hardware_fit_preflight(_cfg("gptq"), card, allow_oom_attempt=False)
     assert console.printed == []
     with pytest.raises(typer.Exit):
@@ -318,12 +335,14 @@ class TestTheSkipLine:
         assert console.printed == []
 
     @pytest.mark.parametrize("quant", ["gptq", "none"])
-    def test_the_other_reason_to_skip_stays_silent(self, console, quant):
-        # The line is about the format. batch_size: auto is skipped as before.
+    def test_auto_batch_says_the_fit_is_not_checked(self, console, quant):
         cfg = _cfg(quant, batch_size="auto")
         assert _build_hardware_fit_input(cfg) is None
         _hardware_fit_preflight(cfg, SMALL_CARD, allow_oom_attempt=False)
-        assert console.printed == []
+        assert [_plain(line) for line in console.printed] == [
+            "Pre-flight: the fit is not checked before training: "
+            "training.batch_size is auto, which is chosen after the model loads."
+        ]
 
     def test_hqq_with_batch_size_auto_still_gets_the_line(self, console):
         _hardware_fit_preflight(

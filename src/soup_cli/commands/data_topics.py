@@ -23,10 +23,12 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils._eval_text import row_text
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.terminal import for_terminal, terminal_text
 from soup_cli.utils.topics import build_topic_report, kmeans, resolve_k
 
 console = Console()
@@ -83,16 +85,24 @@ def topics(
     """
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {escape(str(file_path))}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]", emoji=False)
         raise typer.Exit(1)
     if output is not None and not is_under_cwd(Path(output)):
         console.print(
             "[red]Output path is outside the working directory: "
-            f"{escape(str(output))}[/]"
+            f"{for_terminal(output)}[/]",
+            emoji=False,
         )
         raise typer.Exit(1)
+    if output is not None:
+        # The report must never replace the dataset it describes (#2226).
+        refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
-    rows = load_raw_data(file_path)
+    try:
+        rows = load_raw_data(file_path)
+    except (OSError, ValueError) as exc:
+        console.print(terminal_text(f"Cannot load dataset {path}: {exc}", "red"))
+        raise typer.Exit(1) from exc
     if not rows:
         console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
@@ -100,7 +110,7 @@ def topics(
     try:
         k_eff = resolve_k(len(rows), _parse_clusters(clusters))
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", emoji=False)
         raise typer.Exit(1)
 
     texts = [
@@ -108,7 +118,8 @@ def topics(
         for row in rows
     ]
     console.print(
-        f"[dim]Embedding {len(rows)} rows with {escape(embed_model)}...[/]"
+        f"[dim]Embedding {len(rows)} rows with {for_terminal(embed_model)}...[/]",
+        emoji=False,
     )
     try:
         vectors = embed_texts(texts, model_id=embed_model, device=device)
@@ -121,7 +132,7 @@ def topics(
         )
         raise typer.Exit(1)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
 
     labels = kmeans(vectors, k=k_eff, seed=seed)
@@ -148,7 +159,9 @@ def topics(
     )
 
     if output is not None:
-        atomic_write_text(
-            json.dumps(_report_to_dict(report), indent=2), output
-        )
-        console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")
+        try:
+            atomic_write_text(json.dumps(_report_to_dict(report), indent=2), output)
+        except (OSError, ValueError) as exc:
+            console.print(terminal_text(f"Cannot write --output {output}: {exc}", "red"))
+            raise typer.Exit(1) from exc
+        console.print(f"[green]Report written:[/] [bold]{for_terminal(output)}[/]", emoji=False)

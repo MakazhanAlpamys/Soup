@@ -7,8 +7,12 @@ enable MLX training paths without hard-depending on the ``mlx`` package.
 
 from __future__ import annotations
 
+import os
 import platform
 from typing import Any, Optional
+
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
 
 
 def detect_mlx() -> bool:
@@ -67,8 +71,8 @@ def get_chip_info() -> dict[str, str]:
 
     try:
         import subprocess  # noqa: S404 — used with list args only
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "machdep.cpu.brand_string"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -88,8 +92,8 @@ def get_unified_memory_bytes() -> Optional[int]:
         return None
     try:
         import subprocess  # noqa: S404
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "hw.memsize"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "hw.memsize"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -100,6 +104,27 @@ def get_unified_memory_bytes() -> Optional[int]:
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return None
+
+
+def get_mlx_working_set_bytes() -> Optional[int]:
+    """Metal's recommended working-set size in bytes, or None if it cannot be read.
+
+    The most the GPU should hold at once on Apple Silicon, below the total unified
+    memory; ``soup profile`` checks a run's fit against it (#2049). Newer mlx has
+    ``mlx.core.device_info``; older releases only ``mlx.core.metal.device_info``.
+    """
+    if not is_apple_silicon() or not detect_mlx():
+        return None
+    try:
+        import mlx.core as mx
+
+        reader = getattr(mx, "device_info", None) or mx.metal.device_info
+        value = reader().get("max_recommended_working_set_size")
+    except Exception:  # noqa: BLE001 - no Metal device, or an mlx without the call
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def get_mlx_info() -> dict[str, Any]:
@@ -137,16 +162,59 @@ def estimate_mlx_batch_size(
     return max(1, min(batch, 32))
 
 
+def mlx_revision_binding_reason() -> str | None:
+    """Return why native train cannot bind HF identity, or None when qualified.
+
+    Inspect the provider already imported by mlx-lm, not MLXLM_USE_MODELSCOPE:
+    changing that variable later does not change its download receiver. Do not
+    initialize a process group merely to qualify optional run metadata.
+    """
+    from soup_cli.utils.launcher import is_in_distributed
+
+    if is_in_distributed() or any(key in os.environ for key in (
+        "LOCAL_RANK", "MLX_RANK", "MLX_HOSTFILE", "OMPI_COMM_WORLD_RANK",
+        "PMI_RANK", "PMIX_RANK",
+    )):
+        return "MLX distributed launcher is not qualified for revision binding"
+    for key in ("WORLD_SIZE", "LOCAL_WORLD_SIZE", "MLX_WORLD_SIZE",
+                "OMPI_COMM_WORLD_SIZE", "PMI_SIZE"):
+        try:
+            if int(os.environ.get(key, "1")) != 1:
+                return "MLX distributed launcher is not qualified for revision binding"
+        except ValueError:
+            return "MLX launcher size is not qualified for revision binding"
+    try:
+        from huggingface_hub import snapshot_download
+        from mlx_lm import load, utils
+
+        if load is utils.load and utils.snapshot_download is snapshot_download:
+            return None
+    except (ImportError, AttributeError):
+        pass
+    return "MLX loader provider is not qualified as Hugging Face Hub"
+
+
 def load_mlx_model(
-    model_path: str, quantization: str = "4bit",
-) -> tuple[Any, Any]:
+    model_path: str,
+    quantization: str = "4bit",
+    model_config: Optional[dict[str, Any]] = None,
+    return_config: bool = False,
+) -> tuple[Any, ...]:
     """Thin wrapper around ``mlx_lm.load`` (lazy import).
 
     ``quantization`` is informational: MLX models are typically already
     quantized at build time (e.g. ``mlx-community/...-4bit``), so this
     parameter is currently advisory and is not forwarded to ``mlx_lm.load``.
+    ``return_config`` also returns the effective loaded model config for standalone saves.
     """
     del quantization  # advisory only — MLX models are pre-quantized
     from mlx_lm import load
 
-    return load(model_path)
+    from soup_cli.utils.run_provenance import base_revision_kwargs
+
+    kwargs: dict[str, Any] = dict(base_revision_kwargs(model_path))
+    if model_config is not None:
+        kwargs["model_config"] = model_config
+    if return_config:
+        kwargs["return_config"] = True
+    return load(model_path, **kwargs)

@@ -200,10 +200,12 @@ def collect_reexec_passthrough(
     reward_hack_mitigation: str | None = None,
     gate: str | None = None,
     push_as: str | None = None,
+    push_public: bool = False,
     hf_resume: bool = False,
     trust_remote_code: bool = False,
     tracker: str | None = None,
     diagnose_gate: str | None = None,
+    diagnose_gate_require_all_modes: bool = False,
     annex_xi: str | None = None,
     repro_receipt: str | None = None,
     profile_run: bool = False,
@@ -262,10 +264,12 @@ def collect_reexec_passthrough(
     _opt("--reward-hack-mitigation", reward_hack_mitigation)
     _opt("--gate", gate)
     _opt("--push-as", push_as)
+    _switch("--push-public", push_public)
     _switch("--hf-resume", hf_resume)
     _switch("--trust-remote-code", trust_remote_code)
     _opt("--tracker", tracker)
     _opt("--diagnose-gate", diagnose_gate)
+    _switch("--diagnose-gate-require-all-modes", diagnose_gate_require_all_modes)
     _opt("--annex-xi", annex_xi)
     _opt("--repro-receipt", repro_receipt)
     _switch("--profile", profile_run)
@@ -313,7 +317,10 @@ def build_train_reexec_argv(
 def run_launcher(argv: Sequence[str]) -> int:
     """Hand the run over to the launcher ``argv`` and report ITS exit code.
 
-    POSIX: ``os.execvp`` replaces this process with the launcher, so the
+    The launcher is run by the absolute path ``_find_on_path`` gives for
+    ``argv[0]`` (an absolute PATH directory, never the current directory).
+
+    POSIX: ``os.execv`` replaces this process with the launcher, so the
     launcher's exit status is the command's and this function does not return.
 
     Windows has no exec. ``os.execvp`` there starts the launcher as a NEW
@@ -329,12 +336,12 @@ def run_launcher(argv: Sequence[str]) -> int:
     args = list(argv)
     if not args:
         raise ValueError("launcher argv must not be empty")
+    resolved = _find_on_path(args[0])
+    if resolved is None:
+        raise FileNotFoundError(errno.ENOENT, "launcher not found on PATH", args[0])
     if _IS_WINDOWS:
         import subprocess
 
-        resolved = _find_on_path(args[0])
-        if resolved is None:
-            raise FileNotFoundError(errno.ENOENT, "launcher not found on PATH", args[0])
         process = subprocess.Popen([resolved, *args[1:]])
         while True:
             try:
@@ -343,32 +350,22 @@ def run_launcher(argv: Sequence[str]) -> int:
                 # The console delivers Ctrl+C to the launcher as well. Wait for
                 # it to finish its own shutdown and report the code it ends with.
                 continue
-    os.execvp(args[0], args)
+    os.execv(resolved, args)
 
 
 def _find_on_path(name: str) -> str | None:
-    """Full path of the program ``name`` in a ``PATH`` directory, or ``None``.
+    """Absolute path of the launcher ``name``, or ``None``.
 
-    Tries the ``PATHEXT`` suffixes, so ``accelerate`` finds ``accelerate.exe``.
-    ``PATH`` directories only: ``shutil.which`` on Windows also looks in the
-    current directory first, which would run a file named like the launcher
-    out of the project directory. ``os.execvp`` never searched it either.
+    A name with a directory part is used as it is. A bare name is looked up in
+    the absolute PATH directories only (:func:`soup_cli.utils.tool_paths.find_tool`,
+    with the PATHEXT suffixes on Windows, so ``accelerate`` finds
+    ``accelerate.exe``); the current directory is never searched.
     """
     if os.path.dirname(name):
         return name if os.path.isfile(name) else None
-    if os.path.splitext(name)[1]:
-        candidates = [name]
-    else:
-        suffixes = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
-        candidates = [name + suffix for suffix in suffixes if suffix]
-    for directory in os.get_exec_path():
-        if not directory:
-            continue
-        for candidate in candidates:
-            full = os.path.join(directory, candidate)
-            if os.path.isfile(full):
-                return full
-    return None
+    from soup_cli.utils.tool_paths import find_tool
+
+    return find_tool(name)
 
 
 def hint_argv_from_reexec(script_args: Sequence[str]) -> list[str]:

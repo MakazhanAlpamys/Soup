@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
@@ -807,6 +808,7 @@ class DistillTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 4
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -819,6 +821,9 @@ class DistillTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -1186,7 +1191,8 @@ class DistillTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         if getattr(self, "nonfinite_tracker", None) is not None:
             self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start

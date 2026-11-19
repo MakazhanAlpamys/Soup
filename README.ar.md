@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,52 +92,36 @@ soup train
 
 ## ما الجديد
 
-**v0.76.0 — الإعدادات التي كان Soup يقبلها ولا يطبّقها أبدًا باتت توقف التحميل.** الخيارات التي كان يُتحقَّق
-من صحتها وتُوثَّق ولا يقرؤها شيء في المسار الذي تزعم أنها تضبطه، صارت تُرفَض عند التحميل، مع تسمية
-الإعداد وما ينبغي تغييره؛ أما البقية فتُصدر تحذيرًا وتسمّي الإصدار الذي سيرفضها. وقد يتوقف تحميل إعداد
-كان يُحمَّل من قبل: شغّل `soup doctor --config soup.yaml` أولًا.
+**v0.78.0 — قطع من `main` بعد v0.77.2: 271 طلب سحب (pull request)، منها 218 من 48 شخصًا من خارج
+المشرف.** يضيف ميزات وعدة قواعد ترفض مدخلات كان v0.77.2 يقبلها، لذا اقرأ
+[ملاحظات إصدار v0.78.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) قبل ترقية إعداد أو نص برمجي. إن كنت قادمًا من 0.76.x
+فشغّل `soup doctor --config soup.yaml` أولًا واقرأ [ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **تغيير غير متوافق مع الإصدارات السابقة: يُرفَض عند التحميل أي إعداد لم يكن له أي أثر.** ومن ذلك
-  `training.quantization_aware: true` (فلم يكن يشغّل تدريبًا واعيًا بالتكميم قط)، و`training.use_longlora`،
-  و`training.ebft_variant`، و`training.gdpo_variant`، و`training.rope_scaling_type` حيث لا تقرؤه أي خطوة
-  تهيئة، و`freeze_layers` / `freeze_ratio` خارج مسار `sft` / `tts` النصي على الواجهة الخلفية transformers،
-  و`auto_mixed_precision` خارج `sft` / `tts`، و`backend: unsloth` في سبع مهام أخرى ليست لها خطوة تهيئة
-  لـ unsloth. وتسمّي كل رسالة الحقل وما ينبغي تغييره. أما `lr_groups` و`early_stop_patience`
-  و`forgetting_eval_steps` وغيرها من الإعدادات التي لا يقرؤها شيء فتُصدر تحذيرًا عند التحميل الآن، وستُرفَض
-  بدءًا من v0.77.
-- **صارت خسارة التحقق تُقيَّم الآن.** كان `data.val_split` يستبعد صفوفًا من التدريب في كل تشغيل، ولم يكن
-  أي مدرّب على الواجهة الخلفية transformers يقيّمها. أما الآن فكل مهمة تحصل على قسم للتحقق تقيّمه في نهاية
-  كل حقبة (epoch)، أو كل N خطوة عبر `training.eval_steps`، وتسجّل خسارة التحقق؛ وتستغرق التشغيلات
-  أطول ببضعة في المئة. **تغيير غير متوافق مع الإصدارات السابقة بالنسبة إلى `grpo` و`ppo` و`online_dpo`:**
-  فهي افتراضيًا لم تعد تستبعد صفوفًا (يُتجاهَل `data.val_split` مع ملاحظة)، ولذلك يُدرَّب النموذج على كل صف.
-- **تغيير غير متوافق مع الإصدارات السابقة: كل `grpo_variant` غير قياسي يطبّق عقوبة KL الخاصة بـ `grpo_beta`.**
-  كانت `gspo` و`dapo` و`dr_grpo` و`bnpo` و`two_sided` و`rft` تتحقق من `grpo_beta` ثم تُسقطه، ولذلك لن تعيد
-  إعدادات المتغيّرات الموجودة إنتاج التشغيلات السابقة. وصار `grpo_beta: 0` يعمل بلا KL ويتخطى التمريرة
-  الأمامية للنموذج المرجعي.
-- **يقرأ بثّ الطبقات طبقته القرصية على خيط في الخلفية، عبر الإدخال/الإخراج المباشر (direct I/O)، ويمكنه توزيعها
-  على عدة أقراص NVMe.** على مخزن NF4 بحجم 36 GB وبهيئة نموذج 70B أكبر من ذاكرة RAM (جهاز واحد بوحدة
-  RTX 5070 Laptop سعة 8 GB)، انخفضت الخطوة الباردة من 110.5 s مع القراءة المتزامنة إلى 16.2-17.3 s، ومن
-  17.4 s إلى 9.97 s عبر قرصين باستخدام `SOUP_LAYER_STREAM_STRIPE_DIRS` (مسبار تحت حمل متواصل: جولتان،
-  1.28x و1.41x، بلا حكم رسمي؛ [السجل](benchmarks/probe-rtx5070-two-drive-sustained.md)). أما المخزن الذي
-  يتسع في ذاكرة RAM فيظل أسرع على طبقة RAM، وهي ما يختاره `stream_source: auto`. وهو لا يُفعَّل إلا بطلب
-  صريح (`stream_layers: true`) ولا يزال BETA؛ والسجلات:
-  [الإدخال/الإخراج المباشر](benchmarks/gate-974-disk-tier-direct-io.md)،
-  [التوزيع على الأقراص](benchmarks/gate-two-drive-striping.md).
-- **أوامر وخيارات جديدة.** يفحص `soup adapters check` مهايئ LoRA بحثًا عن الإخفاق الصامت؛ ويدرّب
-  `soup bench train` عددًا ثابتًا من الخطوات ويخرج برمز 1 إذا لم يكن النموذج يتدرّب (ويغطي `task: sft`
-  على الواجهة الخلفية transformers؛ وصار `soup bench` مجموعة أوامر، و`soup bench infer` هو معيار
-  الاستدلال القديم)؛ ويطهّر `soup data clean` مجموعة بيانات ويصلحها دون المساس بملف الإدخال؛
-  ويتحقق `soup recipes verify` على جهاز meta، ودون تنزيل أي أوزان، من أن كل وصفة مشحونة تستطيع إرفاق
-  مهايئ LoRA؛ ويسمّي `soup rewind` صفوف مجموعة البيانات التي تقف وراء قفزة الخسارة. ويكتسب `soup infer`
-  الخيار الاختياري <span dir="ltr">`--batch-size`</span> والخيار التجريبي <span dir="ltr">`--cuda-graphs`</span>
-  (يتطلب PyTorch 2.14 أو أحدث؛ على جهاز RTX 5070 Laptop واحد، دون تثبيت، مع Qwen2.5-1.5B بدقة FP16،
-  كان أبطأ تشغيل مع هذا الخيار أسرع بمقدار 2.9x في فك الترميز من أسرع تشغيل بدونه). ويُجري `soup ab` اختبارًا
-  ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
-  و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
-  (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
+- **حلقة تعلّم مستمر.** يمنح `soup serve` كل إجابة معرّفًا ويستقبل عليها ملاحظات (إعجاب، تقييم، تصحيح)؛
+  ويدرّب `soup loop` مرشّحًا من هذه الملاحظات، ويحكم عليه عبر `soup ship --gate loop-v2`، ويشغّله
+  كنسخة canary ويتراجع عنه تلقائيًا.
+- **`soup ship` يُظهر مم يتكوّن رقمه.** أعداد الأفضل/الأسوأ/المتساوي لكل مهمة، وملف تدقيق لكل صف،
+  و`--task-mode reward --reward-fn` للتقييم بدالة تقدّمها أنت (يُنفَّذ ملف `.py`)، ومقدار ما يغيّره
+  المحوّل في النموذج الأساسي، و`--base-adapter` للمقارنة بين محوّلين.
+- **أوامر جديدة.** `soup eval retention` (النسيان عبر إصدارات النموذج)، و`soup data leakage`
+  (التداخل بين التدريب والتقييم)، و`soup docs search` (دون اتصال)، و`soup prune-layer-cache`،
+  و`soup eval quant-check --performance`.
+- **مزيد على Apple Silicon.** محادثة MLX أصلية، والدمج، وأقنعة الخسارة الانتقائية، وذاكرات المعالجة
+  المسبقة، وتوسيع المفردات، وتمديد RoPE، وSFT كثيف لـ Llama.
+- **بثّ الطبقات يفعل أكثر.** وضع استدلال للأمام فقط، واستيراد NF4 مُكمَّم مسبقًا، وتدريب BCO وIPO
+  و`task: preference` على قاعدة مبثوثة.
+- **تقديرات VRAM تناسب الصفوف القصيرة.** يُسعَّر تشغيل SFT المحشوّ بحسب أطول صف فيه، ويُحتسب
+  gradient checkpointing بـ 8 بت ومساحات عمل cuBLAS ومعلّم التقطير، ويقول الفحص المسبق لماذا لم
+  يُفحص الاتّساع.
+- **8 وصفات جديدة** (181 في المجموع)، ومكتبة نوى Triton لـ SFT بـ QLoRA لنموذج Qwen2 (بلا مفتاح إعداد).
+- **النص يُعرض كما كُتب.** عشرات الأوامر الأخرى تطبع المسارات والأسماء مع الإبقاء على الأقواس ونص
+  `:name:` وإزالة محارف التحكم في الطرفية.
 
-> Python **3.11–3.13** فقط. وعلى الإصدار 3.14 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
-> الامتداد الأصلي قبل أن يعمل Soup أصلًا.
+**تغييرات في السلوك يجب أن تعرفها.** تُرفض القيمة المنطقية في حقل رقمي ضمن `training`. وينشئ `--push-as`
+المستودع خاصًا (و`--push-public` لتغيير ذلك). ويُرفض تفعيل eval gate على MLX أو `prm` أو `unlearn`
+أو `moe_lora_routing`. ويتوقف `soup serve --max-tokens` عند 16384. وتغيّرت أوزان `soup adapters merge`
+ودرجة `tool_call_args_subset`، فقد تختلف نتائج الدمج وأحكام ship. وملفات الأدلة التي يكتبها `soup ship`
+من الإصدار 2، وهو ما يرفضه v0.77.x.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -342,7 +326,7 @@ soup doctor                           # افحص GPU / الاعتماديات / 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # أو ابنِ الصورة محليًا
 ```
 

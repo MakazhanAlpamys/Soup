@@ -669,9 +669,16 @@ def build_cmaes_eval_fn(
     resolved = _resolve_cmaes_scorer(scorer)
 
     from soup_cli.utils.adapter_diff import load_adapter_weights
-    from soup_cli.utils.adapter_merge import merge_linear, write_merged_adapter
+    from soup_cli.utils.adapter_merge import (
+        check_mergeable,
+        merge_linear,
+        write_merged_adapter,
+    )
 
     weights_list = [load_adapter_weights(p) for p in plan.adapters]
+    # Refuse unmergeable inputs before the search starts (#2907): every
+    # candidate would otherwise be an adapter with no weights.
+    check_mergeable(weights_list)
     template_source = plan.adapters[0]
 
     def _eval_fn(weights: Tuple[float, ...]) -> float:

@@ -12,8 +12,10 @@ from __future__ import annotations
 import re
 
 import pytest
+import yaml
 
 from soup_cli.config import loader
+from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 
 _BASE = "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n"
@@ -76,11 +78,21 @@ class TestOneDiagnosticForEarlyStopPatience:
     """#808 left it out of STAGED_FIELDS to avoid two diagnostics for one field:
     ``soup train`` already listed it as not enforced. It moves, it is not copied."""
 
+    _TEXT = _BASE + "training:\n  early_stop_on_regression: true\n  early_stop_patience: 5\n"
+
     def test_soup_train_no_longer_lists_it(self):
         from soup_cli.commands.train import _nondefault_unwired_training_settings
 
-        cfg = loader.load_config_from_string(
-            _BASE + "training:\n  early_stop_on_regression: true\n  early_stop_patience: 5\n"
-        )
+        # The schema still accepts the field; the loader refuses it (#808), so the
+        # config is built from the schema to reach soup train's own list.
+        cfg = SoupConfig(**yaml.safe_load(self._TEXT))
 
         assert _nondefault_unwired_training_settings(cfg.training) == ["early_stop_on_regression"]
+
+    def test_the_loader_refuses_it_instead(self):
+        with pytest.raises(ValueError) as excinfo:
+            loader.load_config_from_string(self._TEXT)
+        assert str(excinfo.value) == (
+            "training.early_stop_patience is accepted but read by nothing; "
+            f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+        )

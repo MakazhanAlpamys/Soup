@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_runpod_cloud import CONFIG, _backend, _controller
+from tests.test_runpod_cloud import CONFIG, FAKE_TOOL_DIR, _backend, _controller
 from tests.test_runpod_controller import _clock
 
 
@@ -108,10 +109,12 @@ def test_ambiguous_create_still_recovers_only_owned_pod(credentials, monkeypatch
                 if failure == "incomplete":
                     raise http.client.IncompleteRead(b"provider-secret")
                 return io.BytesIO(b"invalid json: provider-secret")
-            if path == "/pods":
-                return io.BytesIO(json.dumps([
-                    {"id": "owned", "name": run_name}, {"id": "other", "name": "other"},
-                ]).encode())
+            if path.startswith("/pods?"):
+                return io.BytesIO(json.dumps({
+                    "pods": [{"id": "owned", "name": run_name},
+                             {"id": "other", "name": "other"}],
+                    "pagination": {"nextCursor": None, "hasNextPage": False},
+                }).encode())
             if request.method == "DELETE":
                 return io.BytesIO(b"")
             raise urllib.error.HTTPError(request.full_url, 404, "absent", {}, None)
@@ -119,7 +122,7 @@ def test_ambiguous_create_still_recovers_only_owned_pod(credentials, monkeypatch
     monkeypatch.setattr(ns["urllib"].request, "build_opener", lambda *handlers: Opener())
     ns["_notice"] = notices.append
     assert ns["main"]() == 1
-    assert calls == [("POST", "/pods"), ("GET", "/pods"),
+    assert calls == [("POST", "/pods"), ("GET", "/pods?limit=100"),
                      ("DELETE", "/pods/owned"), ("GET", "/pods/owned")]
     assert "RunPod termination verified." in notices
     assert "provider-secret" not in str(notices)
@@ -144,7 +147,7 @@ def test_main_reports_safe_controller_failure_reason(credentials, monkeypatch, s
 
     def run(argv, **kwargs):
         failed = (stage == "training" and "input" in kwargs) or (
-            stage == "copy" and argv[0] == "scp"
+            stage == "copy" and argv[0] == FAKE_TOOL_DIR + "scp"
         )
         return subprocess.CompletedProcess(argv, int(failed))
 
@@ -192,7 +195,7 @@ def test_output_appearing_during_training_prevents_scp(credentials, monkeypatch)
     monkeypatch.setattr(ns["subprocess"], "run", run)
     with pytest.raises(RuntimeError, match="already exists"):
         ns["_train_and_copy"]("8.8.8.8", 2222, str(credentials))
-    assert [argv[0] for argv in calls] == ["ssh", "ssh"]
+    assert [argv[0] for argv in calls] == [FAKE_TOOL_DIR + "ssh", FAKE_TOOL_DIR + "ssh"]
     assert Path("out/keep").read_text(encoding="utf-8") == "original"
 
 
@@ -235,11 +238,14 @@ def test_readiness_retries_before_training_once(credentials, monkeypatch):
 
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
+        if argv[0] == FAKE_TOOL_DIR + "scp":
+            (Path(argv[-1]) / "out").mkdir()
         return subprocess.CompletedProcess(argv, 255 if len(calls) == 1 else 0)
 
     monkeypatch.setattr(ns["subprocess"], "run", run)
     ns["_train_and_copy"]("8.8.8.8", 2222, str(credentials))
-    assert [argv[0] for argv, _ in calls] == ["ssh", "ssh", "ssh", "scp"]
+    ssh, scp = FAKE_TOOL_DIR + "ssh", FAKE_TOOL_DIR + "scp"
+    assert [argv[0] for argv, _ in calls] == [ssh, ssh, ssh, scp]
     assert calls[0][0][-1] == calls[1][0][-1] == "true"
     assert sum("input" in kwargs for _, kwargs in calls) == 1
     assert sleeps == [5]
@@ -283,7 +289,7 @@ def test_supported_public_keys_launch_secure_cloud(credentials, kind):
     ns["_train_and_copy"] = lambda *args: None
     assert ns["main"]() == 0
     assert len(payloads) == 1
-    assert payloads[0]["cloudType"] == "SECURE"
+    assert payloads[0]["cloud"] == "SECURE"
     assert payloads[0]["env"] == {"PUBLIC_KEY": f"ssh-{kind} AAAATEST fixture"}
 
 
@@ -339,6 +345,7 @@ def test_submit_isolates_python_and_filters_environment(credentials, monkeypatch
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "WINDIR", "SSH_AUTH_SOCK",
+    "PATHEXT", "NoDefaultCurrentDirectoryInExePath",
 ])
 def test_controller_forwards_network_temp_and_agent_settings(
     credentials, monkeypatch, tmp_path, name,
@@ -447,7 +454,7 @@ def test_ssh_uses_per_run_hosts_and_only_selected_identity(
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     ns["tempfile"] = types.SimpleNamespace(TemporaryDirectory=lambda **kw: (
         tempfile.TemporaryDirectory(dir=scratch, **kw)
-    ), mkdtemp=lambda **kw: tempfile.mkdtemp(dir=scratch, **kw))
+    ), mkdtemp=tempfile.mkdtemp)
     all_hosts = []
     for _ in range(2):
         hosts, calls = [], []
@@ -465,12 +472,19 @@ def test_ssh_uses_per_run_hosts_and_only_selected_identity(
             if "input" in kwargs and failure == "interrupt":
                 raise KeyboardInterrupt
             failed = ("input" in kwargs and failure == "training") or (
-                argv[0] == "scp" and failure == "copy"
+                argv[0] == FAKE_TOOL_DIR + "scp" and failure == "copy"
             )
-            if argv[0] == "scp":
+            if argv[0] == FAKE_TOOL_DIR + "scp":
                 assert "--" in argv
                 delimiter = argv.index("--")
-                assert argv[delimiter + 1:] == ["root@8.8.8.8:/workspace/soup/out", "."]
+                assert argv[delimiter + 1] == "root@8.8.8.8:/workspace/soup/out"
+                assert len(argv) == delimiter + 3
+                staging = Path(argv[-1])
+                assert staging.name.startswith(".soup-runpod-copy-"), staging
+                assert staging.parent.resolve() == tmp_path.resolve()
+                assert list(staging.iterdir()) == []
+                if not failed:
+                    (staging / "out").mkdir()
             return subprocess.CompletedProcess(argv, int(failed))
 
         monkeypatch.setattr(ns["subprocess"], "run", run)
@@ -481,9 +495,13 @@ def test_ssh_uses_per_run_hosts_and_only_selected_identity(
             ns["_train_and_copy"]("8.8.8.8", 2222, str(credentials))
         assert len(set(hosts)) == 1
         assert not hosts[0].parent.exists()
+        ssh, scp = FAKE_TOOL_DIR + "ssh", FAKE_TOOL_DIR + "scp"
         assert [argv[0] for argv in calls] == (
-            ["ssh", "ssh"] if failure in {"training", "interrupt"} else ["ssh", "ssh", "scp"]
+            [ssh, ssh] if failure in {"training", "interrupt"} else [ssh, ssh, scp]
         )
+        if failure is None:
+            assert Path("out").is_dir()
+            shutil.rmtree("out")
         all_hosts.append(hosts[0])
     assert len(set(all_hosts)) == 2
     assert user_hosts.read_text(encoding="utf-8") == "keep user hosts"

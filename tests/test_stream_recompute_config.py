@@ -91,6 +91,27 @@ class TestRefused:
         assert "training.stream_recompute" in str(exc.value)
         assert "set but stream_layers is false" in str(exc.value)
 
+    def test_the_refusal_names_only_the_field_that_is_set(self):
+        """It listed all twelve stream_* fields (v0.77.0 release smoke), leaving the
+        user to work out which one the config sets."""
+        with pytest.raises(ValueError) as exc:
+            load_config_from_string(_cfg(stream_layers="false", stream_recompute="'off'"))
+        assert str(exc.value) == (
+            ": Value error, training.stream_recompute set but stream_layers is false; "
+            "set stream_layers=true to stream the base layer-by-layer."
+        )
+
+    def test_two_set_fields_are_both_named_in_field_order(self):
+        with pytest.raises(ValueError) as exc:
+            load_config_from_string(
+                _cfg(stream_layers="false", stream_buffers=3, stream_recompute="auto")
+            )
+        assert str(exc.value) == (
+            ": Value error, training.stream_buffers / training.stream_recompute set but "
+            "stream_layers is false; set stream_layers=true to stream the base "
+            "layer-by-layer."
+        )
+
     @pytest.mark.parametrize("value", ["1", "0", "2"])
     def test_an_int_is_refused(self, value):
         with pytest.raises(Exception) as exc:

@@ -31,6 +31,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
 from soup_cli.data.traces.messages import content_text, conversation_prompt, message_list_text
+from soup_cli.data.traces.parsers import _openai_output
 from soup_cli.utils.paths import is_under_cwd
 
 # ---------------------------------------------------------------------------
@@ -209,7 +210,10 @@ def parse_langfuse(events: Iterable[Any]) -> Iterator[TraceRecord]:
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"langfuse-{idx}")
-        signal = _signal_from_thumbs(event.get("score") or event.get("rating"))
+        score = event.get("score")
+        if score is None:
+            score = event.get("rating")
+        signal = _signal_from_thumbs(score)
         metadata: Dict[str, Any] = {}
         model = event.get("model")
         if isinstance(model, str):
@@ -229,11 +233,24 @@ def parse_langsmith(events: Iterable[Any]) -> Iterator[TraceRecord]:
 
     LangSmith uses ``inputs`` / ``outputs`` (note the trailing s, distinct
     from Langfuse) plus a ``feedback_stats`` block with thumbs averages.
+    A chat model run's ``inputs.messages`` is a batch (a list of lists): a
+    batch of one is read as that list, and a run with several prompts gives
+    no row, as its outputs cannot be matched to them. An OpenAI-style run's
+    answer is read from ``choices`` after ``generations``.
     """
     for idx, event in enumerate(events):
         if not isinstance(event, dict):
             continue
-        prompt = _coerce_str(event.get("inputs"))
+        inputs = event.get("inputs")
+        if isinstance(inputs, dict):
+            messages = inputs.get("messages")
+            if isinstance(messages, list) and messages and all(
+                isinstance(batch, list) for batch in messages
+            ):
+                if len(messages) != 1:
+                    continue
+                inputs = {**inputs, "messages": messages[0]}
+        prompt = _coerce_str(inputs)
         outputs = event.get("outputs")
         # LangSmith generations: {generations: [[{text: "..."}]]}
         output = ""
@@ -248,6 +265,8 @@ def parse_langsmith(events: Iterable[Any]) -> Iterator[TraceRecord]:
                 if isinstance(item, dict):
                     text = item.get("text") or item.get("content")
                     output = content_text(text)
+            if not output:
+                output = _openai_output(outputs.get("choices"))
             if not output:
                 output = _coerce_str(outputs, prompt=False)
         if not prompt or not output:

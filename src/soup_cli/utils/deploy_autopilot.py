@@ -120,8 +120,12 @@ _BUILTIN: Mapping[str, DeployProfile] = MappingProxyType(
             "transformers", "4bit", "qlora", True, 4096,
         ),
         "rtx-4090-24gb": _make(
-            "rtx-4090-24gb", "Consumer NVIDIA 24GB — AWQ + vLLM",
-            "vllm", "awq", "lora", True, 8192,
+            # Was "AWQ + vLLM" with quant awq: Soup no longer produces AWQ
+            # (the AWQ export and extra are gone, #1951), so the recipe trains QLoRA.
+            "rtx-4090-24gb", "Consumer NVIDIA 24GB — 4bit QLoRA + vLLM",
+            "vllm", "4bit", "qlora", True, 8192,
+            "Soup does not produce AWQ; to serve a pre-quantized AWQ checkpoint, "
+            "point vLLM at it directly",
         ),
         "iphone-16": _make(
             "iphone-16", "iPhone 16 / 16 Pro — ExecuTorch on-device",

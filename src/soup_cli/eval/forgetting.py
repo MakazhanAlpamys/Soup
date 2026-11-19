@@ -10,8 +10,9 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional, Tuple
 
-from soup_cli.eval.generation import generate_outputs
+from soup_cli.eval.generation import iter_outputs
 from soup_cli.utils.final_answer import iter_boxed_answers
+from soup_cli.utils.ship_progress import track
 
 MiniBenchmark = list[dict[str, str]]
 
@@ -519,11 +520,11 @@ class ForgettingDetector:
 
     def _evaluate(self) -> float:
         correct = 0
-        outputs = generate_outputs(self.generate_fn, [
+        outputs = iter_outputs(self.generate_fn, [
             build_mcq_prompt(item["question"], item.get("answer", ""))
             for item in self.benchmark
         ])
-        for item, output in zip(self.benchmark, outputs):
+        for item, output in track(zip(self.benchmark, outputs), len(self.benchmark)):
             if output is None:
                 continue
             if score_answer(output, item["answer"]):

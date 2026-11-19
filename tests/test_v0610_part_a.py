@@ -192,6 +192,10 @@ class TestBuildUnlearnTrainer:
             raise RuntimeError("LOAD_CALLED")
 
         monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        # #2574: setup() reads the rows before any model loads.
+        monkeypatch.setattr(
+            "soup_cli.trainer.unlearn._load_unlearn_rows", lambda _path: [("p", "t")]
+        )
         with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 
@@ -397,12 +401,13 @@ class TestSchemaUnlearnTask:
             TrainingConfig(unlearn_method="npo", unlearn_alpha=11.0)
 
     def test_unlearn_alpha_bool_rejected(self):
+        from pydantic import ValidationError
+
         from soup_cli.config.schema import TrainingConfig
 
-        # Bool raises TypeError from the validator; Pydantic v2 does not
-        # wrap TypeError in ValidationError (only ValueError /
-        # AssertionError / PydanticCustomError).
-        with pytest.raises(TypeError, match="bool"):
+        # The helper's TypeError is re-raised as a ValueError by
+        # TrainingConfig, so Pydantic reports it with the field (#2366).
+        with pytest.raises(ValidationError, match="unlearn_alpha"):
             TrainingConfig(unlearn_method="npo", unlearn_alpha=True)
 
     def test_unlearn_alpha_without_method_rejected(self):
@@ -516,6 +521,10 @@ class TestUnlearnTrainerWrapper:
             raise RuntimeError("LOAD_CALLED")
 
         monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        # #2574: setup() reads the rows before any model loads.
+        monkeypatch.setattr(
+            "soup_cli.trainer.unlearn._load_unlearn_rows", lambda _path: [("p", "t")]
+        )
         with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 

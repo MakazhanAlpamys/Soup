@@ -693,10 +693,30 @@ def _convert_embedding(row: dict) -> dict:
     if not isinstance(positive, str) or not positive.strip():
         raise ValueError("Embedding row must have a non-empty 'positive' field")
     result = {"anchor": anchor, "positive": positive}
-    negative = row.get("negative")
-    if isinstance(negative, str) and negative.strip():
-        result["negative"] = negative
+    if _has_embedding_negative(row):
+        result["negative"] = row["negative"]
     return result
+
+
+def _has_embedding_negative(row: dict) -> bool:
+    negative = row.get("negative")
+    return isinstance(negative, str) and bool(negative.strip())
+
+
+def split_embedding_negatives(rows: list, split: str) -> bool:
+    """Whether every embedding row has a negative (triplet) or none does (contrastive).
+
+    A partial mix is refused: the Transformers and MLX embedding trainers both
+    pick one objective per run (#2556, #1993).
+    """
+    have = sum(1 for row in rows if _has_embedding_negative(row))
+    lack = len(rows) - have
+    if have and lack:
+        raise ValueError(
+            f"embedding {split} set: {have} of {len(rows)} rows have a 'negative' and "
+            f"{lack} do not; negatives must be on every row (triplet) or on none (contrastive)"
+        )
+    return bool(have)
 
 
 def _convert_audio(row: dict) -> dict:

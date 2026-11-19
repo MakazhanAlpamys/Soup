@@ -15,7 +15,7 @@ letter. Neither owns a regex any more.
 from __future__ import annotations
 
 from soup_cli.utils.final_answer import BoxedAnswer, iter_boxed_answers, parse_completion
-from tests._growth_timing import assert_grows_linearly
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 # The size the growth checks start from. ``tests/_growth_timing.py`` doubles it until one scan
 # lasts long enough to time, then compares it with a scan of 8x the input. It replaced a
@@ -75,6 +75,7 @@ class TestIssue1347TheScanReadsEveryClosedBox:
             assert parsed is not None and parsed.text == box.answer
 
 
+@linux_only
 class TestIssue1347TheScanGrowsLinearly:
     def test_unclosed_boxes_cost_linear_time(self):
         """A run of ``\\boxed{`` that never closes is the scan's worst case: every brace is
@@ -91,6 +92,7 @@ class TestIssue1347TheScanGrowsLinearly:
 
 
 class TestIssue1347NestedBoxes:
+    @linux_only
     def test_nested_closed_boxes_cost_linear_time(self):
         """Every box closes and holds the next, so the boxes' contents overlap. Skipping the
         boxes that hold a box is what keeps this linear: normalising them all would be quadratic

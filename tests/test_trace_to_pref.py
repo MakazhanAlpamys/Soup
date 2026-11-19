@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -224,6 +225,40 @@ class TestFromTracesCLI:
         assert len(pairs) == 1
         assert pairs[0]["chosen"] == "Hello!"
         assert pairs[0]["rejected"] == "Ugh."
+
+    @pytest.mark.parametrize(("extra", "expected"), [
+        ([], []),
+        ([("Q", "Better", 1)], [("Better", "Same")]),
+        ([("Q", "Worse", 0), ("Q", "Better", 1)], [("Same", "Worse")]),
+        pytest.param(
+            [("Q", "Worse", 0), ("Q", "Awful", 0)], [("Same", "Worse")],
+            id="first-distinct-downvote",
+        ),
+        pytest.param(
+            [("Q", "Better", 1), ("Q", "Best", 1)], [("Better", "Same")],
+            id="first-distinct-upvote",
+        ),
+    ])
+    def test_thumbs_require_distinct_completions(self, tmp_path, monkeypatch, extra, expected):
+        monkeypatch.chdir(tmp_path)
+        logs = tmp_path / "traces.jsonl"
+        self._write_langchain_log(logs, [
+            ("Q", "Same", 1),
+            ("Q", "Same", 0),
+            ("Other prompt", "Unrelated", 0),
+            *extra,
+        ])
+        output = tmp_path / "prefs.jsonl"
+        result = runner.invoke(app, [
+            "data", "from-traces", "--logs", str(logs), "--format", "langchain",
+            "--signal", "thumbs_up", "--output", str(output),
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        pairs = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+        assert pairs == [
+            {"prompt": "Q", "chosen": chosen, "rejected": rejected, "source": "thumbs_up"}
+            for chosen, rejected in expected
+        ]
 
     def test_invalid_format_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

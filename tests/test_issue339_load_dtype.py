@@ -8,7 +8,7 @@ Measured on an H100, LoRA, Llama-3.1-8B: 48,241 MiB (fp32) -> 18,658 MiB
 (`torch_dtype="auto"`), a 28.9 GB / 2.59x saving, byte-identical across 3 repeats.
 
 The fix is a numerics DECISION, not a one-liner: a frozen base (LoRA/QLoRA)
-loads at the checkpoint's own dtype (`torch_dtype="auto"`); a trainable base
+loads at the checkpoint's own dtype (`dtype="auto"`); a trainable base
 (full fine-tuning — Spectrum `unfrozen_parameters`, LISA `lisa_enabled`, or
 the #340 `lora.r=0` spelling) explicitly loads `torch.float32` master
 weights, deliberately rather than by accident.
@@ -36,10 +36,11 @@ weights, deliberately rather than by accident.
 check inline — one resolver shared with the other twelve trainers instead of
 two independent implementations. And the kwarg itself is renamed `dtype` ->
 `torch_dtype`: `dtype=` only exists in transformers>=4.56, while this project
-declares `>=4.36.0`, so it was a hard `TypeError` at model load on every
+declared `>=4.36.0` then, so it was a hard `TypeError` at model load on every
 floor-adjacent version (measured on 4.46.1) — not a silent no-op, and
 something no mock using `def _fake(*args, **kwargs)` could ever catch, since
-that signature swallows any kwarg name.
+that signature swallows any kwarg name. Issue #2200 now migrates every loader
+back to `dtype=` together, since the declared Transformers floor is 5.16.1.
 
 Layers, matching the issue's four acceptance criteria plus the review additions:
 
@@ -49,7 +50,7 @@ Layers, matching the issue's four acceptance criteria plus the review additions:
   using the same fake-`torch.cuda` pattern as `test_issue385_stream_dtype.py`.
 - `TestModelKwargsCaptureAcrossModalities` — mock `from_pretrained` at all
   three call sites (text/vision/audio) and assert on the captured
-  `torch_dtype` kwarg, including the QLoRA case (`torch_dtype` +
+  `dtype` kwarg, including the QLoRA case (`dtype` +
   `quantization_config` coexisting) and the literal kwarg *name*, not just
   its value.
 - `TestLoadDtypeMatchesCheckpoint` — the literal AC1 claim, with real tiny
@@ -225,7 +226,7 @@ class TestResolveLoadDtypeCardAware:
 
 
 # ---------------------------------------------------------------------------
-# Mock-based: model_kwargs["torch_dtype"] capture at all three call sites.
+# Mock-based: model_kwargs["dtype"] capture at all three call sites.
 # Fake transformers/peft modules, same shape as tests/test_trainer_init.py.
 # ---------------------------------------------------------------------------
 
@@ -341,7 +342,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] == "auto"
+        assert captured["dtype"] == "auto"
 
     def test_text_lora_dtype_is_float16_on_pre_ampere_cuda(self, monkeypatch, fake_torch_cuda):
         """#471 — the card check reaches all the way into model_kwargs, not
@@ -381,10 +382,10 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] is torch.float16
+        assert captured["dtype"] is torch.float16
 
     def test_text_qlora_dtype_and_quantization_config_coexist(self, monkeypatch):
-        """#471 review — QLoRA now also gets model_kwargs["torch_dtype"] (since a
+        """#471 review — QLoRA now also gets model_kwargs["dtype"] (since a
         quantized run is never is_full_finetune); confirm it lands alongside
         quantization_config rather than one clobbering the other."""
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -420,7 +421,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
+        assert captured["dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
         assert captured["quantization_config"] is sentinel_quant_config
 
     def test_text_full_finetune_dtype_is_float32(self, monkeypatch):
@@ -457,7 +458,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] is torch.float32
+        assert captured["dtype"] is torch.float32
 
     def test_vision_dtype_is_always_auto(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -496,7 +497,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_vision_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] == "auto"
+        assert captured["dtype"] == "auto"
 
     def test_audio_dtype_is_always_auto(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -535,9 +536,9 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_audio_transformers(cfg, cfg.training)
 
-        assert captured["torch_dtype"] == "auto"
+        assert captured["dtype"] == "auto"
 
-    def test_the_kwarg_key_is_torch_dtype_not_dtype_at_all_three_sites(self, monkeypatch):
+    def test_the_kwarg_key_is_dtype_not_torch_dtype_at_all_three_sites(self, monkeypatch):
         """#492 review — assert the load kwarg name itself at all three sites.
 
         A mock built as ``def _fake(*args, **kwargs)`` swallows any kwarg name
@@ -577,8 +578,8 @@ class TestModelKwargsCaptureAcrossModalities:
         wrapper._trust_remote_code = False
         wrapper.model = wrapper.tokenizer = None
         wrapper._setup_transformers(cfg, cfg.training)
-        assert "torch_dtype" in captured
-        assert "dtype" not in captured
+        assert "dtype" in captured
+        assert "torch_dtype" not in captured
 
         # Vision.
         cfg = _make_config(
@@ -601,8 +602,8 @@ class TestModelKwargsCaptureAcrossModalities:
         wrapper.config, wrapper.device = cfg, "cpu"
         wrapper._trust_remote_code = False
         wrapper._setup_vision_transformers(cfg, cfg.training)
-        assert "torch_dtype" in captured
-        assert "dtype" not in captured
+        assert "dtype" in captured
+        assert "torch_dtype" not in captured
 
         # Audio.
         cfg = _make_config(
@@ -625,8 +626,8 @@ class TestModelKwargsCaptureAcrossModalities:
         wrapper.config, wrapper.device = cfg, "cpu"
         wrapper._trust_remote_code = False
         wrapper._setup_audio_transformers(cfg, cfg.training)
-        assert "torch_dtype" in captured
-        assert "dtype" not in captured
+        assert "dtype" in captured
+        assert "torch_dtype" not in captured
 
 
 # ---------------------------------------------------------------------------

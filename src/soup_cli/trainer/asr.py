@@ -29,9 +29,10 @@ from typing import Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
@@ -224,8 +225,14 @@ class AsrTrainerWrapper:
             )
 
         console.print(f"[dim]Loading Whisper model: {cfg.base}[/]")
+        # #2941: a full fine-tune (the default; ``asr_lora`` is opt-in) steps every
+        # weight, so it loads fp32 master weights. With no ``dtype`` transformers 5
+        # loads the checkpoint's own: fp16 for whisper-large-v3 and -large-v3-turbo.
         self.model = WhisperForConditionalGeneration.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code,
+            dtype=resolve_base_load_dtype(
+                self.device, full_finetune=not self._should_use_lora(tcfg)
+            ),
             **base_revision_kwargs(cfg.base),
         )
         self.model.config.forced_decoder_ids = None
@@ -322,6 +329,7 @@ class AsrTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -342,6 +350,9 @@ class AsrTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -441,7 +452,8 @@ class AsrTrainerWrapper:
             fp16=getattr(_asr_args, "fp16", False),
             bf16=getattr(_asr_args, "bf16", False),
         )
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         self.trainer.save_model(self._output_dir)

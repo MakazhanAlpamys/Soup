@@ -33,6 +33,7 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import TEMPLATES, SoupConfig
 from soup_cli.recipes.catalog import RECIPES
 from tests.conftest import strip_ansi
+from tests.recipe_contracts import load_catalog_config
 
 TIP = "Tip: unsloth is installed"
 
@@ -40,6 +41,12 @@ _SHIPPED = {
     **{f"template:{name}": text for name, text in TEMPLATES.items()},
     **{f"recipe:{name}": recipe.yaml_str for name, recipe in RECIPES.items()},
 }
+
+
+def _shipped_config(name):
+    if name.startswith("recipe:"):
+        return load_catalog_config(RECIPES[name.removeprefix("recipe:")])
+    return load_config_from_string(_SHIPPED[name])
 
 
 def _raw(task="sft", **training):
@@ -113,7 +120,9 @@ class TestEveryShippedConfig:
         """A template or recipe either gets the tip and loads with
         ``backend: unsloth``, or gets neither."""
         text = _SHIPPED[name]
-        cfg = load_config_from_string(text)
+        cfg = _shipped_config(name)
+        if cfg is None:
+            return
         if cfg.backend != "transformers":
             pytest.skip("already on another backend: the tip is not offered")
 
@@ -122,7 +131,9 @@ class TestEveryShippedConfig:
     def test_the_second_validation_is_silent_and_stays_off_the_disk(
         self, name, monkeypatch, capsys, caplog
     ):
-        cfg = load_config_from_string(_SHIPPED[name])
+        cfg = _shipped_config(name)
+        if cfg is None:
+            return
         capsys.readouterr()
         caplog.clear()
 
@@ -158,8 +169,8 @@ def test_some_shipped_configs_are_on_each_side():
     """Guard on the sweep: it must really see both answers."""
     answers = [
         _loads_on_unsloth(cfg)
-        for cfg in (load_config_from_string(text) for text in _SHIPPED.values())
-        if cfg.backend == "transformers"
+        for cfg in (_shipped_config(name) for name in _SHIPPED)
+        if cfg is not None and cfg.backend == "transformers"
     ]
 
     assert answers.count(True) > 100

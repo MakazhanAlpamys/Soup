@@ -1,0 +1,3 @@
+# Excerpt of the arm D timing cell D-r1-T worker log (lines 38-39 of the full log, which is kept outside the repository).
+Rewind recorder disabled: the model returned no logits (use_liger_kernel skips
+them during training), so per-row losses cannot be computed

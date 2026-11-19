@@ -32,7 +32,7 @@ def _mock_env():
 def _assert_cpu_placement(name: str, load, model) -> None:
     kwargs = load.call_args.kwargs
     device_map = kwargs.get("device_map")
-    dtype = kwargs.get("torch_dtype")
+    dtype = kwargs.get("dtype")
 
     assert device_map != "auto", (
         f"{name}._load_model(device='cpu') still passes device_map='auto' "

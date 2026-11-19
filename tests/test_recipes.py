@@ -58,15 +58,13 @@ class TestRecipeCatalog:
         assert len(results) > 0
 
     def test_search_by_size(self):
-        """search_recipes filters by matching size token against recipe name or model id (#1161)."""
-        from soup_cli.recipes.catalog import RECIPES, search_recipes
+        """search_recipes filters by matching size token against declared size (#1161, #2930)."""
+        from soup_cli.recipes.catalog import search_recipes
 
         results = search_recipes(size="7b")
         assert len(results) > 0
-        names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
-            name = names_by_recipe.get(id(recipe), "")
-            assert "7b" in name.lower() or "7b" in recipe.model.lower()
+            assert recipe.size.lower() == "7b"
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
@@ -76,13 +74,15 @@ class TestRecipeCatalog:
         assert results == []
 
     def test_all_recipes_valid_yaml(self):
-        """All recipes contain valid YAML that loads as SoupConfig."""
-        from soup_cli.config.loader import load_config_from_string
+        """Each recipe loads or refuses with its documented unavailability reason."""
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_contracts import load_catalog_config
 
         for name, recipe in RECIPES.items():
             try:
-                config = load_config_from_string(recipe.yaml_str)
+                config = load_catalog_config(recipe)
+                if config is None:
+                    continue
                 assert config.base is not None, f"Recipe {name} has no base model"
             except Exception as exc:
                 pytest.fail(f"Recipe '{name}' is invalid: {exc}")
@@ -1828,6 +1828,9 @@ class TestV025NewRecipes:
         Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
         Issue #1867 retires the unsupported vision-preference recipe -> 169.
         Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
+        Task-variant for #275 added 1 (qwen3.5-2b-dpo) -> 171.
+        Task-variant for #275 added 1 (qwen3.5-0.8b-dpo) -> 172.
+        Task-variant for #275 added 1 (qwen3.5-27b-dpo) -> 173.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
@@ -2010,3 +2013,23 @@ class TestR1DistillLlamaAndDpoRecipes:
         assert use_result.exit_code == 0
         content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
         assert "base: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" in content
+
+
+class TestQwen35LargeMoeGrpoRecipe:
+    """The #275 122B and 397B reasoning rows are discoverable through public catalog APIs."""
+
+    def test_122b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-122b-a10b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="122b")
+
+    def test_397b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-397b-a17b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="397b")

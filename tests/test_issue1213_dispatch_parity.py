@@ -84,6 +84,7 @@ _MLX_EXPECTED = {
     "dpo": "MLXDPOTrainerWrapper",
     "orpo": "MLXORPOTrainerWrapper",
     "simpo": "MLXSimPOTrainerWrapper",
+    "kto": "MLXKTOTrainerWrapper",
     "grpo": "MLXGRPOTrainerWrapper",
 }
 

@@ -9,6 +9,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -149,19 +152,24 @@ def quickstart(
         if not is_under_cwd(output):
             console.print(
                 f"[red]--output must stay under the current working directory; "
-                f"got: {output}[/]"
+                f"got: {for_terminal(output)}[/]",
+                emoji=False,
             )
             raise typer.Exit(2)
         out_dir = Path(os.path.realpath(output))
         out_dir.mkdir(parents=True, exist_ok=True)
 
+    display_dir = for_terminal(out_dir)
     console.print(
         Panel(
-            "This will:\n"
-            f"  1. Create [bold]{out_dir}/quickstart_data.jsonl[/] (20 examples)\n"
-            f"  2. Create [bold]{out_dir}/quickstart_soup.yaml[/] config\n"
-            "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
-            f"Model: [bold]{model_id}[/]",
+            Text.from_markup(
+                "This will:\n"
+                f"  1. Create [bold]{display_dir}/quickstart_data.jsonl[/] (20 examples)\n"
+                f"  2. Create [bold]{display_dir}/quickstart_soup.yaml[/] config\n"
+                "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
+                f"Model: [bold]{model_id}[/]",
+                emoji=False,
+            ),
             title="[bold]Soup Quickstart[/]",
         )
     )
@@ -175,17 +183,24 @@ def quickstart(
     # 1. Create demo data
     data_path = out_dir / "quickstart_data.jsonl"
     if data_path.exists():
-        console.print(f"[yellow]Data file already exists:[/] {data_path}")
+        console.print(
+            f"[yellow]Data file already exists:[/] {for_terminal(data_path)}", emoji=False
+        )
     else:
         with open(data_path, "w", encoding="utf-8") as fh:
             for entry in DEMO_DATA:
                 fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        console.print(f"[green]Created:[/] {data_path} ({len(DEMO_DATA)} examples)")
+        console.print(
+            f"[green]Created:[/] {for_terminal(data_path)} ({len(DEMO_DATA)} examples)",
+            emoji=False,
+        )
 
     # 2. Create demo config
     config_path = out_dir / "quickstart_soup.yaml"
     if config_path.exists():
-        console.print(f"[yellow]Config file already exists:[/] {config_path}")
+        console.print(
+            f"[yellow]Config file already exists:[/] {for_terminal(config_path)}", emoji=False
+        )
     else:
         rendered = DEMO_CONFIG.replace(_DEFAULT_MODEL, model_id)
         # When --output is set, retarget data + run dirs into that dir.
@@ -194,7 +209,7 @@ def quickstart(
                 "./quickstart_data.jsonl", str(data_path)
             ).replace("./quickstart_output", str(out_dir / "quickstart_output"))
         config_path.write_text(rendered, encoding="utf-8")
-        console.print(f"[green]Created:[/] {config_path}")
+        console.print(f"[green]Created:[/] {for_terminal(config_path)}", emoji=False)
     # Also write a `soup.yaml` symlink-style alias for tools that look for it.
     soup_yaml = out_dir / "soup.yaml"
     if not soup_yaml.exists() and output is not None:
@@ -207,7 +222,9 @@ def quickstart(
 
     if dry_run:
         console.print("\n[yellow]Dry run - files created, skipping training.[/]")
-        console.print(f"To train: [bold]soup train --config {config_path}[/]")
+        console.print(
+            f"To train: [bold]soup train --config {for_terminal(config_path)}[/]", emoji=False
+        )
         raise typer.Exit()
 
     # 3. Train — invoke via subprocess so Typer resolves defaults properly

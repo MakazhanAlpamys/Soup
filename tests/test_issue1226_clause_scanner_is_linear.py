@@ -25,7 +25,7 @@ import pytest
 
 from soup_cli.trainer.rewards import accuracy_reward, math_verify_reward
 from soup_cli.utils.final_answer import parse_completion
-from tests._growth_timing import assert_grows_linearly
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 
 def _msg(text: str) -> list[list[dict]]:
@@ -61,6 +61,7 @@ WHITESPACE_RUNS = {
 _SCALE_N = 100  # the starting size; the helper doubles it until the run is long enough to time
 
 
+@linux_only
 class TestTheClauseScannerIsLinear:
     @pytest.mark.parametrize("build", list(WHITESPACE_RUNS.values()), ids=list(WHITESPACE_RUNS))
     def test_time_grows_linearly_with_a_whitespace_run(self, build):

@@ -1,0 +1,10 @@
+# The scripts in this directory are kept exactly as they ran on the rented machine (or as they
+# read its output), so that their hashes in README.md stay checkable. They were not written to
+# the repository's style: long lines, several statements on one line, an upper-case local name,
+# an alias that is not lower-case, an unsorted import block and two assigned-but-unused locals in
+# analyze.py. Only those six rules are relaxed here; everything else the repository enforces
+# (unused imports, undefined names, ...) still applies.
+extend = "../../../pyproject.toml"
+
+[lint]
+ignore = ["E501", "E702", "F841", "I001", "N806", "N812"]

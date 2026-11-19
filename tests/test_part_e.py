@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -247,6 +248,99 @@ def _make_callback(tmp_path, **kwargs):
 
 
 class TestSpikeRecoveryHint:
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("outside_cwd", [False, True], ids=["inside", "outside"])
+    @pytest.mark.parametrize("existing_target", [False, True], ids=["dangling", "existing"])
+    def test_linked_hint_preserves_target_and_recovery_budget(
+        self, tmp_path, monkeypatch, caplog, outside_cwd, existing_target,
+    ):
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        target = (tmp_path if outside_cwd else work) / "target.json"
+        original = b'{"attempts": 7, "untouched": true}\n'
+        if existing_target:
+            target.write_bytes(original)
+        hint = work / "spike_recovery.json"
+        hint.symlink_to(target)
+        reads = []
+        read_text = Path.read_text
+
+        def track_read(path, *args, **kwargs):
+            if path == hint:
+                reads.append(path)
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", track_read)
+        cb = _make_callback(work, spike_recovery=True, spike_recovery_max_attempts=2)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(work))
+
+        cb._write_spike_recovery_hint(args, loss=10.0)
+
+        assert hint.is_symlink()
+        assert reads == [], "linked attempt counts must not be read"
+        assert target.exists() is existing_target
+        if existing_target:
+            assert target.read_bytes() == original
+        assert cb._spike_recovery_attempts == 0
+        assert "Failed to write spike recovery hint" in caplog.text
+        reason = "must stay under cwd" if outside_cwd else "must not be a symlink"
+        assert "spike_recovery hint" in caplog.text and reason in caplog.text
+        # Refusal must not spend an attempt: replacing the link with an ordinary
+        # output permits the first recovery as usual.
+        hint.unlink()
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads(hint.read_text(encoding="utf-8"))
+        assert data["attempts"] == 1
+        assert data["should_recover"] is True
+
+    @pytest.mark.requires_hardlink
+    def test_hardlinked_hint_replacement_preserves_other_file(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        target = tmp_path / "previous-hint.json"
+        original = b'{"attempts": 2}\n'
+        target.write_bytes(original)
+        hint = work / "spike_recovery.json"
+        hint.hardlink_to(target)
+        cb = _make_callback(work, spike_recovery=True, spike_recovery_max_attempts=2)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(work))
+
+        cb._write_spike_recovery_hint(args, loss=10.0)
+
+        assert target.read_bytes() == original
+        assert not hint.samefile(target)
+        data = json.loads(hint.read_text(encoding="utf-8"))
+        assert data["attempts"] == 3
+        assert data["should_recover"] is False
+
+    def test_failed_hint_replacement_preserves_file_and_attempts(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        monkeypatch.chdir(tmp_path)
+        hint = tmp_path / "spike_recovery.json"
+        original = b'{"attempts": 1}\n'
+        hint.write_bytes(original)
+        cb = _make_callback(tmp_path, spike_recovery=True, spike_recovery_max_attempts=2)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+
+        def fail_replace(_source, _destination):
+            raise PermissionError("synthetic hint replacement failure")
+
+        with monkeypatch.context() as failure:
+            failure.setattr("soup_cli.utils.paths.os.replace", fail_replace)
+            cb._write_spike_recovery_hint(args, loss=10.0)
+
+        assert hint.read_bytes() == original
+        assert cb._spike_recovery_attempts == 0
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["spike_recovery.json"]
+        assert "Failed to write spike recovery hint" in caplog.text
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads(hint.read_text(encoding="utf-8"))
+        assert data["attempts"] == 2
+        assert data["should_recover"] is True
+
     def test_writes_hint_file(self, tmp_path, monkeypatch):
         # Containment guard requires output_dir to live under cwd.
         monkeypatch.chdir(tmp_path)

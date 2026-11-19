@@ -182,7 +182,7 @@ class MsprtConfig:
 
     metric: str
     alpha: float = 0.05  # bounds both wrong reject_h0 and wrong accept_h0 (#1418)
-    beta: float | None = None  # retired in #1418: ignored, with a warning
+    beta: float | None = None  # retired in #1418: a passed value is refused
     effect_size: float = 0.1  # Minimum detectable difference in means
 
     def __post_init__(self) -> None:
@@ -192,9 +192,10 @@ class MsprtConfig:
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
         # #1418 retired beta: accept_h0 now comes from a confidence sequence at
         # level alpha, so alpha bounds both wrong verdicts and there is no
-        # Type-II rate left to set. A beta that is passed is not used, and it
-        # says so rather than being dropped silently. #1339's alpha + beta < 1
-        # check guarded the old accept boundary and went with it.
+        # Type-II rate left to set. A beta that is passed is refused, saying
+        # why (``config/deprecation.py``; it warned and was ignored for one
+        # release first). #1339's alpha + beta < 1 check guarded the old accept
+        # boundary and went with it.
         if self.beta is not None:
             warn_deprecated_value(retired_beta_message())
         object.__setattr__(
@@ -675,15 +676,55 @@ def msprt_step(
     return verdict(llr)
 
 
-def run_msprt(
-    input_path: str,
-    *,
-    config: MsprtConfig,
-) -> MsprtVerdict:
-    """Read a JSONL of {arm, <metric>} rows and run the mSPRT pass.
+# #1818: why a line in the A/B JSONL did not become a sample. The command
+# reports these counts when the usable total is under the threshold, so a file
+# full of rows it cannot read is not answered with "collect more samples".
+SKIP_INVALID_JSON = "invalid JSON"
+SKIP_NOT_OBJECT = "not an object"
+SKIP_ARM = "arm missing or not control/treatment"
+SKIP_METRIC = "metric missing or non-numeric"
+SKIP_NOT_FINITE = "metric not finite"
+_SKIP_REASONS = (
+    SKIP_INVALID_JSON,
+    SKIP_NOT_OBJECT,
+    SKIP_ARM,
+    SKIP_METRIC,
+    SKIP_NOT_FINITE,
+)
 
-    Each row must have ``arm`` (``control`` or ``treatment``) and a numeric
-    field matching ``config.metric``.
+
+@dataclass(frozen=True)
+class MsprtRows:
+    """Samples read from an A/B JSONL, plus what was skipped on the way in.
+
+    ``skipped`` always carries every reason in ``_SKIP_REASONS`` order, with
+    ``0`` for the ones that did not occur, so a caller can format the nonzero
+    ones without knowing which happened to be present.
+    """
+
+    control: tuple[float, ...]
+    treatment: tuple[float, ...]
+    skipped: Mapping[str, int]
+
+    def skipped_note(self) -> str | None:
+        """One line naming the skipped rows by reason, or ``None`` if none were."""
+        parts = [
+            f"{self.skipped[reason]} {reason}"
+            for reason in _SKIP_REASONS
+            if self.skipped[reason]
+        ]
+        if not parts:
+            return None
+        return "Skipped rows: " + ", ".join(parts) + "."
+
+
+def read_msprt_rows(input_path: str, *, config: MsprtConfig) -> MsprtRows:
+    """Read the A/B JSONL, keeping the samples and counting the skipped rows.
+
+    A row is usable when it is a JSON object with ``arm`` set to ``control`` or
+    ``treatment`` and a finite numeric ``config.metric``. Every other row is
+    counted under its reason instead of disappearing (#1818): a file the
+    command cannot read must not be answered with "collect more samples".
     """
     if not isinstance(input_path, str):
         raise TypeError(
@@ -700,6 +741,7 @@ def run_msprt(
 
     control: list[float] = []
     treatment: list[float] = []
+    skipped = dict.fromkeys(_SKIP_REASONS, 0)
     with open(input_path, encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
@@ -708,22 +750,48 @@ def run_msprt(
             try:
                 row = json.loads(stripped)
             except json.JSONDecodeError:
+                skipped[SKIP_INVALID_JSON] += 1
                 continue
             if not isinstance(row, dict):
+                skipped[SKIP_NOT_OBJECT] += 1
                 continue
             arm = row.get("arm")
+            if arm not in ("control", "treatment"):
+                skipped[SKIP_ARM] += 1
+                continue
             value = row.get(config.metric)
             if not isinstance(value, (int, float)) or isinstance(value, bool):
+                skipped[SKIP_METRIC] += 1
                 continue
             f_val = float(value)
             if not math.isfinite(f_val):
+                skipped[SKIP_NOT_FINITE] += 1
                 continue
             if arm == "control" and len(control) < _MAX_SAMPLES_PER_ARM:
                 control.append(f_val)
             elif arm == "treatment" and len(treatment) < _MAX_SAMPLES_PER_ARM:
                 treatment.append(f_val)
 
-    return msprt_step(config, control=control, treatment=treatment)
+    return MsprtRows(
+        control=tuple(control),
+        treatment=tuple(treatment),
+        skipped=MappingProxyType(skipped),
+    )
+
+
+def run_msprt(
+    input_path: str,
+    *,
+    config: MsprtConfig,
+) -> MsprtVerdict:
+    """Read a JSONL of {arm, <metric>} rows and run the mSPRT pass.
+
+    Each row must have ``arm`` (``control`` or ``treatment``) and a numeric
+    field matching ``config.metric``. Rows that do not are counted by
+    :func:`read_msprt_rows` and left out of the test.
+    """
+    rows = read_msprt_rows(input_path, config=config)
+    return msprt_step(config, control=rows.control, treatment=rows.treatment)
 
 
 __all__ = [
@@ -731,10 +799,17 @@ __all__ = [
     "HIGHER_IS_BETTER",
     "MAX_STANDARDISED_EFFECT",
     "MsprtConfig",
+    "MsprtRows",
     "MsprtVerdict",
     "PRIOR_SCALE_ROWS",
+    "SKIP_ARM",
+    "SKIP_INVALID_JSON",
+    "SKIP_METRIC",
+    "SKIP_NOT_FINITE",
+    "SKIP_NOT_OBJECT",
     "SUPPORTED_METRICS",
     "msprt_step",
+    "read_msprt_rows",
     "retired_beta_message",
     "run_msprt",
     "validate_metric_name",
