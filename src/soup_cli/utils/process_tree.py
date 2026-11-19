@@ -15,10 +15,14 @@ removed.
   (the job does not allow breakaway), ``TerminateJobObject`` ends all of them, and closing
   the handle ends any that are left.
 
-Best-effort, like the sandbox itself: a process that deliberately leaves the group
-(``setsid`` / ``setpgid``) after its parent is gone is out of the POSIX group's reach, and
-a process the child starts in the few milliseconds between ``CreateProcess`` and the job
-assignment (before the interpreter has run any of the caller's code) is not in the job.
+Best-effort, like the sandbox itself: a process that calls ``setsid`` / ``setpgid`` leaves
+the group and is out of the POSIX group's reach, and a process the child starts in the few
+milliseconds between ``CreateProcess`` and the job assignment (before the interpreter has
+run any of the caller's code) is not in the job. On POSIX the child no longer shares the
+terminal's foreground group, so Ctrl-C and a terminal hangup do not reach it directly: an
+interrupted caller ends the tree in its ``finally``, but a caller that is killed outright
+runs no ``finally`` and the group lives until its code ends it (Windows ends the job when
+the controller exits).
 """
 
 from __future__ import annotations

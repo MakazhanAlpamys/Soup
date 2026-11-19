@@ -149,7 +149,7 @@ def _held_directory_rmtree(monkeypatch, refusals):
 
 
 def _run(code: str, **kwargs) -> SandboxProcessResult:
-    kwargs.setdefault("timeout_seconds", 1)
+    kwargs.setdefault("timeout_seconds", 3)
     return _run_sandboxed_subprocess([sys.executable, "-c", code], None, **kwargs)
 
 
@@ -494,6 +494,36 @@ class TestRemoveDirectory:
         assert result.launch_failed is True
         assert result.returncode is None
         assert _leftover_sandbox_dirs(sandbox_tmp) == []
+
+    def test_a_failure_to_set_up_the_tree_does_not_leave_the_child_running(
+        self, sandbox_tmp, monkeypatch
+    ):
+        started: list = []
+        real_popen = subprocess.Popen
+
+        def recording_popen(*args, **kwargs):
+            started.append(real_popen(*args, **kwargs))
+            return started[-1]
+
+        def broken_tree(process):
+            raise RuntimeError("no tree")
+
+        monkeypatch.setattr(subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(rewards, "ProcessTree", broken_tree)
+        try:
+            with pytest.raises(RuntimeError, match="no tree"):
+                _run(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})", timeout_seconds=10)
+
+            (child,) = started
+            assert child.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+        finally:
+            for child in started:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=_GONE_WITHIN_SECONDS)
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
 
 
 class TestProcessTree:

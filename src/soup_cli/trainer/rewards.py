@@ -481,7 +481,14 @@ def _run_sandboxed_subprocess(
                 launch_failed=True,
             )
 
-        tree = ProcessTree(proc)
+        try:
+            tree = ProcessTree(proc)
+        except BaseException:
+            # No tree to end it with: do not leave the child running.
+            with contextlib.suppress(Exception):
+                proc.kill()
+                proc.wait(timeout=1.0)
+            raise
         try:
             return _collect_sandbox_result(proc, tree, max_output_bytes, timeout_seconds)
         finally:
