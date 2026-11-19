@@ -424,13 +424,17 @@ def fold_lora_scaling(
         rescaled: Optional[dict[str, Any]] = None
         if config is not None:
             for name, tensor in weights.items():
-                role = _lora_role(name)
-                if role is None and name.endswith(_LORA_B_BIAS):
+                parsed = _lora_role(name)
+                if parsed is not None:
+                    (stem, _kind, _adapter_name), role = parsed
+                    if role != "B":
+                        continue
+                elif name.endswith(_LORA_B_BIAS):
                     # PEFT scales lora_B's output, its bias (lora_bias=True) included.
-                    role = (name[: -len(_LORA_B_BIAS)], "B", _LORA_B_BIAS)
-                if role is None or role[1] != "B":
+                    stem = name.removesuffix(_LORA_B_BIAS)
+                else:
                     continue
-                module = peft_module_name(role[0])
+                module = peft_module_name(stem)
                 target = lora_module_scaling(template, module)
                 own = lora_module_scaling(config, module)
                 if target is None or own is None or target == 0.0 or own == target:
