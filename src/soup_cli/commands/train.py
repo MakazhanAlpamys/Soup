@@ -214,6 +214,8 @@ def _completion_commands(
     merge_note: str | None = None,
     *,
     windows_separators: bool | None = None,
+    backend_hint: str = "",
+    dequantize_hint: str = "",
 ) -> str:
     """The follow-up commands of the completion panel, as Rich markup.
 
@@ -224,6 +226,9 @@ def _completion_commands(
     control characters in the path from reaching the console. ``merge_note`` replaces the
     ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
     this host spells paths with backslashes) writes a nested path with forward slashes.
+    ``backend_hint`` (`` --backend mlx``) follows ``soup chat`` and ``soup merge``, and
+    ``dequantize_hint`` (`` --dequantize``) follows the merge adapter argument; both are
+    fixed flags that the caller derives from the config, not text from it.
     """
     from soup_cli.utils.paths import paste_arg
     from soup_cli.utils.terminal import for_terminal
@@ -235,10 +240,13 @@ def _completion_commands(
     merge_line = (
         merge_note
         if merge_note is not None
-        else f"[bold]Merge LoRA:[/]  soup merge --adapter {shown}"
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {shown}"
+            f"{dequantize_hint}"
+        )
     )
     lines = [
-        f"Quick test:  [bold]soup chat --model {shown}[/]",
+        f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
         f"Push to HF:  [bold]soup push --model {shown}[/]",
         merge_line,
         f"Export GGUF: [bold]soup export --model {shown}[/]",
@@ -2799,6 +2807,10 @@ def train(
         raise
 
     # Report
+    backend_hint = " --backend mlx" if cfg.backend == "mlx" else ""
+    dequantize_hint = (
+        " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
+    )
     merge_note = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
@@ -2810,13 +2822,20 @@ def train(
 
     from soup_cli.utils.terminal import for_terminal as _for_terminal
 
+    completion_commands = _completion_commands(
+        result["output_dir"],
+        merge_note,
+        backend_hint=backend_hint,
+        dequantize_hint=dequantize_hint,
+    )
+
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{_for_terminal(result['output_dir'])}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"{_completion_commands(result['output_dir'], merge_note)}\n"
+            f"{completion_commands}\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title=("[bold yellow]Training Stopped — Loss watchdog[/]"
                    if result.get("stop_reason") == "loss_watchdog"

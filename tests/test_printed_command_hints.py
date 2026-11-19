@@ -108,14 +108,34 @@ def _plain(markup: str) -> str:
 
 
 class TestTrainingCompleteCommands:
-    def _commands(self, output_dir, merge_note=None, windows_separators=False) -> str:
+    def _commands(
+        self, output_dir, merge_note=None, windows_separators=False, **hints
+    ) -> str:
         from soup_cli.commands.train import _completion_commands
 
         return _plain(
             _completion_commands(
-                output_dir, merge_note, windows_separators=windows_separators
+                output_dir, merge_note, windows_separators=windows_separators, **hints
             )
         )
+
+    def test_the_backend_and_dequantize_flags_are_kept_next_to_the_path(self):
+        shown = self._commands(
+            "./output", backend_hint=" --backend mlx", dequantize_hint=" --dequantize"
+        )
+
+        assert "soup chat --backend mlx --model ./output" in shown
+        assert "soup merge --backend mlx --adapter ./output --dequantize" in shown
+        assert "soup push --model ./output" in shown
+        assert "soup export --model ./output" in shown
+
+    def test_the_flags_are_kept_when_the_path_is_left_out(self):
+        shown = self._commands(
+            "out$HOME", backend_hint=" --backend mlx", dequantize_hint=" --dequantize"
+        )
+
+        assert "soup chat --backend mlx --model <output directory>" in shown
+        assert "soup merge --backend mlx --adapter <output directory> --dequantize" in shown
 
     def test_plain_output_is_repeated_as_it_was_before(self):
         shown = self._commands("./output")
