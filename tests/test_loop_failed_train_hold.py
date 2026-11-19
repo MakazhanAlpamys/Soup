@@ -177,15 +177,19 @@ class TestFingerprint:
         monkeypatch.setattr(retry, "_READ_CHUNK", 16)
         at_cap = tmp_path / "at.jsonl"
         at_cap.write_bytes(b"A" * 63 + b"Z")  # exactly 64 bytes, hashed whole
+        at_changed = tmp_path / "at_changed.jsonl"
+        at_changed.write_bytes(b"A" * 31 + b"Q" + b"A" * 31 + b"Z")  # same size, middle changed
         over_cap = tmp_path / "over.jsonl"
         over_cap.write_bytes(b"A" * 64 + b"m" * 200 + b"Z" * 64)
-        # One byte over the cap: a long middle is invisible to head + tail.
-        changed_middle = tmp_path / "middle.jsonl"
-        changed_middle.write_bytes(b"A" * 64 + b"q" * 200 + b"Z" * 64)
+        over_changed = tmp_path / "over_changed.jsonl"
+        over_changed.write_bytes(b"A" * 64 + b"q" * 200 + b"Z" * 64)
         at_fp = retry.train_inputs_fingerprint(_state(), str(at_cap), "sft")
         over_fp = retry.train_inputs_fingerprint(_state(), str(over_cap), "sft")
         assert over_fp != at_fp
-        assert retry.train_inputs_fingerprint(_state(), str(changed_middle), "sft") == over_fp
+        # Exactly the cap: the whole file is hashed, so a middle edit is seen.
+        assert retry.train_inputs_fingerprint(_state(), str(at_changed), "sft") != at_fp
+        # One byte over: head + tail only, so the same middle edit is invisible.
+        assert retry.train_inputs_fingerprint(_state(), str(over_changed), "sft") == over_fp
 
     def test_a_held_path_that_becomes_readable_trains_again(self, tmp_path, monkeypatch):
         unreadable = tmp_path / "pairs.jsonl"
