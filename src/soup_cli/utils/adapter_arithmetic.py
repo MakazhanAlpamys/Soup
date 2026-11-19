@@ -368,25 +368,27 @@ def _lora_role(name: str) -> tuple[_LoraStem, str] | None:
 
     A named factor adds exactly one non-empty dot-separated segment:
     ``lora_A.<name>.weight`` or ``lora_embedding_A.<name>`` (likewise for B).
+    The named spelling takes precedence when it also matches an unnamed suffix.
     """
     prefix, dot, tail = name.rpartition(".")
     if not dot or not tail:
         return None
+
+    stem, dot, part = prefix.rpartition(".")
+    if dot:
+        if part and tail in ("weight", "bias"):
+            module, marker_dot, marker = stem.rpartition(".")
+            if marker_dot and marker in _LORA_WEIGHT_FACTORS:
+                if tail == "bias":
+                    # A named bias is not an embedding factor with adapter name "bias".
+                    return None
+                return (module, "weight", part), marker[-1]
+            if tail == "weight" and part in _LORA_WEIGHT_FACTORS:
+                return (stem, "weight", ""), part[-1]
+        if part in _LORA_EMBEDDING_FACTORS:
+            return (stem, "embedding", tail), part[-1]
     if tail in _LORA_EMBEDDING_FACTORS:
         return (prefix, "embedding", ""), tail[-1]
-
-    stem, dot, factor = prefix.rpartition(".")
-    if not dot:
-        return None
-    if tail == "weight":
-        if factor in _LORA_WEIGHT_FACTORS:
-            return (stem, "weight", ""), factor[-1]
-        if factor:
-            module, dot, marker = stem.rpartition(".")
-            if dot and marker in _LORA_WEIGHT_FACTORS:
-                return (module, "weight", factor), marker[-1]
-    if factor in _LORA_EMBEDDING_FACTORS:
-        return (stem, "embedding", tail), factor[-1]
     return None
 
 

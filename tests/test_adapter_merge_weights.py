@@ -359,15 +359,19 @@ BIASED_SECOND = {**SECOND, BIAS_KEY: SECOND_BIAS}
         ("lora_A.default.weight", 0.5),
         ("lora_B.default.weight", -0.5),
         ("lora_A.my_adapter.weight", 0.5),
+        ("lora_B.lora_A.weight", -0.5),
         ("lora_A..weight", -0.25),
         # Dots separate segments: a.b is two segments, not one adapter name.
         ("lora_A.a.b.weight", -0.25),
         ("lora_B.bias", -0.25),
         ("lora_B.default.bias", -0.25),
+        ("lora_B.lora_embedding_A.bias", -0.25),
         ("lora_embedding_A", 0.5),
         ("lora_embedding_B", -0.5),
         ("lora_embedding_A.default", 0.5),
         ("lora_embedding_B.default", -0.5),
+        ("lora_embedding_B.lora_embedding_A", -0.5),
+        ("lora_embedding_B.bias", -0.5),
         ("lora_embedding_A.", -0.25),
         ("lora_embedding_A.a.b", -0.25),
         ("lora_magnitude_vector", -0.25),
@@ -405,13 +409,14 @@ def test_merge_command_weights_named_factors_and_bias(
     np.testing.assert_allclose(written[bias_key], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
 
 
+@pytest.mark.parametrize("second_name", ["my_adapter", "lora_A"])
 def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_name: str
 ) -> None:
     monkeypatch.chdir(tmp_path)
     pairs = [
         (f"{MODULE}.lora_A.{name}.weight", f"{MODULE}.lora_B.{name}.weight")
-        for name in ("default", "my_adapter")
+        for name in ("default", second_name)
     ]
     for folder, slot in (("a", 0), ("b", 1)):
         rank = slot + 1

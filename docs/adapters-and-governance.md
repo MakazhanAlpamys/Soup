@@ -841,8 +841,10 @@ scale each input's factors by `√cᵢ`: `--weights 0.7,0.3` keeps 0.7 and 0.3 o
 inputs' own deltas. Factors include `lora_A.weight`, `lora_B.weight`, `lora_embedding_A`
 and `lora_embedding_B`, and their named forms `lora_A.<name>.weight`,
 `lora_B.<name>.weight`, `lora_embedding_A.<name>` and `lora_embedding_B.<name>`.
-`<name>` is exactly one non-empty dot-separated segment. Other tensors, such as a
-DoRA magnitude vector, `lora_B.bias` or `lora_B.<name>.bias`, take `cᵢ` directly.
+`<name>` is exactly one non-empty dot-separated segment. If it is also a factor
+marker, the named spelling takes precedence: `lora_B.lora_A.weight` is B for the
+adapter named `lora_A`. Other tensors, such as a DoRA magnitude vector,
+`lora_B.bias` or `lora_B.<name>.bias`, take `cᵢ` directly.
 
 The same-rank path of `soup adapters arithmetic` uses the same factor rule. These
 factor-wise merges also add cross terms `√(cᵢcⱼ)·Bᵢ·Aⱼ` between inputs. For the exact
