@@ -57,8 +57,9 @@ def _log_tail(path: Path, count: int) -> tuple[list[bytes], int]:
     return list(tail), total
 
 
-def _referenced_pairs(iteration_lines: Iterable[bytes]) -> set[str]:
+def _referenced_pairs(iteration_lines: Iterable[bytes], keep_ids: set[str]) -> set[str]:
     referenced: set[str] = set()
+    seen_ids: set[str] = set()
     for line in iteration_lines:
         try:
             row = json.loads(line)
@@ -68,6 +69,12 @@ def _referenced_pairs(iteration_lines: Iterable[bytes]) -> set[str]:
             return {"*"}
         if not isinstance(row, dict):
             return {"*"}
+        iteration_id = row.get("iteration_id")
+        if not isinstance(iteration_id, str):
+            return {"*"}
+        if iteration_id not in keep_ids:
+            continue
+        seen_ids.add(iteration_id)
         dataset = row.get("dataset")
         path = dataset.get("path") if isinstance(dataset, dict) else None
         if isinstance(path, str):
@@ -75,6 +82,9 @@ def _referenced_pairs(iteration_lines: Iterable[bytes]) -> set[str]:
             prefix = ".soup-loops/pairs/"
             if normalized.startswith(prefix) and "/" not in normalized[len(prefix):]:
                 referenced.add(normalized[len(prefix):])
+    if not keep_ids.issubset(seen_ids):
+        # A retained run without a matching log row may still own a dataset we cannot name.
+        return {"*"}
     return referenced
 
 
@@ -145,11 +155,15 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
         if entry.name not in keep_ids:
             plan.append(PruneEntry(entry.as_posix(), "older than retained loop runs", True))
 
-    retained_iteration_lines = log_tails.get(DEFAULT_LAYOUT["iteration"], [])
-    retained_pairs = _referenced_pairs(
-        line for line in retained_iteration_lines
-        if _line_iteration_id(line) in keep_ids
-    )
+    iteration_log = Path(DEFAULT_LAYOUT["iteration"])
+    if iteration_log.is_file():
+        # Dataset references for retained runs may be older than the log tail that will
+        # remain after pruning. Scan the full current log before deciding what is unused.
+        enforce_under_cwd_and_no_symlink(str(iteration_log), "loop prune")
+        with iteration_log.open("rb") as handle:
+            retained_pairs = _referenced_pairs(handle, keep_ids)
+    else:
+        retained_pairs = {"*"} if keep_ids else set()
 
     # Preserve adapter folders used by the active/rollback state and those tied to the
     # retained iterations, as well as the newest N orphaned folders.
@@ -171,6 +185,10 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
             run_id = record.get("run_id") if isinstance(record, dict) else None
             if isinstance(run_id, str) and run_id:
                 keep_run_ids.add(run_id)
+        else:
+            # State or version history may name a run whose manifest is missing. Without
+            # that mapping, adapter and sidecar ownership cannot be established safely.
+            manifest_uncertain = True
     if state is not None:
         for adapter in (state.production_adapter, state.previous_production_adapter,
                         state.canary_adapter):
@@ -233,14 +251,6 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
         ):
             plan.append(PruneEntry(entry.as_posix(), "sidecar of an unretained run", False))
     return plan
-
-
-def _line_iteration_id(line: bytes) -> str | None:
-    try:
-        row = json.loads(line)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return row.get("iteration_id") if isinstance(row, dict) else None
 
 
 def execute_prune(plan: list[PruneEntry], *, keep_log_lines: int = DEFAULT_KEEP_LOG_LINES) -> int:
