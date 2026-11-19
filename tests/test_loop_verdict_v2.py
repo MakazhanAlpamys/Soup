@@ -1099,6 +1099,7 @@ class TestKeepAsideThenGraduation:
         world.state = replace(
             world.state,
             failed_train={**world.state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+            failed_stage={**world.state.failed_stage, "retry_after": "2026-01-01T00:00:00+00:00"},
         )
         retry = world.cycle()
         assert retry.run_id
@@ -1373,11 +1374,12 @@ class TestLineageCursor:
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
     # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16: failed_train,
-    # canary_override) and review 5b (2026-11-17: last_idle): at the very end, so a reader of an
+    # canary_override), review 5b (2026-11-17: last_idle), and the stage retry record: at the very
+    # end, so a reader of an
     # older loop.yaml is unaffected; they come last in this order
     LATER = [
         "pending_deploy", "last_failure", "canary_on_timeout_explicit", "failed_train",
-        "canary_override", "last_idle",
+        "canary_override", "last_idle", "failed_stage",
     ]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):
@@ -1595,7 +1597,7 @@ class TestGateFiles:
         run_id = world.records[-1].run_id
         directory = ".soup-loops/verdicts"
         assert [part.replace("\\", "/") for part in world.ship.argv] == [
-            sys.executable.replace("\\", "/"), "-m", "soup_cli.cli", "ship",
+            sys.executable.replace("\\", "/"), "-P", "-m", "soup_cli.cli", "ship",
             "--base", "org/base",
             "--adapter", f".soup-loops/adapters/{run_id}",
             "--task-eval", "tasks.jsonl",
@@ -1970,6 +1972,76 @@ class TestGateModule:
 
         assert loop_gate.clean_corrections(data["corrections"]) is None
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ("corrections", "p_value"),
+            ("corrections", "scoring", "threshold"),
+            ("held_out", "p_value"),
+            ("held_out", "scoring", "threshold"),
+            ("held_out", "style", "p_value"),
+        ],
+    )
+    @pytest.mark.parametrize("value", [10**400, -(10**400), 2, True, float("nan"),
+                                       float("inf"), float("-inf")])
+    def test_invalid_fractions_drop_only_the_affected_evidence(self, path, value):
+        data = gate_output("DON'T SHIP", canary_decides=True)
+        data["held_out"]["style"] = {
+            "preferred_new": 1, "preferred_old": 0, "n": 1, "p_value": 0.5,
+        }
+        obj = data
+        for key in path[:-1]:
+            obj = obj[key]
+        obj[path[-1]] = value
+
+        check = (
+            loop_gate.check_corrections if path[0] == "corrections" else loop_gate.check_held_out
+        )
+        dotted = ".".join(("verdict", *path))
+        message = f"{dotted} must be a number in [0, 1] or null"
+        with pytest.raises(ValueError, match=rf"^{re.escape(message)}$"):
+            check(data[path[0]])
+        found = loop_gate.read_gate_result(data, "DON'T SHIP")
+        assert found.canary_decides is True
+        if path[0] == "corrections":
+            assert loop_gate.clean_corrections(data["corrections"]) is None
+            assert found.corrections is None
+            assert found.held_out == data["held_out"]
+        elif "style" in path:
+            expected = {k: v for k, v in data["held_out"].items() if k != "style"}
+            assert loop_gate.clean_held_out(data["held_out"]) == expected
+            assert found.held_out == expected
+            assert found.corrections == data["corrections"]
+        else:
+            assert loop_gate.clean_held_out(data["held_out"]) is None
+            assert found.held_out is None
+            assert found.corrections == data["corrections"]
+
+    @pytest.mark.parametrize("value", [0, 0.5, 1, None])
+    @pytest.mark.parametrize(
+        "path",
+        [("corrections", "p_value"), ("corrections", "scoring", "threshold"),
+         ("held_out", "p_value"), ("held_out", "scoring", "threshold"),
+         ("held_out", "style", "p_value")],
+    )
+    def test_valid_fractions_keep_their_values_and_types(self, path, value):
+        data = gate_output("DON'T SHIP", canary_decides=True)
+        data["held_out"]["style"] = {
+            "preferred_new": 1, "preferred_old": 0, "n": 1, "p_value": 0.5,
+        }
+        obj = data
+        for key in path[:-1]:
+            obj = obj[key]
+        obj[path[-1]] = value
+        result = loop_gate.read_gate_result(data, "DON'T SHIP")
+        assert result.canary_decides is True
+        assert result.corrections == data["corrections"]
+        assert result.held_out == data["held_out"]
+        obj = result.corrections if path[0] == "corrections" else result.held_out
+        for key in path[1:]:
+            obj = obj[key]
+        assert type(obj) is type(value)
+
     def test_a_judge_scoring_with_its_template_is_accepted(self):
         data = gate_output()
         data["held_out"]["scoring"] = {
@@ -1986,7 +2058,7 @@ class TestGateModule:
         found = loop_gate.clean_held_out(data["held_out"])
 
         assert "style" not in found and found["better"] == 3
-        with pytest.raises(ValueError, match="style"):
+        with pytest.raises(ValueError, match=r"^verdict\.held_out\.style lacks "):
             loop_gate.check_held_out(data["held_out"])
 
 

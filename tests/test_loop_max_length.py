@@ -243,8 +243,9 @@ class TestParent:
         assert REAL_MEASURE("org/base", "d.jsonl", "sft") == (40, 3)
 
         argv, kwargs = calls[0]
-        assert argv[1] == "-c" and argv[2] == lml.CHILD_SCRIPT
-        assert argv[3:] == ["org/base", "d.jsonl", "sft"]
+        # "-P": the child's sys.path never holds the project directory
+        assert argv[1:4] == ["-P", "-c", lml.CHILD_SCRIPT]
+        assert argv[4:] == ["org/base", "d.jsonl", "sft"]
         assert "'', '.'" in lml.CHILD_SCRIPT  # the working directory is dropped from sys.path
         assert kwargs["stdin"] == subprocess.DEVNULL and "shell" not in kwargs
         assert kwargs["timeout"] == lml.CHILD_TIMEOUT_S

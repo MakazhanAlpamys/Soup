@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from soup_cli.commands._common import refuse_nan
 from soup_cli.config.loader import load_config
 from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.sweep_config import load_sweep_yaml
@@ -98,10 +99,15 @@ def sweep(
         "--dry-run",
         help="Show planned runs without executing",
     ),
-    early_stop: float = typer.Option(
+    early_stop: Optional[float] = typer.Option(
         None,
         "--early-stop",
-        help="Stop early if run's loss exceeds best loss by this factor (e.g. 1.5 = 50% worse)",
+        min=1.0,
+        callback=refuse_nan,
+        help=(
+            "Stop early if run's loss exceeds best loss by this factor, 1.0 or more "
+            "(e.g. 1.5 = 50% worse). Unset: no early stop."
+        ),
     ),
     yes: bool = typer.Option(
         False,

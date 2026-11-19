@@ -1829,7 +1829,8 @@ def _adapter_scope(
     PeftModel under that lock at any moment, and a generation running
     outside it would see the model half wrapped. ``model_getter`` re-reads
     the model once the lock is held: a request that queued behind that first
-    load holds the unwrapped object, which has no ``disable_adapter``.
+    load holds the unwrapped object, which has no ``disable_adapter``. The scope
+    yields the effective model for the caller to generate with.
 
     The lock spans the whole generation because the PeftModel is process-global
     and ``set_adapter`` mutates shared state — two concurrent requests on
@@ -1839,7 +1840,7 @@ def _adapter_scope(
     generation and released by the thread that took it, however the client leaves.
     """
     if lock is None or (not names and not always_lock):
-        yield
+        yield model
         return
     # An explicit empty string is the internal sentinel for the unadapted base.
     # Test identity rather than truthiness so it overrides a manual full cutover.
@@ -1849,13 +1850,13 @@ def _adapter_scope(
             model = model_getter()
         if name and name in names and hasattr(model, "set_adapter"):
             model.set_adapter(name)
-            yield
+            yield model
         elif hasattr(model, "disable_adapter"):
             # No (or unknown) adapter selected → base model for this request.
             with model.disable_adapter():
-                yield
+                yield model
         else:
-            yield
+            yield model
 
 
 def _effective_adapter(model, names, requested, active) -> Optional[str]:
@@ -2864,6 +2865,7 @@ def _create_app(
                     adapter_lock=_generation_lock,
                     adapter_names=_peft_adapter_names,
                     always_lock=_adapter_root is not None,
+                    model_getter=lambda: model_obj,
                     requested_adapter=requested_adapter,
                     active_adapter=active_adapter,
                     canary_outcome=(
@@ -2929,14 +2931,14 @@ def _create_app(
                             requested_adapter, active_adapter,
                             always_lock=_adapter_root is not None,
                             model_getter=lambda: model_obj,
-                        ):
+                        ) as selected_model:
                             (
                                 response_text,
                                 prompt_tokens,
                                 completion_tokens,
                                 finish_reason,
                             ) = _generate_response(
-                                model_obj, tokenizer, messages,
+                                selected_model, tokenizer, messages,
                                 max_tokens=max_tokens,
                                 temperature=request.temperature,
                                 top_p=request.top_p,
@@ -3781,6 +3783,7 @@ def _stream_response(
     trace_adapter=None, canary_bucket=None,
     stop=(),
     frames=None,
+    model_getter=None,
 ):
     """Generator that yields SSE chunks for streaming responses.
 
@@ -3860,9 +3863,10 @@ def _stream_response(
                     model, adapter_lock, adapter_names,
                     requested_adapter, active_adapter,
                     always_lock=always_lock,
-                ):
+                    model_getter=model_getter,
+                ) as selected_model:
                     return _generate_response(
-                        model, tokenizer, messages,
+                        selected_model, tokenizer, messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
                         top_p=top_p,
