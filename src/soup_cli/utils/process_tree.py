@@ -15,8 +15,8 @@ removed.
   (the job does not allow breakaway), ``TerminateJobObject`` ends all of them, and closing
   the handle ends any that are left.
 
-Best-effort, like the sandbox itself: a process that calls ``setsid`` / ``setpgid`` leaves
-the group and is out of the POSIX group's reach, and a process the child starts in the few
+Best-effort, like the sandbox itself: a process that moves itself into another process
+group is out of the POSIX group's reach, and a process the child starts in the few
 milliseconds between ``CreateProcess`` and the job assignment (before the interpreter has
 run any of the caller's code) is not in the job. On POSIX the child no longer shares the
 terminal's foreground group, so Ctrl-C and a terminal hangup do not reach it directly: an
