@@ -145,7 +145,7 @@ def test_diff_prompts_and_replies_are_literal_but_generation_and_jsonl_keep_orig
 def test_diff_model_titles_summary_and_output_receipt_keep_literal_paths(
     printed, monkeypatch, value, shown
 ):
-    paths = [Path(prefix + _filename(value)) for prefix in ["a-", "b-"]]
+    paths = [Path(parent) / _filename(value) for parent in ("a", "b")]
     output = Path("out-" + _filename(value) + ".jsonl")
     for path in paths:
         path.mkdir(parents=True)
@@ -167,8 +167,9 @@ def test_diff_model_titles_summary_and_output_receipt_keep_literal_paths(
     for label, path in zip(["A", "B"], paths):
         displayed = str(path).replace(_filename(value), _filename(shown))
         basename = path.name.replace(_filename(value), _filename(shown))
-        # One occurrence in the plan and one in the response-panel title.
-        assert text.count(f"Model {label}: {displayed}") == 2
+        # The plan uses the full path. The response-panel title uses its basename.
+        assert text.count(f"Model {label}: {displayed}") == 1
+        assert text.count(f"Model {label}: {basename}") == 1
         assert f"Model {label} ({basename})" in text
     assert f"Results saved to {str(output).replace(_filename(value), _filename(shown))}" in text
     assert "<empty>" in text
