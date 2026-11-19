@@ -202,14 +202,17 @@ def _factor_coeff(name: str, c: float) -> float:
     self (diagonal) term of the reconstruction is exactly ``c·B@A``
     (``√|c| · sign(c)√|c| = c``). Mirrors PEFT's ``combination_type='linear'``
     task-arithmetic. Non-LoRA tensors (biases / direct deltas) scale linearly
-    by ``c``.
+    by ``c``, including PEFT's ``lora_B.bias`` (``lora_bias=True``), which is
+    added once and not multiplied by ``lora_A``.
+
+    A factor is what :func:`_lora_role` calls one, so this path and the
+    ``--rank`` concat path agree on every name.
     """
-    lname = name.lower()
-    if "lora_a" in lname or "lora_embedding_a" in lname:
-        return math.sqrt(abs(c))
-    if "lora_b" in lname or "lora_embedding_b" in lname:
-        return math.copysign(math.sqrt(abs(c)), c)
-    return float(c)
+    role = _lora_role(name)
+    if role is None:
+        return float(c)
+    magnitude = math.sqrt(abs(c))
+    return magnitude if role[1] == "A" else math.copysign(magnitude, c)
 
 
 def merge_task_arithmetic(
