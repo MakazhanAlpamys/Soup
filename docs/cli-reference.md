@@ -3735,7 +3735,7 @@ Usage: `soup sweep [OPTIONS]`
 | `--max-runs` | integer |  |  | Max number of runs (useful for random strategy) |
 | `--name`, `-n` | text |  |  | Sweep experiment name prefix |
 | `--dry-run` | flag | off |  | Show planned runs without executing |
-| `--early-stop` | float |  |  | Stop early if run's loss exceeds best loss by this factor (e.g. 1.5 = 50% worse) |
+| `--early-stop` | float, at least 1.0 |  |  | Stop early if run's loss exceeds best loss by this factor, 1.0 or more (e.g. 1.5 = 50% worse). Unset: no early stop. |
 | `--yes`, `-y` | flag | off |  | Skip confirmation prompt |
 
 ## `soup tokenizer`
