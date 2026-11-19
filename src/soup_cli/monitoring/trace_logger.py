@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_under_cwd, open_no_follow
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,12 @@ _SECRET_RE = re.compile(
     # silently consumed (e.g. `Use Bearer abc12345xyz.` keeps the period).
     r"(?:hf_[A-Za-z0-9]{8,}"
     r"|sk-[A-Za-z0-9_-]{16,}"
+    # `Bearer <JWT>` is tried first and goes whole: the plain alternative below stops at the
+    # first dot and, being the leftmost, would leave the payload and the signature in the log.
+    # The condition is the JWT alternative's own (below), so a `Bearer` that is not
+    # followed by a token of that shape is handled exactly as before.
+    r"|Bearer\s+(?=[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})"
+    r"[A-Za-z0-9_-]*?eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
     r"|Bearer\s+[A-Za-z0-9_\-]{8,}"
     # GitHub tokens: classic (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`) and fine-grained.
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
@@ -75,8 +81,17 @@ _SECRET_RE = re.compile(
     r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
     # Slack tokens (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`).
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"
-    # JSON Web Tokens: three base64url parts, the first two starting `eyJ` ({"...).
-    r"|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    # JSON Web Tokens: three base64url parts, the first two starting `eyJ` ({"...). The old
+    # pattern started at every `eyJ`, and on a text made of `eyJ` repeated each start consumed the
+    # rest of the run and backtracked: quadratic (240,000 characters took 36 s, and `re` holds the
+    # GIL, so the whole server stalled). Now a match starts only at the left edge of a base64url
+    # run (the look-behind), and a look-ahead checks once per run that `.eyJ...` and a third part
+    # follow, so a run that cannot be a token is scanned once and given up. The lazy prefix then
+    # walks to the first `eyJ` that has a token's shape; characters glued to the token
+    # (`x<token>`, `id123<token>`) go with it, as they did before. Linear: four times the text
+    # takes about four times as long.
+    r"|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})"
+    r"[A-Za-z0-9_-]*?eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
     # PEM private keys: the block, or from the header on when the footer is missing. The
     # body is capped so a header without a footer cannot make the scan quadratic.
     r"|-----BEGIN [A-Z ]{0,24}PRIVATE KEY-----[A-Za-z0-9+/=\s]{0,16384}"
@@ -92,7 +107,14 @@ def _redact_secrets(text: str) -> str:
     """Replace common token shapes with ``<redacted>``."""
     if not isinstance(text, str):
         return text
-    return _SECRET_RE.sub("<redacted>", text)
+    once = _SECRET_RE.sub("<redacted>", text)
+    if once == text:
+        return text
+    # Second pass: a token that ends inside a run of base64url characters (a `ghp_` or `hf_` token
+    # followed by `_` or `-` and a JWT) leaves the rest of the run without the left edge the JWT
+    # alternative needs; the placeholder gives it one. Linear too, and only when the first pass
+    # found something.
+    return _SECRET_RE.sub("<redacted>", once)
 
 
 def _redact_value(value: Any) -> Any:
@@ -128,9 +150,16 @@ def open_private_append(path: "Path | str") -> Any:
 
     The mode applies to a file this call creates; a log that already exists keeps the
     permissions it has (a ``chmod`` of someone else's file is not this function's call).
+
+    The file is opened without following a link: a symlink or reparse point at ``path``, a
+    linked parent directory (under the working directory) or a hard link raises ``OSError``
+    (``ELOOP`` / ``EMLINK``) naming the path, so a link put there after the writer resolved its
+    log cannot send the lines to another file.
     """
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-    fd = os.open(os.fspath(path), flags, LOG_FILE_MODE)
+    fd = open_no_follow(
+        os.fspath(path), flags, LOG_FILE_MODE, check_parent=True, refuse_hardlink=True
+    )
     try:
         return os.fdopen(fd, "ab")
     except Exception:

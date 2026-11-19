@@ -8,12 +8,12 @@ carry the token. ``app.js`` already reads ``?token=`` and strips it.
 from __future__ import annotations
 
 import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
-from tests.conftest import strip_ansi
+from tests.conftest import InlineThread, strip_ansi
 
 pytest.importorskip("fastapi")
 pytest.importorskip("uvicorn")
@@ -28,12 +28,6 @@ def _collapse(text: str) -> str:
     return re.sub(r"\s+", " ", strip_ansi(text))
 
 
-def _immediate_thread(target=None, daemon=None, **kwargs):
-    thread = MagicMock()
-    thread.start.side_effect = lambda: target() if target else None
-    return thread
-
-
 def _run_ui(*extra: str) -> tuple[object, list[str]]:
     """Invoke ``soup ui`` with the browser thread run inline, so any open() is recorded."""
     opened: list[str] = []
@@ -45,7 +39,7 @@ def _run_ui(*extra: str) -> tuple[object, list[str]]:
     with (
         patch("uvicorn.run"),
         patch("webbrowser.open", side_effect=_open),
-        patch("threading.Thread", side_effect=_immediate_thread),
+        patch("threading.Thread", InlineThread),
         patch("time.sleep"),
     ):
         result = CliRunner().invoke(

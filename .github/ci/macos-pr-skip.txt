@@ -1,0 +1,41 @@
+# Test files the macOS PULL-REQUEST cell of CI leaves to the Linux and Windows cells.
+# Read by the step "Leave the heavy platform-neutral test files to the other cells" of the `test`
+# job in .github/workflows/ci.yml, which turns each line into `--ignore=<file>` for pytest, on
+# `test (macos-latest, ...)` of a pull request run and on no other cell. The nightly run, the
+# release branch and a manual dispatch run every one of these files on macOS.
+#
+# A line is ONE top-level test file name, `tests/test_<name>.py`: no option, no glob, no path
+# below tests/. A file belongs here only if it takes a minute or more on macOS AND carries no
+# platform or process-model token (`sys.platform`, `darwin`, `mlx`, `mps`, `subprocess`,
+# `spawn`, `symlink`, ...: the two patterns in tests/test_ci_macos_pr_skip_list.py). Keep the
+# list sorted, at most 40 lines. Why and how it was chosen: that test file's docstring.
+#
+# Measured 2026-11-18 on commit 14be6a450, one green job per OS (macOS: 3 xdist workers, 88.1
+# minutes; Linux: 4 workers, 25.6 minutes): these files took 125.6 of the macOS cell's 262.3
+# worker-minutes and 17.4 of the Linux cell's 100.9. Re-measure before adding a line.
+tests/test_classifier_asr_fp32_master_weights.py
+tests/test_deepseek_v3_streaming_preference.py
+tests/test_expert_stream_two_read_contract.py
+tests/test_grpo_stability_callback.py
+tests/test_input_grad_hook_growth.py
+tests/test_ipo_streaming.py
+tests/test_issue1011_streamed_save_guard.py
+tests/test_issue1049_untied_streamed_preference.py
+tests/test_issue1174_head_prefetch_after_lookup.py
+tests/test_issue1225_online_dpo_unranked_pairs.py
+tests/test_issue1266_mole_gate_fp32_master.py
+tests/test_issue1391_ppo_real_step.py
+tests/test_issue1448_train_profile_trace.py
+tests/test_issue1675_trainer_init_attrs.py
+tests/test_issue265_xcodec2_audio_contract.py
+tests/test_issue308_callback_subclass.py
+tests/test_issue341_seed_and_fullft.py
+tests/test_issue379_pincost_main.py
+tests/test_issue633_ansi_in_highlighted_output.py
+tests/test_issue724_loraplus_optimizer.py
+tests/test_issue796_gradient_checkpointing_tiers.py
+tests/test_issue799_autopilot_unwired_gates.py
+tests/test_moe_lora_string_targets.py
+tests/test_ppo_gradient_checkpointing.py
+tests/test_ppo_wrapper_checkpointing.py
+tests/test_rewind_hf.py

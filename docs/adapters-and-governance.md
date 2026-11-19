@@ -393,7 +393,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
 # daemon itself at each watch cycle, without stopping. A foreground watch rotates
 # nothing. The PID file is created exclusively before the daemon is spawned, so two --detach started at once cannot both win. While the PID file names a live process a second --detach is
-# refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
+# refused (exit 2, naming the pid and the file), and so is a foreground `soup loop watch`
+# (it only reads the file and never writes it, so two foreground watches in two terminals are
+# not guarded against each other); a stale file, whose process is gone or
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
 # when it exits normally, but only if the file still holds its own pid; a killed child
@@ -401,9 +403,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # (POSIX) or process group without a console (Windows), with stdin on the null device, so
 # closing the terminal or Ctrl+C there does not reach it. There is no `stop` command yet.
 # A loop.yaml that is gone or invalid stops the daemon with a reason in its log and exit 1; a
-# permission denial or a locked file is retried next cycle. The commands that write loop.yaml
-# (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
-# is invalid (exit 2). The train and ship children write their output to
+# permission denial or a locked file is retried next cycle. The status, pause, resume, set,
+# canary, and rollback commands print one diagnostic and exit 1 if a loop.yaml read or update
+# error such as permission denial persists after any I/O retries. A writer lock timeout still
+# exits 1; a missing state file or invalid state or setting still exits 2. The train and ship
+# children write their output to
 # .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
 # train_log, verify_log); only the last lines go into a failure note. On Windows every child
 # the loop starts (train, ship, and the short probes for free VRAM and for the tokenizer) gets
@@ -417,6 +421,16 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
 # of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
 # train_retry row.
+# A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
+# directory that went away) does not stop the daemon. The cycle is recorded as failed with the
+# stage's name and the exception's type in last_failure and the iteration, the traceback goes to
+# .soup/loop.log, and the same waits apply to that stage (5 minutes, 30 minutes, then held until
+# `soup loop resume`); the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy
+# that raises is retried like a refused deploy (three attempts). Ctrl+C and SystemExit still stop
+# the daemon.
+# Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
+# so a file in the project directory named like a library is not imported by it, and the loop's
+# JSONL logs are created owner-only (0600) on POSIX; on Windows the folder's permissions apply.
 soup loop watch --detach
 
 # A poll that finds nothing to train (not enough new feedback, a wait, a hold) writes no
@@ -440,7 +454,10 @@ soup loop status
 # answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
 # it and it becomes the router's stable side), MAJOR withdraws it and production
 # never changed. A promotion is written in this order: the server switch (if the
-# server refuses, nothing is recorded as promoted), then .soup/loop.yaml (atomic, under
+# server refuses, nothing is recorded as promoted and the cycle ends there: nothing is
+# harvested or trained on top of the refused canary, no counter moves, no data cursor
+# advances, `soup loop status` shows the refusal as `last_failure` and the next poll asks
+# the server again), then .soup/loop.yaml (atomic, under
 # the lock, at the moment of the promotion, not when the cycle ends: the cycle goes on
 # into the next harvest, train and ship), then versions.jsonl and the iteration's
 # closing line. loop.yaml decides which version is production. A watch that was
@@ -551,7 +568,7 @@ quality verdict is `MAJOR` when the canary's negative share exceeds stable's by 
 five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
 false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
 `OK` at the minimum means no significant regression was found, not that the canary is
-proven equal, and a gap of five points on a few dozen ratings is often chance. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
+proven equal, and a gap of five points on a few dozen ratings is often chance. **Feedback text is training data:** the edits that reach the loop through `soup serve --feedback-log` are trained on as they are and are what the loop-v2 gate checks the candidate against; whoever can post to `POST /v1/feedback` steers the next model, which on a loopback server without `--tool-auth-token` is every local user and process. On a shared machine start `soup serve` with `--tool-auth-token`, and see [Serving and export](serving-and-export.md#response-ids-and-feedback) for what the loop does and does not check before it trains on feedback. Once `--canary-max-wait` is over, `--canary-on-timeout` decides whatever the count (without a feedback log too): `errors-only` lets the request errors alone decide, with however many answers there are, and says `promoted on timeout` with the counts (a canary with no answers at all is withdrawn as `timeout_no_answers` unless `errors-only` was given explicitly); `rollback` withdraws the canary. At most 3 rated answers of one `conversation_id` count per side (the id is chosen by the client, so one conversation cannot supply the sample), and a request that fails input validation (a 4xx) is not counted as a canary failure, only a server-side generation error is. **Known limit:** a client that can chat can still influence the canary within those caps: with many conversation ids it can route requests to either side and rate them, so on an endpoint exposed to untrusted clients the canary is not adversary-proof. With fewer
 ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
 canary against). The two verdicts
 combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is

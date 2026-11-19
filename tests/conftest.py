@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,24 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 def strip_ansi(text: "str | None") -> str:
     """Return ``text`` with SGR escape sequences removed."""
     return _ANSI_ESCAPE.sub("", text or "")
+
+
+class InlineThread(threading.Thread):
+    """A ``threading.Thread`` whose ``start()`` runs its target on the calling thread.
+
+    For a test that has to see a side effect of a background thread (``soup ui`` opening the
+    browser) without waiting for one: ``patch("threading.Thread", InlineThread)``.
+
+    It subclasses the real class on purpose. While the patch is live, anything else that builds
+    a thread reaches ``Thread.__init__`` through that name: ``threading.Timer.__init__`` does,
+    and a leftover background timer from an earlier test (a canary buffer retrying a failed
+    flush) builds one on its own thread. A ``MagicMock`` standing there has its ``side_effect``
+    cleared by that call from Python 3.13 on (``unittest.mock`` stopped reading the properties
+    of the spec, so the call no longer raises), and the test's own thread then never runs.
+    """
+
+    def start(self) -> None:
+        self.run()
 
 
 #: Why a ``requires_symlink`` test was skipped. It names the account's missing capability, not
