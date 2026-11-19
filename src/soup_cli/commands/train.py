@@ -209,21 +209,28 @@ def _format_duration_display(result: dict) -> str:
 _OUTPUT_PLACEHOLDER = "<output directory>"
 
 
-def _completion_commands(output_dir: object, merge_note: str | None = None) -> str:
+def _completion_commands(
+    output_dir: object,
+    merge_note: str | None = None,
+    *,
+    windows_separators: bool | None = None,
+) -> str:
     """The follow-up commands of the completion panel, as Rich markup.
 
-    ``output_dir`` is the config's ``output``, and a shared ``soup.yaml`` need not have
-    been written by whoever runs it. The commands are for pasting into a shell of unknown
-    kind, so the path goes through ``paste_arg`` (same text for POSIX shells, PowerShell
-    and cmd.exe) and, when no such spelling exists, is replaced by a placeholder with a
-    one-line explanation. ``for_terminal`` then keeps Rich markup and control characters
-    in the path from reaching the console. ``merge_note`` replaces the ``soup merge``
-    line when the output needs no merge.
+    ``output_dir`` is the config's ``output``. The commands are for pasting into a shell of
+    unknown kind, so the path goes through ``paste_arg`` (same text for POSIX shells,
+    PowerShell and cmd.exe) and, when no such spelling exists, is replaced by a
+    placeholder with a one-line explanation. ``for_terminal`` then keeps Rich markup and
+    control characters in the path from reaching the console. ``merge_note`` replaces the
+    ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
+    this host spells paths with backslashes) writes a nested path with forward slashes.
     """
     from soup_cli.utils.paths import paste_arg
     from soup_cli.utils.terminal import for_terminal
 
-    spelled = paste_arg(output_dir)
+    if windows_separators is None:
+        windows_separators = os.sep == "\\"
+    spelled = paste_arg(output_dir, windows_separators=windows_separators)
     shown = for_terminal(spelled) if spelled is not None else _OUTPUT_PLACEHOLDER
     merge_line = (
         merge_note
@@ -1728,13 +1735,15 @@ def train(
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
+        from soup_cli.utils.terminal import for_terminal as _plan_text
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
-                f"[bold]Run:[/] {markup_escape(plan.run_command)}",
+                f"Output:   [bold]{_plan_text(plan.output_dir)}[/]\n\n"
+                f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )

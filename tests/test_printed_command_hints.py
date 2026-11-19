@@ -1,7 +1,7 @@
-"""Follow-up commands Soup prints must not hand a config's ``output`` to a shell.
+"""Follow-up commands Soup prints repeat a configured path as a name, in every shell.
 
-Covers the two places a value from a (possibly foreign) ``soup.yaml`` is printed inside a
-command that a person is told to run:
+Covers the two places a configured path is printed inside a command that a person is
+told to run:
 
 * the "Run:" line of a cloud plan (``plan_modal_run`` / ``plan_lambda_run``), whose
   stub path is quoted the way the RunPod plan already quotes it;
@@ -42,8 +42,8 @@ class TestCloudRunCommandQuotesTheStubPath:
         [
             ("soup_modal_app.py", "soup_modal_app.py"),
             ("my stub.py", "'my stub.py'"),
-            ("stub$(touch X).py", "'stub$(touch X).py'"),
-            ("stub;touch X.py", "'stub;touch X.py'"),
+            ("stub$(cmd).py", "'stub$(cmd).py'"),
+            ("stub;cmd.py", "'stub;cmd.py'"),
             ("stub&calc.py", "'stub&calc.py'"),
         ],
     )
@@ -65,8 +65,8 @@ class TestCloudRunCommandQuotesTheStubPath:
         [
             ("soup_lambda_app.py", "soup_lambda_app.py"),
             ("my stub.py", "'my stub.py'"),
-            ("stub$(touch X).py", "'stub$(touch X).py'"),
-            ("stub;touch X.py", "'stub;touch X.py'"),
+            ("stub$(cmd).py", "'stub$(cmd).py'"),
+            ("stub;cmd.py", "'stub;cmd.py'"),
             ("stub&calc.py", "'stub&calc.py'"),
         ],
     )
@@ -108,10 +108,14 @@ def _plain(markup: str) -> str:
 
 
 class TestTrainingCompleteCommands:
-    def _commands(self, output_dir, merge_note=None) -> str:
+    def _commands(self, output_dir, merge_note=None, windows_separators=False) -> str:
         from soup_cli.commands.train import _completion_commands
 
-        return _plain(_completion_commands(output_dir, merge_note))
+        return _plain(
+            _completion_commands(
+                output_dir, merge_note, windows_separators=windows_separators
+            )
+        )
 
     def test_plain_output_is_repeated_as_it_was_before(self):
         shown = self._commands("./output")
@@ -131,9 +135,9 @@ class TestTrainingCompleteCommands:
     @pytest.mark.parametrize(
         "output_dir",
         [
-            "out$(touch X)",
-            "out`touch X`",
-            'out"; touch X; echo "',
+            "out$(cmd)",
+            "out`cmd`",
+            'out"; cmd; echo "',
             "out%COMSPEC%",
             "out!x",
             "out\\dir",
@@ -170,12 +174,69 @@ class TestTrainingCompleteCommands:
         assert "soup merge --adapter" not in shown
         assert "soup export --model ./output" in shown
 
+    def test_a_nested_windows_path_is_repeated_with_forward_slashes(self):
+        shown = self._commands("output\\sub", windows_separators=True)
+
+        assert "soup chat --model output/sub" in shown
+        assert "soup merge --adapter output/sub" in shown
+        assert "<output directory>" not in shown
+
+    def test_the_same_path_is_left_out_where_a_backslash_is_a_name_character(self):
+        shown = self._commands("output\\sub", windows_separators=False)
+
+        assert "soup chat --model <output directory>" in shown
+
     def test_panel_builds_its_commands_through_the_helper(self):
-        """The "Training Complete!" panel in ``train()`` must not format the path itself."""
+        """The "Training Complete!" panel in ``train()`` calls the helper with the run's
+        output directory and does not format the path itself."""
+        import ast
+
         import soup_cli.commands.train as train_module
 
         source = Path(train_module.__file__).read_text(encoding="utf-8")
         assert "--model {result['output_dir']}" not in source
         assert "--adapter {result['output_dir']}" not in source
         assert "Output: [bold]{result['output_dir']}" not in source
-        assert "_completion_commands(" in source
+        train_function = next(
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "train"
+        )
+        calls = [
+            node
+            for node in ast.walk(train_function)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_completion_commands"
+        ]
+        assert len(calls) == 1
+        assert ast.unparse(calls[0].args[0]) == "result['output_dir']"
+
+
+class TestCloudPlanPanel:
+    def test_the_plan_panel_does_not_print_control_characters_of_the_output(
+        self, tmp_path, monkeypatch
+    ):
+        import yaml
+
+        from soup_cli.cli import app
+        from soup_cli.config.loader import load_config
+        from tests.conftest import make_cli_runner
+
+        monkeypatch.chdir(tmp_path)
+        runner = make_cli_runner()
+        init = runner.invoke(app, ["init", "--template", "chat", "--output", "soup.yaml"])
+        assert init.exit_code == 0, init.output
+        cfg = load_config(Path("soup.yaml"))
+        cfg.data.train = "teknium/OpenHermes-2.5"
+        cfg.output = "out\x1b[2Jx"
+        Path("soup.yaml").write_text(
+            yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+        )
+
+        result = runner.invoke(
+            app, ["train", "--config", "soup.yaml", "--cloud", "modal", "--gpu", "a100"]
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "\x1b[2J" not in result.output
+        assert "out" in result.output

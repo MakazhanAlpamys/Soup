@@ -17,6 +17,7 @@ import ntpath
 import os
 import stat
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -49,17 +50,18 @@ _PASTE_BARE_PUNCTUATION = "_./:+-"
 _PASTE_NEVER_QUOTED = '"$`\\%!'
 
 
-def paste_arg(value: object) -> Optional[str]:
+def paste_arg(value: object, *, windows_separators: bool = False) -> Optional[str]:
     """Spell ``value`` as ONE argument of a command line that a person will paste.
 
     Soup prints follow-up commands (``modal volume get ... <dir>``, ``soup chat --model
-    <dir>``) whose argument comes from a ``soup.yaml`` that somebody else may have
-    written. Unquoted, ``out$(cmd)`` or ``out&cmd`` is run by the shell it is pasted
-    into, and that shell is not known here: ``shlex.quote`` suits POSIX shells only
-    (cmd.exe does not treat single quotes as quotes) and ``subprocess.list2cmdline``
-    leaves ``&`` bare. So the result reads the same in every shell, or is ``None``:
+    <dir>``) with a path taken from the configuration. The shell the line is pasted into
+    is not known here, and a name with shell syntax in it must be read as a name in every
+    shell: ``shlex.quote`` suits POSIX shells only (cmd.exe does not treat single quotes
+    as quotes) and ``subprocess.list2cmdline`` leaves ``&`` bare. So the result reads the
+    same in every shell, or is ``None``:
 
-    * letters, digits (of any script) and ``_ . / : + -``: returned as is;
+    * letters, digits and combining marks (of any script) and ``_ . / : + -``: returned
+      as is;
     * those plus a space or any other printable ASCII except ``" $ ` \\ % !``: wrapped in
       double quotes, inside which none of them is special in any of those shells;
     * anything else (a control character, ``"``, ``$``, the backtick, a backslash,
@@ -68,9 +70,15 @@ def paste_arg(value: object) -> Optional[str]:
       placeholder instead of repeating the value.
 
     A value starting with ``-`` gets ``./`` in front so the program cannot read it as an
-    option. An empty value gives ``None``.
+    option. An empty value gives ``None``. With ``windows_separators`` (a Windows host,
+    where ``str(Path(...))`` spells a nested path with backslashes) every ``\\`` is
+    written as ``/`` first: every Windows shell accepts it in an argument, and it is not
+    special in any of them; on other hosts a backslash is a name character and stays a
+    reason for the placeholder.
     """
     text = str(value)
+    if windows_separators:
+        text = text.replace("\\", "/")
     if not text:
         return None
     if text.startswith("-"):
@@ -84,7 +92,7 @@ def paste_arg(value: object) -> Optional[str]:
                 bare = False
                 continue
             return None
-        if char.isalnum():
+        if char.isalnum() or unicodedata.category(char).startswith("M"):
             continue
         return None
     return text if bare else f'"{text}"'

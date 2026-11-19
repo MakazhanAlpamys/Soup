@@ -56,6 +56,7 @@ from soup_cli.cloud._common import (
     validate_path_shape as _validate_path_shape,
 )
 from soup_cli.utils.paths import paste_arg, quote_path
+from soup_cli.utils.terminal import strip_control
 
 SUPPORTED_CLOUDS: frozenset[str] = frozenset({"modal"})
 
@@ -108,13 +109,16 @@ def render_modal_stub(
     output_dir: str,
     soup_version: str,
     run_name: str | None = None,
+    windows_separators: bool | None = None,
 ) -> str:
     """Render the Modal app stub for ``config_yaml`` (v0.71.18 #16).
 
     ``config_yaml`` is base64-embedded as data (no interpolation). ``gpu``
     is validated + mapped to Modal's name. ``run_name`` names the run's
     directory on the ``soup-outputs`` volume (default: ``soup-<12 hex>``) and
-    must match ``[a-z0-9][a-z0-9-]{0,62}``. Returns the stub source text.
+    must match ``[a-z0-9][a-z0-9-]{0,62}``. ``windows_separators`` (default: this host
+    spells paths with backslashes) lets a nested ``output_dir`` written with backslashes
+    appear with forward slashes in the printed retry command. Returns the stub source text.
     """
     if run_name is None:
         run_name = f"soup-{secrets.token_hex(6)}"
@@ -145,12 +149,14 @@ def render_modal_stub(
     # repr()-embed so a stray quote / backslash cannot break out of the literal
     # (defence-in-depth on top of the _VERSION_RE allowlist above).
     pip_spec = f"soup-cli[train]=={soup_version}"
-    # The retry hint is a command a person pastes into a shell of unknown kind, and
-    # output_dir came from a soup.yaml that may have been written by someone else:
-    # it is spelled for every shell by paste_arg, or replaced by a placeholder, and
-    # printed on a line of its own. The text outside that line shows the path
-    # quote_path-escaped. All of it is decided here, so the stub carries no logic.
-    destination = paste_arg(output_dir)
+    # The retry hint is a command a person pastes into a shell of unknown kind: the path
+    # is spelled for every shell by paste_arg, or replaced by a placeholder, and printed
+    # on a line of its own. The text outside that line shows the path with control and
+    # invisible characters removed and quote_path-escaped. All of it is decided here, so
+    # the stub carries no logic.
+    if windows_separators is None:
+        windows_separators = os.sep == "\\"
+    destination = paste_arg(output_dir, windows_separators=windows_separators)
     retry_note = ""
     if destination is None:
         destination = _RETRY_PLACEHOLDER
@@ -158,8 +164,8 @@ def render_modal_stub(
     retry_command = (
         f"modal volume get {MODAL_OUTPUT_VOLUME} /{run_name} {destination} --force"
     )
-    shown_output = quote_path(output_dir)
-    shown_run_dir = quote_path(f"{output_dir}/{run_name}")
+    shown_output = quote_path(strip_control(output_dir))
+    shown_run_dir = quote_path(strip_control(f"{output_dir}/{run_name}"))
 
     # Built by concatenation so there is no triple-quote / brace escaping. The
     # embedded values are the base64 blob and repr()-embedded literals only

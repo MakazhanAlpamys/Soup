@@ -1,10 +1,9 @@
-"""``paste_arg``: a value from a shared ``soup.yaml`` inside a command a person pastes.
+"""``paste_arg``: a configured path inside a command a person pastes.
 
 Soup prints follow-up commands (the cloud download hint, the "Quick test / Push /
-Export" lines after training) whose argument is the config's ``output``. That value is
-written by whoever wrote the config, and the shell it is pasted into is unknown, so the
-spelling has to read the same in POSIX shells, PowerShell and cmd.exe -- or the command
-has to leave the value out.
+Export" lines after training) whose argument is the config's ``output``. The shell the
+line is pasted into is unknown, so the spelling has to read as the same name in POSIX
+shells, PowerShell and cmd.exe -- or the command has to leave the value out.
 
 The oracle below is written independently of the implementation: per shell it lists the
 characters that act OUTSIDE quotes and the ones that still act INSIDE double quotes, and
@@ -30,7 +29,7 @@ def _non_ascii_is_not_a_letter_or_digit(text: str) -> bool:
     """Non-ASCII punctuation, spaces and format characters are quotes/dashes/spaces to
     some shell (typographic quotes, en dash, no-break space) or hide text (bidi marks)."""
     return any(
-        not char.isascii() and unicodedata.category(char)[0] not in "LN" for char in text
+        not char.isascii() and unicodedata.category(char)[0] not in "LNM" for char in text
     )
 
 
@@ -98,10 +97,10 @@ class TestValuesThatAreNotRepeated:
     @pytest.mark.parametrize(
         "value",
         [
-            "out$(touch X)",
+            "out$(cmd)",
             "out$VAR",
             "out${VAR}",
-            "out`touch X`",
+            "out`cmd`",
             'out"x',
             "out\\dir",
             "C:\\work\\out",
@@ -145,8 +144,9 @@ class TestLeadingDash:
         assert paste_arg("run-1/--x") == "run-1/--x"
 
 
-class TestNoShellCharacterIsEverExposed:
-    def test_every_single_character_value(self):
+class TestShellSyntaxIsNeverRepeatedAsSyntax:
+    @pytest.mark.parametrize("windows_separators", [False, True])
+    def test_every_single_character_value(self, windows_separators):
         # Every code point of ASCII, Latin-1 and the typographic/format blocks, alone and
         # embedded between plain text.
         points = [*range(0x00, 0x180), *range(0x2000, 0x2070), 0xFEFF, 0x3000]
@@ -154,7 +154,7 @@ class TestNoShellCharacterIsEverExposed:
         for point in points:
             char = chr(point)
             for value in (char, f"out{char}x", f"{char}out"):
-                result = paste_arg(value)
+                result = paste_arg(value, windows_separators=windows_separators)
                 if result is not None and _exposes_a_shell_character(result):
                     exposed.append((value, result))
         assert exposed == []
@@ -173,27 +173,27 @@ class TestNoShellCharacterIsEverExposed:
     @pytest.mark.parametrize(
         "value",
         [
-            "out$(touch X)",
-            "out`touch X`",
-            "out;touch X",
-            "out&&touch X",
-            "out||touch X",
-            "out|touch X",
+            "out$(cmd)",
+            "out`cmd`",
+            "out;cmd",
+            "out&&cmd",
+            "out||cmd",
+            "out|cmd",
             "out>X",
             "out<X",
             "out&calc",
             "out%COMSPEC%",
-            "out\"; touch X; echo \"",
-            "out'; touch X; echo '",
-            "out\ntouch X",
-            "$(touch X)",
-            "-$(touch X)",
+            "out\"; cmd; echo \"",
+            "out'; cmd; echo '",
+            "out\ncmd",
+            "$(cmd)",
+            "-$(cmd)",
             "${IFS}x",
             "out\\",
             "out^&calc",
         ],
     )
-    def test_injection_shaped_names(self, value):
+    def test_names_with_shell_syntax(self, value):
         result = paste_arg(value)
         assert result is None or not _exposes_a_shell_character(result)
 
@@ -204,3 +204,51 @@ class TestNoShellCharacterIsEverExposed:
             result = paste_arg(value)
             assert result is not None
             assert shlex.split(f"cmd {result}") == ["cmd", value]
+
+
+class TestWindowsSeparators:
+    """``str(Path('output/sub'))`` is ``output\\sub`` on Windows: a nested path is repeated
+    with forward slashes there, and stays a reason for the placeholder elsewhere."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("output\\sub", "output/sub"),
+            ("output\\sub\\run 1", '"output/sub/run 1"'),
+            ("C:\\work\\out", "C:/work/out"),
+            ("out\\", "out/"),
+            ("out/sub\\run", "out/sub/run"),
+        ],
+    )
+    def test_backslashes_become_forward_slashes(self, value, expected):
+        assert paste_arg(value, windows_separators=True) == expected
+
+    @pytest.mark.parametrize("value", ["output\\sub", "C:\\work\\out", "out\\"])
+    def test_a_backslash_is_a_placeholder_when_the_host_does_not_use_it_as_a_separator(
+        self, value
+    ):
+        assert paste_arg(value) is None
+        assert paste_arg(value, windows_separators=False) is None
+
+    @pytest.mark.parametrize(
+        "value", ["out\\$x", 'out\\"x', "out\\%x", "out\\!x", "out\\`x", "out\\\nx"]
+    )
+    def test_other_syntax_is_still_left_out(self, value):
+        assert paste_arg(value, windows_separators=True) is None
+
+    def test_a_leading_dash_still_gets_a_prefix(self):
+        assert paste_arg("-run\\x", windows_separators=True) == "./-run/x"
+
+
+class TestCombiningMarks:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "cafe\u0301/data",  # decomposed accent
+            "\u0939\u093f\u0928\u094d\u0926\u0940/out",  # Devanagari with vowel signs
+            "\u0e44\u0e17\u0e22/out",  # Thai
+            "\u0646\u062a\u0627\u0626\u062c\u064e/out",  # Arabic with a short-vowel mark
+        ],
+    )
+    def test_marks_of_a_script_are_repeated_as_part_of_the_name(self, value):
+        assert paste_arg(value) == value
