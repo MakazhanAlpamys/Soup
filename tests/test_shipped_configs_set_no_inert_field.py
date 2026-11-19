@@ -170,7 +170,7 @@ class TestTheCheckCanFail:
         found = inert_fields_set(text)
         assert any(item.startswith("deprecated value:") for item in found), found
         refusal = (
-            "refused at load: data -> remove_unused_columns: Value error, "
+            "refused at load: Value error, "
             "data.remove_unused_columns: true never had an effect (no trainer reads it; "
             "the trainers that set it pass false). Delete the line. "
             f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."

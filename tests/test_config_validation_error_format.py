@@ -7,12 +7,9 @@ location, then Pydantic's ``Value error, `` prefix in front of Soup's own text. 
 v0.77 many refusals are model-level, so that was the first line most upgraders saw
 (found by the v0.77.0 release smoke).
 
-The printed form is now the message alone for a model-level entry and
-``<loc>: <message>`` for a field-level one, without the ``Value error, `` prefix in
-either. Only the terminal is changed: ``load_config_from_string`` still raises
-``ValueError("<loc>: <msg>")`` with Pydantic's text, because the Web UI, MCP and
-tests (``test_deprecated_value_severity``, ``test_issue795_*``, ``test_issue1357_*``)
-read that string, and ``test_issue1357_*`` parses the fix out of it.
+The printed form is the message alone for a model-level entry and
+``<loc>: <message>`` for a field-level one that needs a location, without the ``Value error, ``
+prefix in either. API callers keep Pydantic's message, including its wrapper.
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ import io
 import re
 
 import pytest
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -72,6 +69,22 @@ training:
 output: ./o
 """
 
+_PREVIOUS_BASELINE = """\
+base: org/model
+task: sft
+data:
+  train: ./x.jsonl
+training:
+  eval_gate:
+    baseline: previous
+output: ./o
+"""
+
+_BASELINE_REFUSAL = (
+    "training.eval_gate.baseline: 'previous' is not implemented; "
+    "use a path to a baseline results file"
+)
+
 _QUANT_REFUSAL = (
     "training.quantization: 4bit has no effect on task='prm': its trainer never "
     "quantises the base, so no run can honour it. Delete the line or set "
@@ -107,6 +120,11 @@ def printed(monkeypatch):
 
 
 class TestThroughSoupTrainDryRun:
+    def test_baseline_refusal_names_its_field_once(self, tmp_path, monkeypatch):
+        result = _dry_run(tmp_path, monkeypatch, _PREVIOUS_BASELINE)
+        assert result.exit_code == 1
+        assert f"Config validation error: {_BASELINE_REFUSAL}" in _plain(result.output)
+
     def test_a_model_level_refusal_is_the_message_alone(self, tmp_path, monkeypatch):
         result = _dry_run(tmp_path, monkeypatch, _PRM_4BIT)
         out = _plain(result.output)
@@ -237,7 +255,7 @@ class TestTheMessageAloneIsStillTerminalSafe:
         assert lines[-1] == "  refused x[2J[bold]y[/bold]", lines
 
 
-class TestTheExceptionTextIsUnchanged:
+class TestTheExceptionText:
     """``load_config_from_string`` is the API path: its ``ValueError`` keeps
     Pydantic's text, which callers read and ``test_issue1357_*`` parses."""
 
@@ -245,3 +263,41 @@ class TestTheExceptionTextIsUnchanged:
         with pytest.raises(ValueError) as excinfo:
             loader.load_config_from_string(_PRM_4BIT)
         assert str(excinfo.value) == f": Value error, {_QUANT_REFUSAL}"
+
+    @pytest.mark.parametrize(
+        ("config", "message"),
+        [
+            (_PREVIOUS_BASELINE, f"Value error, {_BASELINE_REFUSAL}"),
+            (
+                _GRPO_REMOTE_HTTP_JUDGE,
+                "training -> grpo_judge: Value error, judge_model "
+                "'http://judge.example.com/m' uses unsupported scheme",
+            ),
+        ],
+    )
+    def test_field_level(self, config, message):
+        with pytest.raises(ValueError) as excinfo:
+            loader.load_config_from_string(config)
+        assert str(excinfo.value) == message
+
+
+def test_message_starting_with_a_different_path_keeps_its_location(printed, tmp_path, monkeypatch):
+    class DifferentPath(BaseModel):
+        base: str
+
+        @field_validator("base")
+        @classmethod
+        def refuse(cls, value):
+            raise ValueError("base.other: use another model")
+
+    monkeypatch.setattr(loader, "_build_config", lambda raw: DifferentPath(**raw))
+    path = tmp_path / "soup.yaml"
+    path.write_text(_PREVIOUS_BASELINE, encoding="utf-8")
+    with pytest.raises(SystemExit) as refusal:
+        loader.load_config(path)
+    assert refusal.value.code == 1
+    assert printed.getvalue().splitlines()[-1] == "  base: base.other: use another model"
+
+    with pytest.raises(ValueError) as error:
+        loader.load_config_from_string(_PREVIOUS_BASELINE)
+    assert str(error.value) == "base: Value error, base.other: use another model"

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.text import Text
 
-from soup_cli.config.deprecation import SoupConfigDeprecationWarning, deadline_clause
+from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
@@ -167,6 +167,13 @@ def _print_refusal_lines(message: str) -> None:
 _PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
 
 
+def _message_names_location(location: tuple, message: str) -> bool:
+    dotted = ".".join(str(part) for part in location)
+    return bool(location) and message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX).startswith(
+        f"{dotted}: "
+    )
+
+
 def _print_validation_errors(errors: list) -> None:
     """Print each entry of a ``ValidationError`` under ``Config validation error:``.
 
@@ -176,23 +183,17 @@ def _print_validation_errors(errors: list) -> None:
     A field-level entry reads ``<loc>: <message>``. A model-level one (a
     ``model_validator`` refusal) has an empty ``loc`` and is the message alone,
     not ``: <message>``. Pydantic's ``Value error, `` prefix is dropped from both:
-    the text after it is Soup's own and already names the fix. Only the terminal
-    is changed; ``load_config_from_string`` keeps Pydantic's text in its
-    ``ValueError``, which API callers read. Both parts can quote config keys or
-    values from the file, so each goes through :func:`terminal_text`.
+    the text after it is Soup's own and already names the fix. The API keeps Pydantic's wrapper.
+    Both parts can quote config keys or values from the file, so each goes
+    through :func:`terminal_text`.
 
-    A deprecated-value refusal (#759) at field level is also the message alone:
-    its text is the v0.76 warning's, which had no location and so starts with
-    the field's dotted path, and ``<loc>: `` in front would name the field twice
-    (``data -> remove_unused_columns: data.remove_unused_columns: ...``).
+    If a refusal starts with its own dotted field path, print the message alone
+    (for example, ``training.eval_gate.baseline: 'previous' is not implemented...``).
     """
     for err in errors:
         loc = " -> ".join(str(part) for part in err["loc"])
         msg = err["msg"].removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
-        dotted = ".".join(str(part) for part in err["loc"])
-        if loc and msg.startswith(f"{dotted}: ") and deadline_clause() in msg:
-            loc = ""
-        if loc:
+        if loc and not _message_names_location(err["loc"], err["msg"]):
             console.print(
                 Text.assemble("  ", terminal_text(f"{loc}:", "red"), " ", terminal_text(msg))
             )
@@ -403,7 +404,8 @@ def config_from_mapping(raw: dict) -> SoupConfig:
         errors = []
         for err in entries:
             loc = " -> ".join(str(part) for part in err["loc"])
-            errors.append(f"{loc}: {err['msg']}")
+            msg = err["msg"]
+            errors.append(msg if _message_names_location(err["loc"], msg) else f"{loc}: {msg}")
         if staged_first is None:
             raise ValueError("; ".join(errors))
         # The staged lines first, one per field as on a load that builds; the

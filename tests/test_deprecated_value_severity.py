@@ -160,9 +160,7 @@ class TestRemoveUnusedColumns:
     def test_error_refuses_the_string_load(self, refuse, printed):
         with pytest.raises(ValueError) as excinfo:
             loader.load_config_from_string(_RUC.format("true"))
-        assert str(excinfo.value) == (
-            f"data -> remove_unused_columns: Value error, {_RUC_REFUSAL}"
-        )
+        assert str(excinfo.value) == f"Value error, {_RUC_REFUSAL}"
         assert printed.getvalue() == ""
 
     def test_error_refuses_the_file_load(self, refuse, printed, tmp_path):
@@ -361,9 +359,7 @@ class TestAsShipped:
     def test_remove_unused_columns_true_is_refused(self, printed):
         with pytest.raises(ValueError) as excinfo:
             loader.load_config_from_string(_RUC.format("true"))
-        assert str(excinfo.value) == (
-            f"data -> remove_unused_columns: Value error, {_RUC_REFUSAL}"
-        )
+        assert str(excinfo.value) == f"Value error, {_RUC_REFUSAL}"
 
     @pytest.mark.parametrize("quant", ["4bit", "8bit"])
     def test_quantization_on_an_unquantised_task_is_refused(self, printed, quant):
