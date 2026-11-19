@@ -69,7 +69,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (181 recipes)
+# Recipe catalog (182 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4308,6 +4308,40 @@ training:
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-35b-a3b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B-Base",
+        task="pretrain",
+        size="35B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain", "moe", "mixture-of-experts"),
+        description=(
+            "Qwen 3.5 35B-A3B Base MoE continued pre-training (Apache-2.0, 3B active)"
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
 
 output: ./output
 """,
