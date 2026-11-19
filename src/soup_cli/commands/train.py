@@ -206,6 +206,44 @@ def _format_duration_display(result: dict) -> str:
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
 
+_OUTPUT_PLACEHOLDER = "<output directory>"
+
+
+def _completion_commands(output_dir: object, merge_note: str | None = None) -> str:
+    """The follow-up commands of the completion panel, as Rich markup.
+
+    ``output_dir`` is the config's ``output``, and a shared ``soup.yaml`` need not have
+    been written by whoever runs it. The commands are for pasting into a shell of unknown
+    kind, so the path goes through ``paste_arg`` (same text for POSIX shells, PowerShell
+    and cmd.exe) and, when no such spelling exists, is replaced by a placeholder with a
+    one-line explanation. ``for_terminal`` then keeps Rich markup and control characters
+    in the path from reaching the console. ``merge_note`` replaces the ``soup merge``
+    line when the output needs no merge.
+    """
+    from soup_cli.utils.paths import paste_arg
+    from soup_cli.utils.terminal import for_terminal
+
+    spelled = paste_arg(output_dir)
+    shown = for_terminal(spelled) if spelled is not None else _OUTPUT_PLACEHOLDER
+    merge_line = (
+        merge_note
+        if merge_note is not None
+        else f"[bold]Merge LoRA:[/]  soup merge --adapter {shown}"
+    )
+    lines = [
+        f"Quick test:  [bold]soup chat --model {shown}[/]",
+        f"Push to HF:  [bold]soup push --model {shown}[/]",
+        merge_line,
+        f"Export GGUF: [bold]soup export --model {shown}[/]",
+    ]
+    if spelled is None:
+        lines.append(
+            f"[dim]Replace {_OUTPUT_PLACEHOLDER} with the Output path above: it is not "
+            "repeated in these commands because a shell would interpret part of it.[/]"
+        )
+    return "\n".join(lines)
+
+
 def _run_auto_eval_after_training(
     eval_config,
     output_dir: str,
@@ -2752,25 +2790,24 @@ def train(
         raise
 
     # Report
-    merge_hint = (
+    merge_note = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
+        else None
     )
+
+    from soup_cli.utils.terminal import for_terminal as _for_terminal
 
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n"
+            f"Output: [bold]{_for_terminal(result['output_dir'])}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
+            f"{_completion_commands(result['output_dir'], merge_note)}\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title=("[bold yellow]Training Stopped — Loss watchdog[/]"
                    if result.get("stop_reason") == "loss_watchdog"

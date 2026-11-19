@@ -832,6 +832,10 @@ named after the run (`soup-<12 hex>`), so checkpoints outlive the container. Whe
 including after a failed run, the app downloads every file in that directory into your local
 output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
 command that retries the download; that command places the files under `<output dir>/<run name>`.
+The command is printed on its own line. A path with spaces or punctuation is wrapped in double
+quotes; a path that a shell could still interpret (a `$`, a backtick, a backslash, a `%`, a `!`
+or a double quote) is not repeated, and the line shows `<local output directory>` for you to
+replace with the path printed just above it.
 
 ### RunPod
 

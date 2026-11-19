@@ -38,6 +38,58 @@ def quote_path(path: str) -> str:
     return f"'{escaped}'"
 
 
+#: ASCII characters, besides letters and digits, that need no quoting in any shell a
+#: person might paste into (POSIX shells, PowerShell, cmd.exe).
+_PASTE_BARE_PUNCTUATION = "_./:+-"
+#: ASCII characters that keep a special meaning INSIDE double quotes in at least one of
+#: those shells: ``"`` closes the quote; ``$`` and the backtick expand or escape in POSIX
+#: shells and PowerShell; ``\`` escapes in POSIX shells (and before a closing quote
+#: elsewhere); ``%`` expands in cmd.exe; ``!`` expands in interactive bash and in cmd.exe
+#: with delayed expansion.
+_PASTE_NEVER_QUOTED = '"$`\\%!'
+
+
+def paste_arg(value: object) -> Optional[str]:
+    """Spell ``value`` as ONE argument of a command line that a person will paste.
+
+    Soup prints follow-up commands (``modal volume get ... <dir>``, ``soup chat --model
+    <dir>``) whose argument comes from a ``soup.yaml`` that somebody else may have
+    written. Unquoted, ``out$(cmd)`` or ``out&cmd`` is run by the shell it is pasted
+    into, and that shell is not known here: ``shlex.quote`` suits POSIX shells only
+    (cmd.exe does not treat single quotes as quotes) and ``subprocess.list2cmdline``
+    leaves ``&`` bare. So the result reads the same in every shell, or is ``None``:
+
+    * letters, digits (of any script) and ``_ . / : + -``: returned as is;
+    * those plus a space or any other printable ASCII except ``" $ ` \\ % !``: wrapped in
+      double quotes, inside which none of them is special in any of those shells;
+    * anything else (a control character, ``"``, ``$``, the backtick, a backslash,
+      ``%``, ``!``, or non-ASCII punctuation such as the typographic quotes and dashes
+      that PowerShell reads as quotes and dashes): ``None``. The caller shows a
+      placeholder instead of repeating the value.
+
+    A value starting with ``-`` gets ``./`` in front so the program cannot read it as an
+    option. An empty value gives ``None``.
+    """
+    text = str(value)
+    if not text:
+        return None
+    if text.startswith("-"):
+        text = "./" + text
+    bare = True
+    for char in text:
+        if char.isascii():
+            if char.isalnum() or char in _PASTE_BARE_PUNCTUATION:
+                continue
+            if " " <= char <= "~" and char not in _PASTE_NEVER_QUOTED:
+                bare = False
+                continue
+            return None
+        if char.isalnum():
+            continue
+        return None
+    return text if bare else f'"{text}"'
+
+
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
     """Return True when ``path`` resolves inside ``base``."""
     try:
