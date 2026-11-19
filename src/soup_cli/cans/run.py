@@ -13,16 +13,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from soup_cli.cans.schema import DeployTarget, Manifest
 from soup_cli.cans.unpack import extract_can, inspect_can, read_config
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_under_cwd, quote_path
 from soup_cli.utils.redaction import find_redacted_paths
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 _RUN_TIMEOUT_SECONDS = 60 * 60 * 24  # 24h max — generous; user kills with ^C
+#: Most ``data.train`` entries the confirmation panel lists before it says "+N more".
+_MAX_SHOWN_DATA_ENTRIES = 20
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,106 @@ class CanRunResult:
     train_returncode: int
     deploy_returncode: Optional[int] = None
     env_path: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class CanTargets:
+    """Where a can's config says ``soup train`` will write and read, for the panel.
+
+    ``output`` is the text to show; ``output_problem`` is the refusal message
+    :func:`check_can_output` raises for it (``None`` when ``soup can run`` accepts it).
+    ``data_train`` holds each ``data.train`` entry with whether it is a local path outside
+    the working directory (``soup can run`` shows those with a warning and does not
+    refuse them: reading local data is the user's choice).
+    """
+
+    output: str
+    output_problem: Optional[str]
+    data_train: tuple[tuple[str, bool], ...]
+    data_train_more: int = 0
+
+
+def _output_of(config: Mapping[str, Any]) -> object:
+    """The ``output`` value ``soup train`` will use for a can's config mapping."""
+    if "output" not in config:
+        from soup_cli.config.schema import SoupConfig
+
+        return SoupConfig.model_fields["output"].default
+    return config["output"]
+
+
+def _output_problem(output: object) -> Optional[str]:
+    """Why ``soup can run`` refuses this ``output``, or ``None`` when it accepts it.
+
+    ``soup train`` creates the checkpoints, logs and final model under ``output``, resolved
+    against the directory ``soup can run`` was started in. The can's config is written by
+    whoever packed the can, so a path that resolves outside the working directory (an
+    absolute path, ``..``, a symlink or a Windows drive-relative or UNC spelling) would
+    put those files, and the rotation of ``checkpoint-*`` directories already there, in
+    any directory the user can write to. ``is_under_cwd`` resolves symlinks and compares
+    with ``os.path.commonpath``, which also treats a different drive or UNC share as
+    outside. A value that is not text is refused too: the loader would turn a YAML
+    ``!!binary`` value into text, so it cannot be left for the loader to judge.
+    """
+    if not isinstance(output, str):
+        return (
+            "this can's config sets output to a value that is not a text path "
+            f"({type(output).__name__}); soup can run needs a plain path under the "
+            "working directory"
+        )
+    if "\x00" in output:
+        # POSIX path resolution raises on it, Windows resolution keeps it: say so here
+        # rather than leave the answer to the platform.
+        return (
+            f"this can's config sets output to {quote_path(output)}, which contains a NUL "
+            "byte; soup can run needs a plain path under the working directory"
+        )
+    if is_under_cwd(output):
+        return None
+    return (
+        f"this can's config sets output to {quote_path(output)}, which resolves outside "
+        f"the working directory ({quote_path(os.getcwd())}), and soup can run does not "
+        "write training output there. Run it from the directory the output should go "
+        "to, or take config.yaml out of the can (a .tar.gz), set output to a path under "
+        "your working directory and run soup train on it"
+    )
+
+
+def check_can_output(config: Mapping[str, Any]) -> None:
+    """Refuse a can whose config ``output`` resolves outside the working directory.
+
+    Raises ``ValueError`` naming the value; see :func:`_output_problem`.
+    """
+    problem = _output_problem(_output_of(config))
+    if problem is not None:
+        raise ValueError(problem)
+
+
+def describe_can_targets(config: Mapping[str, Any]) -> CanTargets:
+    """What the confirmation panel shows: ``output`` and every ``data.train`` entry."""
+    output = _output_of(config)
+    data = config.get("data")
+    raw_train = data.get("train") if isinstance(data, Mapping) else None
+    if isinstance(raw_train, str):
+        entries: list[object] = [raw_train]
+    elif isinstance(raw_train, list):
+        entries = list(raw_train)
+    else:
+        entries = []
+    shown = []
+    for entry in entries[:_MAX_SHOWN_DATA_ENTRIES]:
+        text = entry if isinstance(entry, str) else str(entry)
+        # An entry with "://" names a remote source and anything else without a data
+        # file suffix may be a Hub dataset id; neither is a path the warning is about,
+        # and a relative id resolves inside the working directory anyway.
+        outside = "://" not in text and not is_under_cwd(text)
+        shown.append((text, outside))
+    return CanTargets(
+        output=output if isinstance(output, str) else repr(output),
+        output_problem=_output_problem(output),
+        data_train=tuple(shown),
+        data_train_more=max(0, len(entries) - _MAX_SHOWN_DATA_ENTRIES),
+    )
 
 
 def capture_env(out_path: Path) -> Path:
@@ -192,7 +296,9 @@ def run_can(
     Security:
         Confirmation panel is mandatory for non-``yes`` runs because this
         auto-downloads data and auto-trains. A crafted can could otherwise
-        pull arbitrary HF datasets or HTTPS payloads.
+        pull arbitrary HF datasets or HTTPS payloads. A can whose config ``output``
+        resolves outside the working directory is refused (``ValueError``) before
+        anything is extracted, and again for the extracted ``config.yaml``.
     """
     src = _validate_can_path(can_path)
 
@@ -212,6 +318,9 @@ def run_can(
             + ". They were removed when the can was packed; supply them in the can's "
             "config.yaml (a .tar.gz) and run soup train on it instead of soup can run"
         )
+    # Refuse an output outside the working directory before anything is extracted or
+    # asked: the confirmation would otherwise approve a run that is then refused.
+    check_can_output(config)
 
     if not yes:
         if confirm_callback is None:
@@ -249,6 +358,16 @@ def run_can(
 
     try:
         extract_can(str(src), str(owned_dir))
+
+        # The file ``soup train`` is about to read is the one extraction left at
+        # ``config.yaml``, not the archive member read for the check above, so the
+        # extracted file is checked too, with the loader ``soup train`` itself uses.
+        extracted_config = load_yaml_file_limited(
+            owned_dir / "config.yaml", "config.yaml", max_bytes=MAX_CONFIG_BYTES
+        ) or {}
+        if not isinstance(extracted_config, dict):
+            raise ValueError("config.yaml must deserialise to a mapping")
+        check_can_output(extracted_config)
 
         # Optional env capture.
         env_path: Optional[Path] = None

@@ -143,6 +143,32 @@ def verify_cmd(
         raise typer.Exit(1)
 
 
+def _target_parts(targets) -> list:
+    """The panel lines for the can's ``output`` and ``data.train`` (text from the can).
+
+    ``output`` outside the working directory is flagged as refused; a local
+    ``data.train`` path outside it is flagged as a warning only.
+    """
+    parts: list = [f"\nOutput: {strip_control(targets.output)}"]
+    if targets.output_problem is not None:
+        parts.append(
+            (
+                "\n  warning: outside the working directory - "
+                "soup can run will refuse this can",
+                "red",
+            )
+        )
+    if not targets.data_train:
+        parts.append("\nTraining data: (not set)")
+    for entry, outside in targets.data_train:
+        parts.append(f"\nTraining data: {strip_control(entry)}")
+        if outside:
+            parts.append(("\n  warning: this path is outside the working directory", "yellow"))
+    if targets.data_train_more:
+        parts.append(f"\nTraining data: (+{targets.data_train_more} more)")
+    return parts
+
+
 @app.command(name="run")
 def run_cmd(
     can_path: str = typer.Argument(..., help="Path to .can file"),
@@ -164,12 +190,13 @@ def run_cmd(
     ),
 ) -> None:
     """Run a can end-to-end: extract -> train (-> optional deploy)."""
-    from soup_cli.cans.run import run_can
+    from soup_cli.cans.run import describe_can_targets, run_can
 
     if not yes:
         try:
-            from soup_cli.cans.unpack import inspect_can
+            from soup_cli.cans.unpack import inspect_can, read_config
             manifest = inspect_can(can_path)
+            targets = describe_can_targets(read_config(can_path))
         except (FileNotFoundError, ValueError) as exc:
             _fail(str(exc))
         console.print(Panel(
@@ -181,7 +208,9 @@ def run_cmd(
                 ("soup train", "bold"),
                 " against the embedded config\n\nRecipe: ",
                 (manifest.name, "bold"),
-                f"\nAuthor: {strip_control(manifest.author)}\n\nPass ",
+                f"\nAuthor: {strip_control(manifest.author)}",
+                *_target_parts(targets),
+                "\n\nPass ",
                 ("--yes", "bold"),
                 " to confirm.",
             ),
