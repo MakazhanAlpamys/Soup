@@ -464,6 +464,12 @@ Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
+An output may not replace one of the run's inputs: `--output` and `--emit-evidence` are refused
+(exit 3, before any model loads and before anything is read beyond the config and the gate's files) when either is the
+same file, by real path, as `--evidence`, `--task-eval`, `--config`, `--corrections`,
+`--held-out`, a `--baseline` or `--reward-fn` file, the training file that `--config` names in
+`data.train` (each entry of a list), or the other output.
+
 With a local `--adapter`, ship reads the adapter weights before loading either model. If every
 `lora_B` tensor is zero (an untrained adapter, or a DPO run's `ref/` folder) and no other saved
 tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
