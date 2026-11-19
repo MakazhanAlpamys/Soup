@@ -1995,7 +1995,9 @@ class TestGateModule:
         check = (
             loop_gate.check_corrections if path[0] == "corrections" else loop_gate.check_held_out
         )
-        with pytest.raises(ValueError, match=path[-1]):
+        dotted = ".".join(("verdict", *path))
+        message = f"{dotted} must be a number in [0, 1] or null"
+        with pytest.raises(ValueError, match=rf"^{re.escape(message)}$"):
             check(data[path[0]])
         found = loop_gate.read_gate_result(data, "DON'T SHIP")
         assert found.canary_decides is True
@@ -2054,7 +2056,7 @@ class TestGateModule:
         found = loop_gate.clean_held_out(data["held_out"])
 
         assert "style" not in found and found["better"] == 3
-        with pytest.raises(ValueError, match="style"):
+        with pytest.raises(ValueError, match=r"^verdict\.held_out\.style lacks "):
             loop_gate.check_held_out(data["held_out"])
 
 
