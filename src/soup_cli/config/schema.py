@@ -2402,7 +2402,7 @@ class TrainingConfig(BaseModel):
     nvfp4: bool = Field(
         default=False,
         description=(
-            "Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, "
+            "NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). DPO-family, "
             "GRPO/PPO, pre-training, reward-model, and embedding wrappers "
             "route it through torchao conversion; the default SFT path does "
             "not consume it."

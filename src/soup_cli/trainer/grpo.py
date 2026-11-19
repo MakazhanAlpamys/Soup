@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -67,7 +68,7 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
         _soup_fallback_warned: bool = False
 
         def _warn_fallback(self, reason: str) -> None:
-            """Emit a one-shot WARNING when the variant kernel falls back.
+            """Emit a one-shot warning when the variant kernel falls back.
 
             v0.71.11 #159 — when a TRL internal rename or a kernel error
             makes ``compute_loss`` delegate to the stock GRPO loss, the
@@ -150,6 +151,80 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
             tool_mask = _read_attr(inputs, "tool_mask")
             if mask is not None and tool_mask is not None:
                 mask = mask * tool_mask
+            global_token_count = None
+            num_processes = 1
+            use_global_dapo_normalizer = False
+            if self._soup_grpo_variant == "dapo":
+                count = _read_attr(inputs, "num_items_in_batch")
+                if hasattr(inputs, "get"):
+                    has_count = "num_items_in_batch" in inputs
+                else:
+                    has_count = hasattr(inputs, "num_items_in_batch")
+                count_reason = None
+                if not has_count:
+                    count_reason = "num_items_in_batch is missing"
+                elif count is None:
+                    count_reason = "num_items_in_batch is None"
+                elif isinstance(count, bool):
+                    count_reason = f"num_items_in_batch is boolean ({count!r})"
+                elif isinstance(count, (int, float)):
+                    if isinstance(count, float) and not math.isfinite(count):
+                        count_reason = f"num_items_in_batch is not finite ({count!r})"
+                    elif count <= 0:
+                        count_reason = f"num_items_in_batch is not positive ({count!r})"
+                else:
+                    import torch
+
+                    if torch.is_tensor(count):
+                        if count.ndim != 0:
+                            count_reason = (
+                                "num_items_in_batch tensor must be zero-dimensional "
+                                f"(shape={tuple(count.shape)!r})"
+                            )
+                        elif count.dtype == torch.bool or count.dtype.is_complex:
+                            count_reason = (
+                                "num_items_in_batch tensor must have a real numeric "
+                                f"dtype (dtype={count.dtype})"
+                            )
+                        else:
+                            count_value = count.detach().item()
+                            if isinstance(count_value, float) and not math.isfinite(
+                                count_value
+                            ):
+                                count_reason = (
+                                    "num_items_in_batch is not finite "
+                                    f"({count!r})"
+                                )
+                            elif count_value <= 0:
+                                count_reason = (
+                                    "num_items_in_batch is not positive "
+                                    f"({count!r})"
+                                )
+                    else:
+                        count_reason = (
+                            "num_items_in_batch must be an int, float, or "
+                            f"zero-dimensional numeric tensor (got {type(count).__name__}: "
+                            f"{count!r})"
+                        )
+                accelerator = getattr(self, "accelerator", None)
+                process_count = getattr(accelerator, "num_processes", 1)
+                valid_process_count = (
+                    isinstance(process_count, int)
+                    and not isinstance(process_count, bool)
+                    and process_count > 0
+                )
+                if count_reason is None and valid_process_count:
+                    global_token_count = count
+                    num_processes = process_count
+                    use_global_dapo_normalizer = True
+                else:
+                    if count_reason is None:
+                        count_reason = (
+                            "accelerator.num_processes must be a positive integer "
+                            f"(got {process_count!r})"
+                        )
+                    self._warn_fallback(count_reason)
+                    return None
 
             try:
                 variant_loss = apply_variant_loss(
@@ -161,6 +236,8 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                     delta=delta,
                     completion_mask=mask,
                     reference_logp=ref_logp,
+                    global_token_count=global_token_count,
+                    num_processes=num_processes,
                 )
             except (TypeError, ValueError) as exc:
                 self._warn_fallback(f"kernel error: {exc}")
@@ -183,12 +260,9 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
             metrics = getattr(self, "_metrics", None)
             if mean_kl is not None and metrics is not None:
                 metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
-            normalizer = (
-                getattr(self, "current_gradient_accumulation_steps", 1.0)
-                if mode == "train"
-                else 1.0
-            )
-            return variant_loss / normalizer
+            if mode == "train" and not use_global_dapo_normalizer:
+                return variant_loss / getattr(self, "current_gradient_accumulation_steps", 1.0)
+            return variant_loss
 
         def _compute_loss(self, model, inputs):
             loss = self._compute_variant_loss(model, inputs)
