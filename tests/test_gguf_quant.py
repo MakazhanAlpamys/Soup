@@ -91,7 +91,7 @@ _SPELLINGS = [
     for spelling in _spellings(name)
 ]
 # The Kelvin sign (U+212A) lower-cases to "k", so this is accepted as Q4_K_M.
-_SPELLINGS.append(("Q4_K_M", "Q4_K_M"))
+_SPELLINGS.append(("Q4_\u212a_M", "Q4_K_M"))
 
 
 @pytest.mark.parametrize("calibration", [True, False], ids=["calib", "no-calib"])
