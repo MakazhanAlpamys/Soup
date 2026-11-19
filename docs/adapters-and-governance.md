@@ -424,10 +424,20 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
-# .soup/loop.log, and the same waits apply to that stage (5 minutes, 30 minutes, then held until
-# `soup loop resume`); the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy
-# that raises is retried like a refused deploy (three attempts). Ctrl+C and SystemExit still stop
-# the daemon.
+# .soup/loop.log, and non-deploy failures share one loop-wide streak: 5 minutes after the first,
+# 30 minutes after the second, then held after the third if the streak includes a raised non-deploy
+# stage, including a raised train stage, even when stages alternate. Returned training failures
+# also count in that streak, but a streak made only of those does not hold the loop: `failed_train`
+# still owns its dataset-specific retry and hold, so a changed dataset can run without
+# `soup loop resume`. This
+# retry record does not replace the dataset-specific training retry; waiting notes start
+# `stage_backoff:` or `stage_held:`. A deploy that raises is retried like a refused deploy (three
+# attempts). Ctrl+C and SystemExit still stop the daemon. The streak counts consecutive cycles
+# ending in a raised non-deploy stage or failed training. Any cycle with no failure clears it,
+# including an idle poll and a non-OK gate. A cycle skipped by a retry hold preserves it. Pending
+# deploy retries do not add a failure and clear the streak if nothing else failed; deploy failures
+# use their own record. `soup loop status` shows it in `stage_retry`; `soup loop resume` clears both
+# `stage_retry` and `train_retry`.
 # Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
 # so a file in the project directory named like a library is not imported by it, and the loop's
 # JSONL logs are created owner-only (0600) on POSIX; on Windows the folder's permissions apply.
@@ -492,7 +502,7 @@ soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
 
 # Pause/resume the daemon between iterations (atomic state flip). resume also clears a
-# failed-train hold (the train_retry row of status), paused or not.
+# failed-train hold (`train_retry`) and a raised-stage hold (`stage_retry`), paused or not.
 soup loop pause
 soup loop resume
 
