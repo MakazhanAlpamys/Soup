@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS metrics (
     grad_norm REAL,
     speed     REAL,
     gpu_mem   TEXT,
-    kind      TEXT,
     timestamp TEXT NOT NULL,
+    kind      TEXT,
     reward REAL,
     reward_std REAL
 );
@@ -261,10 +261,11 @@ class ExperimentTracker:
              "ALTER TABLE runs ADD COLUMN loss_summary_kind TEXT"),
             # A reinforcement-style run's per-step training reward and its spread
             # (experiment/reward_columns.py). Nullable with no default and never
-            # backfilled, like the columns above: NULL is "not measured". Appended
-            # after every existing column here and in _SCHEMA_SQL, so in a fresh and
-            # in an upgraded database alike they are the last two columns and no
-            # existing one moves: a reader that indexes a row by position keeps working.
+            # backfilled, like the columns above: NULL is "not measured". Fresh
+            # tables follow the v0.77.2 upgrade order: timestamp, kind, then these
+            # two fields. Existing tables keep their order, which can differ for
+            # older upgrades and databases created by v0.78.0. get_metrics reads
+            # columns by name, so both orders work without rebuilding any table.
             ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
             ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
         ):
