@@ -555,6 +555,29 @@ class _FitDecision:
     student_required_gb: float | None = None
 
 
+def _auto_fp16_pick_keeps_fp32(cfg) -> bool:
+    """Whether this run's auto fp16 pick keeps peft's fp32 non-quantised weights.
+
+    ``trainer/sft.py``'s ``_kbit_compute_dtype`` passes ``prefer_fp16=not bf16`` to
+    ``kbit_compute_dtype``. On a bf16 card whose pick is fp16 (a quirk family such
+    as Qwen2.5) the trainer therefore loads fp32 embeddings, norms and head, so the
+    pre-flight must price them (#3044). This is called only from the train pre-flight,
+    which already knows its card; callers that know no card keep their old answer.
+    """
+    if not getattr(getattr(cfg, "training", None), "auto_mixed_precision", False):
+        return False
+    try:
+        import torch
+
+        major, minor = torch.cuda.get_device_capability()
+        cc = float(f"{major}.{minor}")
+        from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+        return pick_mixed_precision(str(getattr(cfg, "base", "") or ""), cc) != "bf16"
+    except (RuntimeError, AssertionError, OSError, TypeError, ValueError):
+        return False
+
+
 def _hardware_fit_preflight(
     cfg,
     gpu_info,
@@ -615,7 +638,10 @@ def _hardware_fit_preflight(
 
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
     # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
-    kbit_fp32 = bf16_fp16_flags("cuda")[1]
+    # So does an auto_mixed_precision pick of fp16 on a bf16 card (#3044): resolve the
+    # pick here, where the card is known, rather than in the shared builder that
+    # `soup profile --config` calls without a card.
+    kbit_fp32 = bf16_fp16_flags("cuda")[1] or _auto_fp16_pick_keeps_fp32(cfg)
     inp = _hardware_fit_input_or_reason(
         cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32
     )
