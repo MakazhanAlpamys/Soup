@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequence, Tuple
 
+from soup_cli.utils.adapter_arithmetic import factor_coeff
 from soup_cli.utils.adapter_diff import (
     WRITE_ADAPTER_DEPS,
     WRITE_ADAPTER_DEPS_MSG,
@@ -202,8 +203,6 @@ def merge_linear(
     """
     import numpy as np
 
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff
-
     if len(weights_list) < _MIN_ADAPTERS:
         raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
     if len(weights_list) > _MAX_ADAPTERS:
@@ -226,7 +225,7 @@ def merge_linear(
             continue
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += _factor_coeff(name, c) * t
+            acc += factor_coeff(name, c) * t
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -312,8 +311,6 @@ def merge_dare(
     for adapters in weights_list[1:]:
         shared &= set(adapters.keys())
 
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff
-
     rng = np.random.default_rng(seed)
     merged: dict[str, Any] = {}
     skipped: list[str] = []
@@ -327,7 +324,7 @@ def merge_dare(
         for c, t in zip(coeffs, tensors):
             mask = rng.random(t.shape) < density_val
             rescaled = np.where(mask, t / density_val, 0.0)
-            acc += _factor_coeff(name, c) * rescaled
+            acc += factor_coeff(name, c) * rescaled
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
