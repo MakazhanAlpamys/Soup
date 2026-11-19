@@ -631,6 +631,7 @@ def version(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """Show Soup CLI version."""
+    import contextlib
     import json
     import platform
 
@@ -642,24 +643,26 @@ def version(
         }
 
         if full:
-            for lib in ["torch", "transformers", "peft", "trl", "datasets", "accelerate"]:
-                try:
-                    mod = __import__(lib)
-                    if hasattr(mod, "__version__"):
-                        info[lib] = mod.__version__
-                except ImportError:
-                    pass
-            for name in ["fastapi", "vllm", "datasketch", "lm_eval", "deepspeed", "wandb"]:
-                try:
-                    mod = __import__(name)
-                    if hasattr(mod, "__version__"):
-                        info[name] = mod.__version__
-                    elif hasattr(mod, "version"):
-                        info[name] = mod.version
-                    else:
-                        info[name] = "installed"
-                except ImportError:
-                    pass
+            # Optional packages can log to stdout on import. Reserve it for JSON.
+            with contextlib.redirect_stdout(sys.stderr):
+                for lib in ["torch", "transformers", "peft", "trl", "datasets", "accelerate"]:
+                    try:
+                        mod = __import__(lib)
+                        if hasattr(mod, "__version__"):
+                            info[lib] = mod.__version__
+                    except ImportError:
+                        pass
+                for name in ["fastapi", "vllm", "datasketch", "lm_eval", "deepspeed", "wandb"]:
+                    try:
+                        mod = __import__(name)
+                        if hasattr(mod, "__version__"):
+                            info[name] = mod.__version__
+                        elif hasattr(mod, "version"):
+                            info[name] = mod.version
+                        else:
+                            info[name] = "installed"
+                    except ImportError:
+                        pass
 
         typer.echo(json.dumps(info))
         return

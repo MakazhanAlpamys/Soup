@@ -467,6 +467,7 @@ def _trainer_inputs(torch, batch, *, with_reference=True):
         "completion_ids": torch.ones(3, 5, dtype=torch.long),
         "completion_mask": batch["mask"],
         "advantages": batch["advantages"],
+        "num_items_in_batch": batch["mask"].sum(),
     }
     if with_reference:
         inputs["ref_per_token_logps"] = batch["reference"]

@@ -18,6 +18,8 @@ Public surface:
 - ``init_local_rl_db(db_path)`` — atomic table creation (interactions/thumbs/state)
 - ``record_thumb(...)`` — append a thumbs-up/down record
 - ``harvest_dpo_pairs(db_path)`` — pair up/down responses to same prompt
+- ``harvest_dpo_pairs_since(db_path, since_ts)`` — the same pairs plus which are new
+- ``harvest_up_answers(db_path)`` — the answers whose newest thumb is up (``soup loop`` sft)
 - ``get_state`` / ``set_state`` / ``count_new_thumbs_since`` — state-table I/O
 - ``pairs_to_rows(pairs, method)`` — DPO pairs -> dpo/orpo/kto JSONL rows
 - ``run_nightly_train(config)`` — live DPO/KTO/ORPO train runner (v0.71.13 #229)
@@ -25,6 +27,7 @@ Public surface:
 
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 import stat
@@ -325,6 +328,83 @@ def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
             )
         )
     return tuple(pairs)
+
+
+def harvest_dpo_pairs_since(
+    db_path: str, since_ts: "float | None"
+) -> "Tuple[Tuple[DpoPair, ...], Tuple[DpoPair, ...], float | None]":
+    """``harvest_dpo_pairs`` plus which pairs are NEW since ``since_ts``.
+
+    Returns ``(pairs, new_pairs, newest_ts)``:
+
+    - ``pairs``: every pair, exactly what ``harvest_dpo_pairs`` returns (the latest
+      up with the latest down per prompt), so a training run sees all of them.
+    - ``new_pairs``: those whose NEWER row (the up or the down) has
+      ``ts > since_ts``. An old up with a new down is new; a pair whose rows both
+      predate ``since_ts`` is not. ``since_ts=None`` makes every pair new.
+    - ``newest_ts``: the largest ``ts`` among the rows of ``pairs`` (not of rows
+      that pair with nothing), or ``None`` when there is no pair.
+    """
+    if since_ts is not None and (
+        isinstance(since_ts, bool)
+        or not isinstance(since_ts, (int, float))
+        or not (-math.inf < since_ts < math.inf)  # finite; False for NaN too
+    ):
+        raise TypeError("since_ts must be a finite number or None")
+    validate_db_path(db_path)
+    real = os.path.abspath(db_path)
+    if not os.path.exists(real):
+        raise FileNotFoundError(f"db_path not found: {db_path!r}")
+    with sqlite3.connect(real) as conn:
+        rows = conn.execute(f"{THUMBS_HARVEST_SELECT} ORDER BY ts ASC").fetchall()
+    last_up: dict[str, tuple[str, float]] = {}
+    last_down: dict[str, tuple[str, float]] = {}
+    for prompt, response, thumb, ts in rows:
+        if thumb == "up":
+            last_up[prompt] = (response, ts)
+        elif thumb == "down":
+            last_down[prompt] = (response, ts)
+    pairs = []
+    new_pairs = []
+    newest: "float | None" = None
+    for prompt in sorted(set(last_up) & set(last_down)):
+        (chosen, up_ts), (rejected, down_ts) = last_up[prompt], last_down[prompt]
+        if chosen == rejected:
+            # The same rule as harvest_dpo_pairs (#2521): matching latest texts are no
+            # preference, and an older distinct answer is not used as a fallback.
+            continue
+        pair = DpoPair(prompt=prompt, chosen=chosen, rejected=rejected)
+        pair_ts = max(up_ts, down_ts)
+        pairs.append(pair)
+        if since_ts is None or pair_ts > since_ts:
+            new_pairs.append(pair)
+        if newest is None or pair_ts > newest:
+            newest = float(pair_ts)
+    return tuple(pairs), tuple(new_pairs), newest
+
+
+def harvest_up_answers(db_path: str) -> "Tuple[Tuple[str, str, float], ...]":
+    """``(prompt, response, ts)`` of every answer whose NEWEST thumb is ``up``.
+
+    An answer is a ``(prompt, response)`` pair; its labels are compared by ``ts`` (rows with
+    the same ``ts`` by insertion order), the newest wins, so an ``up`` followed by a
+    ``down`` is not good and a ``down`` followed by an ``up`` is. A ``down`` alone gives
+    nothing. ``ts`` is the newest label's. Answers come in the order their first label was
+    given. The ``soup loop`` sft dataset reads these as answers rated good.
+    """
+    validate_db_path(db_path)
+    real = os.path.abspath(db_path)
+    if not os.path.exists(real):
+        raise FileNotFoundError(f"db_path not found: {db_path!r}")
+    with sqlite3.connect(real) as conn:
+        rows = conn.execute(f"{THUMBS_HARVEST_SELECT} ORDER BY ts ASC, id ASC").fetchall()
+    newest: "dict[tuple[str, str], tuple[str, float]]" = {}
+    for prompt, response, thumb, ts in rows:
+        newest[(prompt, response)] = (thumb, float(ts))
+    return tuple(
+        (prompt, response, ts) for (prompt, response), (thumb, ts) in newest.items()
+        if thumb == "up"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +717,8 @@ __all__ = [
     "init_local_rl_db",
     "record_thumb",
     "harvest_dpo_pairs",
+    "harvest_dpo_pairs_since",
+    "harvest_up_answers",
     "get_state",
     "set_state",
     "count_new_thumbs_since",
