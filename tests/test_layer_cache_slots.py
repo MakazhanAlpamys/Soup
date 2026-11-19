@@ -1,6 +1,7 @@
 """Stale layer-stream cache slots: listing, preflight panel, opt-in prune (#2196)."""
 
 import os
+import shutil
 import time
 
 import pytest
@@ -9,7 +10,10 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import cache as cache_cmd
 from soup_cli.trainer import stream_setup
-from soup_cli.utils.layer_cache_slots import list_base_slots, prune_slots
+from soup_cli.utils import layer_cache_slots
+from soup_cli.utils.layer_cache_slots import CacheSlot, StripeFolder, list_base_slots, prune_slots
+from tests._windows_filenames import skip_colon_on_windows
+from tests.conftest import strip_ansi
 
 OLD = time.time() - 7200
 INDEX = (
@@ -100,7 +104,6 @@ def test_prune_dry_run_then_yes(root):
 def test_prune_failure_does_not_stop_others(root, monkeypatch):
     a, b = _slot(root, "org__m@a", age=OLD - 200), _slot(root, "org__m@b", age=OLD - 100)
     _slot(root, "org__m@z")
-    import shutil
 
     real = shutil.rmtree
 
@@ -125,15 +128,72 @@ def test_symlinked_slot_ignored(root, tmp_path_factory):
     assert (target / "f").exists()
 
 
-def test_hostile_name_renders(root, monkeypatch):
-    # A narrow console must not put a line break inside the path (soft_wrap), so no widening.
+@pytest.mark.parametrize(
+    "suffix",
+    ["[red]x", pytest.param("cache:warning:", marks=skip_colon_on_windows, id="emoji-code")],
+)
+@pytest.mark.parametrize("confirm", [False, True], ids=["dry-run", "remove"])
+def test_hostile_name_renders(root, monkeypatch, suffix, confirm):
+    # The path must stay on one line even in a narrow terminal.
     monkeypatch.setattr(cache_cmd.console, "_width", 20)
-    hostile = _slot(root, "org__m@[red]x", age=OLD - 100)
+    slot = _slot(root, f"org__m@{suffix}", age=OLD - 100)
+    displayed_path = os.path.realpath(slot)
     _slot(root, "org__m@z")
+    args = ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
+    if confirm:
+        args.append("--yes")
+
+    result = runner.invoke(app, args, color=True)
+
+    verb = "Removed" if confirm else "Would remove"
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"{verb} {displayed_path} (" in strip_ansi(result.stdout)
+    assert slot.exists() is not confirm
+
+
+@skip_colon_on_windows
+def test_cli_prune_reports_failed_slot_path_literally(root, monkeypatch):
+    slot = _slot(root, "org__m@cache:warning:", age=OLD - 100)
+    _slot(root, "org__m@new")
+    displayed_path = os.path.realpath(slot)
+    rmtree = shutil.rmtree
+
+    def fail_on_slot(path, *args, **kwargs):
+        if path == displayed_path:
+            raise OSError("boom")
+        return rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_on_slot)
+
     result = runner.invoke(
-        app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root)]
+        app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(root), "--yes"],
+        color=True,
     )
-    assert result.exit_code == 0 and str(hostile) in result.output
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"Failed {displayed_path}: boom" in strip_ansi(result.stdout)
+    assert slot.is_dir()
+
+
+def test_cli_prune_reports_kept_stripe_path_literally(tmp_path, monkeypatch):
+    # This path is only displayed, so the case can also run on Windows.
+    stripe = StripeFolder(path=str(tmp_path / "stripe:warning:"), bytes=100)
+    slot = CacheSlot(
+        name="org__m@old",
+        path=str(tmp_path / "org__m@old"),
+        bytes=100,
+        referenced=False,
+        stripes=(stripe,),
+    )
+    monkeypatch.setattr(layer_cache_slots, "prune_slots", lambda *args, **kwargs: [(slot, None)])
+
+    result = runner.invoke(
+        app, ["prune-layer-cache", "--model", "org/m", "--cache-dir", str(tmp_path)],
+        color=True,
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"stripe folder kept, delete manually: {stripe.path} (" in strip_ansi(result.stdout)
 
 
 def test_cli_prune_requires_yes(root):

@@ -72,3 +72,37 @@ def test_existing_recipe_output_confirmation_preserves_literal_path(tmp_path, mo
     assert f"File '{strip_control(output)}' already exists. Overwrite?" in strip_ansi(result.stdout)
     assert "\u202e" not in result.stdout
     assert output.read_text(encoding="utf-8") == "keep this"
+
+
+@pytest.mark.parametrize("flags", [[], ["--yes"]], ids=["interactive", "yes"])
+def test_recipe_output_directory_is_refused_before_confirmation(tmp_path, monkeypatch, flags):
+    monkeypatch.chdir(tmp_path)
+    directory = Path("recipe[local]")
+    directory.mkdir()
+    child = directory / "keep.yaml"
+    child.write_text("keep this", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recipes", "use", "llama3.1-8b-sft", "-o", str(directory), *flags], input="y\n",
+    )
+
+    assert result.exit_code == 1
+    output = strip_ansi(result.stdout)
+    assert "Cannot write --output recipe[local]: destination is a directory." in output
+    assert "Overwrite?" not in output
+    assert "Next: soup train" not in output
+    assert list(directory.iterdir()) == [child]
+    assert child.read_text(encoding="utf-8") == "keep this"
+
+
+def test_missing_recipe_output_parent_reports_write_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = Path("missing[local]") / "recipe.yaml"
+
+    result = runner.invoke(app, ["recipes", "use", "llama3.1-8b-sft", "-o", str(path), "-y"])
+
+    assert result.exit_code == 1
+    output = strip_ansi(result.stdout)
+    assert f"Cannot write --output {path}:" in output
+    assert "Next: soup train" not in output
+    assert not path.parent.exists()

@@ -202,14 +202,17 @@ def _factor_coeff(name: str, c: float) -> float:
     self (diagonal) term of the reconstruction is exactly ``c·B@A``
     (``√|c| · sign(c)√|c| = c``). Mirrors PEFT's ``combination_type='linear'``
     task-arithmetic. Non-LoRA tensors (biases / direct deltas) scale linearly
-    by ``c``.
+    by ``c``, including PEFT's ``lora_B.bias`` (``lora_bias=True``), which is
+    added once and not multiplied by ``lora_A``.
+
+    A factor is what :func:`_lora_role` calls one, so this path and the
+    ``--rank`` concat path agree on every name.
     """
-    lname = name.lower()
-    if "lora_a" in lname or "lora_embedding_a" in lname:
-        return math.sqrt(abs(c))
-    if "lora_b" in lname or "lora_embedding_b" in lname:
-        return math.copysign(math.sqrt(abs(c)), c)
-    return float(c)
+    role = _lora_role(name)
+    if role is None:
+        return float(c)
+    magnitude = math.sqrt(abs(c))
+    return magnitude if role[1] == "A" else math.copysign(magnitude, c)
 
 
 def merge_task_arithmetic(
@@ -247,9 +250,10 @@ def merge_task_arithmetic(
         tensors = [np.asarray(w[name], dtype=np.float64) for w in weights_list]
         if len({t.shape for t in tensors}) > 1:
             raise ValueError(
-                f"rank/shape mismatch on {name!r} across adapters — task "
-                f"arithmetic requires same-rank adapters (harmonize the LoRA "
-                f"rank first, or merge with `soup adapters merge --strategy svd`)"
+                f"rank/shape mismatch on {name!r} across adapters — the "
+                f"element-wise path requires the same rank on every module "
+                f"(harmonize the LoRA rank first, or take the concat path with "
+                f"`soup adapters arithmetic ... --rank N`)"
             )
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):

@@ -43,6 +43,8 @@ from typing import (
 )
 from urllib.parse import urlparse
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 # --- Part A: New formats ---------------------------------------------------
 
 # v0.42.0 new format strings on DataConfig.format Literal. Each is matched by
@@ -513,7 +515,7 @@ def parse_interleave(
                 raise ValueError(
                     f"interleave.probs[{index}] must be numeric"
                 )
-            entry_f = float(entry)
+            entry_f = float_with_overflow_check(entry, f"interleave.probs[{index}]")
             if not math.isfinite(entry_f):
                 raise ValueError(
                     f"interleave.probs[{index}] must be finite"

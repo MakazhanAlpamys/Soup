@@ -1012,6 +1012,9 @@ def test_resident_tokenizer_load_mirrors_the_streamed_route(
     raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
     base = Path(_write_config(tmp_path, raw)).as_posix()
     sentinel = object()
+    # The hint names tiktoken only when the package is absent (kimi_k2_tokenizer_hint), so
+    # pin that here: the assertion below must not depend on what the machine has installed.
+    monkeypatch.setattr(kimi_k2, "_tiktoken_available", lambda: False)
     monkeypatch.setattr(kimi_k2, "load_resident_model_config", lambda *a, **k: sentinel)
     seen = _spy_tokenizer_load(monkeypatch)
     printed = _record_console_prints(monkeypatch, module)

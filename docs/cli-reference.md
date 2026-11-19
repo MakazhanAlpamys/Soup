@@ -1563,8 +1563,8 @@ Usage: `soup data sample [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_sampled.jsonl) |
-| `--n`, `-n` | integer |  |  | Number of samples to select |
-| `--pct` | float |  |  | Percentage of dataset to sample (0-100) |
+| `--n`, `-n` | integer |  |  | Number of samples to select (positive integer) |
+| `--pct` | float |  |  | Percentage of dataset to sample in (0, 100] |
 | `--strategy`, `-s` | text | `random` |  | Sampling strategy: random, diverse (TF-IDF + clusters), hard (by length) |
 | `--seed` | integer |  |  | Random seed for reproducibility |
 
@@ -1770,6 +1770,7 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--citation-style` | text | `bracket` |  | Citation style for the live RAFT citation probe: bracket (\[doc-id]) / inline ((doc-id)) / footnote (\[^id]). Must match the style the model was trained to emit. (v0.71.17 #254) |
 | `--allow-not-run` | flag | off |  | Exit 0 even when a requested probe did not run (verdict NOT_RUN). Without it such a run exits 3. |
+| `--require-all-modes` | flag | off |  | With --evidence: a mode missing from the file is NOT_RUN instead of a neutral OK, so the run exits 3 unless --allow-not-run (#1525). |
 | `--shuffle-seed` | integer |  |  | RAFT document-shuffle seed for the live citation probe (composes the \[doc-N] ids the model is scored against). (v0.71.17 #254) |
 
 ## `soup diff`
@@ -2734,6 +2735,8 @@ Subcommands:
 - [`pause`](#soup-loop-pause)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
+- [`rollback`](#soup-loop-rollback)
+- [`set`](#soup-loop-set)
 - [`status`](#soup-loop-status)
 - [`watch`](#soup-loop-watch)
 
@@ -2748,6 +2751,7 @@ Usage: `soup loop canary [OPTIONS] NEW_ADAPTER`
 | `NEW_ADAPTER` | text |  | yes | Adapter id/path to canary. |
 | `--traffic` | text | `5%` |  | Traffic share, e.g. "5%" or "5". |
 | `--autoroll-on-regress` / `--no-autoroll-on-regress` | flag | on |  | Roll back automatically on MAJOR verdict. |
+| `--allow-dont-ship` | flag | off |  | Canary the adapter although its last verdict was DON'T SHIP. Recorded in loop.yaml, the progress log and, if it is promoted, the line that records the promotion. |
 
 ### `soup loop init`
 
@@ -2764,6 +2768,28 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--max-runs-per-day` | integer |  |  | Cap on iteration starts per UTC day. |
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
 | `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
+| `--base-model` | text |  |  | Model the pre-wired train stage starts from. Default: the registry entry's base model for a registry://&lt;id> served model, the base_model_name_or_path of a LoRA adapter directory, otherwise the served model itself. |
+| `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, \*.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
+| `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
+| `--canary-traffic` | text | `5%` |  | Share of keyed traffic a newly deployed adapter gets while its canary runs, e.g. "5%" (the default) or "10". |
+| `--canary-max-wait` | text | `24h` |  | How long after a canary started its ratings may stay short of the 30 per side the quality verdict needs: &lt;int>m, &lt;int>h or &lt;int>d, or plain seconds (at most 30d, default 24h). Then --canary-on-timeout applies. |
+| `--canary-on-timeout` | text |  |  | What happens when --canary-max-wait runs out: errors-only (the request-error verdict alone decides; the default), rollback (withdraw the canary) or wait (keep waiting, no time limit). A canary with no canary answers at all is withdrawn (timeout_no_answers) unless errors-only is given here: then it promotes with no evidence. |
+| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. An sft loop with a feedback log uses --min-new-edits and --min-new-rated instead. |
+| `--min-new-edits` | integer | `8` |  | An sft loop with a feedback log trains once at least this many new edits (corrected answers newer than the last training run) have arrived, or --min-new-rated new rated answers, whichever comes first. Default 8. |
+| `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
+| `--feedback-log` | text |  |  | Feedback log (JSONL: thumbs, ratings, edits and comments on logged answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. SOUP_LOOP_FEEDBACK_LOG overrides it. |
+| `--train-method` | text | `sft` |  | What the pre-wired loop trains: sft (the default; corrected answers and answers rated good), dpo (preference pairs) or kto (answers labelled good or bad). A loop.yaml without this field keeps dpo. |
+| `--sft-target-modules` | text |  |  | sft only: the LoRA target modules of the training config: all-linear, auto (the config schema's default) or a comma-separated list such as q_proj,v_proj. Default: the loop's built-in sft recipe (soup loop status). |
+| `--sft-lora-r` | integer |  |  | sft only: LoRA rank of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-lora-alpha` | integer |  |  | sft only: LoRA alpha of the training config, 1 to 4096. Default: the built-in recipe. |
+| `--sft-lr` | float |  |  | sft only: learning rate of the training config, above 0 and at most 1 (for example 2e-4). Default: the built-in recipe. |
+| `--sft-epochs` | integer |  |  | sft only: epochs of the training config, 1 to 100. Default: the built-in recipe. |
+| `--sft-batch-size` | integer |  |  | sft only: per-device micro-batch of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-grad-accum` | integer |  |  | sft only: gradient accumulation steps of the training config, 1 to 1024 (micro-batch x accumulation = the batch per optimizer step). Default: the built-in recipe. |
+| `--sft-seed` | integer |  |  | sft only: training seed of the training config, 0 to 4294967295. Default: the built-in recipe. |
+| `--sft-quantization` | text |  |  | sft only: quantization of the training config: 4bit, none or auto (none if the base model fits in free VRAM when training starts, else 4bit). Default: the built-in recipe. |
+| `--paraphraser-endpoint` | text |  |  | OpenAI-compatible base URL (this machine or LAN) of the model that writes paraphrases of the prompts of corrected answers, which the loop's verdict asks the new version instead of the original prompts. Needs --paraphraser-model. Default: the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT) with the tool token. |
+| `--paraphraser-model` | text |  |  | Model name sent to --paraphraser-endpoint, recorded as the generator of the paraphrases. A small served model paraphrases poorly: name a better one here. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`
@@ -2793,6 +2819,25 @@ Usage: `soup loop resume`
 
 Takes no options or arguments.
 
+### `soup loop rollback`
+
+Return to the version that was production before the last promotion.
+
+Usage: `soup loop rollback`
+
+Takes no options or arguments.
+
+### `soup loop set`
+
+Change ONE setting of an existing loop: base_model, trace_dir or verify.
+
+Usage: `soup loop set KEY VALUE`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `KEY` | text |  | yes | base_model, trace_dir or verify. |
+| `VALUE` | text |  | yes | The new value. |
+
 ### `soup loop status`
 
 Show counters and current status.
@@ -2810,7 +2855,7 @@ Usage: `soup loop watch [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--foreground` | flag | off |  | Run in foreground (default). |
-| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. |
+| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
 | `--pre-wired` | flag | off |  | Force the pre-wired production stages even if loop.yaml didn't set it. |
@@ -3511,7 +3556,7 @@ Usage: `soup serve [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--port`, `-p` | integer | `8000` |  | Port to serve on |
-| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs and adapter routes only: the generation routes take no token. |
+| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs, feedback and adapter routes only: the generation routes take no token. |
 | `--device` | text |  |  | Device: cuda, cuda:&lt;index>, mps or cpu. Auto-detected if not set. With the transformers backend, cpu loads on the CPU in float32 (unless --kv-cache-type bf16/f16 picks the dtype); cuda:&lt;index> and mps are pinned to that device; cuda uses device_map=auto, all in float16. |
 | `--max-tokens` | integer | `512` |  | Default max tokens for generation |
 | `--backend` | text | `transformers` |  | Inference backend: transformers (default), vllm, sglang, or mii |
@@ -3521,6 +3566,7 @@ Usage: `soup serve [OPTIONS]`
 | `--speculative-decoding` | text |  |  | Draft model for speculative decoding (smaller/faster model ID or path) |
 | `--num-speculative-tokens` | integer | `5` |  | Number of tokens the draft model generates per step (speculative decoding) |
 | `--adapters` | text, repeatable |  |  | LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter |
+| `--adapter-dir` | text |  |  | Directory runtime adapters may be loaded from through POST /v1/adapters/load (needs --tool-auth-token). Not set: the route is off. |
 | `--prefix-cache` | flag | off |  | Enable vLLM prefix caching for shared system prompts (RAG/agent workloads). |
 | `--auto-spec` | flag | off |  | Auto-pair draft model for speculative decoding based on target model. |
 | `--structured-output` | text | `off` |  | Constrain generation: off (default) \| json \| regex. |
@@ -3531,9 +3577,10 @@ Usage: `soup serve [OPTIONS]`
 | `--trace-endpoint` | text |  |  | OTLP endpoint URL (default: http://localhost:4317). |
 | `--auto-quant` | flag | off |  | Unavailable until Soup can measure each loaded candidate; the command refuses instead of guessing a format. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
-| `--trace-log` | text |  |  | Append per-request {prompt, response, latency_ms, tokens, ts} to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
+| `--trace-log` | text |  |  | Append one conversation record per answer (the v1 format of docs/loop-formats.md) to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
 | `--trace-log-cap-mb` | integer | `100` |  | Rotation cap in MB for --trace-log (1 - 10000). Default 100. |
 | `--record-thumbs` | text |  |  | Auto-capture thumbs-up/down feedback into a local-rl SQLite at this path via POST /v1/thumbs. Path must stay under cwd. Transformers backend only. v0.71.1 (#230). |
+| `--feedback-log` | text |  |  | Append feedback (POST /v1/feedback) as JSONL records to this path; must stay under cwd. |
 | `--reasoning-parser` | text |  |  | Strip reasoning-trace blocks from responses. One of: deepseek-r1 \| qwen3 \| phi4 \| openthinker. v0.53.9 #98. |
 | `--steer` | text |  |  | Apply a stored activation-steering vector at decode time (CAA / ITI / RepE). Pass the name registered via `soup steer train`; the transformers backend installs the decode hook after loading the model. |
 | `--steer-strength` | float | `1.0` |  | Steering strength multiplier (\|s\| &lt;= 10.0). Ignored when --steer is unset. |
@@ -3542,7 +3589,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
 | `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
-| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
+| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
 
@@ -3556,8 +3603,10 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--base` | text |  |  | Base model id/path (the 'before'). |
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
+| `--base-adapter` | text |  |  | LoRA adapter applied to the base side (before = base + this adapter), e.g. the current production version. Live run with --adapter only. |
 | `--task-eval` | text |  |  | JSONL of leg-1 task-win eval tasks. |
-| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate). |
+| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs --reward-fn). |
+| `--reward-fn` | text |  |  | Reward function for --task-mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| path/to/file.py. A .py file is EXECUTED as Python code on this machine (it must sit under the working directory and not be a symlink): only use a file you trust. It is called once per row and returns one number in \[0, 1]; the verdict is decided on the mean. |
 | `--noise-floor` | integer |  |  | Re-run the BASE model N times (2-10) to measure what this instrument can resolve, print it beside the verdict, and refuse to call any delta smaller than the measured floor significant. Costs N extra base passes. The leg-1 task floor is measured in every --task-mode; in judge_score / pairwise each repeat is N extra JUDGE passes (N x the judge API calls), and the floor is labelled decode + judge. |
 | `--judge-model` | text |  |  | Judge model URL for --task-mode judge_score or pairwise. |
 | `--general-suite` | text |  |  | Comma list of leg-2 benchmarks (default: the bundled offline suite — MCQ/arithmetic + tool-call/JSON/safety; non-bundled names route through lm-eval). |
@@ -3572,6 +3621,9 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
+| `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
+| `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
 
 ## `soup shrink`
 
@@ -3755,6 +3807,7 @@ Usage: `soup train [OPTIONS]`
 | `--profile` | flag | off |  | Record a torch.profiler trace (Chrome trace JSON) during early training steps. Output: &lt;output>/profiles/&lt;run_id>.trace.json |
 | `--allow-oom-attempt` | flag | off |  | Bypass the analytical hardware-fit VRAM gate and launch even when the run is predicted to run out of GPU memory (opt-out). |
 | `--diagnose-gate` | text |  |  | After training, run `soup diagnose` against the supplied evidence JSON (or scratch evidence). Refuses to mark the run successful if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3). |
+| `--diagnose-gate-require-all-modes` | flag | off |  | With --diagnose-gate: a mode missing from the evidence JSON counts as NOT_RUN (exit 3) instead of a neutral OK, so the gate proves coverage. |
 | `--annex-xi` | text |  |  | After training, render an EU AI Act Annex XI/XII auto-doc to the given output path (cwd-contained). Markdown body now; PDF in v0.59.1. |
 | `--repro-receipt` | text |  |  | After training, write an SR 11-7-style reproducibility receipt (seeds + kernel versions + GPU + OS) to the given path. v0.59.0. |
 | `--capture-activations` | text |  |  | After training, capture residual-stream activations at the named decoder layer (e.g. model.layers.5) on --capture-prompts and write them to &lt;output>/activations/activations.json for soup probe sae-diff / sleeper. v0.71.8 #219. |

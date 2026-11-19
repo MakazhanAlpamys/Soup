@@ -129,7 +129,7 @@ def test_legacy_option_conflict_exit_two_is_not_a_numerical_fail(
         args.extend(["--validate-onnx", "--prompts", str(prompts)])
     result = _invoke(tmp_path, args)
     assert result.exit_code == 2, result.output
-    assert "require --format gguf" in " ".join(strip_ansi(result.output).split())
+    assert "requires --format gguf" in " ".join(strip_ansi(result.output).split())
     assert "ONNX Logits Validation" not in result.output
     assert "FAIL" not in result.output
     exporter.assert_not_called()
@@ -174,7 +174,7 @@ def test_merged_reference_lives_until_validation_and_is_cleaned(tmp_path, monkey
     (adapter / "adapter_config.json").write_text('{"base_model_name_or_path": "local-base"}')
     merged = tmp_path / "merged"
     merged.mkdir()
-    monkeypatch.setattr(export, "_merge_dir_for", lambda _: (merged, True))
+    monkeypatch.setattr(export, "_merge_dir_for", lambda _: merged)
     monkeypatch.setattr(export, "_merge_adapter", Mock())
 
     def validate(source, output, prompts, **kwargs):

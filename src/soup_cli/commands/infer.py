@@ -11,8 +11,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -677,14 +678,10 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Quote the dataset-derived filename first, then escape and
-            # control-strip it (repr() after the escape would double the
-            # escape's backslash and make a tag live again); the exception,
-            # whose message embeds that filename, is escaped too.
-            name = for_terminal(repr(Path(str(audio)).name))
-            console.print(
-                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
-            )
+            name = repr(Path(str(audio)).name)
+            console.print(Text.assemble(
+                "Skipped ", terminal_text(name), ": ", terminal_text(exc), style="yellow",
+            ))
             continue
         rec = {"audio": audio, "transcription": hyp}
         ref = row.get("text")
@@ -697,11 +694,11 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(repr(Path(str(audio)).name))
-                console.print(
-                    f"[yellow]Metric skipped for {name}: "
-                    f"{for_terminal(str(exc))}[/]"
-                )
+                name = repr(Path(str(audio)).name)
+                console.print(Text.assemble(
+                    "Metric skipped for ", terminal_text(name), ": ", terminal_text(exc),
+                    style="yellow",
+                ))
             else:
                 rec["reference"] = ref
                 rec["wer"] = row_wer
@@ -721,11 +718,13 @@ def _infer_asr(
 
     atomic_write_text("\n".join(out_lines) + "\n", output_file, field="--output")
 
-    summary = f"Transcribed [bold]{len(out_lines)}[/] clip(s) -> {output_file}"
+    summary = Text.assemble(
+        "Transcribed ", (str(len(out_lines)), "bold"), " clip(s) -> ", terminal_text(output_file),
+    )
     if skipped:
-        summary += f"  ([yellow]{skipped} skipped[/])"
+        summary.append("  (").append(f"{skipped} skipped", style="yellow").append(")")
     if refs:
-        summary += f"\nCorpus WER: [bold]{corpus_wer(refs, hyps):.3f}[/]"
+        summary.append("\nCorpus WER: ").append(f"{corpus_wer(refs, hyps):.3f}", style="bold")
     console.print(Panel(summary, title="[bold green]ASR Complete![/]"))
 
 

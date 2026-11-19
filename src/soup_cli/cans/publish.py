@@ -10,9 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from soup_cli.cans.unpack import inspect_can
+from rich.console import Console
+
+from soup_cli.cans.unpack import inspect_can, read_config
 from soup_cli.utils.hf import resolve_token, validate_repo_id
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.redaction import RedactionReport, redact_config, redact_text
+from soup_cli.utils.terminal import for_terminal
 
 CAN_HF_TAG = "can-format-v1"
 _MAX_COMMIT_MESSAGE_LEN = 200
@@ -26,12 +30,29 @@ def _sanitize_commit_message(message: Optional[str]) -> str:
     return first_line[:_MAX_COMMIT_MESSAGE_LEN] or f"Upload .can ({CAN_HF_TAG})"
 
 
+def credential_paths(can_path: str, description: Optional[str] = None) -> list[str]:
+    """Key paths of a can's config (and ``description``) that hold what looks like a credential.
+
+    A scan only: nothing is rewritten, and a config that cannot be read gives no paths
+    (publishing is not blocked by it). Attestations are not looked at.
+    """
+    try:
+        _, report = redact_config(read_config(can_path))
+    except Exception:
+        report = RedactionReport()
+    paths = list(report.paths)
+    if description and redact_text(description) != description:
+        paths.append("description")
+    return paths
+
+
 def publish_can(
     can_path: str, *,
     repo_id: str,
     token: Optional[str] = None,
     private: bool = False,
     commit_message: Optional[str] = None,
+    console: Optional[Console] = None,
 ) -> str:
     """Upload a ``.can`` file to ``hf_hub://datasets/<repo_id>``.
 
@@ -44,6 +65,9 @@ def publish_can(
         - Token is resolved via ``utils.hf.resolve_token`` (env > cache files).
         - Commit message is first-line-only, capped at 200 chars to prevent
           multi-line injection into public HF history.
+        - The can's config and description are scanned for credentials and a warning
+          naming the key paths (never the values) is printed on ``console``; the file is
+          uploaded as it is (``soup can pack`` / ``fork`` already redact what they write).
     """
     src = Path(can_path)
     if not is_under_cwd(src):
@@ -54,6 +78,16 @@ def publish_can(
     validate_repo_id(repo_id)
     # inspect_can also enforces is_under_cwd + parses the manifest schema.
     manifest = inspect_can(str(src))
+
+    flagged = credential_paths(str(src), manifest.description)
+    if flagged:
+        shown = ", ".join(for_terminal(path) for path in flagged[:20])
+        (console or Console()).print(
+            "[yellow]WARNING:[/] this can's config may still hold credentials at: "
+            f"{shown}{' (+more)' if len(flagged) > 20 else ''}. "
+            "It is uploaded as it is; read it before publishing.",
+            soft_wrap=True, highlight=False,
+        )
 
     resolved = token or resolve_token()
     if not resolved:

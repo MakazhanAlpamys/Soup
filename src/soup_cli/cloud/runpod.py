@@ -22,7 +22,9 @@ from soup_cli.cloud._common import (
 )
 
 SUPPORTED_CLOUDS = frozenset({"runpod"})
-# REST v1 gpuTypeIds, verified against the provider's published OpenAPI schema.
+# REST API v2 ``gpu.id`` values, as listed in RunPod's GPU types table
+# (https://docs.runpod.io/references/gpu-types). The v2 schema does not enumerate them
+# ("as returned by GET /v2/catalog/gpus"), so only a live catalog read confirms them.
 _GPU_IDS = types.MappingProxyType(
     {
         "a100": "NVIDIA A100-SXM4-80GB",
