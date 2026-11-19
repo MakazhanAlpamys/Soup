@@ -1,0 +1,46 @@
+{
+  "task": "preference",
+  "mode": "resident",
+  "quantization": "none",
+  "instrument": "initial scale 1024, set in the harness only",
+  "default_initial_scale": 65536.0,
+  "effective_initial_scale": 1024.0,
+  "attempt_cap": 1,
+  "attempts": [
+    {
+      "step": 1,
+      "scale_before": 1024.0,
+      "scale_after": 1024.0,
+      "optimizer_skipped": false,
+      "adapter_max_delta": 1.99999976757681e-05,
+      "loss": 25.0,
+      "grad_norm": 26.783069610595703
+    }
+  ],
+  "skipped_steps": 0,
+  "first_applied_step": 1,
+  "fixture_sha256": "d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80",
+  "layer_reads": null,
+  "default_adapter_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "ref_adapter_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "adapter_reload": true,
+  "peak_allocated_bytes": 17396224
+}

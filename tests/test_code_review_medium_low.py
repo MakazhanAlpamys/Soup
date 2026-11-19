@@ -73,7 +73,43 @@ def test_ema_and_median_use_window_size():
 
 
 def test_sse_metric_push_preserves_zero():
-    assert "float(loss) if loss is not None else None" in _src("monitoring/callback.py")
+    # The live event sends `row_loss` / `row_lr` (the carried values, or NULL for a
+    # reward-bearing log that carried no loss): `is not None`, never truthiness.
+    source = _src("monitoring/callback.py")
+    assert "float(row_loss) if row_loss is not None else None" in source
+    assert "float(row_lr) if row_lr is not None else None" in source
+
+
+def test_sse_metric_push_sends_a_real_zero_as_zero_not_none():
+    """The source pin above is text; this is the behaviour it protects: a 0.0 loss, lr,
+    grad norm and reward each reach the live event as 0.0 (a falsy-value test would send
+    None), and a reward-only log sends its reward as 0.0 with no loss at all."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from soup_cli.monitoring.callback import SoupTrainerCallback
+    from soup_cli.utils.sse_train_stream import to_payload
+    from soup_cli.utils.train_event_buffer import get_global_buffer, reset_global_buffer
+
+    def push(**logs):
+        reset_global_buffer()
+        callback = SoupTrainerCallback(display=MagicMock(), tracker=None, run_id="")
+        callback.on_log(
+            SimpleNamespace(), SimpleNamespace(global_step=3, epoch=1.0), SimpleNamespace(),
+            logs=logs,
+        )
+        (event,) = get_global_buffer().snapshot()
+        return to_payload(event)
+
+    try:
+        payload = push(loss=0.0, learning_rate=0.0, grad_norm=0.0, reward=0.0, reward_std=0.0)
+        for key in ("loss", "lr", "grad_norm", "reward", "reward_std"):
+            assert payload[key] == 0.0, key
+        reward_only = push(**{"objective/scores": 0.0})
+        assert reward_only["reward"] == 0.0
+        assert "loss" not in reward_only and "lr" not in reward_only
+    finally:
+        reset_global_buffer()
 
 
 def test_deploy_target_rejects_windows_drive_absolute():

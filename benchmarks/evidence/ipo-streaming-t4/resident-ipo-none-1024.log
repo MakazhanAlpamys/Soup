@@ -1,0 +1,25 @@
+Loading tokenizer: 
+<tmp>/pytest-1/test_cuda_first_applied_update0/model
+Loading model: 
+<tmp>/pytest-1/test_cuda_first_applied_update0/model
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 2108.45it/s]
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 84,032 total (2.13%)
+Adding EOS to train dataset:   0%|          | 0/4 [00:00<?, ? examples/s]Adding EOS to train dataset: 100%|██████████| 4/4 [00:00<00:00, 1090.92 examples/s]
+Tokenizing train dataset:   0%|          | 0/4 [00:00<?, ? examples/s]Tokenizing train dataset: 100%|██████████| 4/4 [00:00<00:00, 597.86 examples/s]
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]Map: 100%|██████████| 4/4 [00:00<00:00, 767.55 examples/s]
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 3}.
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:00<00:00,  1.39it/s]                                             {'loss': '25', 'grad_norm': '26.78', 'learning_rate': '2e-05', 'entropy': '4.146', 'num_tokens': '7', 'logits/chosen': '0.00147', 'logits/rejected': '0.00356', 'mean_token_accuracy': '0', 'rewards/chosen': '0', 'rewards/rejected': '0', 'rewards/accuracies': '0', 'rewards/margins': '0', 'logps/chosen': '-11.96', 'logps/rejected': '-8.064', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:00<00:00,  1.39it/s]                                             {'train_runtime': '0.7638', 'train_samples_per_second': '1.309', 'train_steps_per_second': '1.309', 'train_loss': '25', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:00<00:00,  1.39it/s]100%|██████████| 1/1 [00:00<00:00,  1.31it/s]
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 2672.99it/s]
+.
+=============================== warnings summary ===============================
+tests/test_ipo_streaming.py: 14 warnings
+  <site-packages>/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 14 warnings in 14.06s

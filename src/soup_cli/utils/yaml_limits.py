@@ -371,6 +371,95 @@ def load_yaml_limited(source: str | bytes, what: str, *, max_bytes: int) -> obje
     return data
 
 
+def duplicate_keys_in_sequence_mappings(
+    source: str | bytes,
+    what: str,
+    *,
+    sequence_key: str,
+    max_bytes: int,
+) -> list[tuple[str, int]]:
+    """Return repeated scalar keys in mappings inside one named sequence.
+
+    YAML merge keys are ignored because an explicit key is allowed to override
+    a merged default. The input is size and nesting bounded, and parsing stays
+    centralized here alongside the limited YAML loader.
+    """
+    if isinstance(source, str):
+        source_bytes = len(source.encode("utf-8", "surrogatepass"))
+    elif isinstance(source, bytes):
+        source_bytes = len(source)
+    else:
+        raise TypeError(f"{what} must be str or bytes, got {type(source).__name__}")
+    if source_bytes > max_bytes:
+        raise _size_error(what, max_bytes)
+
+    loader = _LimitedLoader(source, node_budget=source_bytes + ALIAS_EXPANSION_SLACK)
+    try:
+        root = loader.get_single_node()
+    except _TooDeepError:
+        raise _nesting_error(what) from None
+    except _MergeChainError:
+        raise YamlLimitError(
+            f"{what} chains merge keys more than {MAX_YAML_NESTING} levels deep; refusing"
+        ) from None
+    except _MergeBudgetError:
+        raise _expansion_error(
+            what, source_bytes + ALIAS_EXPANSION_SLACK, source_bytes
+        ) from None
+    except RecursionError:
+        raise YamlLimitError(
+            f"{what} is nested or chained too deeply to load; refusing"
+        ) from None
+    finally:
+        loader.dispose()
+
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    sequence_node: yaml.Node | None = None
+    for key_node, value_node in root.value:
+        if (
+            isinstance(key_node, yaml.ScalarNode)
+            and key_node.tag == "tag:yaml.org,2002:str"
+            and key_node.value == sequence_key
+        ):
+            # Match safe_load: when a root key is repeated, its last value is
+            # the one used to build the resulting mapping.
+            sequence_node = value_node
+    if not isinstance(sequence_node, yaml.SequenceNode):
+        return []
+
+    duplicates: list[tuple[str, int]] = []
+    visited: set[int] = set()
+
+    def scan_node(node: yaml.Node) -> None:
+        if isinstance(node, yaml.SequenceNode):
+            for child in node.value:
+                scan_node(child)
+            return
+        if not isinstance(node, yaml.MappingNode) or id(node) in visited:
+            return
+        visited.add(id(node))
+
+        seen: set[tuple[str, str]] = set()
+        for key_node, value_node in node.value:
+            if key_node.tag == _MERGE_TAG:
+                # Each merged source is checked independently: explicit task
+                # keys may override defaults, and different sources may
+                # intentionally provide the same key with YAML precedence.
+                scan_node(value_node)
+                continue
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue
+            identity = (key_node.tag, key_node.value)
+            if identity in seen:
+                duplicates.append((key_node.value, key_node.start_mark.line + 1))
+            seen.add(identity)
+
+    for mapping_node in sequence_node.value:
+        scan_node(mapping_node)
+    return duplicates
+
+
 def read_text_limited(
     path: str | os.PathLike[str], what: str, *, max_bytes: int
 ) -> str:

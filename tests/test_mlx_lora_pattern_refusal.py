@@ -199,11 +199,16 @@ class TestOtherRefusalsKeepTheirOwnWords:
 
     def test_full_fine_tuning_keeps_its_own_message(self) -> None:
         # lora.r=0 builds no adapter, so there is nothing for a pattern to override
-        # on any backend; MLX is refused for r=0 itself before this check runs.
+        # on any backend; full-FT names the conflicting LoRA control first.
         with pytest.raises(ValidationError) as excinfo:
-            _config("sft", r=0, rank_pattern={"q_proj": 4})
+            SoupConfig(
+                base="test/model", backend="mlx", data={"train": "d.jsonl"},
+                training={"quantization": "none", "lora": {"r": 0,
+                                                          "rank_pattern": {"q_proj": 4}}},
+            )
         msg = " ".join(str(excinfo.value).split())
-        assert "training.lora.r=0 (full fine-tuning) requires backend='transformers'" in msg
+        assert "training.lora.r=0 means full fine-tuning (no adapter)" in msg
+        assert "lora.rank_pattern" in msg
         assert "is not applied by backend: mlx" not in msg
 
 

@@ -53,8 +53,10 @@ def pinned_text_architectures(tag: str) -> frozenset[str]:
 def probe_text_architectures(converter: Path) -> frozenset[str] | None:
     """Return advertised TEXT models, or None when the probe is inconclusive.
 
-    b5270 writes grouped capabilities to stderr. A nonzero exit, timeout, missing
-    interpreter/dependency or an unrecognized/empty listing proves no exclusion.
+    The converter writes grouped capabilities to stderr (b5270 printed TEXT/VISION;
+    since the conversion/ package split, b12423-era builds print TEXT and MMPROJ
+    sections). A nonzero exit, timeout, missing interpreter/dependency or an
+    unrecognized/empty listing proves no exclusion.
     """
     try:
         result = subprocess.run(
@@ -69,7 +71,10 @@ def probe_text_architectures(converter: Path) -> frozenset[str] | None:
     for output in (result.stderr, result.stdout):
         kind = None
         for line in output.splitlines():
-            heading = re.search(r"(?:^|:)\s*(TEXT|VISION) models:\s*$", line)
+            # Since the conversion/ package split, the listing also has an
+            # MMPROJ section (conversion/__init__.py print_registered_models).
+            # Recognize it so its entries cannot leak into the TEXT set.
+            heading = re.search(r"(?:^|:)\s*(TEXT|VISION|MMPROJ) models:\s*$", line)
             if heading:
                 kind = heading[1]
                 continue

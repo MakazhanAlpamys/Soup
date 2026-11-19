@@ -28,7 +28,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.utils._eval_text import row_text
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 from soup_cli.utils.topics import build_topic_report, kmeans, resolve_k
 
 console = Console()
@@ -98,7 +98,11 @@ def topics(
         # The report must never replace the dataset it describes (#2226).
         refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
-    rows = load_raw_data(file_path)
+    try:
+        rows = load_raw_data(file_path)
+    except (OSError, ValueError) as exc:
+        console.print(terminal_text(f"Cannot load dataset {path}: {exc}", "red"))
+        raise typer.Exit(1) from exc
     if not rows:
         console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
@@ -155,7 +159,9 @@ def topics(
     )
 
     if output is not None:
-        atomic_write_text(
-            json.dumps(_report_to_dict(report), indent=2), output
-        )
+        try:
+            atomic_write_text(json.dumps(_report_to_dict(report), indent=2), output)
+        except (OSError, ValueError) as exc:
+            console.print(terminal_text(f"Cannot write --output {output}: {exc}", "red"))
+            raise typer.Exit(1) from exc
         console.print(f"[green]Report written:[/] [bold]{for_terminal(output)}[/]", emoji=False)

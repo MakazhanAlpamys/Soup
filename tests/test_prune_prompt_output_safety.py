@@ -89,21 +89,28 @@ def test_prune_cli_rejects_input_as_output(
     assert "same file" in message
 
 @pytest.mark.parametrize("token_aware", [False, True], ids=["char", "token"])
+@pytest.mark.parametrize(
+    ("encoding", "newline"),
+    [("utf-8", "\n"), ("utf-8-sig", "\r\n")],
+    ids=["plain", "bom-crlf"],
+)
 def test_prune_writes_distinct_output_without_changing_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     token_aware: bool,
+    encoding: str,
+    newline: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     source = Path("traces.jsonl")
     destination = Path("pruned.jsonl")
     rows = [
-        {"prompt": "SYSTEM: alpha", "output": "one", "metadata": {"id": 1}},
+        {"prompt": "SYSTEM: alpha", "output": "one\ufeffin text", "metadata": {"id": 1}},
         {"prompt": "SYSTEM: beta", "output": "two", "metadata": {"id": 2}},
     ]
     original = (
-        "\n".join(json.dumps(row) for row in rows) + "\n"
-    ).encode("utf-8")
+        newline.join(json.dumps(row, ensure_ascii=False) for row in rows) + newline
+    ).encode(encoding)
     source.write_bytes(original)
 
     tokenizer = CharacterTokenizer() if token_aware else None
@@ -121,7 +128,7 @@ def test_prune_writes_distinct_output_without_changing_input(
         for line in destination.read_text(encoding="utf-8").splitlines()
     ]
     assert actual_rows == [
-        {"prompt": "alpha", "output": "one", "metadata": {"id": 1}},
+        {"prompt": "alpha", "output": "one\ufeffin text", "metadata": {"id": 1}},
         {"prompt": "beta", "output": "two", "metadata": {"id": 2}},
     ]
     assert report.prefix == "SYSTEM: "

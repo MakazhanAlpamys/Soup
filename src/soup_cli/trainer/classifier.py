@@ -36,6 +36,8 @@ from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.classifier import (
     QUERY_ID_KEY,
     RANKING_TASKS,
+    classification_metrics,
+    classification_skip_reason,
     ranking_metrics,
     ranking_query_groups,
     ranking_relevance,
@@ -44,8 +46,11 @@ from soup_cli.utils.classifier import (
     validate_query_id,
 )
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    upcast_trainable_half_to_fp32,
+)
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -261,6 +266,50 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
                     )
 
 
+def _eval_logits(eval_pred: Any) -> Any:
+    """The logits of an ``EvalPrediction``, unwrapped when the model returns a tuple."""
+    logits = eval_pred.predictions
+    if isinstance(logits, (tuple, list)) and len(logits) and hasattr(logits[0], "shape"):
+        logits = logits[0]
+    return logits
+
+
+def build_classification_compute_metrics(
+    cfg: SoupConfig, dataset: dict
+) -> Optional[Callable[[Any], dict[str, float]]]:
+    """``compute_metrics`` reporting accuracy and F1 for ``task: classifier`` (#2638).
+
+    Returns None, so Hugging Face keeps logging ``eval_loss`` only, when the
+    task is not ``classifier`` or there are no validation rows; and, with one
+    line saying why, for a ``num_labels: 1`` single-label head. The metrics
+    reach the Hugging Face log and ``trainer_state.json`` as ``eval_accuracy``
+    and ``eval_f1_macro`` (single-label) or ``eval_subset_accuracy``,
+    ``eval_f1_micro`` and ``eval_f1_macro`` (multi-label); the recorded
+    validation number stays ``eval_loss``.
+    """
+    if cfg.task != "classifier":
+        return None
+    if not dataset.get("val"):
+        return None
+    tcfg = cfg.training
+    if tcfg.num_labels is None:
+        return None
+    num_labels = int(tcfg.num_labels)
+    multi_label = (tcfg.classifier_kind == "multi_label")
+
+    reason = classification_skip_reason(num_labels, multi_label)
+    if reason is not None:
+        console.print(f"[yellow]Classification metrics skipped:[/] {reason}.")
+        return None
+
+    def compute_metrics(eval_pred: Any) -> dict[str, float]:
+        return classification_metrics(
+            _eval_logits(eval_pred), eval_pred.label_ids, num_labels, multi_label
+        )
+
+    return compute_metrics
+
+
 def build_ranking_compute_metrics(
     cfg: SoupConfig, dataset: dict
 ) -> Optional[Callable[[Any], dict[str, float]]]:
@@ -318,10 +367,7 @@ def build_ranking_compute_metrics(
     queries_split = float(counts["queries_split"])
 
     def compute_metrics(eval_pred: Any) -> dict[str, float]:
-        logits = eval_pred.predictions
-        if isinstance(logits, (tuple, list)) and len(logits) and hasattr(logits[0], "shape"):
-            logits = logits[0]
-        scores = ranking_scores(logits, num_labels, multi_label)
+        scores = ranking_scores(_eval_logits(eval_pred), num_labels, multi_label)
         relevance = ranking_relevance(eval_pred.label_ids, num_labels, multi_label)
         if len(scores) != len(groups):
             raise RuntimeError(
@@ -408,12 +454,28 @@ class ClassifierTrainerWrapper:
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
+        # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
+        # behaviour; opting in wraps the SeqCls head with a SEQ_CLS LoRA so
+        # only the adapter (+ classification head) trains. ``lora.r`` defaults
+        # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
+        # positive rank (a rank of 0 would be a no-op LoRA). Decided before the
+        # load, because it decides whether the base trains (#2941).
+        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
+            tcfg.lora.r > 0
+        )
+
         console.print(f"[dim]Loading classifier model: {cfg.base}[/]")
+        # #2941: a full fine-tune steps every base weight, so it loads fp32 master
+        # weights, as sft, pretrain, embedding and prm do (#339, #1235). With no
+        # ``dtype`` transformers 5 loads the checkpoint's own (``"auto"``): bf16 for
+        # most decoder bases, where AdamW steps of about ``lr`` round away.
         self.model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base,
             num_labels=num_labels,
             problem_type=problem_type,
             trust_remote_code=self._trust_remote_code,
+            dtype=resolve_base_load_dtype(self.device, full_finetune=not self._lora_active),
             **base_revision_kwargs(cfg.base),
         )
         label_names = (
@@ -423,15 +485,6 @@ class ClassifierTrainerWrapper:
             self.model.config.id2label = {i: name for i, name in enumerate(label_names)}
             self.model.config.label2id = {name: i for i, name in enumerate(label_names)}
 
-        # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
-        # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
-        # behaviour; opting in wraps the SeqCls head with a SEQ_CLS LoRA so
-        # only the adapter (+ classification head) trains. ``lora.r`` defaults
-        # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
-        # positive rank (a rank of 0 would be a no-op LoRA).
-        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
-            tcfg.lora.r > 0
-        )
         if self._lora_active:
             from peft import TaskType, get_peft_model
 
@@ -540,9 +593,13 @@ class ClassifierTrainerWrapper:
         # #2618: ranking quality for reranker / cross_encoder. The query ids are
         # read from the raw rows here, because the map above drops every source
         # column; evaluation keeps row order, so predictions line up with them.
-        compute_metrics = (
-            build_ranking_compute_metrics(cfg, dataset) if eval_ds is not None else None
-        )
+        # #2638: accuracy and F1 for classifier.
+        compute_metrics = None
+        if eval_ds is not None:
+            if cfg.task in RANKING_TASKS:
+                compute_metrics = build_ranking_compute_metrics(cfg, dataset)
+            else:
+                compute_metrics = build_classification_compute_metrics(cfg, dataset)
 
         self.trainer = Trainer(
             model=self.model,
@@ -598,6 +655,14 @@ class ClassifierTrainerWrapper:
                 )
             )
         align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
+        # #2941: on the LoRA path peft trains a copy of the classification head
+        # (``modules_to_save``) in the frozen base's dtype; give it an fp32 master
+        # weight wherever autocast runs the step.
+        upcast_trainable_half_to_fp32(
             self.trainer.model,
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),

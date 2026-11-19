@@ -143,3 +143,34 @@ def test_config_paths_values_and_benchmarks_render_literally(tracker):
     text = _compare("first", "second")
     assert "[red]:warning:" in text and "[bold]left[/bold]" in text
     assert "[green]:warning:" in text and "[blue]right[/blue]" in text
+
+
+_CLI_REFERENCE = Path(__file__).resolve().parents[1] / "docs" / "cli-reference.md"
+
+
+def _plain(text: str) -> str:
+    """ANSI- and panel-border-stripped, whitespace-collapsed CLI output."""
+    return " ".join(re.sub("[─-╿]", " ", strip_ansi(text)).split())
+
+
+def test_compare_help_and_the_cli_reference_say_the_same_thing():
+    """#2774: #2706 described the command on the generated CLI page and left its help
+    alone, so `--help` said less than the page. The page is rendered from the help; this
+    reads both and compares what a reader sees."""
+    page = _CLI_REFERENCE.read_text(encoding="utf-8")
+    section = page.split("\n### `soup runs compare`\n", 1)[1]
+    description = " ".join(section.split("\nUsage: ", 1)[0].split())
+    assert description.startswith("Compare two local training runs side by side."), description
+    result = CliRunner().invoke(app, ["runs", "compare", "--help"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert description in _plain(result.output), (description, result.output)
+
+
+def test_runs_listing_keeps_compare_to_one_line():
+    """The longer description is for `soup runs compare --help` and the reference page;
+    the Commands panel of `soup runs --help` shows one row per command, not a paragraph."""
+    result = CliRunner().invoke(app, ["runs", "--help"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    listing = _plain(result.output)
+    assert "compare Compare two local training runs side by side. delete" in listing, listing
+    assert "SHA-256" not in listing, listing

@@ -93,42 +93,39 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.77.2 — v0.77.1'den sonra `main`'in bir kesiti: 159 pull request, bunların 153'ü bakımcı
-dışındaki 30 kişiden.** Büyük kısmı düzeltme. Ayrıca yeni özellikler ve v0.77.1'in kabul ettiğini
-reddedebilen iki kural getiriyor; bu yüzden bir sunucuyu ya da bir `task: sft` yapılandırmasını
-yükseltmeden önce [v0.77.2 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) okuyun. 0.76.x'ten geliyorsanız önce
+**v0.78.0 — v0.77.2'den sonra `main`'in bir kesiti: 271 pull request, bunların 218'i bakımcı
+dışındaki 48 kişiden.** Yeni özellikler getiriyor ve v0.77.2'nin kabul ettiği bazı girdileri
+reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yükseltmeden önce
+[v0.78.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) okuyun. 0.76.x'ten geliyorsanız önce
 `soup doctor --config soup.yaml` komutunu çalıştırın ve [v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **`soup profile --model <id>`, `soup.yaml` olmadan "sığar mı?" sorusunu yanıtlıyor.** Çalıştırmayı
-  modelin `config.json` dosyasından fiyatlıyor; sonucu `--seq`, `--batch`, `--method`, `--lora-r`,
-  `--optimizer` ve `--gradient-checkpointing` belirliyor; Apple Silicon'da Metal'in çalışma kümesiyle
-  karşılaştırıyor. `soup plan` ve `soup apply` artık `--minillm-on-policy` alıyor.
-- **Apple Silicon'da daha fazla eğitim.** `preference_loss: dpo`, `orpo` ya da `simpo` ile
-  `task: preference` yerel MLX eğiticisini çalıştırıyor, MLX GRPO 4-bit `mlx-community` tabanlarında
-  eğitiliyor ve MLX Adafactor yapılandırılmış öğrenme oranını ve çizelgesini izliyor.
-- **İki yeni DPO tarifi:** `qwen3.5-0.8b-dpo` ve `qwen3.5-27b-dpo`.
-- **Daha yakın VRAM tahminleri.** Optimizer adımı kendi başına bir aşama; bir PRM adımına tek konumun
-  logit'leri yazılıyor; parçalanmış bir FSDP ya da ZeRO çalıştırması kart başına fiyatlanıyor;
-  `stream_loss_chunk` adımına son katmanının yeniden hesaplaması yazılıyor; Unsloth'un LoRA hedefleri
-  yükleyicisinin seçtiği gibi hesaplanıyor.
-- **Sessiz üzerine yazmalar ve boş sonuçlar azaldı.** Daha fazla komut, bir girdiyi adlandıran
-  `--output` değerini reddediyor (`soup data ingest`, `persona-mix`, `generate` ve diğerleri);
-  `soup ship --adapter` hiçbir şeyi değiştirmeyen bir adaptörü reddediyor; `soup distill-prompt`,
-  `soup data evolve`, `gen-magpie` ve `filter --perplexity` boş ya da filtrelenmemiş bir dosya yazmak
-  yerine hata veriyor.
-- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, PPO istenince
-  politikasını checkpoint'liyor (4-bit ve 8-bit altında artık çökmüyor) ve `soup merge` adaptörün
-  eğitildiği taban commit'ini yüklüyor.
-- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut yolları, adları ve iletileri köşeli
-  parantezler ve `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
+- **Sürekli öğrenen bir döngü.** `soup serve` her yanıta bir kimlik verip üzerine geri bildirim alıyor
+  (beğeni, puan, düzeltme); `soup loop` bu geri bildirimden bir aday eğitiyor, `soup ship --gate loop-v2`
+  ile değerlendiriyor, canary olarak çalıştırıyor ve kendiliğinden geri alıyor.
+- **`soup ship` sayısının neden oluştuğunu gösteriyor.** Görev başına daha iyi/daha kötü/aynı sayıları,
+  satır satır denetim dosyası, sağladığınız bir fonksiyonla puanlamak için `--task-mode reward --reward-fn`
+  (bir `.py` dosyası çalıştırılır), adaptörün tabanı ne kadar değiştirdiği ve iki adaptörü
+  karşılaştırmak için `--base-adapter`.
+- **Yeni komutlar.** `soup eval retention` (model sürümleri arasında unutma), `soup data leakage`
+  (eğitim/değerlendirme örtüşmesi), `soup docs search` (çevrimdışı), `soup prune-layer-cache` ve
+  `soup eval quant-check --performance`.
+- **Apple Silicon'da daha fazlası.** Yerel MLX sohbeti, birleştirme, seçici kayıp maskeleri, ön işleme
+  önbellekleri, sözcük dağarcığı genişletme, RoPE uzatma ve yoğun Llama SFT.
+- **Katman akışı daha fazlasını yapıyor.** Yalnızca ileri geçişli çıkarım kipi, önceden nicemlenmiş NF4
+  içe aktarma ve akıtılan bir tabanda BCO, IPO ve `task: preference` eğitimi.
+- **Kısa satırlara uyan VRAM tahminleri.** Dolgulu bir SFT çalıştırması en uzun satırına göre
+  fiyatlanıyor; 8-bit checkpointing, cuBLAS çalışma alanları ve bir damıtma öğretmeni ücretlendiriliyor;
+  ön kontrol de bir sığma denetiminin neden yapılmadığını söylüyor.
+- **8 yeni tarif** (toplam 181) ve Qwen2 QLoRA SFT için bir Triton çekirdek kütüphanesi (yapılandırma anahtarı yok).
+- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut daha yolları ve adları köşeli parantezler ve
+  `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
 
-**Bilmeniz gereken davranış değişiklikleri.** `soup serve --tool-auth-token`, `A-Z`, `a-z`, `0-9`,
-`_` ve `-` karakterlerinden oluşan 16 ila 128 karakter olmalı (aksi halde çıkış kodu 2).
-`task: sft`, `reasoning_effort`, `train_on_eot`, `use_flash_attn` ve `use_liger` ayarlarını,
-bunları hiç uygulamayan görü, ses, MLX, Unsloth, RAFT ve önceden belirteçlenmiş yollarda reddediyor.
-`soup completions` betiklerinin yeniden üretilmesi gerekiyor.
-`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` ve VRAM ön kontrolü
-v0.77.1'den farklı bir sonuç verebilir.
+**Bilmeniz gereken davranış değişiklikleri.** Sayısal bir `training` alanındaki boolean reddediliyor.
+`--push-as` depoyu özel oluşturuyor (bunu değiştirmek için `--push-public`). MLX'te ya da `prm`,
+`unlearn`, `moe_lora_routing` üzerinde etkin bir eval gate reddediliyor. `soup serve --max-tokens`
+16384'te duruyor. `soup adapters merge` ağırlıkları ve `tool_call_args_subset` puanı değişti; bu yüzden
+birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, v0.77.x'in
+reddettiği 2. sürümde.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
