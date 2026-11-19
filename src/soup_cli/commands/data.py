@@ -1050,6 +1050,14 @@ def split_data(
         console.print("[red]--val and --test must be non-negative.[/]")
         raise typer.Exit(1)
 
+    if (val or 0) == 0 and (test or 0) == 0:
+        console.print("[red]Specify at least one positive split (--val or --test).[/]")
+        raise typer.Exit(1)
+
+    if not absolute and ((val or 0) + (test or 0) >= 100):
+        console.print("[red]Split percentages must sum to less than 100.[/]")
+        raise typer.Exit(1)
+
     if stratify and stratify_semantic:
         console.print("[red]Cannot use --stratify and --stratify-semantic together. Pick one.[/]")
         raise typer.Exit(1)
