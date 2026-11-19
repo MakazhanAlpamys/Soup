@@ -408,3 +408,44 @@ def test_resume_decisions_are_explicit(
         )
         == expected
     )
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_canonical_jsonl_reads_a_row_holding_the_character_3066(char):
+    from soup_cli.autodistill.contract import canonicalize_jsonl_bytes
+
+    out = canonicalize_jsonl_bytes(_rows_3066(char).encode("utf-8"))
+
+    rows = [json.loads(line) for line in out.decode("utf-8").split("\n") if line]
+    assert rows == [{"prompt": f"a{char}b"}, {"prompt": "next"}]
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_canonical_jsonl_reads_its_own_output_again_3066(char):
+    """A file this function wrote (the character raw) gives the same digest when read again."""
+    import hashlib
+
+    from soup_cli.autodistill.contract import canonicalize_jsonl_bytes
+
+    escaped = (json.dumps({"prompt": f"a{char}b"}) + "\n").encode("ascii")
+    written = canonicalize_jsonl_bytes(escaped)
+    assert char.encode("utf-8") in written
+
+    again = canonicalize_jsonl_bytes(written)
+
+    assert again == written
+    assert hashlib.sha256(again).hexdigest() == hashlib.sha256(written).hexdigest()
