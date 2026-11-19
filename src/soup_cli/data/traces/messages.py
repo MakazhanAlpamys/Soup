@@ -5,16 +5,40 @@ from __future__ import annotations
 import json
 from typing import Any
 
+_LANGCHAIN_ROLES = {"human": "user", "ai": "assistant", "system": "system"}
+
+
+def _serialised_kwargs(message: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``kwargs`` of a serialised LangChain message (``lc`` with ``kwargs``), else ``None``."""
+    kwargs = message.get("kwargs")
+    if message.get("lc") == 1 and isinstance(kwargs, dict):
+        return kwargs
+    return None
+
 
 def _message_role(message: dict[str, Any]) -> str | None:
-    """Prefer explicit roles, accepting LangChain's serialized message types."""
+    """Prefer explicit roles, accepting LangChain's serialized message types.
+
+    A serialised message takes its role from ``kwargs.type`` only, so a class
+    with no mapping (``tool``, ``chat``) is left out rather than guessed.
+    """
+    kwargs = _serialised_kwargs(message)
+    if kwargs is not None:
+        message_type = kwargs.get("type")
+        return _LANGCHAIN_ROLES.get(message_type) if isinstance(message_type, str) else None
     role = message.get("role")
     if isinstance(role, str):
         return role
     message_type = message.get("type")
     if isinstance(message_type, str):
-        return {"human": "user", "ai": "assistant", "system": "system"}.get(message_type)
+        return _LANGCHAIN_ROLES.get(message_type)
     return None
+
+
+def _message_content(message: dict[str, Any]) -> str:
+    """A message's text, read from ``kwargs.content`` for a serialised message."""
+    kwargs = _serialised_kwargs(message)
+    return content_text((kwargs if kwargs is not None else message).get("content"))
 
 
 def content_text(value: Any) -> str:
@@ -46,7 +70,7 @@ def conversation_prompt(messages: Any) -> str:
         if isinstance(message, dict):
             role = _message_role(message)
             if role is not None:
-                turns.append({"role": role, "content": content_text(message.get("content"))})
+                turns.append({"role": role, "content": _message_content(message)})
     last_user = next((idx for idx in range(len(turns) - 1, -1, -1)
                       if turns[idx]["role"] == "user"), None)
     if last_user is None or not turns[last_user]["content"].strip():
@@ -66,6 +90,6 @@ def message_list_text(messages: list[Any], *, prompt: bool = True) -> str:
         # Output envelopes may include several turns; choose the final assistant.
         for message in reversed(messages):
             if isinstance(message, dict) and _message_role(message) == "assistant":
-                return content_text(message.get("content"))
+                return _message_content(message)
         return ""
     return content_text(messages)

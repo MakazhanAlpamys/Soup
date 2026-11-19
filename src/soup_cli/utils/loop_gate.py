@@ -22,7 +22,6 @@ Standard library only: ``loop_iteration`` validates its evidence fields with thi
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
@@ -158,7 +157,6 @@ def _is_fraction(value: object) -> bool:
     return (
         not isinstance(value, bool)
         and isinstance(value, (int, float))
-        and math.isfinite(value)
         and 0 <= value <= 1
     )
 
