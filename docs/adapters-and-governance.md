@@ -403,9 +403,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # (POSIX) or process group without a console (Windows), with stdin on the null device, so
 # closing the terminal or Ctrl+C there does not reach it. There is no `stop` command yet.
 # A loop.yaml that is gone or invalid stops the daemon with a reason in its log and exit 1; a
-# permission denial or a locked file is retried next cycle. The commands that write loop.yaml
-# (pause, resume, set, canary, rollback) print one line when it is locked (exit 1) or the value
-# is invalid (exit 2). The train and ship children write their output to
+# permission denial or a locked file is retried next cycle. The status, pause, resume, set,
+# canary, and rollback commands print one diagnostic and exit 1 if a loop.yaml read or update
+# error such as permission denial persists after any I/O retries. A writer lock timeout still
+# exits 1; a missing state file or invalid state or setting still exits 2. The train and ship
+# children write their output to
 # .soup-loops/adapters/<run>.train.log and .soup-loops/verdicts/<run>.ship.log (iteration.json:
 # train_log, verify_log); only the last lines go into a failure note. On Windows every child
 # the loop starts (train, ship, and the short probes for free VRAM and for the tokenizer) gets
@@ -418,14 +420,33 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # after the second, and after the third the loop holds. A held loop trains again when the inputs
 # change (new feedback makes a new dataset) or when `soup loop resume` clears the hold. The notes
 # of a waiting cycle start train_backoff: or train_held:, and `soup loop status` shows a
-# train_retry row.
+# train_retry row. A dataset over 256 MiB is fingerprinted from its size and its first
+# and last chunks, and an unreadable one from its path, so their failures are held too;
+# over the cap a change keeping the size and both ends is not seen, and such a hold ends
+# only with `soup loop resume`.
+# A refused deploy keeps its trained candidate and waits 5 minutes before its second attempt,
+# then 30 minutes before its third. After a third refusal, it holds the candidate until
+# `soup loop resume`; for a SHIP candidate, the data cursor advances on success or that terminal
+# hold, not while the deploy is waiting.
+# `soup loop status` shows a `pending_deploy` row for the waiting, due or held state, and the
+# cycle notes start with deploy_backoff: or deploy_held: while applicable.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
-# .soup/loop.log, and the same waits apply to that stage (5 minutes, 30 minutes, then held until
-# `soup loop resume`); the notes of a waiting cycle start stage_backoff: or stage_held:. A deploy
-# that raises is retried like a refused deploy (three attempts). Ctrl+C and SystemExit still stop
-# the daemon.
+# .soup/loop.log, and non-deploy failures share one loop-wide streak: 5 minutes after the first,
+# 30 minutes after the second, then held after the third if the streak includes a raised non-deploy
+# stage, including a raised train stage, even when stages alternate. Returned training failures
+# also count in that streak, but a streak made only of those does not hold the loop: `failed_train`
+# still owns its dataset-specific retry and hold, so a changed dataset can run without
+# `soup loop resume`. This
+# retry record does not replace the dataset-specific training retry; waiting notes start
+# `stage_backoff:` or `stage_held:`. A deploy that raises is retried like a refused deploy (three
+# attempts). Ctrl+C and SystemExit still stop the daemon. The streak counts consecutive cycles
+# ending in a raised non-deploy stage or failed training. Any cycle with no failure clears it,
+# including an idle poll and a non-OK gate. A cycle skipped by a retry hold preserves it. Pending
+# deploy retries do not add a failure and clear the streak if nothing else failed; deploy failures
+# use their own record. `soup loop status` shows it in `stage_retry`; `soup loop resume` clears both
+# `stage_retry` and `train_retry`.
 # Every Python child of the loop (the detached daemon, train, ship and the probes) starts with -P,
 # so a file in the project directory named like a library is not imported by it, and the loop's
 # JSONL logs are created owner-only (0600) on POSIX; on Windows the folder's permissions apply.
@@ -490,7 +511,9 @@ soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
 
 # Pause/resume the daemon between iterations (atomic state flip). resume also clears a
-# failed-train hold (the train_retry row of status), paused or not.
+# failed-train hold (`train_retry`), a raised-stage hold (`stage_retry`), and a deploy hold
+# (`pending_deploy`); it resets saved-candidate deploy attempts and reports `deploy hold cleared`,
+# paused or not.
 soup loop pause
 soup loop resume
 
@@ -827,6 +850,7 @@ The inputs must have the same LoRA rank on every module they share. A merge of a
 
 **Defaults & safety:**
 
+- The merged adapter keeps the first input's `adapter_config.json`. Every other input's `lora_B` and `lora_embedding_B` (and the `lora_B` bias of an adapter saved with `lora_bias=True`) is rescaled to that adapter's LoRA scaling first (`lora_alpha / r`, or `lora_alpha / sqrt(r)` with `use_rslora`, per-module `rank_pattern` / `alpha_pattern` applied), so inputs trained with a different `lora_alpha` keep their strength. This covers every `adapters merge` strategy (`linear`, `ties`, `dare`, `svd`), the candidates `cmaes` scores, and the same-rank path of `adapters arithmetic`. Inputs with the template's scaling are passed through untouched, so such a merge is unchanged. An input whose own scaling is 0 contributes nothing, as it did on its own. A template whose scaling is 0 (`lora_alpha: 0`) decodes every module at 0 whatever the tensors hold, so there is nothing to fold to: the inputs are merged as they are. DoRA's `lora_magnitude_vector` is not multiplied by the scaling and goes through the strategy unchanged.
 - Output paths are containment-checked under cwd and reject pre-placed symlinks (TOCTOU defence).
 - Safetensors writes are atomic via `tempfile.mkstemp` + `os.replace` — a crash mid-write never leaves a partial adapter at the target path.
 - `.bin` (PyTorch pickle) adapter format is rejected with an explicit "re-save as safetensors" message.
