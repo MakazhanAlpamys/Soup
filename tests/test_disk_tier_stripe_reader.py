@@ -4,6 +4,7 @@ import io
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -357,24 +358,46 @@ def test_build_source_reports_each_drive_mode_and_page_cache_reason(tmp_path, mo
         source.close()
 
 
-def test_page_cache_warning_sanitizes_external_root_and_reason():
+@pytest.mark.parametrize("field", ["root", "reason"])
+@pytest.mark.parametrize(
+    "value, shown",
+    [
+        pytest.param("plain", "plain", id="control"),
+        pytest.param(":rocket:", ":rocket:", id="emoji"),
+        pytest.param("x[red]name[/red]", "x[red]name[/red]", id="markup"),
+        pytest.param(r"x\[red]name", r"x\[red]name", id="backslash"),
+        pytest.param("x\x1b\x07\x9b\u202ename", "xname", id="controls"),
+    ],
+)
+def test_page_cache_warning_sanitizes_external_root_and_reason(
+    field: str, value: str, shown: str,
+) -> None:
     output = io.StringIO()
-    source = type(
-        "Source",
-        (),
-        {"page_cache_reasons": {"[/]root\x1b": "[bold]refused[/]\x07"}},
-    )()
+    root = value if field == "root" else "/cache/ordinary"
+    reason = value if field == "reason" else "direct open refused"
+    shown_root = shown if field == "root" else root
+    shown_reason = shown if field == "reason" else reason
+    reasons = {root: reason}
+    source = SimpleNamespace(page_cache_reasons=reasons)
 
     _say_page_cache_roots(
         source,
-        Console(file=output, width=200, color_system=None),
+        Console(
+            file=output, width=240, force_terminal=True,
+            color_system="standard", no_color=False, highlight=False,
+        ),
     )
 
-    said = strip_ansi(output.getvalue())
-    assert "[/]root" in said
-    assert "[bold]refused[/]" in said
-    assert "\x1b" not in said
-    assert "\x07" not in said
+    rendered = output.getvalue()
+    said = " ".join(strip_ansi(rendered).split())
+    expected = (
+        f"Layer streaming reads {shown_root} through the page cache: "
+        f"direct I/O is unavailable there ({shown_reason})."
+    )
+    assert said == expected
+    assert f"\x1b[33m{expected}\x1b[0m" in rendered
+    assert not any(char in said for char in ("\x1b", "\x07", "\x9b", "\u202e"))
+    assert source.page_cache_reasons is reasons and reasons == {root: reason}
 
 
 def test_submit_calls_on_done_once_per_job_after_its_outcome_is_set():

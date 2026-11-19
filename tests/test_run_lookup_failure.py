@@ -4,6 +4,7 @@ The tracker returns ``None`` both for an id that names no run and for a prefix
 that names several, so each caller asks ``run_lookup_failure`` which one it was.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,8 @@ def db(tmp_path, monkeypatch) -> Path:
         monkeypatch.setattr(f"soup_cli.commands.{module}.console", Console(width=500))
     workdir = tmp_path / "work"
     workdir.mkdir()
+    (workdir / "tasks.jsonl").write_text(json.dumps({"prompt": "q"}) + "\n")
+    (workdir / "model").mkdir()
     monkeypatch.chdir(workdir)
     tracker = ExperimentTracker(db_path=path)
     try:
@@ -65,6 +68,16 @@ def _commands():
         pytest.param(
             lambda r: ["eval", "aider", "--model", "m", "--output", "out", "--run-id", r],
             id="eval-aider",
+        ),
+        pytest.param(
+            lambda r: ["eval", "benchmark", "--model", "model", "--run-id", r],
+            id="eval-benchmark",
+        ),
+        pytest.param(
+            lambda r: [
+                "eval", "custom", "--tasks", "tasks.jsonl", "--model", "model", "--run-id", r,
+            ],
+            id="eval-custom",
         ),
     ]
 

@@ -1,0 +1,75 @@
+{
+  "source_commit": "794fecabf77e77c97071b4f71b63d48fe42936ba",
+  "python": "3.12.15 (main, Oct 13 2026, 16:52:04) [GCC 15.3.0]",
+  "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+  "torch": "2.14.1+cu132",
+  "cuda_runtime": "13.2",
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "capability": [
+    8,
+    6
+  ],
+  "gpu_memory_bytes": 25350045696,
+  "float32_matmul_precision": "highest",
+  "cuda_matmul_allow_tf32": false,
+  "cudnn_allow_tf32": false,
+  "packages": {
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "pytest": "8.4.2",
+    "pydantic": "2.14.1",
+    "accelerate": "1.15.0"
+  },
+  "source_hashes": {
+    "src/soup_cli/autodistill/student_loss.py": "f489f735439c55b9e2118a7b8c083d7a1fdcf24a7e7c97aea6278204bd6facf4",
+    "tests/test_autodistill_student_loss.py": "da6fee12ff5cb66b3324f2fb215f60769c87c1e1e359716fa0344454557e54e4"
+  },
+  "scope": "Numerical objective and tiny real student updates, not the full AutoDistill workflow",
+  "nvidia_smi": "NVIDIA GeForce RTX 3090, 615.71.09, 24576 MiB",
+  "cuda": {
+    "command": [
+      "/venv/main/bin/python",
+      "-m",
+      "pytest",
+      "--noconftest",
+      "-o",
+      "addopts=",
+      "-o",
+      "markers=gpu: requires a CUDA device",
+      "-q",
+      "--tb=short",
+      "--junitxml=/workspace/soup580/reports/cuda.xml",
+      "-m",
+      "gpu",
+      "tests/test_autodistill_student_loss.py"
+    ],
+    "seconds": 12.797466190997511,
+    "exit_code": 0,
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "all": {
+    "command": [
+      "/venv/main/bin/python",
+      "-m",
+      "pytest",
+      "--noconftest",
+      "-o",
+      "addopts=",
+      "-o",
+      "markers=gpu: requires a CUDA device",
+      "-q",
+      "--tb=short",
+      "--junitxml=/workspace/soup580/reports/all.xml",
+      "tests/test_autodistill_student_loss.py"
+    ],
+    "seconds": 8.53829241299536,
+    "exit_code": 0,
+    "tests": 52,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -1,8 +1,15 @@
 """Tests for soup diff — model comparison command."""
 
 import json
+from unittest.mock import patch
 
 import pytest
+
+from tests.conftest import strip_ansi
+
+
+def _plain(output: str) -> str:
+    return " ".join(strip_ansi(output).split())
 
 
 class TestCollectPrompts:
@@ -69,6 +76,24 @@ class TestCollectPrompts:
 
         result = _collect_prompts(str(prompts_file), None)
         assert len(result) == 2
+
+    def test_collect_from_jsonl_with_utf8_bom(self, tmp_path):
+        """Should parse JSONL prompts even when file starts with a UTF-8 BOM."""
+        from soup_cli.commands.diff import _collect_prompts
+
+        prompts_file = tmp_path / "prompts_bom.jsonl"
+        content = json.dumps({"prompt": "Prompt with BOM"}) + "\n"
+        prompts_file.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
+
+        result = _collect_prompts(str(prompts_file), None)
+        assert result == ["Prompt with BOM"]
+
+    def test_collect_from_missing_file_or_directory(self, tmp_path):
+        """Should return empty list for missing file or directory."""
+        from soup_cli.commands.diff import _collect_prompts
+
+        assert _collect_prompts(str(tmp_path / "missing.jsonl"), None) == []
+        assert _collect_prompts(str(tmp_path), None) == []
 
 
 class TestComputeMetrics:
@@ -196,3 +221,273 @@ class TestDiffCLI:
             "--model-b", str(tmp_path),
         ])
         assert result.exit_code != 0
+
+    def test_prompts_file_not_found(self, tmp_path, monkeypatch):
+        """Should exit 1 with full message before Diff Plan when prompts file is missing."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "missing.jsonl",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "Prompts file not found: missing.jsonl"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_not_found_with_prompt_option(self, tmp_path, monkeypatch):
+        """Should refuse missing --prompts even when --prompt is also supplied."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "missing.jsonl",
+                "--prompt", "hello",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "Prompts file not found: missing.jsonl"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_is_directory_error(self, tmp_path, monkeypatch):
+        """Should exit 1 cleanly when --prompts points to a directory."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        prompts_dir = tmp_path / "prompts_dir"
+        model_a.mkdir()
+        model_b.mkdir()
+        prompts_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "prompts_dir",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "Prompts path is not a file: prompts_dir"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_empty_error(self, tmp_path, monkeypatch):
+        """Should exit 1 with full message when --prompts file yields no rows."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "empty.jsonl").write_text("\n   \n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "empty.jsonl",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "No prompts found in file: empty.jsonl"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_empty_with_prompt_option_error(self, tmp_path, monkeypatch):
+        """Should refuse an empty --prompts file even when --prompt is also supplied."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "empty.jsonl").write_text("", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "empty.jsonl",
+                "--prompt", "hello",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "No prompts found in file: empty.jsonl"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_non_utf8_error(self, tmp_path, monkeypatch):
+        """Should exit 1 with a named message when --prompts file is not valid UTF-8."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "bad.jsonl").write_bytes(b"\xff\xfe\x00not utf-8\n")
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "soup_cli.commands.diff._load_model",
+            side_effect=AssertionError("_load_model should not be called"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "bad.jsonl",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == (
+            "Cannot read prompts file bad.jsonl: "
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        )
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_unreadable_os_error(self, tmp_path, monkeypatch):
+        """Should exit 1 with a named message when reading --prompts raises OSError."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "locked.jsonl").write_text("hi\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch(
+                "soup_cli.commands.diff._collect_prompts",
+                side_effect=PermissionError("Permission denied"),
+            ),
+            patch(
+                "soup_cli.commands.diff._load_model",
+                side_effect=AssertionError("_load_model should not be called"),
+            ),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "locked.jsonl",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 1
+        assert plain == "Cannot read prompts file locked.jsonl: Permission denied"
+        assert "Diff Plan" not in plain
+
+    def test_prompts_file_with_utf8_bom_cli(self, tmp_path, monkeypatch):
+        """BOM-prefixed JSONL row must come out as prompt text, not raw JSON line."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        bom_file = tmp_path / "bom.jsonl"
+        bom_file.write_bytes(
+            b"\xef\xbb\xbf" + json.dumps({"prompt": "Hello BOM prompt"}).encode("utf-8") + b"\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("soup_cli.commands.diff._load_model", return_value=(None, None)),
+            patch("soup_cli.commands.diff._generate", return_value="stub reply"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "bom.jsonl",
+                "--device", "cpu",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 0, plain
+        assert "Prompts: 1" in plain
+        assert "Hello BOM prompt" in plain
+        assert '"prompt"' not in plain
+
+    def test_prompts_file_combined_with_prompt_option_cli(self, tmp_path, monkeypatch):
+        """Both --prompts file rows and inline --prompt values reach Diff Plan and output."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_a = tmp_path / "model_a"
+        model_b = tmp_path / "model_b"
+        model_a.mkdir()
+        model_b.mkdir()
+        (tmp_path / "prompts.txt").write_text("From file prompt\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("soup_cli.commands.diff._load_model", return_value=(None, None)),
+            patch("soup_cli.commands.diff._generate", return_value="stub reply"),
+        ):
+            result = CliRunner().invoke(app, [
+                "diff",
+                "--model-a", str(model_a),
+                "--model-b", str(model_b),
+                "--prompts", "prompts.txt",
+                "--prompt", "From inline prompt",
+                "--device", "cpu",
+            ])
+        plain = _plain(result.output)
+        assert result.exit_code == 0, plain
+        assert "Prompts: 2" in plain
+        assert "From file prompt" in plain
+        assert "From inline prompt" in plain

@@ -39,6 +39,9 @@ _SUPPORTED_SDKS = ("gradio", "streamlit", "docker", "static")
 def detect_space_sdk(requirements_text: str | None) -> str:
     """Detect the Space SDK from a requirements.txt body.
 
+    A detected ``streamlit`` SDK still deploys as today, but emits the
+    v0.78.0 deprecation warning in ``soup deploy hf-space``.
+
     Returns ``"streamlit"`` when the rendered ``requirements.txt`` lists
     ``streamlit``, ``"gradio"`` when it lists ``gradio`` (or in any other
     case — the project default for chat templates).

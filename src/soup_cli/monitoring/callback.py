@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
@@ -10,7 +11,15 @@ from rich.console import Console
 if TYPE_CHECKING:
     from transformers import TrainerControl, TrainerState, TrainingArguments
 
+from soup_cli.experiment.reward_columns import reward_from_logs
+from soup_cli.experiment.row_kinds import ROW_KIND_SUMMARY, ROW_KIND_TRAIN, metric_row_kind
 from soup_cli.monitoring.display import TrainingDisplay
+from soup_cli.monitoring.reward_collapse import (
+    ZERO_SPREAD_FRACTION_THRESHOLD,
+    ZERO_SPREAD_REQUIRED_STEPS,
+    RewardCollapseMonitor,
+)
+from soup_cli.monitoring.step_rate import StepRate, is_finite_number
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -166,6 +175,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         from soup_cli.utils.eval_schedule import DEFAULT_VALIDATION_METRIC
 
         self.display = display
+        self._reward_group_monitor = RewardCollapseMonitor()
         self.tracker = tracker
         self.run_id = run_id
         self.output_dir = output_dir
@@ -192,6 +202,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         #: None until an evaluation runs. Not 0.0 -- an unmeasured
         #: validation loss must not read as a measured one.
         self._last_val_loss = None
+        #: Measures each step row's speed (#2791). The callback hands the same
+        #: value to the panel and the tracker, so screen and record agree.
+        self._step_rate = StepRate()
         # Loss watchdog state
         self._watchdog_enabled = loss_watchdog
         self._watchdog_threshold = loss_watchdog_threshold
@@ -234,7 +247,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self, args: TrainingArguments, state: TrainerState,
         control: TrainerControl, **kwargs,
     ):
+        self._reward_group_monitor = RewardCollapseMonitor()
         self.display.start(total_steps=state.max_steps)
+        self._step_rate.reset()
         # Prod wiring for the eval gate: load the suite + baseline and build a
         # live generate_fn from the training model. Before this, ``_gate_suite``
         # was only ever set by tests, so ``_run_eval_gate`` returned immediately
@@ -353,7 +368,78 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # here.
         display_val_loss = self._last_val_loss
         measured_val_loss = logs.get(val_key)
-        speed = logs.get("train_steps_per_second", 0.0)
+        # Hugging Face sets `train_steps_per_second` only in the final summary
+        # log; reading it on every step stored 0.0 on every step row (#2791).
+        # A step row records the run average since the first logged step -- the
+        # number the panel shows -- and None on the first row, where there is
+        # no interval yet. Not 0.0: an unmeasured speed must not read as a
+        # measured one, as for `loss` (#1225) and `val_loss`.
+        rate = self._step_rate.update(step, time.monotonic())
+        summary_speed = logs.get("train_steps_per_second")
+        speed = summary_speed if summary_speed is not None else rate
+        # An event that measured none of the per-step metrics -- HF's final runtime
+        # summary (`train_runtime`, the `train_loss` MEAN, throughput), a bare
+        # `tool_calls` count -- is not a measurement of loss. The panel keeps showing
+        # the carried values, but the sinks get no training row and no event: the
+        # carried values would store a copy of the last real measurement under that
+        # step, an observation nothing made. A real 0.0 is a measurement
+        # (`is not None`). The summary's throughput is the exception, and is stored
+        # as its own `summary` row below (#2810), with no loss carried into it.
+        #
+        # A reinforcement-style run's reward is a measurement too: a PPO log carries none
+        # of the four keys above (it logs `loss/policy_avg` and `lr`), and a GRPO or
+        # online-DPO window can log a reward and no loss. Which entries are the reward is
+        # decided in one place, `experiment.reward_columns`; the dict below is empty for
+        # every log that carries none, which is every log of a non-RL run.
+        # Its keys are the column names, which are also the keyword names of the tracker's
+        # `log_metrics` and of the live event, so it is passed on as `**reward_columns`.
+        reward_columns = reward_from_logs(logs)
+        # Only a finite reward is a measurement: a log whose one entry is a NaN reward
+        # (a PPO `objective/scores` that diverged) has nothing to store and writes no row
+        # and sends no event, as a log with no entry at all.
+        reward_measured = any(value is not None for value in reward_columns.values())
+        own_measured = any(
+            logs.get(key) is not None
+            for key in ("loss", "learning_rate", "grad_norm", val_key)
+        )
+        measured_any = reward_measured or own_measured
+        # HF's final runtime summary is told apart FIRST, by what it did not measure: a
+        # finite throughput and none of loss / lr / grad norm / the validation number.
+        # TRL's `GRPOTrainer.log` merges what is left in its metric buffer into the next
+        # log and HF forces no log on the last step, so when the step count is not a
+        # multiple of `logging_steps` this log also carries the remainder's reward. It is
+        # still a runtime summary (one `summary` row, throughput only, #2810), and the
+        # reward is written beside it as its own `train` row, so the reward curve keeps
+        # its last point and the summary row stays what it always was.
+        is_runtime_summary = not own_measured and is_finite_number(summary_speed)
+        # What the row is (experiment/row_kinds.py): an event carrying the validation
+        # number is an evaluation, any other measured one a training log.
+        row_kind = metric_row_kind(**{val_field: measured_val_loss})
+        # What the row and the live event carry for `loss` / `lr`: the carried last values
+        # (the panel's rule, and the pinned one for an evaluation row), except for a
+        # training log that carries a reward and no loss of its own. Its objective was not
+        # logged, so the previous step's loss is not copied under this step beside this
+        # step's reward (the NULL-loss contract, #2589): NULL loss, and the lr only if the
+        # log carried one -- never the callback's 0.0 start value for an lr nobody measured.
+        row_loss, row_lr = loss, lr
+        if reward_columns and row_kind == ROW_KIND_TRAIN and logs.get("loss") is None:
+            row_loss, row_lr = None, logs.get("learning_rate")
+
+        reward_metrics = {}
+        if (
+            getattr(getattr(self.display, "config", None), "task", None) == "grpo"
+            and getattr(state, "is_world_process_zero", True)
+            and "frac_reward_zero_std" in logs
+        ):
+            if self._reward_group_monitor.observe(step, logs["frac_reward_zero_std"]):
+                logger.warning(
+                    "GRPO reward diversity is low: more than %.0f%% of groups had zero "
+                    "reward spread for %d distinct logged steps. These groups have "
+                    "no group-relative advantage signal; inspect the rewards and prompts.",
+                    ZERO_SPREAD_FRACTION_THRESHOLD * 100,
+                    ZERO_SPREAD_REQUIRED_STEPS,
+                )
+            reward_metrics["frac_reward_zero_std"] = self._reward_group_monitor.fraction
 
         self.display.update(
             step=step,
@@ -364,6 +450,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             speed=speed,
             gpu_mem=gpu_mem,
             **{val_field: display_val_loss},
+            **reward_metrics,
         )
 
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
@@ -373,29 +460,32 @@ class _SoupTrainerCallback_body:  # noqa: N801
             from soup_cli.utils.sse_train_stream import TrainEvent
             from soup_cli.utils.train_event_buffer import push_train_event
 
-            push_train_event(
-                TrainEvent(
-                    type="metric",
-                    step=int(step) if step is not None else None,
-                    epoch=float(epoch) if epoch is not None else None,
-                    # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
-                    # end of an LR schedule) must not be reported as None.
-                    loss=float(loss) if loss is not None else None,
-                    lr=float(lr) if lr is not None else None,
-                    grad_norm=(
-                        float(measured_grad_norm)
-                        if measured_grad_norm is not None
-                        else None
-                    ),
-                    **{
-                        val_field: (
-                            float(measured_val_loss)
-                            if measured_val_loss is not None
+            if measured_any:
+                push_train_event(
+                    TrainEvent(
+                        type="metric",
+                        step=int(step) if step is not None else None,
+                        epoch=float(epoch) if epoch is not None else None,
+                        # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
+                        # end of an LR schedule) must not be reported as None.
+                        loss=float(row_loss) if row_loss is not None else None,
+                        lr=float(row_lr) if row_lr is not None else None,
+                        grad_norm=(
+                            float(measured_grad_norm)
+                            if measured_grad_norm is not None
                             else None
-                        )
-                    },
+                        ),
+                        **reward_columns,
+                        kind=row_kind,
+                        **{
+                            val_field: (
+                                float(measured_val_loss)
+                                if measured_val_loss is not None
+                                else None
+                            )
+                        },
+                    )
                 )
-            )
         except Exception:
             pass
 
@@ -404,8 +494,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # the field only when the data format is `tool-calling`.
         if "tool_calls" in (logs or {}):
             try:
-                import time
-
                 from soup_cli.utils.tool_outputs import get_global_tool_buffer
 
                 tool_count = logs.get("tool_calls")
@@ -466,17 +554,36 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
-        # Log to experiment tracker
-        if self.tracker and self.run_id:
+        # Log to experiment tracker. An event that measured no loss, lr, grad_norm or
+        # validation number writes no training row.
+        if self.tracker and self.run_id and is_runtime_summary:
+            # HF's final runtime summary: its throughput is a measurement (#2810), so
+            # it is kept, as a row of its own. Nothing else in the event is a per-step
+            # value, so loss / lr / grad_norm / val -- and the reward -- stay NULL, not
+            # the carried training values, and `kind = "summary"` tells a reader (one
+            # that reads `loss`, `lr` per row) that this row is not a training step.
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,
                 epoch=epoch,
-                loss=loss,
-                lr=lr,
-                grad_norm=measured_grad_norm,
-                speed=speed,
+                speed=summary_speed,
                 gpu_mem=gpu_mem,
+                kind=ROW_KIND_SUMMARY,
+            )
+        if self.tracker and self.run_id and measured_any:
+            # A training row; for a runtime summary that carried a leftover reward it is
+            # the reward's own row, and the whole-run throughput is not its speed.
+            self.tracker.log_metrics(
+                run_id=self.run_id,
+                step=step,
+                epoch=epoch,
+                loss=row_loss,
+                lr=row_lr,
+                grad_norm=measured_grad_norm,
+                speed=None if is_runtime_summary else speed,
+                gpu_mem=gpu_mem,
+                **reward_columns,
+                kind=row_kind,
                 **{val_field: measured_val_loss},
             )
 
@@ -495,8 +602,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         injected it, so unit tests that pre-set ``_gate_suite`` /
         ``_gate_generate_fn`` still control the harness. Malformed YAML,
         non-mapping roots and non-string top-level keys abort setup; other
-        loading failures are logged and leave the gate inert. The CLI (``soup train --gate``)
-        already validated the suite path up front.
+        suite loading failures are logged and leave the gate inert. The CLI
+        (``soup train --gate``) already validated the suite path up front. A
+        configured baseline that cannot be resolved aborts setup with a
+        ``ValueError`` naming ``training.eval_gate.baseline``; an unset
+        baseline is an empty map.
         """
         cfg = self.eval_gate_config
         if cfg is None or not getattr(cfg, "enabled", False):
@@ -519,13 +629,18 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 return
 
         if self._gate_baseline is None:
-            try:
-                from soup_cli.eval.gate import resolve_baseline
+            from soup_cli.eval.gate import resolve_baseline
 
-                self._gate_baseline = resolve_baseline(getattr(cfg, "baseline", None))
+            baseline_spec = getattr(cfg, "baseline", None)
+            try:
+                self._gate_baseline = resolve_baseline(baseline_spec)
             except (ValueError, FileNotFoundError, OSError) as exc:
-                logger.warning("eval gate: could not resolve baseline: %s", exc)
-                self._gate_baseline = {}
+                # A baseline the user asked for must not silently become "no
+                # baseline": with an empty map no task can ever regress (#2523).
+                raise ValueError(
+                    f"eval gate: could not resolve training.eval_gate.baseline "
+                    f"{baseline_spec!r}: {exc}"
+                ) from exc
 
         if self._gate_generate_fn is None and model is not None and tokenizer is not None:
             try:

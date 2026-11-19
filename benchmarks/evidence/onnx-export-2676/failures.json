@@ -1,0 +1,39 @@
+{
+  "released_on_transformers_5": {
+    "optimum": "2.3.0",
+    "optimum_onnx": "0.1.0",
+    "transformers": "5.19.0",
+    "error": "ImportError: get_parameter_dtype",
+    "also_checked_optimum_core": "2.1.0: same get_parameter_dtype ImportError"
+  },
+  "old_on_transformers_5": {
+    "optimum": "1.16.0",
+    "transformers": "5.19.0",
+    "error": "ImportError: is_tf_available"
+  },
+  "upstream_proposal_on_transformers_5": {
+    "optimum_onnx_sha": "7c9ccd7331403147c6b2a9f9440cd31f470a08f4",
+    "optimum_sha": "87ba58464371163e4f23d8fcc155141bab8c55de",
+    "transformers": "5.19.0",
+    "cli_exit": 1,
+    "error": "sdpa_mask_without_vmap() missing 1 required positional argument: 'cache_position'"
+  },
+  "raw_generic_5x_tokenizer_in_4x_export_env": {
+    "cli_exit": 3,
+    "error": "Tokenizer class TokenizersBackend does not exist or is not currently imported."
+  },
+  "released_optimum_cli": {
+    "gpt2_exit": 0,
+    "llama_exit": 0,
+    "strict_zero_atol_gpt2_exit": 2,
+    "pip_check": "No broken requirements found."
+  },
+  "native_prototype": {
+    "gpt2_exit": 0,
+    "llama_exit": 0,
+    "corrupted_gpt2_inspect_exit": 2,
+    "optimum_imported": false,
+    "pip_check": "No broken requirements found.",
+    "optimum_distribution_present": false
+  }
+}

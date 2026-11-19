@@ -10,7 +10,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
 #: Diagnostics for ``verify``. They go to stderr so that ``--json`` leaves stdout
@@ -96,17 +96,23 @@ def use(
 
     try:
         output_path = validate_output_path(Path(output))
+        if output_path.is_dir():
+            message = f"Cannot write --output {output}: destination is a directory."
+            console.print(terminal_text(message, "red"))
+            raise typer.Exit(1)
+        if output_path.exists() and not yes:
+            confirm = typer.confirm(f"File '{strip_control(output)}' already exists. Overwrite?")
+            if not confirm:
+                console.print("[yellow]Aborted.[/]")
+                raise typer.Exit(0)
+        output_path.write_text(recipe.yaml_str, encoding="utf-8")
     except ValueError as exc:
         console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
+    except OSError as exc:
+        console.print(terminal_text(f"Cannot write --output {output}: {exc}", "red"))
+        raise typer.Exit(1) from exc
 
-    if output_path.exists() and not yes:
-        confirm = typer.confirm(f"File '{strip_control(output)}' already exists. Overwrite?")
-        if not confirm:
-            console.print("[yellow]Aborted.[/]")
-            raise typer.Exit(0)
-
-    output_path.write_text(recipe.yaml_str, encoding="utf-8")
     console.print(
         f"[green]\u2713[/] Recipe [bold]{for_terminal(name)}[/] "
         f"written to [bold]{for_terminal(output)}[/]", emoji=False,
