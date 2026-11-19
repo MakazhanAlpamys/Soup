@@ -1429,28 +1429,100 @@ class _PlainModel:
     """The served model before any adapter: not a PeftModel (no set_adapter / disable_adapter)."""
 
 
+@pytest.mark.parametrize("mode", ["chat", "stream-fallback", "stream-tokens", "messages-tokens"])
 def test_a_chat_queued_behind_the_first_load_waits_and_runs_without_the_new_adapter(
-    root, loader, seen
+    root, loader, seen, monkeypatch, mode
 ):
-    served = _serve(root, model_obj=_PlainModel())
+    base = _PlainModel()
+    served = _serve(root, model_obj=base)
+    contended = threading.Event()
+    real_scope = serve_cmd._adapter_scope
+    record_generation = serve_cmd._generate_response
+    worker_runs = []
+    generation_lock = None
+
+    @contextmanager
+    def observe_lock(lock):
+        # Try the actual generation lock while the loader is held. A failed try
+        # establishes contention before the test releases the loader.
+        if lock.acquire(blocking=False):
+            lock.release()
+            pytest.fail("the generation lock was available before the first load completed")
+        contended.set()
+        with lock:
+            yield
+
+    def observe_scope(model, lock, *args, **kwargs):
+        nonlocal generation_lock
+        assert model is base
+        generation_lock = lock
+        return real_scope(model, observe_lock(lock), *args, **kwargs)
+
+    def generate(model, *args, streamer=None, **kwargs):
+        assert generation_lock is not None and generation_lock.locked()
+        worker_runs.append((
+            threading.current_thread().name == serve_cmd._STREAM_WORKER_NAME,
+            streamer is not None,
+        ))
+        result = record_generation(model, *args, **kwargs)
+        if streamer is not None:
+            streamer.on_finalized_text(result[0])
+        return result
+
+    def request():
+        if mode == "messages-tokens":
+            return served.client.post(
+                "/v1/messages",
+                json={
+                    "model": "test",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 8,
+                    "stream": True,
+                },
+            )
+        return served.chat(stream=mode != "chat")
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", observe_scope)
+    monkeypatch.setattr(serve_cmd, "_generate_response", generate)
+    token_stream = mode.endswith("-tokens")
+    if token_stream:
+        pytest.importorskip("transformers")
+        # Keep the first Transformers import outside the held-loader window.
+        serve_cmd._reply_streamer_class()
+    if mode == "stream-fallback":
+        monkeypatch.setattr(serve_cmd, "_can_stream", lambda model: False)
     loader.returned.current = "v2"  # PEFT activates the adapter it has just loaded
     loader.hold = threading.Event()
     path = _adapter(root, "v2")
     results = {}
     load = threading.Thread(target=lambda: results.update(load=served.load("v2", path)))
+    chat = threading.Thread(target=lambda: results.update(chat=request()))
     load.start()
-    assert loader.entered.wait(10)
-    chat = threading.Thread(target=lambda: results.update(chat=served.chat()))
-    chat.start()
-    chat.join(0.5)
-    assert seen == [], "a generation ran while the first load was wrapping the model"
-    loader.hold.set()
-    load.join(10)
-    chat.join(10)
+    try:
+        assert loader.entered.wait(10)
+        chat.start()
+        assert contended.wait(10), "the request did not contend for the generation lock"
+        assert seen == [], "a generation ran while the first load was wrapping the model"
+    finally:
+        loader.hold.set()
+        load.join(10)
+        if chat.ident is not None:
+            chat.join(10)
+    assert not load.is_alive() and not chat.is_alive()
     assert results["load"].status_code == 200, results["load"].text
     assert results["chat"].status_code == 200, results["chat"].text
     # It ran on the wrapped model, with the new adapter disabled (base for this request).
     assert seen == [(loader.returned, None)]
+    assert loader.returned.current == "v2"
+    assert worker_runs == [(token_stream, token_stream)]
+    if mode == "chat":
+        assert results["chat"].json()["choices"][0]["message"]["content"] == "ok"
+    elif mode == "messages-tokens":
+        assert "event: message_stop" in results["chat"].text
+        assert '"ok"' in results["chat"].text
+    else:
+        assert "data: [DONE]" in results["chat"].text
+        assert '"ok"' in results["chat"].text
 
 
 def test_chat_and_stream_lock_every_generation_only_with_an_adapter_dir(root, seen, monkeypatch):

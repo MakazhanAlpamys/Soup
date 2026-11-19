@@ -293,7 +293,8 @@ class TestFreeVram:
 
         ((argv, kwargs),) = probe.calls
         assert isinstance(argv, list)
-        assert argv == [sys.executable, "-c", lq.PROBE_SCRIPT]
+        # "-P": the probe's sys.path never holds the project directory
+        assert argv == [sys.executable, "-P", "-c", lq.PROBE_SCRIPT]
         assert not kwargs.get("shell", False)
         assert kwargs["timeout"] == lq.PROBE_TIMEOUT_S == 60
         assert kwargs["capture_output"] is True

@@ -240,9 +240,9 @@ def _measure_in_child(base: str, data_path: str, method: str) -> "tuple[int, int
     """``(longest, rows)`` from a short-lived child; ``MeasureFailedError`` when it cannot tell."""
     import subprocess  # noqa: S404 - argv list, no shell
 
-    from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit
+    from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit, python_child_argv
 
-    argv = [sys.executable, "-c", CHILD_SCRIPT, base, data_path, method]
+    argv = python_child_argv("-c", CHILD_SCRIPT, base, data_path, method)
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, no shell
             argv, capture_output=True, text=True, timeout=CHILD_TIMEOUT_S,
