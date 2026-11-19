@@ -1216,7 +1216,10 @@ from the file, only at most five key names (of at most 64 characters) for unsupp
 `load_task_rows_for(path)` does that for a verdict or an evidence file: it follows `task_rows`
 next to it, takes 1e-12 for a `judge_score` verdict, the exact decimal mean for a `reward`
 verdict (`load_task_rows(..., decimal=True)`) and exactness otherwise, and checks the file
-against the same JSON (whose `rows` numbers must be integers in range).
+against the same JSON (whose `rows` numbers must be integers in range). When
+`generation_failures` is present, its row count and both failure counts must agree with the
+row file's size and failure flags, regardless of task mode. An absent or null block leaves
+those counts unchecked.
 
 ### Reward mode (`--task-mode reward`)
 
