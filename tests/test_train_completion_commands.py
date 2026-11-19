@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from rich.console import Console
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -16,8 +17,8 @@ from soup_cli.cli import app
 from tests.conftest import strip_ansi
 
 
-def _plain(text):
-    return " ".join(strip_ansi(text).split())
+def _plain(text: str) -> str:
+    return "\n".join(" ".join(line.split()).strip(" │") for line in strip_ansi(text).splitlines())
 
 
 def _offered_params(output, label, command):
@@ -46,7 +47,10 @@ def complete_training(tmp_path, monkeypatch):
     monkeypatch.setattr(train_mod, "get_gpu_info", lambda **kw: {"memory_total": "0 GB"})
     (tmp_path / "base").mkdir()
 
-    def complete(*, backend="mlx", task="sft", stop_reason=None, output_dir="./saved", **training):
+    def complete(
+        *, backend="mlx", task="sft", stop_reason=None, output_dir="./saved", raw_output=False,
+        **training,
+    ):
         row = {"instruction": "Question", "output": "Answer"}
         fmt = "alpaca"
         if task in {"dpo", "orpo", "simpo", "preference"}:
@@ -74,10 +78,10 @@ def complete_training(tmp_path, monkeypatch):
         monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", lambda *a, **kw: trainer)
         run = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
         assert run.exit_code == 0, (run.output, repr(run.exception))
-        output = "\n".join(_plain(line).strip(" │") for line in run.output.splitlines())
+        output = _plain(run.output)
         title = "Training Stopped — Loss watchdog" if stop_reason else "Training Complete!"
         assert title in output
-        return output
+        return run.output if raw_output else output
 
     return complete
 
@@ -182,6 +186,65 @@ def test_completion_hints_quote_saved_path(
     ]
     assert f"Output: {path}" in lines
     assert ("Use PowerShell for the commands below." in lines) is powershell_only
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows paths cannot contain ESC")
+@pytest.mark.parametrize(
+    "path, displayed_path",
+    [
+        pytest.param("./saved\x1b[31m adapter", "./saved[31m adapter", id="sgr"),
+        pytest.param("./saved\x1b", "./saved", id="escape-only"),
+    ],
+)
+def test_posix_completion_strips_escape_after_quoting(
+    complete_training, monkeypatch, path: str, displayed_path: str,
+) -> None:
+    import soup_cli.commands.train as train_mod
+
+    # Inspect the actual captured output, without ANSI stripping or Rich's own color.
+    monkeypatch.setattr(
+        train_mod, "console", Console(force_terminal=False, color_system=None, width=240),
+    )
+    output = complete_training(output_dir=path, raw_output=True)
+    assert "\x1b" not in output
+
+    lines = _plain(output).splitlines()
+    assert f"Output: {displayed_path}" in lines
+    line = next(line for line in lines if line.startswith("Quick test:"))
+    # The escape-only case still has quotes: the unsanitized path required them.
+    assert line == f"Quick test: soup chat --backend mlx --model '{displayed_path}'"
+    assert shlex.split(line.removeprefix("Quick test:").lstrip()) == [
+        "soup", "chat", "--backend", "mlx", "--model", displayed_path,
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, argument",
+    [
+        pytest.param(r"C:\my runs\out", r'"C:\my runs\out"', id="drive-with-space"),
+        pytest.param("C:\\my runs\\out\\", r'"C:\my runs\out\\"', id="space-trailing-backslash"),
+        pytest.param("C:\\out[1]\\", r'"C:\out[1]\\"', id="bracket-trailing-backslash"),
+        ("./out^dir", '"./out^dir"'),
+        ("./out(dir", '"./out(dir"'),
+        ("./out)dir", '"./out)dir"'),
+        ("./out<dir", '"./out<dir"'),
+        ("./out>dir", '"./out>dir"'),
+        ("./out|dir", '"./out|dir"'),
+        ("./out,dir", '"./out,dir"'),
+        ("./out;dir", '"./out;dir"'),
+        ("./out{dir", '"./out{dir"'),
+        ("./out}dir", '"./out}dir"'),
+        ("./out@dir", '"./out@dir"'),
+        ("./out#dir", '"./out#dir"'),
+    ],
+)
+def test_windows_quoting_handles_drive_paths_and_unspaced_punctuation(
+    path: str, argument: str,
+) -> None:
+    from soup_cli.commands.train import _quote_completion_path
+
+    # Test the formatter without touching the drive or creating Windows-invalid names.
+    assert _quote_completion_path(path, windows=True) == (argument, False)
 
 
 @pytest.mark.parametrize(
