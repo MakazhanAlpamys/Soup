@@ -207,8 +207,21 @@ def test_apply_reports_recipe_yaml_syntax_error():
 
 @pytest.mark.parametrize(
     "probs",
-    ["[0.5, pending]", "0.5", "[" + "9" * 310 + "]"],
-    ids=["nonnumeric-weight", "scalar", "overflow"],
+    [
+        pytest.param("[0.5, pending]", id="nonnumeric-weight"),
+        pytest.param("0.5", id="scalar"),
+        pytest.param("[" + "9" * 310 + "]", id="overflow"),
+        pytest.param('"12"', id="quoted-scalar"),
+        pytest.param("{0: ignored, 1: ignored}", id="mapping"),
+        pytest.param('["0.5", "0.5"]', id="quoted-weight"),
+        pytest.param("[true, 0.5]", id="boolean-weight"),
+        pytest.param("[0.5, null]", id="null-weight"),
+        pytest.param("[0.5, [0.5]]", id="nested-list"),
+        pytest.param("[0.5, .nan]", id="nan"),
+        pytest.param("[0.5, .inf]", id="infinity"),
+        pytest.param("[0.5, -.inf]", id="negative-infinity"),
+        pytest.param("[0.5, -0.5]", id="negative"),
+    ],
 )
 def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
     recipe = Path("r.yaml")
@@ -225,3 +238,28 @@ def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
     assert "apply failed: invalid data.interleave.probs in r.yaml" in text
     assert "Loaded recipe:" not in text
     assert "\ndata:\n" not in strip_ansi(result.stdout)
+
+
+@pytest.mark.parametrize(
+    ("probs", "rendered_weights"),
+    [
+        pytest.param("[0.5, 0.5]", ["0.500000", "0.500000"], id="floats"),
+        pytest.param("[1, 2]", ["1.000000", "2.000000"], id="integers"),
+        pytest.param("[0, 1.0]", ["0.000000", "1.000000"], id="zero"),
+        pytest.param(None, [], id="absent"),
+    ],
+)
+def test_apply_preserves_valid_weights(probs, rendered_weights):
+    recipe = Path("r.yaml")
+    source = (
+        "data:\n  train: [a.jsonl, b.jsonl]\n  interleave:\n    strategy: probs\n"
+    )
+    if probs is not None:
+        source += f"    probs: {probs}\n"
+    recipe.write_text(source, encoding="utf-8")
+
+    result = _mix("--apply", recipe.name)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    weight_lines = "".join(f"      - {weight}\n" for weight in rendered_weights)
+    assert f"\n    probs:\n{weight_lines}  train:\n" in strip_ansi(result.stdout)
