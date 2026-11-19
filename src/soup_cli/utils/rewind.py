@@ -178,6 +178,16 @@ def load_row_previews(
     # Exactly what `soup train` calls for an SFT run: preserve_source_columns
     # is GRPO-only, and the rewind log is written for SFT.
     rows = load_dataset(cfg.data)["train"]
+    # With `curriculum` on, the SFT wrapper sorts the train rows by length
+    # before the trainer and the recorder see them, whatever `curriculum_metric`
+    # says, so the logged ids are positions in that sorted list and the
+    # fingerprint is taken over it (#2972). Rebuild the same list, or an
+    # unchanged dataset reads as edited and every preview is withheld. The MLX
+    # trainer does not sort, and records the file order.
+    if cfg.training.curriculum and cfg.backend != "mlx":
+        from soup_cli.utils.curriculum import sort_by_length
+
+        rows = sort_by_length(rows)
 
     if dataset_fingerprint(rows) != expected_fingerprint:
         return None

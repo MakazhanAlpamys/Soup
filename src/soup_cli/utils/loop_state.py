@@ -97,6 +97,11 @@ _MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the state file
 # The data cursor is epoch seconds up to the year 9999 (datetime.max): `soup loop status`
 # prints it as a date, and a larger value is a typo that would stop all learning.
 MAX_CURSOR_TS = 253402300799.0
+# The most a dollar amount in loop.yaml (`monthly_budget_usd`, `spent_this_month_usd`) can be.
+# `soup loop status` and the budget check convert it to a float, which a JSON integer of a few
+# hundred digits cannot survive (OverflowError); `soup loop watch --monthly-budget` itself stops
+# at 1,000,000. Compared without float(), so a huge int is a refusal, not an overflow.
+MAX_USD_AMOUNT = 1e15
 _DEFAULT_STATE_DIR = ".soup"
 _DEFAULT_STATE_FILENAME = "loop.yaml"
 
@@ -291,6 +296,9 @@ class LoopState:
     # and why ("not_enough_new_data: ..."), a dict with "at" and "reason". None = no idle
     # poll yet. Last, so adding it shifted no existing positional field; loads as None.
     last_idle: Optional[dict] = None
+    # Consecutive failures from raised loop stages, kept apart from dataset-specific train retry.
+    # State written before this field loads with None.
+    failed_stage: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -319,15 +327,25 @@ class LoopState:
             v = self.canary_traffic_pct
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ValueError("canary_traffic_pct must be numeric or None")
-            if not (0.0 <= float(v) <= 100.0):
+            if not (0 <= v <= 100):  # no float(): a huge int would overflow (false for NaN)
                 raise ValueError("canary_traffic_pct must be in [0, 100]")
         if self.monthly_budget_usd is not None:
             v = self.monthly_budget_usd
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-                raise ValueError("monthly_budget_usd must be >= 0 or None")
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not (0 <= v <= MAX_USD_AMOUNT)  # no float(); false for NaN too
+            ):
+                raise ValueError(
+                    f"monthly_budget_usd must be in [0, {int(MAX_USD_AMOUNT)}] or None"
+                )
         v = self.spent_this_month_usd
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-            raise ValueError("spent_this_month_usd must be >= 0")
+        if (
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not (0 <= v <= MAX_USD_AMOUNT)  # no float(); false for NaN too
+        ):
+            raise ValueError(f"spent_this_month_usd must be in [0, {int(MAX_USD_AMOUNT)}]")
         if self.max_runs_per_day is not None:
             v = self.max_runs_per_day
             if isinstance(v, bool) or not isinstance(v, int) or v < 1:
@@ -354,7 +372,7 @@ class LoopState:
         if (
             isinstance(v, bool)
             or not isinstance(v, (int, float))
-            or not (0.0 < float(v) <= 100.0)
+            or not (0 < v <= 100)  # no float(): a huge int would overflow (false for NaN)
         ):
             raise ValueError("deploy_traffic_pct must be in (0, 100]")
         for fname in (
@@ -478,6 +496,8 @@ class LoopState:
             _check_pending_deploy(self.pending_deploy)
         if self.failed_train is not None:
             _check_failed_train(self.failed_train)
+        if self.failed_stage is not None:
+            _check_failed_stage(self.failed_stage)
         if self.last_idle is not None:
             _check_last_idle(self.last_idle)
         if self.canary_override is not None:
@@ -605,29 +625,50 @@ _FAILED_TRAIN_FINGERPRINT = re.compile(r"[0-9a-f]{64}", re.ASCII)
 
 def _check_failed_train(record: object) -> None:
     """``failed_train`` is the small record ``utils/loop_retry.py`` writes; nothing else."""
+    _check_failure_record(record, "failed_train")
+
+
+def _check_failed_stage(record: object) -> None:
+    """Validate the loop-wide failure record for a stage that raised."""
     if not isinstance(record, dict):
-        raise ValueError("failed_train must be a dict or None")
+        raise ValueError("failed_stage must be a dict or None")
+    # Older persisted records have no classification flag; accept them as legacy state.
+    has_non_train_failure = record.get("has_non_train_failure")
+    legacy = "has_non_train_failure" not in record
+    core = {key: value for key, value in record.items() if key != "has_non_train_failure"}
+    _check_failure_record(core, "failed_stage")
+    assert isinstance(record, dict)
+    if not str(record["reason"]).startswith("stage error: "):
+        raise ValueError("failed_stage reason must start with 'stage error: '")
+    if not legacy and not isinstance(has_non_train_failure, bool):
+        raise ValueError("failed_stage has_non_train_failure must be bool")
+
+
+def _check_failure_record(record: object, field: str) -> None:
+    """Validate the shared persisted shape used by retry records."""
+    if not isinstance(record, dict):
+        raise ValueError(f"{field} must be a dict or None")
     if sorted(record) != sorted(_FAILED_TRAIN_KEYS):
-        raise ValueError(f"failed_train must hold exactly {', '.join(_FAILED_TRAIN_KEYS)}")
+        raise ValueError(f"{field} must hold exactly {', '.join(_FAILED_TRAIN_KEYS)}")
     inputs = record["inputs"]
     if not isinstance(inputs, str) or _FAILED_TRAIN_FINGERPRINT.fullmatch(inputs) is None:
-        raise ValueError("failed_train inputs must be a 64-character lowercase hex digest")
+        raise ValueError(f"{field} inputs must be a 64-character lowercase hex digest")
     attempts = record["attempts"]
     if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
-        raise ValueError("failed_train attempts must be an int from 1 to 100")
+        raise ValueError(f"{field} attempts must be an int from 1 to 100")
     if not isinstance(record["held"], bool):
-        raise ValueError("failed_train held must be bool")
+        raise ValueError(f"{field} held must be bool")
     for name in ("last_at", "retry_after"):
         value = record[name]
         if value is None and name == "retry_after":
             continue
-        _require_str(f"failed_train {name}", value, allow_empty=False)
+        _require_str(f"{field} {name}", value, allow_empty=False)
         if len(value) > 64 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-            raise ValueError(f"failed_train {name} must be a short ISO 8601 time")
+            raise ValueError(f"{field} {name} must be a short ISO 8601 time")
     reason = record["reason"]
-    _require_str("failed_train reason", reason, allow_empty=False)
+    _require_str(f"{field} reason", reason, allow_empty=False)
     if len(reason) > 300 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in reason):
-        raise ValueError("failed_train reason must be one short line without control characters")
+        raise ValueError(f"{field} reason must be one short line without control characters")
 
 
 def _check_last_idle(record: object) -> None:
