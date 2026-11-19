@@ -6,7 +6,8 @@ never factor by factor: ``(B·M, M⁻¹·A)`` is the same ``ΔW`` for any invert
 ``M``, so the raw factors measure the parameterisation, not the change.
 Public surface:
 
-- ``compute_layer_diffs(weights_a, weights_b)`` -> per-layer Frobenius diffs
+- ``compute_layer_diffs(weights_a, weights_b, *, config_a=None, config_b=None)``
+  -> per-layer Frobenius diffs
 - ``effective_rank(matrix)`` -> SVD-entropy effective rank
 - ``compute_adapter_diff(path_a, path_b, *, top_k=10)`` -> ``AdapterDiffReport``
 - ``render_report_markdown(report)`` / ``render_report_json(report)``
@@ -130,7 +131,11 @@ def _effective_rank_of_singular_values(singular: Any, *, eps: float = 1e-12) -> 
 
 
 def _lora_modules(weights: Mapping[str, Any]) -> dict[str, Tuple[str, str]]:
-    """Complete LoRA pairs of an adapter: module stem -> (lora_A name, lora_B name)."""
+    """Complete LoRA pairs of an adapter: module stem -> (lora_A name, lora_B name).
+
+    A factor is what ``adapter_arithmetic._lora_role`` calls one: ``lora_A.weight`` /
+    ``lora_B.weight`` and ``lora_embedding_A`` / ``lora_embedding_B``.
+    """
     from soup_cli.utils.adapter_arithmetic import _lora_role
 
     roles: dict[str, dict[str, str]] = {}
@@ -146,7 +151,11 @@ def _lora_modules(weights: Mapping[str, Any]) -> dict[str, Tuple[str, str]]:
 
 
 def _module_scaling(config: Optional[Mapping[str, Any]], stem: str) -> float:
-    """PEFT's decode-time scaling for a module; 1.0 when the config cannot say."""
+    """PEFT's decode-time scaling for a module, from :func:`lora_module_scaling`.
+
+    1.0 when there is no config or it carries no usable ``r`` / ``lora_alpha``, the
+    same fallback ``soup adapters check`` uses.
+    """
     if config is None:
         return 1.0
     scaling = lora_module_scaling(config, peft_module_name(stem))
@@ -158,18 +167,18 @@ def _delta_factors(
 ) -> Optional[Tuple[Any, Any]]:
     """``(left, right)`` with ``left @ right == scaling * B @ A`` as 2-D float64.
 
-    ``None`` when the pair cannot form a product (unexpected shapes) or holds a
-    non-finite value; such a module is diffed tensor by tensor instead.
+    Linear: A ``(r, in)``, B ``(out, r)``. Embedding: A ``(r, num_embeddings)``, B
+    ``(embedding_dim, r)``; PEFT's delta is the transpose, which has the same norm
+    and singular values. ``None`` when the pair is not two 2-D factors of one rank
+    (a conv pair is 4-D) or holds a non-finite value; such a pair is diffed tensor
+    by tensor, by name.
     """
     import numpy as np
 
-    lora_a = np.asarray(weights[pair[0]], dtype=np.float64)
-    lora_b = np.asarray(weights[pair[1]], dtype=np.float64)
-    if lora_a.ndim < 2 or lora_b.ndim < 2 or lora_a.size == 0 or lora_b.size == 0:
+    right = np.asarray(weights[pair[0]], dtype=np.float64)
+    left = np.asarray(weights[pair[1]], dtype=np.float64)
+    if right.ndim != 2 or left.ndim != 2 or right.size == 0 or left.size == 0:
         return None
-    # Linear: A (r, in), B (out, r). Conv: A (r, in, kh, kw), B (out, r, 1, 1).
-    right = lora_a.reshape(lora_a.shape[0], -1)
-    left = lora_b.reshape(lora_b.shape[0], -1)
     if left.shape[1] != right.shape[0]:
         return None
     if not (np.isfinite(left).all() and np.isfinite(right).all()):
@@ -180,17 +189,15 @@ def _delta_factors(
 def _product_singular_values(left: Any, right: Any) -> Any:
     """Singular values of ``left @ right`` without forming the (out, in) product.
 
-    Their squares are the eigenvalues of ``(left^T left)(right right^T)``, a
-    rank-sized product that ``S (left^T left) S`` symmetrises, with ``S`` the
-    square root of ``right right^T``.
+    With the reduced QR factorisations ``left = Q_l R_l`` and ``right^T = Q_r R_r``
+    (``Q_l``, ``Q_r`` with orthonormal columns), ``left @ right = Q_l (R_l R_r^T) Q_r^T``,
+    so its singular values are those of the core ``R_l R_r^T``, at most r x r.
     """
     import numpy as np
 
-    eig_right, vec_right = np.linalg.eigh(right @ right.T)
-    root = (vec_right * np.sqrt(np.clip(eig_right, 0.0, None))) @ vec_right.T
-    core = root @ (left.T @ left) @ root
-    eig = np.linalg.eigvalsh((core + core.T) / 2.0)
-    return np.sqrt(np.clip(eig, 0.0, None))[::-1]
+    r_left = np.linalg.qr(left, mode="r")
+    r_right = np.linalg.qr(right.T, mode="r")
+    return np.linalg.svd(r_left @ r_right.T, compute_uv=False)
 
 
 def _product_inner(left_a: Any, right_a: Any, left_b: Any, right_b: Any) -> float:
@@ -244,13 +251,17 @@ def compute_layer_diffs(
 ) -> Tuple[Tuple[LayerDiff, ...], Tuple[str, ...], Tuple[str, ...]]:
     """Compute per-layer Frobenius diffs for every layer in both adapters.
 
-    A LoRA module whose ``lora_A`` / ``lora_B`` pair is present in both adapters
-    is compared on its effective delta ``ΔW = scaling · B @ A`` and reported
-    once, under its module name, whatever the two ranks are. ``scaling`` comes
-    from each adapter's ``config`` (``lora_alpha / r``, or ``/ sqrt(r)`` with
-    ``use_rslora``, per-module patterns applied; 1.0 without one). Every other
-    tensor (``modules_to_save`` weights, biases, a half-present pair) is diffed
-    element-wise by name, skipping shape mismatches.
+    A LoRA module whose 2-D factor pair (``lora_A`` / ``lora_B``, or
+    ``lora_embedding_A`` / ``lora_embedding_B``) is present in both adapters is
+    compared on its effective delta ``ΔW = scaling · B @ A`` and reported once,
+    under its module name, whatever the two ranks are. ``scaling`` is
+    :func:`lora_module_scaling` of each adapter's ``config`` (``lora_alpha / r``,
+    or ``/ sqrt(r)`` with ``use_rslora``, after ``rank_pattern`` /
+    ``alpha_pattern``), or 1.0 without a usable ``r`` / ``lora_alpha``. Every
+    other tensor (a conv pair, a half-present pair, a DoRA magnitude vector,
+    ``modules_to_save`` weights, biases) is diffed element-wise by name, skipping
+    shape mismatches; without configs, names that are not LoRA factors give the
+    same rows as before.
 
     Returns ``(per_layer, only_in_a, only_in_b)``. ``per_layer`` is sorted by name.
     """
