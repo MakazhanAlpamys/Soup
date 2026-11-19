@@ -118,6 +118,34 @@ def test_a_syntax_error_is_still_a_yaml_error():
         load_yaml_limited("a: [1, 2\nb: }", "doc", max_bytes=64)
 
 
+#: Unclosed flow sequence: PyYAML reports a parser error at line 3.
+_SYNTAX_ERROR_YAML = "base_model: x\nlr: [1, 2\nepochs: 3\n"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [(_SYNTAX_ERROR_YAML, "<unicode string>"), (_SYNTAX_ERROR_YAML.encode(), "<byte string>")],
+    ids=["str", "bytes"],
+)
+def test_text_syntax_error_keeps_pyyamls_own_label(source, label):
+    """Loading from text (no file involved) reports exactly what yaml.safe_load reports."""
+    with pytest.raises(yaml.YAMLError) as expected:
+        yaml.safe_load(source)
+    with pytest.raises(yaml.YAMLError) as raised:
+        load_yaml_limited(source, "doc", max_bytes=4096)
+    assert type(raised.value) is type(expected.value)
+    assert str(raised.value) == str(expected.value)
+    assert raised.value.problem_mark.name == label
+
+
+def test_text_can_be_given_an_explicit_name():
+    with pytest.raises(yaml.YAMLError) as raised:
+        load_yaml_limited(_SYNTAX_ERROR_YAML, "doc", max_bytes=4096, name="soup.yaml")
+    assert raised.value.problem_mark.name == "soup.yaml"
+    assert '"soup.yaml", line 3' in str(raised.value)
+    assert "<unicode string>" not in str(raised.value)
+
+
 def test_every_refusal_is_a_value_error():
     assert issubclass(YamlLimitError, ValueError)
 
@@ -619,6 +647,36 @@ def test_file_that_is_not_utf8_is_still_a_decode_error(tmp_path):
 def test_missing_file_is_still_file_not_found(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_yaml_file_limited(tmp_path / "absent.yaml", "absent.yaml", max_bytes=4096)
+
+
+@pytest.mark.parametrize("as_text", [False, True], ids=["pathlib", "str"])
+def test_file_syntax_error_names_the_file_not_unicode_string(tmp_path, as_text):
+    path = tmp_path / "broken.yaml"
+    path.write_text(_SYNTAX_ERROR_YAML, encoding="utf-8")
+    with pytest.raises(yaml.YAMLError) as raised:
+        load_yaml_file_limited(str(path) if as_text else path, "broken.yaml", max_bytes=4096)
+    message = str(raised.value)
+    assert str(path) in message
+    assert "<unicode string>" not in message
+    assert raised.value.problem_mark.name == str(path)
+
+
+def test_file_syntax_error_differs_from_the_text_error_only_by_the_name(tmp_path):
+    path = tmp_path / "broken.yaml"
+    path.write_text(_SYNTAX_ERROR_YAML, encoding="utf-8")
+    with pytest.raises(yaml.YAMLError) as from_text:
+        load_yaml_limited(_SYNTAX_ERROR_YAML, "broken.yaml", max_bytes=4096)
+    with pytest.raises(yaml.YAMLError) as from_file:
+        load_yaml_file_limited(path, "broken.yaml", max_bytes=4096)
+    assert type(from_file.value) is type(from_text.value)
+    assert from_file.value.problem == from_text.value.problem
+    assert (from_file.value.problem_mark.line, from_file.value.problem_mark.column) == (
+        from_text.value.problem_mark.line,
+        from_text.value.problem_mark.column,
+    )
+    # Swap the quoted name back and the two messages are identical.
+    relabelled = str(from_file.value).replace(f'"{path}"', '"<unicode string>"')
+    assert relabelled == str(from_text.value)
 
 
 def test_file_over_the_nesting_limit_is_refused_by_name(tmp_path):

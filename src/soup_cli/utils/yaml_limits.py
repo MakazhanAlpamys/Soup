@@ -221,8 +221,13 @@ class _LimitedLoader(yaml.SafeLoader):
     their own node and copy nothing.
     """
 
-    def __init__(self, stream: str | bytes, *, node_budget: int) -> None:
+    def __init__(
+        self, stream: str | bytes, *, node_budget: int, name: str | None = None
+    ) -> None:
         super().__init__(stream)
+        if name is not None:
+            # PyYAML names a str/bytes source "<unicode string>"; use the real name.
+            self.name = name
         self._open_collections = 0
         self._node_budget = node_budget
         self._merge_depth = 0
@@ -322,11 +327,13 @@ for _name in ("bool", "int", "float", "timestamp"):
     )
 
 
-def _parse(source: str | bytes, what: str, *, source_bytes: int) -> object:
+def _parse(
+    source: str | bytes, what: str, *, source_bytes: int, name: str | None = None
+) -> object:
     """Build the single document in ``source`` as ``yaml.safe_load`` would."""
     limit = source_bytes + ALIAS_EXPANSION_SLACK
     # A SafeLoader subclass: the same tags and constructors as safe_load.
-    loader = _LimitedLoader(source, node_budget=limit)
+    loader = _LimitedLoader(source, node_budget=limit, name=name)
     try:
         return loader.get_single_data()
     except _TooDeepError:
@@ -348,7 +355,9 @@ def _size_error(what: str, max_bytes: int) -> YamlLimitError:
     return YamlLimitError(f"{what} is larger than {max_bytes} bytes; refusing")
 
 
-def load_yaml_limited(source: str | bytes, what: str, *, max_bytes: int) -> object:
+def load_yaml_limited(
+    source: str | bytes, what: str, *, max_bytes: int, name: str | None = None
+) -> object:
     """Load one YAML document from text, within the limits.
 
     Returns what ``yaml.safe_load(source)`` returns. Raises
@@ -366,7 +375,7 @@ def load_yaml_limited(source: str | bytes, what: str, *, max_bytes: int) -> obje
         raise TypeError(f"{what} must be str or bytes, got {type(source).__name__}")
     if source_bytes > max_bytes:
         raise _size_error(what, max_bytes)
-    data = _parse(source, what, source_bytes=source_bytes)
+    data = _parse(source, what, source_bytes=source_bytes, name=name)
     check_yaml_expanded_size(data, what, source_bytes=source_bytes)
     return data
 
@@ -489,4 +498,4 @@ def load_yaml_file_limited(
     and ``UnicodeDecodeError`` are passed on unchanged.
     """
     text = read_text_limited(path, what, max_bytes=max_bytes)
-    return load_yaml_limited(text, what, max_bytes=max_bytes)
+    return load_yaml_limited(text, what, max_bytes=max_bytes, name=os.fspath(path))
