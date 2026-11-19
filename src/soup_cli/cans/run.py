@@ -100,6 +100,18 @@ def _output_problem(output: object) -> Optional[str]:
     )
 
 
+def _refuse_redacted(config: Mapping[str, Any]) -> None:
+    """Refuse a config that holds a ``<redacted>`` placeholder (``ValueError``)."""
+    holes = find_redacted_paths(config)
+    if holes:
+        raise ValueError(
+            "this can holds redacted value(s) at: " + ", ".join(holes[:20])
+            + (" (+more)" if len(holes) > 20 else "")
+            + ". They were removed when the can was packed; supply them in the can's "
+            "config.yaml (a .tar.gz) and run soup train on it instead of soup can run"
+        )
+
+
 def check_can_output(config: Mapping[str, Any]) -> None:
     """Refuse a can whose config ``output`` resolves outside the working directory.
 
@@ -310,14 +322,7 @@ def run_can(
     config = read_config(str(src))
     # A value that ``soup can pack`` redacted is not in the can: running it would send the
     # placeholder to a server. Refuse before anything is extracted, fetched or trained.
-    holes = find_redacted_paths(config)
-    if holes:
-        raise ValueError(
-            "this can holds redacted value(s) at: " + ", ".join(holes[:20])
-            + (" (+more)" if len(holes) > 20 else "")
-            + ". They were removed when the can was packed; supply them in the can's "
-            "config.yaml (a .tar.gz) and run soup train on it instead of soup can run"
-        )
+    _refuse_redacted(config)
     # Refuse an output outside the working directory before anything is extracted or
     # asked: the confirmation would otherwise approve a run that is then refused.
     check_can_output(config)
@@ -360,13 +365,14 @@ def run_can(
         extract_can(str(src), str(owned_dir))
 
         # The file ``soup train`` is about to read is the one extraction left at
-        # ``config.yaml``, not the archive member read for the check above, so the
+        # ``config.yaml``, not the archive member read for the checks above, so the
         # extracted file is checked too, with the loader ``soup train`` itself uses.
         extracted_config = load_yaml_file_limited(
             owned_dir / "config.yaml", "config.yaml", max_bytes=MAX_CONFIG_BYTES
         ) or {}
         if not isinstance(extracted_config, dict):
             raise ValueError("config.yaml must deserialise to a mapping")
+        _refuse_redacted(extracted_config)
         check_can_output(extracted_config)
 
         # Optional env capture.

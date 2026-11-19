@@ -243,14 +243,28 @@ class TestNothingHappensBeforeTheRefusal:
         assert not (env.work / "extracted").exists()
 
 
-class TestTheExtractedFileIsTheOneThatIsChecked:
-    def _can_with_two_configs(self, env, first: str, second: str) -> str:
-        members = _members(first)
-        members.append(("./config.yaml", second.encode("utf-8")))
-        return _write_can(env.work / "twice.can", members).name
+def _swap_extracted_config(monkeypatch, payload):
+    """Model a ``config.yaml`` on disk that is not the member that was read: extraction
+    writes the real files, then the config file is replaced."""
+    real_extract = can_run.extract_can
+    data = payload.encode("utf-8") if isinstance(payload, str) else payload
 
-    def test_a_config_that_differs_from_the_one_read_first_is_refused(self, env):
-        can = self._can_with_two_configs(env, _config(), _config(output=str(env.outside)))
+    def extract_then_swap(path, dest):
+        result = real_extract(path, dest)
+        (Path(dest) / "config.yaml").write_bytes(data)
+        return result
+
+    monkeypatch.setattr(can_run, "extract_can", extract_then_swap)
+
+
+class TestTheExtractedFileIsChecked:
+    """The member names of a can are unique (``test_can_member_names.py``), so the member
+    read first is the file extraction writes. ``soup can run`` still checks the file it
+    hands to ``soup train``, with the loader ``soup train`` uses."""
+
+    def test_an_output_outside_in_the_extracted_file_is_refused(self, env, monkeypatch):
+        can = env.can(_config())
+        _swap_extracted_config(monkeypatch, _config(output=str(env.outside)))
 
         with pytest.raises(ValueError, match=_REFUSAL):
             run_can(can, yes=True)
@@ -259,8 +273,9 @@ class TestTheExtractedFileIsTheOneThatIsChecked:
         assert env.leftovers() == []
         assert not env.outside.exists()
 
-    def test_a_user_chosen_extract_dir_is_kept_but_nothing_is_trained(self, env):
-        can = self._can_with_two_configs(env, _config(), _config(output="../elsewhere"))
+    def test_a_user_chosen_extract_dir_is_kept_but_nothing_is_trained(self, env, monkeypatch):
+        can = env.can(_config())
+        _swap_extracted_config(monkeypatch, _config(output="../elsewhere"))
 
         with pytest.raises(ValueError, match=_REFUSAL):
             run_can(can, yes=True, extract_dir="extracted")
@@ -268,8 +283,9 @@ class TestTheExtractedFileIsTheOneThatIsChecked:
         assert env.calls == []
         assert (env.work / "extracted").is_dir()
 
-    def test_train_is_handed_the_file_that_was_checked(self, env):
-        can = self._can_with_two_configs(env, _config(), _config(output="inside/run"))
+    def test_train_is_handed_the_file_that_was_checked(self, env, monkeypatch):
+        can = env.can(_config())
+        _swap_extracted_config(monkeypatch, _config(output="inside/run"))
 
         result = run_can(can, yes=True)
 
@@ -278,10 +294,9 @@ class TestTheExtractedFileIsTheOneThatIsChecked:
         config_path = Path(argv[argv.index("--config") + 1])
         assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["output"] == "inside/run"
 
-    def test_a_config_that_is_not_a_mapping_after_extraction_is_refused(self, env):
-        members = _members(_config())
-        members.append(("./config.yaml", b"- just\n- a list\n"))
-        can = _write_can(env.work / "listy.can", members).name
+    def test_a_config_that_is_not_a_mapping_after_extraction_is_refused(self, env, monkeypatch):
+        can = env.can(_config())
+        _swap_extracted_config(monkeypatch, b"- just\n- a list\n")
 
         with pytest.raises(ValueError, match="must deserialise to a mapping"):
             run_can(can, yes=True)
@@ -289,18 +304,31 @@ class TestTheExtractedFileIsTheOneThatIsChecked:
         assert env.calls == []
         assert env.leftovers() == []
 
-    def test_an_oversized_extracted_config_is_refused_by_the_capped_reader(self, env):
+    def test_an_oversized_extracted_config_is_refused_by_the_capped_reader(
+        self, env, monkeypatch
+    ):
         from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES
 
-        members = _members(_config())
-        members.append(("./config.yaml", b"#" + b"x" * MAX_CONFIG_BYTES + b"\n"))
-        can = _write_can(env.work / "big.can", members).name
+        can = env.can(_config())
+        _swap_extracted_config(monkeypatch, b"#" + b"x" * MAX_CONFIG_BYTES + b"\n")
 
         with pytest.raises(ValueError, match="larger than"):
             run_can(can, yes=True)
 
         assert env.calls == []
         assert env.leftovers() == []
+
+    def test_a_can_with_two_members_for_one_name_is_refused_before_extraction(self, env):
+        members = _members(_config())
+        members.append(("./config.yaml", _config(output=str(env.outside)).encode("utf-8")))
+        can = _write_can(env.work / "twice.can", members).name
+
+        with pytest.raises(ValueError, match="resolve to the same name"):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+        assert env.leftovers() == []
+        assert not env.outside.exists()
 
 
 class TestWhatStillRuns:

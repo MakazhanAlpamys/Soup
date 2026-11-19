@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import tarfile
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 from soup_cli.cans.schema import Manifest
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_under_cwd, quote_path
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_limited
 
 #: Largest ``manifest.yaml`` read into memory. A manifest holds a handful of
@@ -25,6 +26,80 @@ MAX_EXTRACT_MEMBERS = 10_000
 #: so 8 GiB covers that case with margin while bounding what a small gzip
 #: stream can expand to on disk (deflate reaches ~1000:1 on repetitive input).
 MAX_EXTRACT_BYTES = 8 * 1024 * 1024 * 1024
+
+
+def _name_key(name: str) -> str:
+    """The entry a member name is written to, on any platform, as one comparable string.
+
+    Two members whose keys are equal are the same file once extracted somewhere: the
+    separator forms (``/``, ``\\``, ``//``), a ``./`` prefix, ``.`` and ``..`` components
+    and a trailing separator all resolve away; case and Unicode composition are folded
+    (case-insensitive file systems, macOS); and a trailing dot or space and an NTFS
+    stream suffix (``:name``) are dropped, as Windows drops them. Raises ``ValueError``
+    for a name that leaves the can. An empty key is the can's root.
+    """
+    parts: list[str] = []
+    for raw in name.replace("\\", "/").split("/"):
+        if raw in ("", "."):
+            continue
+        if raw == "..":
+            if not parts:
+                raise ValueError(f"member name {quote_path(name)} leaves the can; refusing")
+            parts.pop()
+            continue
+        part = unicodedata.normalize("NFC", raw).split(":", 1)[0].rstrip(". ")
+        parts.append((part or raw).casefold())
+    return "/".join(parts)
+
+
+def _check_members(tar: tarfile.TarFile) -> None:
+    """Refuse a can whose members are not one file or directory per name.
+
+    ``inspect_can`` and ``read_config`` read a member by its exact name while
+    ``extract_can`` writes all of them, so an archive holding two members that resolve to
+    the same entry (see :func:`_name_key`) would show one file to the checks and hand
+    another to the code that runs. Every reader of a can calls this first. Also refused:
+    a link, a device or any other member that is not a regular file or a directory (``soup
+    can pack`` never writes one), a member below a file member, and more members than
+    :data:`MAX_EXTRACT_MEMBERS`. Iterates lazily, so the count stops the header scan early.
+    """
+    first_name: dict[str, str] = {}
+    files: set[str] = set()
+    for count, member in enumerate(tar, start=1):
+        if count > MAX_EXTRACT_MEMBERS:
+            raise ValueError(
+                f"can has too many members (> {MAX_EXTRACT_MEMBERS}); refusing"
+            )
+        if member.issym() or member.islnk():
+            raise ValueError(
+                f"member {quote_path(member.name)} is a link; links are not allowed in a "
+                ".can file; refusing"
+            )
+        if not (member.isfile() or member.isdir()):
+            raise ValueError(
+                f"member {quote_path(member.name)} is neither a regular file nor a "
+                "directory; refusing"
+            )
+        key = _name_key(member.name)
+        if not key:
+            continue
+        if key in first_name:
+            raise ValueError(
+                "two members of this can resolve to the same name: "
+                f"{quote_path(first_name[key])} and {quote_path(member.name)}; refusing"
+            )
+        first_name[key] = member.name
+        if member.isfile():
+            files.add(key)
+    for key, name in first_name.items():
+        parts = key.split("/")
+        for depth in range(1, len(parts)):
+            parent = "/".join(parts[:depth])
+            if parent in files:
+                raise ValueError(
+                    f"member {quote_path(name)} lies under the file member "
+                    f"{quote_path(first_name[parent])}; refusing"
+                )
 
 
 def _read_text_member(
@@ -69,6 +144,7 @@ def inspect_can(path: str) -> Manifest:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
+        _check_members(tar)
         manifest_text = _read_text_member(tar, "manifest.yaml", MAX_MANIFEST_BYTES)
     data = load_yaml_limited(
         manifest_text, "manifest.yaml", max_bytes=MAX_MANIFEST_BYTES,
@@ -84,6 +160,7 @@ def read_config(path: str) -> dict[str, Any]:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
+        _check_members(tar)
         cfg_text = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
     data = load_yaml_limited(cfg_text, "config.yaml", max_bytes=MAX_CONFIG_BYTES) or {}
     if not isinstance(data, dict):
@@ -136,9 +213,10 @@ def extract_can(path: str, dest_dir: str) -> Path:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     dest = Path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(can_path, mode="r:gz") as tar:
+        _check_members(tar)
         _check_extract_bounds(tar)
+        dest.mkdir(parents=True, exist_ok=True)
         _safe_extract(tar, dest)
     return dest
 
