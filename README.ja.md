@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,58 +92,37 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.0 — v0.76 が警告していたものは、拒否されるようになりました。** 何からも読み取られない
-31 個の設定フィールドと、非推奨の三つの値は、警告付きで読み込まれることがなくなりました。読み込みは、
-設定ごとに一行で、その設定名と削除すべきものを示して停止します。v0.76 では警告付きで、あるいは黙って読み込めた設定が、
-v0.77 では読み込めなくなることがあります。まず `soup doctor --config soup.yaml` を実行してください。
+**v0.78.0 — v0.77.2 以降の `main` をそのまま切り出したリリース：プルリクエスト 271 件、うち 218 件は
+メンテナー以外の 48 人によるものです。** 新機能と、v0.77.2 が受け入れていた入力を拒否する規則を
+いくつか含みます。設定やスクリプトをアップグレードする前に
+[v0.78.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: ステージされたフィールドと非推奨の値は拒否されます。** 対象のフィールドには、
-  `training.lr_groups`、`early_stop_patience`、`forgetting_eval_steps`、`checkpoint_eval_*`、
-  `quantize_ref_model`、`long_context_grpo`、`vision_grpo`、`data.split_thinking`、そして
-  `data.video_*` キーが含まれます。`training.rl_checkpoint_include_ref_model` と
-  `rl_checkpoint_include_rollout_buffer` は v0.76.0 より後にステージされたため、事前に警告した
-  リリースはありません。値は、`data.remove_unused_columns: true`、量子化を一切行わないタスクでの
-  `training.quantization: 4bit` / `8bit`（または `load_in_8bit: true`）、そして `soup ab --beta` です。
-  v0.76 が何も言わずに無視していた十五個の設定も拒否されます。たとえば何も適用しない場所での `use_mod` や
-  `neftune_alpha`、LoRA ランク付きの `expand_layers`、Unsloth での `8bit` やビジョン SFT、MLX または
-  Unsloth での `lora.rank_pattern` です。CHANGELOG のアップグレードノートを参照してください。
-- **破壊的変更: Python 3.11–3.13、AWQ と GPTQ のエクスポートは廃止、`soup serve` の二つのルートに
-  トークンが必要に。** Python 3.10 はサポート対象外になりました（2026-10-01 にサポート終了）。3.10 では
-  pip は引き続き v0.76.x を解決します。`soup export --format awq` / `gptq` と
-  `soup quantize --to awq` / `gptq` は削除されました。どちらの上流プロジェクトもアーカイブ済みのためです。
-  `gguf`、`onnx`、`tensorrt`、`bitnet`、`tq1_0` を使うか、v0.76.x にとどまってください。
-  `/v1/tools/python` と `/v1/tools/bash` は、サーバーが `--tool-auth-token`（または
-  `SOUP_TOOL_AUTH_TOKEN`）付きで起動されていなければ、どのバインドでも 401 を返します。また
-  `/v1/tools/python` は、ホストに OS レベルの分離がない環境では、bash と同じく 501 を返します。
-- **DPO、ORPO、SimPO、KTO が Apple Silicon でネイティブに動作します。** `backend: mlx` での
-  `task: dpo`、`orpo`、`simpo`、`kto` は、Soup 独自の MLX ループで TRL の目的関数に従って学習します
-  （ORPO と SimPO は参照モデル不要）。MLX のテキスト SFT は、ネイティブ DoRA、`training.eval_steps`、
-  `training.seed`、損失ウォッチドッグに対応しました。`lora.use_rslora` は MLX と Unsloth で適用される
-  ようになったため、そこでの rsLoRA 実行は要求したスケールで学習し、結果が変わります。
-- **レイヤーストリーミングが DeepSeek-V3 系の MoE に対応しました。** Soup のレイヤーストリーミング
-  （L2L の実装、Pudipeddi et al. 2020）は、`model_type: deepseek_v3` を、常駐とストリーミングで
-  フォワードとバックワードの一致（パリティ）を確認したうえでストリーミングし、FP8 ブロック量子化
-  チェックポイントをシャード時に逆量子化します。Kimi-K2-Base と -Instruct は、フィールドごとの検査を
-  通ったうえで受け入れられます（K2 形状の小さなチェックポイントが CPU 上でビット単位で一致して
-  ストリーミングされます。K2 そのものでは何も学習していません）。
-  `training.stream_expert_layout: per_expert` は、ルーティングされたエキスパートを一つずつストリーミング
-  します。RTX 5070 Laptop 8 GB 一台で、同じ Moonlight-16B の LoRA 設定は、fused の 3.1 GB に対して
-  GPU メモリのピークが 1.0 GB（エキスパートは bf16 に対して NF4、キャッシュ階層も異なる）で、ステップ時間は約 2.7x でした
-  （[記録](benchmarks/probe-rtx5070-moonlight-16b.md)）。`training.stream_recompute: off` / `auto` は、
-  ストリーミングされるレイヤーのアクティベーションを再計算せずに保持し、勾配はビット単位で一致します。
-  同じカードの RAM 階層では、Mistral-7B NF4 のステップが 512 トークンで 22%、2048 で 8.5% 速くなります
-  （[記録](benchmarks/gate-stream-recompute.md)）。オプトイン方式（`stream_layers: true`）で、BETA です。
-- **検証できる来歴（provenance）。** `soup registry push --data <file>` は学習ファイルの SHA-256 を
-  記録し、`--idempotency-key` によりプッシュを安全に再試行できます。transformers バックエンドでは、常駐、
-  レイヤーストリーミング、マルチ GPU の各実行が、読み込んだベースモデルの Hub コミットを記録します。
-  `soup ship --require-provenance` は、エビデンスを、それに刻まれたアダプター・タスク・ソースのバイト列、
-  スイートのバージョン、判定ポリシーと照合します。
-- **その他の新機能。** `soup --version`。`soup data ingest` で PDF と DOCX を扱うための
-  `pip install "soup-cli[documents]"`。`soup merge --low-memory`。GRPO が LLM ジャッジで採点できる
-  ようになりました（`training.reward_fn: judge_rank`）。そして
-  [`docs/config-reference.md`](docs/config-reference.md) と
-  [`docs/cli-reference.md`](docs/cli-reference.md) はコードから生成され、どちらかがコードの動作を正しく
-  述べなくなると、テストスイートが失敗します。
+- **継続学習ループ。** `soup serve` はすべての回答に ID を付け、それに対するフィードバック
+  （高評価・評価点・修正）を受け取ります。`soup loop` はそのフィードバックから候補を学習し、
+  `soup ship --gate loop-v2` で判定し、カナリアとして動かし、自動でロールバックします。
+- **`soup ship` が数値の内訳を示します。** タスクごとの改善/悪化/変化なしの件数、行ごとの監査ファイル、
+  自分で用意した関数で採点する `--task-mode reward --reward-fn`（`.py` ファイルが実行されます）、
+  アダプターがベースをどれだけ変えるか、2 つのアダプターを比べる `--base-adapter`。
+- **新しいコマンド。** `soup eval retention`（モデルのバージョン間の忘却）、`soup data leakage`
+  （学習と評価の重複）、`soup docs search`（オフライン）、`soup prune-layer-cache`、
+  `soup eval quant-check --performance`。
+- **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
+  前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
+- **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
+  取り込み、ストリーミングしたベースでの BCO、IPO、`task: preference` の学習。
+- **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
+  チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
+  表示します。
+- **新しいレシピ 8 件**（合計 181 件）と、Qwen2 QLoRA SFT 向けの Triton カーネルライブラリ（設定キーなし）。
+- **テキストを入力どおりに表示。** さらに数十のコマンドが、パスと名前を、角括弧と `:name:` のテキストを
+  保ったまま、端末制御文字を取り除いて表示します。
+
+**知っておくべき挙動の変更。** `training` の数値フィールドへの真偽値は拒否されます。`--push-as` は
+リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
+`moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
+`soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
+変わることがあります。`soup ship` が書き出す証拠ファイルはバージョン 2 で、v0.77.x は拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -343,7 +322,7 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 

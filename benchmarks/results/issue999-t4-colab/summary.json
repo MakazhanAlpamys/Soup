@@ -1,0 +1,240 @@
+{
+  "harness": "benchmarks/harness/issue999_t4_bracket_check.ipynb",
+  "environment": {
+    "gpu": "Tesla T4",
+    "driver": "580.82.07",
+    "vram_total_mib": "15360",
+    "power_limit_w": "70.00",
+    "sm_clock_max_mhz": "1590",
+    "pcie_link_gen_max": "3",
+    "pcie_link_width_max": "16",
+    "host_ram_total_bytes": 13605818368,
+    "host_ram_available_bytes_at_start": 12378632192,
+    "cpu_count": 2,
+    "disk_free_bytes": 75307335680,
+    "python": "3.13.16",
+    "platform": "Linux-6.6.159+-x86_64-with-glibc2.39",
+    "memory_cap": "none: no set_per_process_memory_fraction, no stream_vram_override",
+    "pytorch_cuda_alloc_conf": null
+  },
+  "versions": {
+    "soup-cli": "0.77.0",
+    "torch": "2.11.0+cu130",
+    "transformers": "5.20.2",
+    "peft": "0.21.2",
+    "trl": "0.29.1",
+    "bitsandbytes": "0.50.2",
+    "accelerate": "1.15.0",
+    "torch_cuda": "13.0",
+    "cudnn": 92700
+  },
+  "steps": 28,
+  "warmup": 8,
+  "published_bracket": [
+    288.0,
+    423.0
+  ],
+  "prime": {
+    "name": "prime",
+    "config": "soup-a.yaml",
+    "command": [
+      "soup",
+      "bench",
+      "train",
+      "--config",
+      "/content/issue999/soup-a.yaml",
+      "--steps",
+      "2",
+      "--warmup",
+      "1",
+      "-o",
+      "/content/issue999/prime.json"
+    ],
+    "fixes_applied": [
+      "fingerprint",
+      "fp16-adapter-alignment"
+    ],
+    "exit_code": 1,
+    "wall_seconds": 432.4,
+    "peak_rss_bytes": 8868257792,
+    "min_available_bytes": 4017762304
+  },
+  "runs": [
+    {
+      "run": "a1",
+      "variant": "a",
+      "valid": true,
+      "failures": [],
+      "fixes_applied": [
+        "fingerprint",
+        "fp16-adapter-alignment"
+      ],
+      "counted_steps": 20,
+      "tokens_per_sequence": 37.5,
+      "total_tok_s": 45.49418596012114,
+      "supervised_tok_s": 21.533914687790674,
+      "utilisation": 0.47333333333333333,
+      "median_step_s": 3.2648313789999293,
+      "p95_step_s": 3.5175736890000735,
+      "sm_busy_min_med_max": [
+        960,
+        1530.0,
+        1590
+      ],
+      "sm_samples": 652,
+      "peak_alloc_gb": 1.505984,
+      "peak_reserved_gb": 1.591738368,
+      "peak_host_rss_gb": 8.687157248,
+      "min_host_available_gb": 4.240896,
+      "session_bracket": {
+        "low": 327.0,
+        "high": 481.0,
+        "tflops": 23.18,
+        "dtype": "float16",
+        "probe_clock_mhz": 675
+      },
+      "x_of_published_low": 0.15796592347264285,
+      "x_of_published_high": 0.10755126704520365,
+      "x_of_session_low": 0.1391259509483827,
+      "smi_medians_whole_run": {
+        "sm_mhz": 1230.0,
+        "power_w": 54.3,
+        "temp_c": 68.0,
+        "util_pct": 97.0,
+        "pcie_gen": 3.0
+      }
+    },
+    {
+      "run": "b1",
+      "variant": "b",
+      "valid": true,
+      "failures": [],
+      "fixes_applied": [
+        "fingerprint",
+        "fp16-adapter-alignment"
+      ],
+      "counted_steps": 20,
+      "tokens_per_sequence": 256.0,
+      "total_tok_s": 232.9312160982144,
+      "supervised_tok_s": 214.96093673126234,
+      "utilisation": 0.9228515625,
+      "median_step_s": 4.377777183000035,
+      "p95_step_s": 4.543680048000169,
+      "sm_busy_min_med_max": [
+        585,
+        750,
+        1575
+      ],
+      "sm_samples": 877,
+      "peak_alloc_gb": 1.927563776,
+      "peak_reserved_gb": 2.11812352,
+      "peak_host_rss_gb": 8.823328768,
+      "min_host_available_gb": 4.170489856,
+      "session_bracket": {
+        "low": 351.0,
+        "high": 516.0,
+        "tflops": 24.86,
+        "dtype": "float16",
+        "probe_clock_mhz": 690
+      },
+      "x_of_published_low": 0.8087889447854667,
+      "x_of_published_high": 0.5506648134709561,
+      "x_of_session_low": 0.6636216982855111,
+      "smi_medians_whole_run": {
+        "sm_mhz": 727.5,
+        "power_w": 67.27,
+        "temp_c": 76.0,
+        "util_pct": 100.0,
+        "pcie_gen": 3.0
+      }
+    },
+    {
+      "run": "a2",
+      "variant": "a",
+      "valid": true,
+      "failures": [],
+      "fixes_applied": [
+        "fingerprint",
+        "fp16-adapter-alignment"
+      ],
+      "counted_steps": 20,
+      "tokens_per_sequence": 37.5,
+      "total_tok_s": 44.86710012713171,
+      "supervised_tok_s": 21.23709406017567,
+      "utilisation": 0.47333333333333333,
+      "median_step_s": 3.3140650374999723,
+      "p95_step_s": 3.584417239000004,
+      "sm_busy_min_med_max": [
+        930,
+        1530,
+        1590
+      ],
+      "sm_samples": 663,
+      "peak_alloc_gb": 1.505984,
+      "peak_reserved_gb": 1.591738368,
+      "peak_host_rss_gb": 8.817123328,
+      "min_host_available_gb": 4.212994048,
+      "session_bracket": {
+        "low": 356.0,
+        "high": 523.0,
+        "tflops": 25.2,
+        "dtype": "float16",
+        "probe_clock_mhz": 840
+      },
+      "x_of_published_low": 0.1557885421080962,
+      "x_of_published_high": 0.1060687946267889,
+      "x_of_session_low": 0.12603118013239242,
+      "smi_medians_whole_run": {
+        "sm_mhz": 1170.0,
+        "power_w": 53.22,
+        "temp_c": 75.0,
+        "util_pct": 97.0,
+        "pcie_gen": 3.0
+      }
+    },
+    {
+      "run": "b2",
+      "variant": "b",
+      "valid": true,
+      "failures": [],
+      "fixes_applied": [
+        "fingerprint",
+        "fp16-adapter-alignment"
+      ],
+      "counted_steps": 20,
+      "tokens_per_sequence": 256.0,
+      "total_tok_s": 233.0912131362958,
+      "supervised_tok_s": 215.1085902478511,
+      "utilisation": 0.9228515625,
+      "median_step_s": 4.374150572499957,
+      "p95_step_s": 4.534709059000079,
+      "sm_busy_min_med_max": [
+        555,
+        750.0,
+        1575
+      ],
+      "sm_samples": 876,
+      "peak_alloc_gb": 1.927563776,
+      "peak_reserved_gb": 2.11812352,
+      "peak_host_rss_gb": 8.626208768,
+      "min_host_available_gb": 4.218187776,
+      "session_bracket": {
+        "low": 357.0,
+        "high": 525.0,
+        "tflops": 25.28,
+        "dtype": "float16",
+        "probe_clock_mhz": 720
+      },
+      "x_of_published_low": 0.8093444900565827,
+      "x_of_published_high": 0.551043057059801,
+      "x_of_session_low": 0.652916563406991,
+      "smi_medians_whole_run": {
+        "sm_mhz": 720.0,
+        "power_w": 67.33,
+        "temp_c": 76.0,
+        "util_pct": 99.0,
+        "pcie_gen": 3.0
+      }
+    }
+  ]
+}

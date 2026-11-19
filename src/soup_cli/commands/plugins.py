@@ -6,8 +6,10 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import plugins as plugins_pkg
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 app = typer.Typer(
     name="plugins",
@@ -35,11 +37,14 @@ def list_cmd() -> None:
 @app.command("install")
 def install_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
     """Explain how to install plugins without pretending an install occurred."""
-    safe = escape(name)
+    # The name is typed text that nothing has validated: strip, escape and keep
+    # ":name:" codes literal.
+    safe = for_terminal(name)
     console.print(
         f"[red]Soup does not install plugin [bold]{safe}[/].[/] Install a trusted "
         "Python distribution that exposes the [bold]soup_cli.plugins[/] entry-point "
-        "group, then opt in with [bold]soup plugins enable <name>[/]."
+        "group, then opt in with [bold]soup plugins enable <name>[/].",
+        emoji=False,
     )
     raise typer.Exit(code=2)
 
@@ -102,10 +107,10 @@ def _show_table() -> None:
             resources.append(f"model groups: {', '.join(spec.model_groups)}")
         table.add_row(
             escape(spec.name),
-            escape(spec.version),
+            Text(strip_control(spec.version)),
             state,
             ", ".join(hooks) if hooks else "[dim]none[/]",
-            escape("\n".join(resources)) if resources else "[dim]none[/]",
-            escape(spec.description),
+            Text(strip_control("\n".join(resources))) if resources else "[dim]none[/]",
+            Text(strip_control(spec.description)),
         )
     console.print(table)

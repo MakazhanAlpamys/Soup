@@ -136,6 +136,9 @@ class PRMScorer:
         self.trust_remote_code = trust_remote_code
         self._model = None
         self._tokenizer = None
+        # #2368: whether the loaded model's forward takes ``logits_to_keep``,
+        # checked once on first use.
+        self._logits_to_keep: Any = None
 
     def _ensure_loaded(self) -> None:
         """Lazy-load the base CausalLM + re-attach and load the reward head."""
@@ -154,7 +157,7 @@ class PRMScorer:
         model = AutoModelForCausalLM.from_pretrained(
             self.prm_path,
             trust_remote_code=self.trust_remote_code,
-            torch_dtype=dtype,
+            dtype=dtype,
         )
         head_state = load_reward_head_weights(self.prm_path)
         hidden_size = model.config.hidden_size
@@ -173,6 +176,18 @@ class PRMScorer:
         model.to(self.device)
         self._model = model
         self._tokenizer = tokenizer
+
+    def _forward_kwargs(self) -> dict:
+        """``logits_to_keep=1`` where the PRM's forward takes it (#2368).
+
+        The score reads only ``hidden_states[-1]``, so the LM head need not run on
+        every position. A forward without the parameter keeps today's call.
+        """
+        from soup_cli.utils.prm import forward_takes_logits_to_keep
+
+        if getattr(self, "_logits_to_keep", None) is None:
+            self._logits_to_keep = forward_takes_logits_to_keep(self._model)
+        return {"logits_to_keep": 1} if self._logits_to_keep else {}
 
     def _render_prompt(self, prompt: Any) -> str:
         """Best-effort render of a GRPO prompt (str or message list) to text."""
@@ -238,7 +253,9 @@ class PRMScorer:
                 return 0.0
         ids = torch.tensor([input_ids], dtype=torch.long, device=self.device)
         with torch.no_grad():
-            outputs = self._model(input_ids=ids, output_hidden_states=True)
+            outputs = self._model(
+                input_ids=ids, output_hidden_states=True, **self._forward_kwargs()
+            )
             last_hidden = outputs.hidden_states[-1][0]  # [T, H]
             pos = torch.tensor(step_positions, dtype=torch.long, device=self.device)
             step_hidden = last_hidden.index_select(0, pos)  # [S, H]
@@ -314,6 +331,7 @@ class PRMScorer:
                     input_ids=padded,
                     attention_mask=attn_mask,
                     output_hidden_states=True,
+                    **self._forward_kwargs(),
                 )
                 last_hidden = outputs.hidden_states[-1]  # [B, T, H]
                 for b, orig_idx in enumerate(valid_indices):

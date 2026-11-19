@@ -19,10 +19,13 @@ id back instead of relying on shell job control.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import signal
 import threading
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Optional
@@ -30,6 +33,7 @@ from typing import Callable, Mapping, Optional
 from soup_cli.utils.canary_router import (
     BucketStats,
     CanaryPolicy,
+    QualityStats,
     read_bucket_stats,
     rollback,
 )
@@ -37,15 +41,59 @@ from soup_cli.utils.loop_budget import (
     BudgetDecision,
     check_budget,
     reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
+)
+from soup_cli.utils.loop_gate import GATE, clean_corrections, clean_held_out
+from soup_cli.utils.loop_holdout import (
+    HoldoutPlan,
+    later,
+    record_plan,
+    valid_cursor,
 )
 from soup_cli.utils.loop_iteration import (
     IterationRecord,
     new_iteration_id,
     write_iteration,
 )
-from soup_cli.utils.loop_state import LoopState, read_state, write_state
+from soup_cli.utils.loop_log import (
+    NO_LOG,
+    LoopLog,
+    StageEvents,
+    canary_result,
+    iteration_from_record,
+    progress_line,
+    resolved_line,
+    start_log,
+    utc_now_iso,
+    version_line,
+    withdrawn_line,
+)
+from soup_cli.utils.loop_reconcile import finish as finish_promotion
+from soup_cli.utils.loop_reconcile import promoted_state
+from soup_cli.utils.loop_retry import (
+    STAGE_ERROR_STAGES,
+    after_failure,
+    is_stage_error,
+    stage_error_fingerprint,
+    stage_error_hold,
+    stage_error_reason,
+)
+from soup_cli.utils.loop_state import (
+    MAX_CURSOR_TS,
+    LoopState,
+    StateMergeError,
+    default_state_path,
+    format_wait_duration,
+    merge_state,
+    read_state,
+    update_state,
+    write_state,
+)
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 _LOG = logging.getLogger(__name__)
+# BucketStats.verdict's default: canary answers needed before a verdict.
+CANARY_MIN_SAMPLES = 30
 
 # A per-stage callable returns a small dict; the orchestrator merges the
 # result dicts into one ``StageResult`` before recording the iteration.
@@ -55,6 +103,9 @@ TrainFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 GateFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 DeployFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 CostFn = Callable[[LoopState], float]
+PromoteFn = Callable[[LoopState], Mapping[str, object]]
+# What people said about the active canary's answers; None = the quality verdict takes no part.
+QualityFn = Callable[[LoopState], Optional[QualityStats]]
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +142,11 @@ def default_deploy(state: LoopState, ctx: Mapping[str, object]) -> Mapping[str, 
     return {"deployed": False, "canary_verdict": None}
 
 
+def default_promote(state: LoopState) -> Mapping[str, object]:
+    """Stub promote stage — the state change alone, no server to tell."""
+    return {"promoted": True}
+
+
 def default_cost(state: LoopState) -> float:
     """Stub cost estimate — zero so the budget gate stays permissive."""
     return 0.0
@@ -110,6 +166,7 @@ class WatchConfig:
     gate_fn: GateFn = default_gate
     deploy_fn: DeployFn = default_deploy
     cost_fn: CostFn = default_cost
+    promote_fn: PromoteFn = default_promote
     on_iteration: Optional[Callable[[IterationRecord], None]] = None
     # v0.71.4 #177 — pack each successful iteration as a v0.26 Soup Can +
     # append a Registry entry (default off so existing tests / stub watchers
@@ -117,6 +174,16 @@ class WatchConfig:
     pack_iterations: bool = False
     served_model: Optional[str] = None
     base_model: str = "unknown"
+    # The feedback side of the canary verdict (loop_stages.canary_quality for the pre-wired
+    # loop); None = judge by request errors alone, as the stub stages do.
+    quality_fn: Optional[QualityFn] = None
+    # Append the iteration, version and progress logs (docs/loop-formats.md) under
+    # ``iteration_dir`` (default .soup-loops) as the loop runs. False = only the manifests.
+    loop_logs: bool = True
+    # Called with no arguments at the start of every pass of the watch loop (also while the
+    # loop is paused, and when a budget skips the iteration), unlike ``on_iteration``. The
+    # detached child uses it to rotate its log; a plain foreground watch passes none.
+    on_cycle: Optional[Callable[[], None]] = None
 
     def __post_init__(self) -> None:
         v = self.poll_interval_sec
@@ -128,13 +195,19 @@ class WatchConfig:
             mi = self.max_iterations
             if isinstance(mi, bool) or not isinstance(mi, int) or mi < 0:
                 raise ValueError("max_iterations must be a non-negative int or None")
-        for fname in ("harvest_fn", "train_fn", "gate_fn", "deploy_fn", "cost_fn"):
+        for fname in ("harvest_fn", "train_fn", "gate_fn", "deploy_fn", "cost_fn", "promote_fn"):
             if not callable(getattr(self, fname)):
                 raise ValueError(f"{fname} must be callable")
         if self.on_iteration is not None and not callable(self.on_iteration):
             raise ValueError("on_iteration must be callable or None")
+        if self.on_cycle is not None and not callable(self.on_cycle):
+            raise ValueError("on_cycle must be callable or None")
+        if self.quality_fn is not None and not callable(self.quality_fn):
+            raise ValueError("quality_fn must be callable or None")
         if not isinstance(self.pack_iterations, bool):
             raise ValueError("pack_iterations must be bool")
+        if not isinstance(self.loop_logs, bool):
+            raise ValueError("loop_logs must be bool")
         # Validate the #177 registry-packing identity fields like every other
         # field, so a NUL/oversize value fails at construction rather than deep
         # inside store.push (review LOW). They flow into registry_name_from /
@@ -150,29 +223,145 @@ class WatchConfig:
             raise ValueError("base_model must be a non-empty NUL-free str <= 512 chars")
 
 
+def _now() -> datetime:
+    """The clock ``run_once`` reads when it is not given ``now`` (tests replace this)."""
+    return datetime.now(timezone.utc)
+
+
 def run_once(
     state: LoopState,
     config: WatchConfig,
+    *,
+    now: Optional[datetime] = None,
+    log: Optional[LoopLog] = None,
+    on_persisted: Optional[Callable[[LoopState], None]] = None,
 ) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
-    """Execute one full iteration synchronously. Pure with respect to time."""
+    """Execute one full iteration synchronously. Pure with respect to time.
+
+    ``now`` fixes the clock for the day and month rollovers and for how long a canary has
+    waited for ratings (tests); None reads ``_now()``, the current UTC time.
+
+    ``log`` is where the cycle appends its lines to ``iterations.jsonl``, ``versions.jsonl``
+    and ``progress.jsonl`` (``soup loop watch`` passes one); None writes nothing and leaves
+    the version counter alone. A line that cannot be written is a note on the returned
+    record, never an error.
+
+    A promotion is written to ``loop.yaml`` the moment it happens, not when the cycle ends
+    (the cycle goes on into the next harvest, train and ship): ``on_persisted`` is called with
+    the state that was written, so the caller merges only what changes after it
+    (``loop_reconcile``).
+    """
     if not isinstance(state, LoopState):
         raise TypeError("state must be LoopState")
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
-    runs_today, today = reset_daily_counter_if_new_day(
-        state.runs_today, state.last_run_date
+    log = NO_LOG if log is None else log
+    # #2362: read the clock once, so the month and day rollovers agree even
+    # when `soup loop watch` runs across midnight at the end of a month.
+    if now is None:
+        now = _now()
+    if log.enabled:
+        state = start_log(state, log, actor="loop")  # the first version, once
+    # Read the month from the OLD last_run_date, before the daily reset
+    # overwrites it.
+    spent = reset_monthly_spend_if_new_month(
+        state.spent_this_month_usd, state.last_run_date, now=now
     )
-    state = _state_with(state, runs_today=runs_today, last_run_date=today)
-    canary_verdict, rollback_policy = _evaluate_active_canary(state, config)
+    runs_today, today = reset_daily_counter_if_new_day(
+        state.runs_today, state.last_run_date, now=now
+    )
+    state = _state_with(
+        state,
+        runs_today=runs_today,
+        last_run_date=today,
+        spent_this_month_usd=spent,
+    )
+    reading = _evaluate_active_canary(state, config, now)
+    canary_verdict, rollback_policy = reading.verdict, reading.rollback
+    canary_samples, quality_notes = reading.samples, list(reading.notes)
     rolled_back = rollback_policy is not None
+    canary_notes = []
     if rollback_policy is not None:
+        canary_notes.append(
+            reading.rollback_note
+            or f"canary {state.canary_active} rolled back ({canary_verdict})"
+        )
+        canary_notes.extend(quality_notes)
+        _log_withdrawn(log, state, reading, canary_notes[0])
         state = _state_with(
             state,
             canary_active=rollback_policy.canary,
             canary_traffic_pct=rollback_policy.traffic_pct,
             canary_rollout_id=None,
+            canary_adapter=None,
+            canary_started_ts=None,
+            canary_cursor_ts=None,
+            canary_iteration=None,
+            canary_override=None,
         )
-    estimated = float(config.cost_fn(state))
+    elif canary_verdict == "OK" and state.canary_active:
+        canary_before = state
+        log.progress(progress_line(
+            _canary_iteration_id(state), "promote", "start",
+            message=f"promoting {state.canary_active} to production",
+        ))
+        state, note = _promote(state, config)
+        canary_notes.append(note)
+        if reading.promote_note and state.canary_active is None:
+            canary_notes.append(reading.promote_note)  # (a refused promotion keeps the canary)
+        canary_notes.extend(quality_notes)
+        if state.canary_active is None:
+            # Promoted: the server has switched. loop.yaml decides which version is production,
+            # so it is written now (atomic, under the lock), before the log lines and not at the
+            # end of the cycle (loop_reconcile has the order and the recovery).
+            saved = _persist_promotion(canary_before, state, config, on_persisted)
+            if saved:
+                canary_notes.append(saved)
+        _log_promotion(log, canary_before, state, reading, canary_notes, note)
+        if state.canary_active is not None:
+            # The server refused the promotion, so the canary is still the running canary. The
+            # cycle ends here: training on top of it would cost hours of card time for a candidate
+            # the deploy stage must refuse ("canary X is still running"), and the rows it read
+            # would be marked as used. The next poll asks the server again.
+            return _refused_promotion_cycle(state, canary_notes, note, canary_verdict, log)
+    elif state.canary_active:
+        # A canary is still collecting answers: no new iteration until it is decided.
+        _log_waiting(log, state, reading)
+        record = IterationRecord(
+            iteration_id=new_iteration_id(),
+            started_at=_utc_iso(),
+            finished_at=_utc_iso(),
+            pairs_harvested=0,
+            run_id=None,
+            gate_verdict="SKIPPED",
+            canary_verdict=canary_verdict,
+            shipped=False,
+            rolled_back=False,
+            estimated_cost_usd=0.0,
+            notes=" | ".join([
+                f"canary-wait: {state.canary_active} has {canary_samples} canary answers "
+                f"(verdict at {CANARY_MIN_SAMPLES})",
+                *quality_notes,
+            ])[:4096],
+            canary_quality=reading.evidence,
+        )
+        return state, _noted(record, log), BudgetDecision(
+            proceed=False,
+            reason="canary in progress",
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        )
+    # A record of a stage that raised (its back-off or hold) is judged before any stage runs, so a
+    # cost stage that keeps raising is not called again either. A deploy retry is not held by it.
+    held_note = (
+        None if state.pending_deploy is not None
+        else stage_error_hold(state.failed_train, datetime.now(timezone.utc))
+    )
+    stage_error: Optional[_StageError] = None
+    estimated = 0.0
+    if held_note is None:
+        cost, stage_error = _guard("cost", lambda: float(config.cost_fn(state)))
+        estimated = 0.0 if stage_error is not None else cost
     decision = check_budget(
         estimated_run_usd=estimated,
         spent_so_far_usd=state.spent_this_month_usd,
@@ -194,19 +383,133 @@ def run_once(
             shipped=False,
             rolled_back=rolled_back,
             estimated_cost_usd=estimated,
-            notes=f"budget-skip: {decision.reason}",
+            notes=" | ".join([*canary_notes, f"budget-skip: {decision.reason}"])[:4096],
+            canary_quality=reading.evidence,
         )
-        return state, record, decision
-    harvest_out = dict(config.harvest_fn(state))
-    train_out = dict(config.train_fn(state, harvest_out))
-    gate_out = dict(config.gate_fn(state, train_out))
-    deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
+        return state, _noted(record, log), decision
+    # Stage events: held back until the iteration has work to show (see StageEvents).
+    events = StageEvents(log, iteration_id)
+    pending = state.pending_deploy
+    harvest_out: dict = {"pairs_harvested": 0, "traces_collected": 0}
+    waiting_note: Optional[str] = None
+    read_up_to = None
+    plan = None
+    resumed_attempts = 0
+    trained_run = False
+    train_out: dict = {}
+    gate_out: dict = {"gate_verdict": "SKIPPED"}
+    if pending is not None:
+        # A candidate trained earlier whose deploy was refused: only the deploy runs again.
+        stage_error = None  # (a cost stage that raised is in the log; the retry goes ahead)
+        events.go_live()
+        train_out = dict(pending["train"])
+        gate_out = dict(pending["gate"])
+        trained_run = True
+        read_up_to = valid_cursor(pending.get("cursor_ts"))
+        resumed_attempts = int(pending["attempts"])
+        iteration_id = str(pending.get("iteration_id") or iteration_id)
+        events.emit("deploy", "start")
+    elif held_note is not None:
+        # The same stage raised before and is waiting or held: no stage is called.
+        train_out = {"run_id": None, "skipped": True, "train_held": True, "notes": held_note}
+    elif stage_error is None:
+        events.emit("harvest", "start")
+        raw_harvest, stage_error = _guard("harvest", lambda: config.harvest_fn(state))
+        if stage_error is None:
+            harvest_out = dict(raw_harvest)
+            events.emit("harvest", "end", message=_harvest_message(harvest_out))
+            waiting_note = _log_wait(log, iteration_id, state, harvest_out)
+            if harvest_out.get("pairs_path"):
+                events.go_live()  # a dataset was handed to training
+            events.emit("train", "start")
+            raw_train, stage_error = _guard("train", lambda: config.train_fn(state, harvest_out))
+        if stage_error is None:
+            train_out = dict(raw_train)
+            trained_run = _training_ran(train_out)
+            if trained_run:
+                events.go_live()  # (a custom stage can train without a dataset path)
+            _emit_train_end(events, train_out, trained_run)
+            read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
+            plan = harvest_out.get("holdout")
+            if trained_run:
+                events.emit("verdict", "start")
+            raw_gate, stage_error = _guard("gate", lambda: config.gate_fn(state, train_out))
+            if stage_error is None:
+                gate_out = dict(raw_gate)
+                if trained_run:
+                    _emit_verdict_end(events, gate_out)
+    if stage_error is not None:
+        events.go_live()
+        events.emit(
+            "verdict" if stage_error.stage == "gate" else stage_error.stage, "error",
+            error="stage_exception", message=stage_error.text,
+        )
+        if stage_error.stage == "gate":
+            gate_out = {"gate_verdict": "SKIPPED", "failed": True, "notes": stage_error.text}
+        else:
+            train_out = {
+                "run_id": None, "skipped": False, "failed": True,
+                "notes": stage_error.text, "failure": stage_error.text,
+            }
+            trained_run = False
+            read_up_to = None
+            plan = None
+    deploying = trained_run and (gate_out.get("gate_verdict") == "OK" or _canary_decides(gate_out))
+    if deploying and pending is None:
+        events.emit("deploy", "start")
+    if stage_error is not None or held_note is not None:
+        deploy_out: dict = {"deployed": False, "canary_verdict": None}  # nothing to deploy
+    else:
+        raw_deploy, deploy_error = _guard(
+            "deploy", lambda: config.deploy_fn(state, {**train_out, **gate_out})
+        )
+        if deploy_error is None:
+            deploy_out = dict(raw_deploy)
+        else:
+            stage_error = deploy_error  # (a deploy that raised is retried like a refused one)
+            deploy_out = {
+                "deployed": False, "canary_verdict": None, "failed": True,
+                "notes": deploy_error.text,
+            }
+            events.go_live()
+    if deploying:
+        _emit_deploy_end(events, deploy_out)
     gate_verdict = str(gate_out.get("gate_verdict", "SKIPPED"))
     deploy_verdict = deploy_out.get("canary_verdict")
     if canary_verdict is None and deploy_verdict is not None:
         canary_verdict = str(deploy_verdict)
     shipped = bool(deploy_out.get("deployed", False))
     rolled_back = rolled_back or bool(deploy_out.get("rolled_back", False))
+    # The batch is consumed only by a DECIDED verdict: SHIP deployed, DON'T SHIP, or a deploy
+    # that failed for good (retries used up). A skipped verdict (soup ship crashed) keeps it;
+    # a refused deploy keeps the trained candidate and retries just the deploy next cycle.
+    verdict_decided = str(gate_out.get("gate_verdict", "SKIPPED")) in ("OK", "MAJOR")
+    deploy_refused = deploying and not shipped and bool(deploy_out.get("failed"))
+    attempts_used = resumed_attempts + 1 if deploy_refused else 0
+    retry_deploy = deploy_refused and attempts_used < DEPLOY_RETRY_LIMIT
+    consumed = trained_run and verdict_decided and not retry_deploy
+    failure_note = None
+    if deploy_refused:
+        reason = str(deploy_out.get("notes") or "deploy failed")
+        if retry_deploy:
+            failure_note = (
+                f"deploy failed (attempt {attempts_used} of {DEPLOY_RETRY_LIMIT}): {reason}; "
+                "the trained candidate is kept and the deploy will be retried next cycle"
+            )
+        else:
+            failure_note = f"deploy failed after {attempts_used} attempts: {reason}"
+    elif train_out.get("failed") and train_out.get("notes"):
+        # The failure itself (exit code or signal name, log tail), not the notes that came before
+        # it (quantization, max_length, paraphrases): last_failure keeps its first 500 characters.
+        failure_note = str(train_out.get("failure") or train_out["notes"])
+    elif stage_error is not None:
+        failure_note = stage_error.text  # a gate that raised, or a deploy that did (not retried)
+    deploy_out = {**deploy_out, **({"notes": failure_note} if deploy_refused else {})}
+    ledger_notes = (
+        record_plan(plan, iteration_id=iteration_id, until=read_up_to)
+        if consumed and isinstance(plan, HoldoutPlan)
+        else []
+    )
     pairs = int(harvest_out.get("pairs_harvested", 0) or 0)
     if pairs < 0:
         pairs = 0
@@ -226,12 +529,53 @@ def run_once(
         rolled_back=rolled_back,
         estimated_cost_usd=estimated,
         notes=" | ".join(
-            str(n) for n in (train_out.get("notes"), deploy_out.get("notes")) if n
+            str(n)
+            for n in (
+                *canary_notes,
+                train_out.get("notes"),
+                gate_out.get("notes"),
+                deploy_out.get("notes"),
+                *ledger_notes,
+            )
+            if n
         )[:4096],
+        canary_quality=reading.evidence,
+        graduated=len(plan.graduated) if trained_run and isinstance(plan, HoldoutPlan) else None,
+        train_log=_log_ref(train_out.get("train_log")),
+        verify_log=_log_ref(gate_out.get("verify_log")),
+        **_evidence(gate_out),
     )
+    if stage_error is None and _is_idle_poll(
+        pending, trained_run, train_out, deploying, deploy_refused, gate_out, rolled_back,
+        canary_notes,
+    ):
+        # Nothing to train, nothing failed, no canary touched (review 5b, N2): no iteration line, no
+        # manifest, no counter. loop.yaml keeps when and why, for `soup loop status`.
+        reason = _idle_reason(record.notes)
+        idle_state = _state_with(
+            state,
+            waiting_note=_safe_wait(waiting_note),
+            # a stage that raised is still waiting or held: its failure stays in view
+            last_failure=(
+                (failure_note or "")[:500]
+                or (state.last_failure if held_note is not None else None)
+                or None
+            ),
+            failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
+            last_idle={"at": _utc_iso(), "reason": reason},
+        )
+        return idle_state, _noted(record, log), BudgetDecision(
+            proceed=False,
+            reason=f"idle poll: {reason}"[:300],
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        )
+    # The lifetime totals count what training used: an iteration that only waited for
+    # more feedback (or whose training failed) would otherwise add the whole pile again.
+    trained = _training_ran(train_out)
     new_state = state.bumped(
-        traces_collected=int(harvest_out.get("traces_collected", 0) or 0),
-        pairs_distilled=pairs,
+        traces_collected=int(harvest_out.get("traces_collected", 0) or 0) if trained else 0,
+        pairs_distilled=pairs if trained else 0,
         runs_gated=1 if record.gate_verdict in ("OK", "MAJOR") else 0,
         adapters_shipped=1 if shipped else 0,
         iteration_count=1,
@@ -243,19 +587,591 @@ def run_once(
         last_iteration_id=iteration_id,
         last_run_date=today,
     )
-    return new_state, record, decision
+    new_state = _state_with(
+        _note_attempt(new_state, read_up_to if consumed else None),
+        waiting_note=_safe_wait(waiting_note),
+        pending_deploy=(
+            {
+                "train": _plain_json(train_out),
+                "gate": _plain_json(gate_out),
+                "attempts": attempts_used,
+                "cursor_ts": read_up_to,
+                "iteration_id": iteration_id,
+            }
+            if retry_deploy
+            else None
+        ),
+        last_failure=(failure_note or "")[:500] or None,
+        failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
+    )
+    if shipped and deploy_out.get("canary_active"):
+        new_state = _state_with(
+            new_state,
+            canary_cursor_ts=read_up_to,
+            canary_active=str(deploy_out["canary_active"]),
+            canary_adapter=(
+                str(deploy_out["canary_adapter"]) if deploy_out.get("canary_adapter") else None
+            ),
+            canary_traffic_pct=float(deploy_out.get("canary_traffic_pct") or 0.0),
+            canary_rollout_id=str(deploy_out.get("canary_rollout_id") or uuid.uuid4().hex),
+            canary_started_ts=_rollout_start(deploy_out),
+            canary_autoroll_on_regress=True,
+        )
+    new_state = _log_iteration(log, events, record, state, new_state, {
+        "harvest": harvest_out, "train": train_out, "gate": gate_out, "deploy": deploy_out,
+    })
+    return new_state, _noted(record, log), decision
+
+
+# ---------------------------------------------------------------------------
+# The cycle's log lines (docs/loop-formats.md). Each helper only appends: it decides
+# nothing, and a line that cannot be written is a note, never an error (LoopLog).
+# ---------------------------------------------------------------------------
+
+
+def _noted(record: IterationRecord, log: LoopLog) -> IterationRecord:
+    """``record`` with a note for each log line that could not be written this cycle."""
+    failures = log.take_failures()
+    if not failures:
+        return record
+    note = " | ".join(failures)
+    notes = f"{record.notes} | {note}" if record.notes else note
+    return replace(record, notes=notes[:4096])
+
+
+def _canary_iteration_id(state: LoopState) -> Optional[str]:
+    """The iteration the running canary belongs to, or None (a canary no iteration started)."""
+    snapshot = state.canary_iteration if state.canary_active else None
+    return snapshot["iteration_id"] if snapshot else None
+
+
+def _canary_of(state: LoopState, reading: "_CanaryReading") -> dict:
+    """The ``canary`` object of a resolved canary: what this cycle measured of it."""
+    measured = reading.stable_samples is not None
+    return canary_result(
+        traffic_pct=state.canary_traffic_pct,
+        verdict=reading.verdict,
+        stable_samples=reading.stable_samples,
+        canary_samples=reading.samples if measured else None,
+        quality=reading.evidence,
+    )
+
+
+def _log_withdrawn(
+    log: LoopLog, state: LoopState, reading: "_CanaryReading", reason: str
+) -> None:
+    """The canary was withdrawn: its iteration ends ``rolled_back``. Production is unchanged."""
+    line = withdrawn_line(state, reason, canary=_canary_of(state, reading))
+    if line is not None:
+        log.iteration(line)
+    log.progress(progress_line(
+        _canary_iteration_id(state), "rollback", "end", message=reason
+    ))
+
+
+def _log_promotion(
+    log: LoopLog,
+    before: LoopState,
+    after: LoopState,
+    reading: "_CanaryReading",
+    canary_notes: "list[str]",
+    note: str,
+) -> None:
+    """The canary became production (or the server refused): the iteration, version, event."""
+    iteration_id = _canary_iteration_id(before)
+    if after.canary_active is not None:  # refused: nothing changed
+        log.progress(progress_line(
+            iteration_id, "promote", "error", error="promote_refused", message=note
+        ))
+        return
+    now_iso = utc_now_iso()
+    reason = " | ".join(canary_notes)[:4096]
+    snapshot = before.canary_iteration
+    if snapshot is not None:
+        log.iteration(resolved_line(
+            snapshot, outcome="promoted", reason=reason, finished_at=now_iso,
+            to_version=after.production_version, canary=_canary_of(before, reading),
+        ))
+    log.version(version_line(
+        from_version=before.production_version, to_version=after.production_version,
+        cause="promote", actor="loop", iteration_id=iteration_id,
+        served_as=before.canary_active, reason=reason, ts=now_iso,
+    ))
+    log.progress(progress_line(iteration_id, "promote", "end", message=note, ts=now_iso))
+
+
+def _refused_promotion_cycle(
+    state: LoopState,
+    canary_notes: "list[str]",
+    refusal: str,
+    canary_verdict: Optional[str],
+    log: LoopLog,
+) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
+    """The cycle of a promotion the server refused: recorded with its reason, nothing else runs.
+
+    No stage runs, no counter moves and no cursor advances (``proceed=False``: no manifest, as
+    for a canary that is still collecting answers). ``last_failure`` names the refusal for
+    ``soup loop status`` until a later cycle replaces it; ``_log_promotion`` already wrote the
+    ``promote_refused`` progress line.
+    """
+    record = IterationRecord(
+        iteration_id=new_iteration_id(),
+        started_at=_utc_iso(),
+        finished_at=_utc_iso(),
+        pairs_harvested=0,
+        run_id=None,
+        gate_verdict="SKIPPED",
+        canary_verdict=(
+            canary_verdict if canary_verdict in (None, "OK", "MAJOR", "UNKNOWN") else None
+        ),
+        shipped=False,
+        rolled_back=False,
+        estimated_cost_usd=0.0,
+        notes=" | ".join(canary_notes)[:4096],
+    )
+    return (
+        _state_with(state, last_failure=refusal[:500]),
+        _noted(record, log),
+        BudgetDecision(
+            proceed=False,
+            reason=refusal[:300],
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        ),
+    )
+
+
+def _log_waiting(log: LoopLog, state: LoopState, reading: "_CanaryReading") -> None:
+    """A canary still collecting answers: one ``canary`` progress line for this cycle.
+
+    The numbers are the canary's rated answers out of the minimum the quality verdict needs
+    when people rate them, else its answers out of ``CANARY_MIN_SAMPLES``; None when the
+    statistics could not be read.
+    """
+    evidence = reading.evidence
+    if evidence is not None:
+        rated, total = evidence["rated"], evidence["min_rated"]
+        done = rated["canary"]
+        message = (
+            f"{rated['canary']}/{total} canary and {rated['stable']}/{total} stable answers rated"
+        )
+    elif reading.verdict is not None:
+        done, total = reading.samples, CANARY_MIN_SAMPLES
+        message = f"{done}/{total} canary answers"
+    else:
+        done = total = None
+        message = "canary statistics unavailable"
+    log.progress(progress_line(
+        _canary_iteration_id(state), "canary", "progress", done=done, total=total, message=message
+    ))
+
+
+def _harvest_message(harvest_out: Mapping[str, object]) -> str:
+    pairs, new = harvest_out.get("pairs_harvested"), harvest_out.get("new_pairs")
+    text = f"{pairs} rows harvested" if isinstance(pairs, int) else "harvested"
+    return f"{text} ({new} new)" if isinstance(new, int) and not isinstance(new, bool) else text
+
+
+def _emit_train_end(
+    events: StageEvents, train_out: Mapping[str, object], trained: bool
+) -> None:
+    if trained:
+        events.emit("train", "end", message=f"trained {train_out.get('run_id')}")
+    elif train_out.get("failed"):
+        events.emit("train", "error", error="train_failed", message="training failed")
+    else:
+        events.emit("train", "end", message="training skipped")
+
+
+def _emit_verdict_end(events: StageEvents, gate_out: Mapping[str, object]) -> None:
+    verdict = gate_out.get("gate_verdict")
+    notes = str(gate_out.get("notes") or "")
+    if verdict == "OK":
+        events.emit("verdict", "end", message="SHIP")
+    elif verdict == "MAJOR" and _canary_decides(gate_out):
+        events.emit(
+            "verdict", "end", message="DON'T SHIP: no corrections to check, the canary decides"
+        )
+    elif verdict == "MAJOR":
+        events.emit("verdict", "end", message="DON'T SHIP")
+    elif notes.startswith("verdict_skipped:"):
+        events.emit("verdict", "error", error="verdict_not_reached", message=notes[:300])
+    else:
+        events.emit("verdict", "end", message="no verdict")
+
+
+def _emit_deploy_end(events: StageEvents, deploy_out: Mapping[str, object]) -> None:
+    notes = str(deploy_out.get("notes") or "")
+    if deploy_out.get("deployed"):
+        events.emit("deploy", "end", message=notes or "deployed")
+    elif deploy_out.get("failed"):
+        events.emit("deploy", "error", error="deploy_failed", message=notes or "deploy failed")
+    else:
+        events.emit("deploy", "end", message=notes or "not deployed")
+
+
+def _log_iteration(
+    log: LoopLog,
+    events: StageEvents,
+    record: IterationRecord,
+    state: LoopState,
+    new_state: LoopState,
+    stages: "Mapping[str, Mapping[str, object]]",
+) -> LoopState:
+    """Append the iteration's line; a canary keeps its line in ``loop.yaml`` for later.
+
+    Returns ``new_state``, with ``canary_iteration`` set when the iteration started a canary.
+    """
+    if not log.enabled:
+        return new_state
+    line = iteration_from_record(
+        record, state=state, new_state=new_state, harvest=stages["harvest"],
+        train=stages["train"], gate=stages["gate"], deploy=stages["deploy"],
+    )
+    log.iteration(line)
+    if line["outcome"] != "canary":
+        return new_state
+    try:
+        new_state = _state_with(new_state, canary_iteration=line)
+    except (TypeError, ValueError):
+        # (a stage reported something the snapshot cannot hold): the canary still runs,
+        # but its promotion will not be able to complete this line.
+        _LOG.warning("canary iteration snapshot not kept", exc_info=True)
+    events.go_live()  # (a canary started: that is work, whatever the stages reported)
+    events.emit(
+        "canary", "start", done=0, total=CANARY_MIN_SAMPLES,
+        message=f"{new_state.canary_traffic_pct:g}% of keyed traffic; verdict after "
+        f"{CANARY_MIN_SAMPLES} canary answers",
+    )
+    return new_state
+
+
+def _rollout_start(deploy_out: Mapping[str, object]) -> float:
+    """When the canary the deploy stage started began: its own stamp, else now.
+
+    A custom ``deploy_fn`` that reports none (or a value ``LoopState`` would refuse) gets
+    the time of this cycle, so the quality verdict still has a start to count from.
+    """
+    started = deploy_out.get("canary_started_ts")
+    if (
+        isinstance(started, bool)
+        or not isinstance(started, (int, float))
+        or not (0 <= started <= MAX_CURSOR_TS)  # False for NaN too
+    ):
+        return datetime.now(timezone.utc).timestamp()
+    return float(started)
+
+
+#: A trained candidate whose deploy is refused is deployed again on the next cycles, this many
+#: attempts in all (the first one included); then the iteration is recorded as failed.
+DEPLOY_RETRY_LIMIT = 3
+
+
+def _training_ran(train_out: Mapping[str, object]) -> bool:
+    """True when the train stage produced a run (not skipped, not failed)."""
+    return bool(train_out.get("run_id")) and not train_out.get("skipped")
+
+
+def _plain_json(stage_out: Mapping[str, object]) -> "dict[str, object]":
+    """The JSON-plain part of a stage's output (what ``loop.yaml`` can keep for a retry)."""
+    kept: "dict[str, object]" = {}
+    for key, value in stage_out.items():
+        try:
+            if isinstance(key, str) and json.loads(json.dumps(value, allow_nan=False)) == value:
+                kept[key] = value
+        except (TypeError, ValueError):
+            continue
+    return kept
+
+
+@dataclass(frozen=True)
+class _StageError:
+    """A stage of the cycle that raised: its name, the exception's type and a short message."""
+
+    stage: str
+    error_type: str
+    detail: str
+
+    @property
+    def text(self) -> str:
+        base = f"the {self.stage} stage raised {self.error_type}"
+        return f"{base}: {self.detail}" if self.detail else base
+
+
+_STAGE_ERROR_DETAIL_CHARS = 100
+
+
+def _guard(stage: str, call: Callable[[], object]) -> "tuple[object, Optional[_StageError]]":
+    """Call a stage; an exception is a failed cycle for the daemon, never its end.
+
+    ``KeyboardInterrupt`` and ``SystemExit`` are not ``Exception``: they pass through and still
+    stop the daemon. The traceback goes to the daemon log; the record keeps the stage's name, the
+    exception's type and the first words of its message on one clean line.
+    """
+    try:
+        return call(), None
+    except Exception as exc:  # noqa: BLE001 — a stage that raises must not stop the daemon
+        try:
+            detail = " ".join(strip_control(exc).split())[:_STAGE_ERROR_DETAIL_CHARS]
+        except Exception:  # noqa: BLE001 — a message that cannot be printed is left out
+            detail = ""
+        error = _StageError(stage, type(exc).__name__, detail)
+        _LOG.warning("watch: %s", error.text, exc_info=True)
+        return None, error
+
+
+def _is_idle_poll(
+    pending: object,
+    trained_run: bool,
+    train_out: Mapping[str, object],
+    deploying: bool,
+    deploy_refused: bool,
+    gate_out: Mapping[str, object],
+    rolled_back: bool,
+    canary_notes: "list[str]",
+) -> bool:
+    """True for a cycle that did nothing: no training, no failure, no deploy, no canary event.
+
+    A failed train, a DON'T SHIP verdict, a deploy retry, a promotion or a withdrawal DID something
+    and keeps its iteration line (review 5, F4); waiting for more data or a hold does not.
+    """
+    return (
+        pending is None
+        and not trained_run
+        and not train_out.get("failed")
+        and not deploying
+        and not deploy_refused
+        and not rolled_back
+        and not canary_notes
+        and gate_out.get("gate_verdict") in (None, "SKIPPED")
+    )
+
+
+def _idle_reason(notes: str) -> str:
+    """Why the cycle did nothing: the record's notes (a skip reason, a stage's note) on one line.
+
+    At most 300 characters, control characters out; "nothing to train" when no stage said anything.
+    """
+    text = notes or "nothing to train"
+    text = "".join(char if ord(char) >= 0x20 and ord(char) != 0x7F else " " for char in text)
+    return " ".join(text.split())[:300] or "nothing to train"
+
+
+def _failed_train_after(
+    state: LoopState,
+    train_out: Mapping[str, object],
+    ran_train_stage: bool,
+    stage_error: "Optional[_StageError]" = None,
+) -> Optional[dict]:
+    """``state.failed_train`` after this cycle's train stage (review 5, F3).
+
+    A failure on a known fingerprint counts one more attempt (``loop_retry.after_failure``); a
+    run that trained clears the record; a cycle that waited, or skipped for want of data, or only
+    retried a deploy leaves it as it is. A custom train stage that reports no fingerprint
+    (``train_inputs``) is never held.
+
+    A stage that raised (the cost, harvest, train or gate stage) counts as a failure of its own
+    fingerprint, the stage's name; a cycle that got through every stage clears such a record.
+    """
+    if stage_error is not None and stage_error.stage in STAGE_ERROR_STAGES:
+        return after_failure(
+            state.failed_train,
+            stage_error_fingerprint(stage_error.stage),
+            datetime.now(timezone.utc),
+            stage_error_reason(stage_error.stage, stage_error.error_type, stage_error.detail),
+        )
+    if not ran_train_stage or train_out.get("train_held"):
+        return state.failed_train
+    if state.failed_train is not None and is_stage_error(state.failed_train):
+        return None  # every stage ran this cycle without raising
+    fingerprint = train_out.get("train_inputs")
+    if train_out.get("failed") and isinstance(fingerprint, str):
+        reason = str(train_out.get("failure") or train_out.get("notes") or "train failed")
+        return after_failure(state.failed_train, fingerprint, datetime.now(timezone.utc), reason)
+    if _training_ran(train_out):
+        return None
+    return state.failed_train
+
+
+def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:
+    """Note what a training run read: the newest feedback it saw (``attempt_cursor_ts``).
+
+    Only a run counts: a skip (not enough new data, no pairs) or a failed training leaves it, so
+    the same feedback is picked up again and accumulates. The verdict does not matter (a DON'T
+    SHIP still read the data, and retraining on it every poll would never end), and the cursor
+    never moves back. The data cursor itself (``harvest_cursor_ts``) is not touched here: it
+    follows the version in production and moves when the canary is promoted
+    (``loop_holdout.promotion_cursor_changes``). ``cursor`` is None for a harvest that reports
+    none, or a value ``LoopState`` would refuse (a custom ``harvest_fn``).
+    """
+    if cursor is None:
+        return state
+    return _state_with(state, attempt_cursor_ts=later(state.attempt_cursor_ts, cursor))
+
+
+def _safe_wait(note: Optional[str]) -> Optional[str]:
+    """``note`` if ``LoopState`` would take it as the plan-time wait, else ``None``."""
+    if (
+        isinstance(note, str)
+        and 0 < len(note) <= 512
+        and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in note)
+    ):
+        return note
+    return None
+
+
+def _log_wait(
+    log: LoopLog, iteration_id: str, state: LoopState, harvest_out: Mapping[str, object]
+) -> Optional[str]:
+    """Say, once per change, that the cycle waits for more corrections; returns the note.
+
+    A ``harvest`` progress line with the trainable corrections out of the five needed. The same
+    note as the cycle before is not written again (an idle poll adds nothing). None = not waiting.
+    """
+    waiting = harvest_out.get("waiting")
+    note = waiting.get("note") if isinstance(waiting, Mapping) else None
+    note = _safe_wait(note)
+    if note is not None and note != state.waiting_note:
+        log.progress(progress_line(
+            iteration_id, "harvest", "progress", done=waiting.get("trainable"),
+            total=waiting.get("needed"), message=note,
+        ))
+    return note
+
+
+def _canary_decides(gate_out: Mapping[str, object]) -> bool:
+    """The check said DON'T SHIP for want of corrections to check: the canary's ratings decide."""
+    return gate_out.get("gate_verdict") == "MAJOR" and gate_out.get("canary_decides") is True
+
+
+def _log_ref(path: object) -> Optional[str]:
+    """``path`` if it is a plain path string fit for the iteration record, else ``None``."""
+    if (
+        isinstance(path, str)
+        and 0 < len(path) <= 512
+        and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in path)
+    ):
+        return path
+    return None
+
+
+def _evidence(gate_out: Mapping[str, object]) -> "dict[str, object]":
+    """The iteration record's fields for the evidence of ``soup ship --gate loop-v2``.
+
+    Only what follows the iteration format: a custom gate stage that returns something else
+    leaves the evidence out instead of failing the record.
+    """
+    if gate_out.get("verdict_gate") != GATE:
+        return {}
+    fields: "dict[str, object]" = {"verdict_gate": GATE}
+    corrections = clean_corrections(gate_out.get("verdict_corrections"))
+    held_out = clean_held_out(gate_out.get("verdict_held_out"))
+    reason = gate_out.get("verdict_reason")
+    if corrections is not None:
+        fields["verdict_corrections"] = corrections
+    if held_out is not None:
+        fields["verdict_held_out"] = held_out
+    if isinstance(reason, str) and reason and "\x00" not in reason:
+        fields["verdict_reason"] = reason[:4096]
+    return fields
+
+
+def _persist_promotion(
+    before: LoopState,
+    after: LoopState,
+    config: WatchConfig,
+    on_persisted: Optional[Callable[[LoopState], None]],
+) -> Optional[str]:
+    """Write a promotion's state change to ``loop.yaml`` now; a note if that failed, else ``None``.
+
+    Only the fields the promotion changed are merged (``merge_state``), onto the file as it is
+    now. A run with no ``loop.yaml`` (a stub run in a test) writes nothing. A failure is not fatal:
+    the end of the cycle writes the state as before, and the note says the early write failed.
+    """
+    path = config.state_path or default_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        merge_state(before, after, path)
+    except (StateMergeError, OSError) as exc:  # a lock timeout is an OSError
+        return (
+            f"loop.yaml could not be updated at the promotion ({for_terminal(exc)}); "
+            "the end of the cycle tries again"
+        )
+    if on_persisted is not None:
+        on_persisted(after)
+    return None
+
+
+def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
+    """Promote the active canary to production when the server agrees."""
+    name = state.canary_active
+    try:
+        out = dict(config.promote_fn(state))
+    except Exception as exc:  # noqa: BLE001 — the daemon must not crash
+        out = {"promoted": False, "notes": type(exc).__name__}
+    if not out.get("promoted"):
+        why = out.get("notes") or "the promote stage failed"
+        return state, f"canary {name} passed but was not promoted: {why}"
+    promoted = promoted_state(state)
+    note = f"canary {name} promoted to production"
+    if state.canary_override:
+        # A person started this canary over a DON'T SHIP verdict (soup loop canary
+        # --allow-dont-ship): the promotion line and the version line say so.
+        note += f"; {state.canary_override}"
+    if out.get("notes"):
+        note += f" ({out['notes']})"
+    if state.canary_adapter is None:
+        note += "; its adapter path is unknown, so the next verdict compares against the base"
+    return promoted, note
+
+
+@dataclass(frozen=True)
+class _CanaryReading:
+    """What one cycle learned about the active canary (``None``/empty: no canary)."""
+
+    verdict: Optional[str] = None
+    rollback: Optional[CanaryPolicy] = None  # set when the canary is to be withdrawn
+    samples: int = 0
+    # The stable bucket's answers, measured the same way; None when the statistics could not
+    # be read (so the iteration line leaves the samples out instead of saying 0).
+    stable_samples: Optional[int] = None
+    notes: "tuple[str, ...]" = ()
+    # The numbers behind the quality verdict (QualityStats.evidence), None without one.
+    evidence: "Optional[dict[str, object]]" = None
+    # Why a withdrawal that is not a MAJOR verdict happened (the maximum wait ran out).
+    rollback_note: Optional[str] = None
+    # Appended to the notes once the canary was promoted without its ratings.
+    promote_note: Optional[str] = None
+
+
+def _wait_is_over(state: LoopState, now: datetime) -> bool:
+    """True when the rollout started at least ``canary_max_wait_sec`` before ``now``."""
+    started = state.canary_started_ts
+    if started is None:  # a rollout from before the field: nothing to count from
+        return False
+    return now.timestamp() - started >= state.canary_max_wait_sec
 
 
 def _evaluate_active_canary(
-    state: LoopState, config: WatchConfig
-) -> "tuple[Optional[str], Optional[CanaryPolicy]]":
-    """Read live bucket outcomes and return a sticky rollback policy if needed."""
+    state: LoopState, config: WatchConfig, now: datetime
+) -> _CanaryReading:
+    """Read live bucket outcomes and feedback.
+
+    The verdict is the request-error verdict alone, or, when ``config.quality_fn`` has
+    feedback to judge by, the two combined (``combine_canary_verdicts``); the notes then
+    record both. If the quality verdict would be ``UNKNOWN`` and the canary has waited
+    ``state.canary_max_wait_sec`` since it started, it becomes ``INSUFFICIENT`` and
+    ``state.canary_on_timeout`` decides: ``errors-only`` (the error verdict stands alone),
+    ``rollback`` (withdraw it, whatever ``canary_autoroll_on_regress`` says) or ``wait``
+    (no time limit: it stays ``UNKNOWN``).
+    """
     active_canary = state.canary_active
     if active_canary is None:
-        return None, None
+        return _CanaryReading()
     try:
         policy = CanaryPolicy(
-            stable=state.served_model,
+            stable=state.stable_name(),
             canary=active_canary,
             traffic_pct=float(state.canary_traffic_pct or 0.0),
         )
@@ -266,12 +1182,234 @@ def _evaluate_active_canary(
             path=config.canary_stats_path,
         )
         verdict = evaluate_canary_verdict(stats)
+        counts = stats.snapshot()
+        samples = counts["canary_ok"] + counts["canary_major"]
+        stable_samples = counts["stable_ok"] + counts["stable_major"]
     except (OSError, TypeError, ValueError):
         _LOG.warning("canary stats read failed", exc_info=True)
-        return None, None
-    if verdict == "MAJOR" and state.canary_autoroll_on_regress:
-        return verdict, maybe_rollback(policy, verdict)
-    return verdict, None
+        return _CanaryReading()
+    quality = _read_quality(state, config)
+    # The maximum wait ended a canary only once it had its 30 answers; a small share of keyed
+    # traffic may never get there. Once the wait is over --canary-on-timeout decides, whatever
+    # the count (see _decide_on_timeout).
+    wait_over = state.canary_on_timeout != "wait" and _wait_is_over(state, now)
+    counts_text = f"{samples} canary answers, {stable_samples} stable answers"
+    if wait_over and verdict == "UNKNOWN":
+        timed = _decide_on_timeout(state, policy, stats, counts_text, samples, stable_samples)
+        if timed is not None and quality is None:
+            return timed
+        if timed is not None:
+            verdict = timed.verdict or verdict
+            timeout_reading = timed
+        else:
+            timeout_reading = None
+    else:
+        timeout_reading = None
+    if quality is None:
+        regressed = verdict == "MAJOR" and state.canary_autoroll_on_regress
+        return _CanaryReading(
+            verdict=verdict,
+            rollback=maybe_rollback(policy, verdict) if regressed else None,
+            samples=samples,
+            stable_samples=stable_samples,
+        )
+    quality_verdict = quality.verdict(min_samples=CANARY_MIN_SAMPLES)
+    timed_out = (
+        quality_verdict == "UNKNOWN"
+        and state.canary_on_timeout != "wait"
+        and _wait_is_over(state, now)
+    )
+    if timed_out:
+        quality_verdict = "INSUFFICIENT"
+    # A verdict is made of shares; before it, show how far each side is from one.
+    detail = (
+        quality.summary()
+        if quality_verdict in ("OK", "MAJOR")
+        else quality.progress(CANARY_MIN_SAMPLES)
+    )
+    notes = (f"canary errors: {verdict}", f"canary quality: {detail} ({quality_verdict})")
+    verdict = combine_canary_verdicts(verdict, quality_verdict)
+    decided_on = "errors_and_quality"
+    withdraw = None
+    rollback_note = None
+    promote_note = None
+    if timed_out:
+        waited = format_wait_duration(state.canary_max_wait_sec)
+        missing = f"{quality.shortfall(CANARY_MIN_SAMPLES)} in {waited}"
+        if state.canary_on_timeout == "rollback":
+            # Withdrawn although nothing is known to be wrong, and whatever
+            # --autoroll-on-regress says: the person asked for this on timeout.
+            withdraw = rollback(policy, reason="canary quality unverified after the maximum wait")
+            if verdict != "MAJOR":
+                verdict = "UNKNOWN"
+                rollback_note = (
+                    f"canary {active_canary} rolled back: {missing}, quality unverified "
+                    "(--canary-on-timeout rollback)"
+                )
+        else:
+            decided_on = "errors_only"
+            # Added to the notes only if the canary then is promoted (run_once: verdict OK).
+            promote_note = f"promoted on errors only - quality unverified: {missing}"
+    if timeout_reading is not None:
+        # The error verdict was UNKNOWN for want of answers: the timeout decided it above.
+        if timeout_reading.rollback is not None:
+            withdraw = timeout_reading.rollback
+            rollback_note = timeout_reading.rollback_note
+            if verdict != "MAJOR":
+                verdict = "UNKNOWN"
+        else:
+            promote_note = timeout_reading.promote_note
+    if withdraw is None and verdict == "MAJOR" and state.canary_autoroll_on_regress:
+        withdraw = maybe_rollback(policy, verdict)
+    return _CanaryReading(
+        verdict=verdict,
+        rollback=withdraw,
+        samples=samples,
+        stable_samples=stable_samples,
+        notes=notes,
+        evidence=quality.evidence(
+            min_samples=CANARY_MIN_SAMPLES,
+            verdict=quality_verdict,
+            timed_out=timed_out,
+            decided_on=decided_on,
+        ),
+        rollback_note=rollback_note,
+        promote_note=promote_note,
+    )
+
+
+def _decide_on_timeout(
+    state: LoopState,
+    policy: CanaryPolicy,
+    stats: BucketStats,
+    counts_text: str,
+    samples: int,
+    stable_samples: Optional[int],
+) -> Optional[_CanaryReading]:
+    """The canary's request-error verdict once the maximum wait is over, whatever the count.
+
+    ``--canary-on-timeout rollback`` withdraws it; ``errors-only`` lets the request errors
+    alone decide with however many answers there are (a canary that failed more than stable is
+    withdrawn when autoroll is on, any other is promoted) - except a canary with NO answers
+    at all, which is withdrawn (``timeout_no_answers``) unless ``errors-only`` was given
+    explicitly. The reason says "timeout" and the counts. ``None`` leaves the verdict as it
+    was (``wait``).
+    """
+    waited = format_wait_duration(state.canary_max_wait_sec)
+    name = state.canary_active
+    if state.canary_on_timeout == "rollback":
+        return _CanaryReading(
+            verdict="UNKNOWN",
+            rollback=rollback(policy, reason="canary undecided after the maximum wait"),
+            samples=samples,
+            stable_samples=stable_samples,
+            rollback_note=(
+                f"canary {name} rolled back on timeout: {counts_text} in {waited}, not enough "
+                "to decide (--canary-on-timeout rollback)"
+            ),
+        )
+    if state.canary_on_timeout != "errors-only":
+        return None
+    if samples == 0 and not state.canary_on_timeout_explicit:
+        # Nothing was answered by the canary (serve restarted without it, a wrong rollout id,
+        # too little traffic for the share): no evidence for it, so it is not promoted.
+        return _CanaryReading(
+            verdict="UNKNOWN",
+            rollback=rollback(policy, reason="timeout_no_answers"),
+            samples=samples,
+            stable_samples=stable_samples,
+            rollback_note=(
+                f"canary {name} withdrawn on timeout: {counts_text} in {waited}, nothing to "
+                "judge it by (timeout_no_answers; --canary-on-timeout errors-only given "
+                "explicitly promotes with no evidence)"
+            ),
+        )
+    error_verdict = stats.verdict(min_samples=1)
+    if error_verdict == "UNKNOWN":
+        error_verdict = "OK"  # no canary answer failed: nothing against it
+    regressed = error_verdict == "MAJOR" and state.canary_autoroll_on_regress
+    return _CanaryReading(
+        verdict=error_verdict,
+        rollback=maybe_rollback(policy, error_verdict) if regressed else None,
+        samples=samples,
+        stable_samples=stable_samples,
+        promote_note=(
+            f"promoted on timeout: {counts_text} in {waited}, decided on request errors alone"
+        ),
+    )
+
+
+def _read_quality(state: LoopState, config: WatchConfig) -> Optional[QualityStats]:
+    """What people said about the canary's answers, or ``None`` (no hook, no data, a failure).
+
+    A failing read must not stop the loop or roll a canary back: it is logged and the
+    request-error verdict stands alone for this cycle.
+    """
+    if config.quality_fn is None:
+        return None
+    try:
+        quality = config.quality_fn(state)
+    except (OSError, TypeError, ValueError):
+        _LOG.warning("canary quality read failed", exc_info=True)
+        return None
+    return quality if isinstance(quality, QualityStats) else None
+
+
+def combine_canary_verdicts(error_verdict: str, quality_verdict: str) -> str:
+    """One canary verdict from the request-error verdict and the feedback verdict.
+
+    Strict: ``MAJOR`` if either is, ``OK`` only when both are, ``UNKNOWN`` otherwise, so a
+    canary is promoted only once its requests succeeded AND enough people rated its
+    answers well enough. The exception is ``INSUFFICIENT`` (the maximum wait for ratings ran
+    out): the ratings never came, so the error verdict stands alone.
+    """
+    if quality_verdict == "INSUFFICIENT":
+        return error_verdict
+    if "MAJOR" in (error_verdict, quality_verdict):
+        return "MAJOR"
+    if error_verdict == "OK" and quality_verdict == "OK":
+        return "OK"
+    return "UNKNOWN"
+
+
+class WatchAbortedError(RuntimeError):
+    """The daemon stopped because ``loop.yaml`` could not be read or merged (``str()`` = why).
+
+    ``state`` is the last state the daemon held and ``iterations`` the iterations it ran; the
+    ``soup loop watch`` command prints the reason and exits 1.
+    """
+
+    def __init__(self, reason: str, state: LoopState, iterations: int) -> None:
+        super().__init__(reason)
+        self.state = state
+        self.iterations = iterations
+
+
+def _log_daemon_error(log: Optional[LoopLog], code: str, reason: str) -> None:
+    """One line with the reason to the daemon's log and (if there is one) the progress file."""
+    _LOG.error("watch: %s", reason)
+    if log is not None:
+        try:
+            log.progress(progress_line(
+                None, "daemon", "error", message="loop.yaml could not be used; see the log",
+                error=code,
+            ))
+        except (OSError, ValueError):
+            _LOG.warning("watch: the progress line could not be written", exc_info=True)
+
+
+def _with_note(record: IterationRecord, text: str) -> IterationRecord:
+    prefix = record.notes + " | " if record.notes else ""
+    return replace(record, notes=(prefix + text)[:4096])
+
+
+def _restore_signal_handlers(previous: "dict[int, object]") -> None:
+    """Put back the handlers ``watch`` replaced, so Ctrl+C works again once it returns."""
+    for signum, handler in previous.items():
+        try:
+            signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+        except (ValueError, OSError, TypeError):
+            pass
 
 
 def watch(config: WatchConfig) -> "tuple[LoopState, int]":
@@ -281,6 +1419,11 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     - ``config.max_iterations`` reached (test/finite mode)
     - state file going to ``status="stopped"`` between iterations
     - SIGTERM/SIGINT (installed via ``signal.signal`` when on the main thread)
+
+    Raises ``WatchAbortedError`` (after the final status write) when ``loop.yaml`` is gone or
+    invalid at the top of a cycle, or cannot be merged after an iteration: the reason is
+    logged first. An ``OSError`` (a Windows permission denial, a lock timeout) is transient:
+    it is logged and the daemon goes on to the next cycle.
     """
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
@@ -289,41 +1432,97 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
     def _request_stop(signum, frame):  # pragma: no cover — signal path
         stop.set()
 
+    previous_handlers: "dict[int, object]" = {}
     try:
         if threading.current_thread() is threading.main_thread():
-            signal.signal(signal.SIGTERM, _request_stop)
-            signal.signal(signal.SIGINT, _request_stop)
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                previous_handlers[signum] = signal.signal(signum, _request_stop)
     except (ValueError, AttributeError):
         # Non-main-thread + Windows-Python combos where signal.signal raises.
         pass
 
     iterations = 0
+    aborted: Optional[str] = None
+    log = LoopLog(config.iteration_dir) if config.loop_logs else None
     # v0.71.4 #177 — chain Registry entries across iterations so the loop
     # forms a real lineage DAG (parent links to the prior iteration's entry).
     prev_registry_id: Optional[str] = None
-    state = read_state(config.state_path)
-    # Only promote `stopped` → `running` automatically; `paused` must
-    # survive a `soup loop watch` invocation so a SIGTERM + restart
-    # cycle does not silently un-pause the daemon (code-review HIGH #2).
-    if state.status == "stopped":
-        state = state.with_status("running")
-        write_state(state, config.state_path)
+    try:
+        state = read_state(config.state_path)
+        # Only promote `stopped` → `running` automatically; `paused` must
+        # survive a `soup loop watch` invocation so a SIGTERM + restart
+        # cycle does not silently un-pause the daemon (code-review HIGH #2).
+        if state.status == "stopped":
+            state = state.with_status("running")
+            write_state(state, config.state_path)
+    except BaseException:
+        _restore_signal_handlers(previous_handlers)
+        raise
+    if log is not None:
+        # A promotion that a stop cut in two (loop.yaml and the version log disagree) is finished
+        # now, or reported by name when it is not one this tool can finish.
+        try:
+            for sentence in finish_promotion(config.state_path, log):
+                _LOG.warning("watch: %s", sentence)
+                log.progress(progress_line(None, "promote", "progress", message=sentence[:300]))
+        except OSError:
+            _LOG.warning("watch: the version log could not be read", exc_info=True)
     try:
         while not stop.is_set():
             if config.max_iterations is not None and iterations >= config.max_iterations:
                 break
+            if config.on_cycle is not None:
+                try:
+                    config.on_cycle()
+                except Exception:  # noqa: BLE001 — daemon must not crash
+                    _LOG.warning("on_cycle callback raised", exc_info=True)
             try:
                 state = read_state(config.state_path)
-            except (FileNotFoundError, ValueError):
+            except (FileNotFoundError, ValueError) as exc:
+                aborted = f"loop.yaml cannot be used ({for_terminal(exc)}); the daemon stops"
+                _log_daemon_error(log, "state_unreadable", aborted)
                 break
+            except OSError as exc:  # transient: a permission denial, a locked drive
+                _LOG.warning(
+                    "watch: loop.yaml could not be read this cycle (%s); trying again",
+                    type(exc).__name__,
+                )
+                if stop.wait(min(config.poll_interval_sec, 60.0)):
+                    break
+                continue
             if state.status == "paused":
                 if stop.wait(min(config.poll_interval_sec, 60.0)):
                     break
                 continue
             if state.status == "stopped":
                 break
-            state, record, decision = run_once(state, config)
-            write_state(state, config.state_path)
+            base = [state]  # what the file holds of this cycle's state; a promotion moves it on
+
+            def _persisted(saved: LoopState, holder: list = base) -> None:
+                holder[0] = saved
+
+            state, record, decision = run_once(state, config, log=log, on_persisted=_persisted)
+            started_from = base[0]
+            # The iteration may have run for hours: persist only the fields it changed onto
+            # the file as it is NOW, so a rollback / pause / canary made meanwhile survives.
+            skipped: list = []
+            try:
+                state = merge_state(started_from, state, config.state_path, skipped=skipped)
+            except StateMergeError as exc:
+                aborted = str(exc)
+                _log_daemon_error(log, "state_unreadable", aborted)
+                record = _with_note(record, f"loop.yaml could not be updated: {aborted}")
+            except OSError as exc:  # TimeoutError (locked) too: transient
+                note = f"loop.yaml could not be updated: {for_terminal(exc)}"
+                _LOG.warning("watch: %s", note)
+                record = _with_note(record, note)
+            else:
+                if skipped:
+                    record = _with_note(
+                        record,
+                        "loop.yaml changed during the run; not overwritten: "
+                        + ", ".join(skipped),
+                    )
             # Budget-skipped iterations DO NOT produce a manifest — the
             # cycle didn't actually run, so cluttering .soup-loops/ with
             # "I didn't run" records would surprise operators expecting
@@ -346,25 +1545,30 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                     except Exception:  # noqa: BLE001 — daemon must not crash
                         _LOG.warning("on_iteration callback raised", exc_info=True)
             iterations += 1
+            if aborted is not None:
+                break
             if iterations and (
                 config.max_iterations is None or iterations < config.max_iterations
             ):
                 if stop.wait(config.poll_interval_sec):
                     break
     finally:
+        _restore_signal_handlers(previous_handlers)
         # Preserve `paused` status across daemon exit — only flip to
         # `stopped` if the daemon naturally exited (max_iterations / state
         # was running). A SIGTERM while paused must not be silently
         # promoted to stopped (code-review HIGH #2 fix).
         try:
-            current = read_state(config.state_path)
-            if current.status == "running":
-                write_state(current.with_status("stopped"), config.state_path)
-                state = current.with_status("stopped")
-            else:
-                state = current
-        except (FileNotFoundError, ValueError):
-            pass
+            state = update_state(
+                lambda current: (
+                    current.with_status("stopped") if current.status == "running" else current
+                ),
+                config.state_path,
+            )
+        except (OSError, ValueError):  # gone, invalid, or locked: nothing more to record
+            _LOG.warning("watch: the final status could not be written", exc_info=True)
+    if aborted is not None:
+        raise WatchAbortedError(aborted, state, iterations)
     return state, iterations
 
 

@@ -16,12 +16,17 @@ from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
-from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
+from soup_cli.utils.yaml_limits import (
+    MAX_CONFIG_BYTES,
+    duplicate_keys_in_sequence_mappings,
+    load_yaml_limited,
+    read_text_limited,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +85,13 @@ class GateTask(BaseModel):
         default=None, description="Registered benchmark id (e.g. mini_mmlu)",
     )
 
+    @field_validator("threshold", mode="before")
+    @classmethod
+    def _numeric_threshold(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("threshold must be a number, not a boolean")
+        return value
+
     @field_validator("tasks", "prompts")
     @classmethod
     def _clean_path_fields(cls, value: Optional[str]) -> Optional[str]:
@@ -125,7 +137,7 @@ class EvalSuite(BaseModel):
 
 
 class MalformedSuiteError(ValueError):
-    """Invalid YAML syntax or root shape that must still abort training setup."""
+    """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
 def _require_gate_tasks(suite: EvalSuite) -> None:
@@ -142,6 +154,45 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         names.add(task.name)
 
 
+def _suite_error_location(loc: tuple[object, ...]) -> str:
+    """Render a pydantic error location as ``tasks[0].name``."""
+    rendered: list[str] = []
+    for part in loc:
+        if isinstance(part, int) and rendered:
+            rendered[-1] = f"{rendered[-1]}[{part}]"
+        elif isinstance(part, int):
+            rendered.append(f"[{part}]")
+        else:
+            rendered.append(str(part))
+    return ".".join(rendered)
+
+
+def _suite_validation_message(path: str, exc: ValidationError, *, empty: bool) -> str:
+    """Name the suite file and each field a pydantic refusal is about.
+
+    An empty document only fails ``suite`` (``tasks`` has a default), so say
+    what to write instead of repeating that one missing field.
+    """
+    if empty:
+        return (
+            f"eval-gate suite '{path}' is empty: it needs 'suite' (a name) "
+            "and 'tasks' (a list of tasks)"
+        )
+    pieces: list[str] = []
+    for err in exc.errors():
+        loc = _suite_error_location(tuple(err["loc"]))
+        if err["type"] == "missing":
+            pieces.append(f"{(loc or 'value')!r} is required")
+            continue
+        # A validator's own text comes from the original exception in ``ctx``;
+        # anything else (a field-type refusal) already reads fine verbatim.
+        ctx_error = err.get("ctx", {}).get("error")
+        msg = str(ctx_error) if ctx_error is not None else str(err["msg"])
+        pieces.append(f"{loc}: {msg}" if loc else msg)
+    detail = "; ".join(pieces)
+    return f"eval-gate suite '{path}': {detail}"
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -152,9 +203,21 @@ def load_suite(path: str) -> EvalSuite:
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
     try:
-        raw = load_yaml_file_limited(
-            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        what = f"eval-gate suite '{path}'"
+        source = read_text_limited(suite_path, what, max_bytes=MAX_CONFIG_BYTES)
+        raw = load_yaml_limited(source, what, max_bytes=MAX_CONFIG_BYTES)
+        duplicates = duplicate_keys_in_sequence_mappings(
+            source,
+            what,
+            sequence_key="tasks",
+            max_bytes=MAX_CONFIG_BYTES,
         )
+        if duplicates:
+            key, line = duplicates[0]
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has duplicate key {key!r} "
+                f"in a task mapping on line {line}"
+            )
     except yaml.YAMLError as exc:
         raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"
@@ -169,7 +232,23 @@ def load_suite(path: str) -> EvalSuite:
         )
     else:
         data = dict(raw)
-    suite = EvalSuite(**data)
+    empty = raw is None
+    for key in data:
+        if not isinstance(key, str):
+            raise MalformedSuiteError(
+                f"eval-gate suite '{path}' has a non-string key {key!r}; "
+                "top-level keys must be strings"
+            )
+    # #2295: a plain ValueError (not MalformedSuiteError) so the training hook
+    # keeps warning and leaves the gate inert. The message names the file and
+    # each failing field; the chained pydantic report is suppressed so an
+    # uncaught SDK traceback does not surface its documentation URL either.
+    try:
+        suite = EvalSuite(**data)
+    except ValidationError as exc:
+        raise ValueError(
+            _suite_validation_message(path, exc, empty=empty)
+        ) from None
     _require_gate_tasks(suite)
     return suite
 
@@ -533,9 +612,9 @@ def _run_judge_task(
     provider, model, api_base = _parse_judge_url(task.judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
 
-    items: list[dict] = []
+    validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
@@ -545,16 +624,31 @@ def _run_judge_task(
                 raise ValueError(
                     f"invalid JSONL in {task.prompts}: {exc}"
                 ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"row must be an object, got {type(row).__name__}"
+                )
             prompt = row.get("prompt", "")
-            response = generate_fn(prompt)
-            items.append({
-                "prompt": prompt,
-                "response": response,
-                "category": row.get("category", "default"),
-            })
+            if not isinstance(prompt, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'prompt' must be a string, got {type(prompt).__name__}"
+                )
+            category = row.get("category", "default")
+            validated_rows.append((prompt, category))
 
-    if not items:
+    if not validated_rows:
         raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
+
+    items: list[dict] = [
+        {
+            "prompt": prompt,
+            "response": generate_fn(prompt),
+            "category": category,
+        }
+        for prompt, category in validated_rows
+    ]
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
@@ -652,6 +746,12 @@ def run_gate(
             context="baseline score",
         )
     _require_gate_tasks(suite)
+    try:
+        finite_threshold = math.isfinite(regression_threshold)
+    except OverflowError:
+        finite_threshold = False
+    if not finite_threshold:
+        raise ValueError("regression_threshold must be finite")
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

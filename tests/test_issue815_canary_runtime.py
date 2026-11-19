@@ -54,7 +54,7 @@ def test_five_percent_policy_routes_live_serve_requests(tmp_path, monkeypatch):
 
     def generate(current_model, *args, **kwargs):
         observed.append(current_model.current)
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(
@@ -112,7 +112,7 @@ def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypa
         observed.append(current_model.current)
         if current_model.current == "candidate":
             raise RuntimeError("bad canary")
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(
@@ -208,7 +208,9 @@ def test_watch_persists_rollback_for_major_live_stats(tmp_path, monkeypatch):
     assert persisted.canary_traffic_pct == 0.0
 
 
-@pytest.mark.parametrize("sample_count", [5, 30])
+# Below the 30-answer minimum the canary keeps running; at 30 healthy answers it is
+# promoted instead (tests/test_loop_canary_deploy.py).
+@pytest.mark.parametrize("sample_count", [5, 29])
 def test_watch_keeps_a_non_regressing_canary_active(tmp_path, monkeypatch, sample_count):
     monkeypatch.chdir(tmp_path)
     state_path = tmp_path / ".soup" / "loop.yaml"
@@ -312,7 +314,7 @@ def _serve_with_canary(monkeypatch, state_path, stats_path, adapters, fail_on=No
         observed.append(current_model.current)
         if fail_on is not None and current_model.current == fail_on:
             raise RuntimeError("bad canary")
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(

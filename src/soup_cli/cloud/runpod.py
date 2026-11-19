@@ -22,7 +22,9 @@ from soup_cli.cloud._common import (
 )
 
 SUPPORTED_CLOUDS = frozenset({"runpod"})
-# REST v1 gpuTypeIds, verified against the provider's published OpenAPI schema.
+# REST API v2 ``gpu.id`` values, as listed in RunPod's GPU types table
+# (https://docs.runpod.io/references/gpu-types). The v2 schema does not enumerate them
+# ("as returned by GET /v2/catalog/gpus"), so only a live catalog read confirms them.
 _GPU_IDS = types.MappingProxyType(
     {
         "a100": "NVIDIA A100-SXM4-80GB",
@@ -122,9 +124,13 @@ def render_runpod_stub(
         raise ValueError("soup_version must be a safe package version")
     _validate_config(config_yaml)
     encoded = base64.b64encode(config_yaml.encode("utf-8")).decode("ascii")
+    from soup_cli.utils.terminal import _CONTROL_STRIP_TABLE
+
     constants = (
         f"_GPU_ID = {_GPU_IDS[gpu]!r}\n_CONFIG_B64 = {encoded!r}\n"
         f"_OUTPUT = {str(output)!r}\n_SOUP_VERSION = {soup_version!r}\n"
+        # The standalone script carries data from the one canonical sanitizer.
+        f"_TERMINAL_STRIP_TABLE = {_CONTROL_STRIP_TABLE!r}\n"
     )
     from soup_cli.utils.tool_paths import controller_source
 
@@ -140,7 +146,15 @@ def plan_runpod_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_runpod_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
+    """Build a RunPod controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed: the caller passes the *effective*
+    config, with every CLI override applied, so the remote run trains what the
+    local run said it would (#1430). Reading ``config_path`` is the fallback for
+    a direct caller. The embedded text is validated either way (``_validate_config``).
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     for value, field in (
@@ -150,8 +164,9 @@ def plan_runpod_run(
     ):
         validate_path_shape(value, field)
         enforce_under_cwd_and_no_symlink(value, field)
-    with open(config_path, encoding="utf-8") as source:
-        config_yaml = source.read(_MAX_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as source:
+            config_yaml = source.read(_MAX_CONFIG_BYTES + 1)
     if os.path.lexists(output_dir):
         raise ValueError("output_dir already exists; choose a fresh directory for retrieval")
     stub = render_runpod_stub(

@@ -13,13 +13,13 @@ import json
 import re
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.mcp_server import registry as reg
 from soup_cli.utils.profiler import GPU_MEMORY, normalize_gpu_key
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -58,7 +58,7 @@ _DRIVER_NAMES = [
 
 def _json(result) -> dict:
     # Rich highlights JSON when colour is forced (FORCE_COLOR=1), so strip it.
-    return json.loads(_ANSI.sub("", result.output))
+    return json.loads(_ANSI.sub("", result.stdout))
 
 
 _CONFIG = (

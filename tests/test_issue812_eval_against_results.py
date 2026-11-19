@@ -9,9 +9,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 
 def _save_score(run_id: str, benchmark: str, score: float) -> None:
@@ -29,7 +28,7 @@ def _save_score(run_id: str, benchmark: str, score: float) -> None:
 def _against(*args: str):
     from soup_cli.commands.eval import app
 
-    return CliRunner().invoke(app, ["against", *args])
+    return make_cli_runner().invoke(app, ["against", *args])
 
 
 def test_custom_eval_results_produce_a_verdict_and_report_degenerate_ci():
@@ -46,7 +45,7 @@ def test_custom_eval_results_produce_a_verdict_and_report_degenerate_ci():
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    output = strip_ansi(result.output)
+    output = strip_ansi(result.stdout)
     assert "Empty series" not in output
     payload = json.loads(output)
     assert payload["metric"] == "custom"
@@ -65,7 +64,7 @@ def test_default_task_accuracy_falls_back_to_custom_results():
     result = _against("run-base", "--candidate", "run-candidate", "--json-only")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    payload = json.loads(strip_ansi(result.output))
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload["metric"] == "task_accuracy"
     assert payload["source_metric"] == "custom"
 
@@ -84,7 +83,7 @@ def test_explicit_benchmark_metric_reads_lm_eval_task_result():
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    payload = json.loads(strip_ansi(result.output))
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload["source_metric"] == "mmlu"
     assert payload["regressed"] is False
 
@@ -104,7 +103,7 @@ def test_named_soup_eval_results_are_directly_comparable(metric):
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    payload = json.loads(strip_ansi(result.output))
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload["source_metric"] == metric
 
 

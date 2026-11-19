@@ -1,0 +1,112 @@
+{
+  "model_id": "unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+  "revision": "70d37f62f4f475a5a42dbbd5b7aad38f420e0960",
+  "source_sha": "7c546b22909ad8b4db4631331105306307256a57",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "capability": [
+    12,
+    0
+  ],
+  "driver": "570.211.01",
+  "versions": {
+    "torch": "2.8.0+cu128",
+    "unsloth": "2026.10.10",
+    "unsloth-zoo": "2026.10.10",
+    "transformers": "5.17.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2"
+  },
+  "torch_cuda": "12.8",
+  "load_kwargs": {
+    "model_name": "unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+    "max_seq_length": 2048,
+    "dtype": null,
+    "load_in_4bit": true
+  },
+  "peft_kwargs": {
+    "r": 16,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "bias": "none",
+    "use_gradient_checkpointing": "unsloth",
+    "use_rslora": false
+  },
+  "after_load": {
+    "embedding": {
+      "shape": [
+        128256,
+        4096
+      ],
+      "dtype": "torch.bfloat16",
+      "element_size": 2,
+      "numel": 525336576,
+      "parameter_names": [
+        "model.embed_tokens.weight"
+      ]
+    },
+    "output_head": {
+      "shape": [
+        128256,
+        4096
+      ],
+      "dtype": "torch.bfloat16",
+      "element_size": 2,
+      "numel": 525336576,
+      "parameter_names": [
+        "lm_head.weight"
+      ]
+    },
+    "shared_storage": false
+  },
+  "after_get_peft_model": {
+    "embedding": {
+      "shape": [
+        128256,
+        4096
+      ],
+      "dtype": "torch.bfloat16",
+      "element_size": 2,
+      "numel": 525336576,
+      "parameter_names": [
+        "base_model.model.model.embed_tokens.weight"
+      ]
+    },
+    "output_head": {
+      "shape": [
+        128256,
+        4096
+      ],
+      "dtype": "torch.bfloat16",
+      "element_size": 2,
+      "numel": 525336576,
+      "parameter_names": [
+        "base_model.model.lm_head.weight"
+      ]
+    },
+    "shared_storage": false
+  },
+  "actual_targets": [
+    "down_proj",
+    "gate_proj",
+    "k_proj",
+    "o_proj",
+    "q_proj",
+    "up_proj",
+    "v_proj"
+  ],
+  "adapted_module_count": 224,
+  "peak_allocated_bytes_during_load_and_injection": 5883438080,
+  "seconds": 389.73,
+  "note": "Real model weight load and LoRA injection only; no training step or training-peak claim.",
+  "load_source": "Verified local snapshot of model_id at revision; local path replaced by model ID.",
+  "measurement_date": "2026-10-30"
+}

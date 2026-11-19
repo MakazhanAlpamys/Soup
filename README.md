@@ -91,55 +91,37 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.77.0 — what v0.76 warned about is now refused.** 31 config fields that nothing reads, and
-three deprecated values, no longer load with a warning: the load stops with one line per setting
-that names it and says what to delete. A config that loaded on v0.76, with warnings or
-silently, can stop loading on v0.77: run `soup doctor --config soup.yaml` first.
+**v0.78.0 — a cut of `main` after v0.77.2: 271 pull requests, 218 of them from 48 people outside
+the maintainer.** It adds features and several rules that refuse input v0.77.2 accepted, so read the
+[v0.78.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) before
+upgrading a config or a script. Coming from 0.76.x, run `soup doctor --config soup.yaml` first and
+read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **Breaking: staged fields and deprecated values are refused.** Among the fields:
-  `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`, `checkpoint_eval_*`,
-  `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking` and the
-  `data.video_*` keys. `training.rl_checkpoint_include_ref_model` and
-  `rl_checkpoint_include_rollout_buffer` were staged after v0.76.0, so no release warned about
-  them first. The values: `data.remove_unused_columns: true`, `training.quantization: 4bit` /
-  `8bit` (or `load_in_8bit: true`) on a task that never quantises, and `soup ab --beta`.
-  Fifteen settings v0.76 ignored without a word are refused too, such as `use_mod` or
-  `neftune_alpha` where nothing applies them, `expand_layers` with a LoRA rank, `8bit` or vision
-  SFT on Unsloth, and `lora.rank_pattern` on MLX or Unsloth: see the CHANGELOG upgrade notes.
-- **Breaking: Python 3.11–3.13, no AWQ or GPTQ export, a token for two `soup serve` routes.**
-  Python 3.10 is no longer supported (end of life 2026-10-01); on 3.10, pip keeps resolving
-  v0.76.x. `soup export --format awq` / `gptq` and `soup quantize --to awq` / `gptq` are removed,
-  because both upstream projects are archived: use `gguf`, `onnx`, `tensorrt`, `bitnet` or
-  `tq1_0`, or stay on v0.76.x. `/v1/tools/python` and `/v1/tools/bash` answer 401 unless the
-  server was started with `--tool-auth-token` (or `SOUP_TOOL_AUTH_TOKEN`), on every bind, and
-  `/v1/tools/python` answers 501 where the host has no OS-level isolation, as bash already did.
-- **DPO, ORPO, SimPO and KTO run natively on Apple Silicon.** `task: dpo`, `orpo`, `simpo` and
-  `kto` with `backend: mlx` train through Soup's own MLX loop on TRL's objectives (ORPO and SimPO
-  with no reference model). MLX text SFT gains native DoRA, `training.eval_steps`,
-  `training.seed` and the loss watchdog. `lora.use_rslora` is now applied on MLX and Unsloth, so
-  an rsLoRA run there trains at the scale it asked for, and its results change.
-- **Layer streaming reaches DeepSeek-V3-family MoE.** Soup's layer streaming (an implementation
-  of L2L, Pudipeddi et al. 2020) now streams `model_type: deepseek_v3` with resident-vs-streamed
-  parity forward and backward, and dequantises FP8 block-quantised checkpoints at shard time.
-  Kimi-K2-Base and -Instruct are admitted behind a field-by-field check (a tiny K2-shaped
-  checkpoint streams bit for bit on CPU; nothing has been trained on K2 itself).
-  `training.stream_expert_layout: per_expert` streams one routed expert at a time: on one RTX
-  5070 Laptop 8 GB, the same Moonlight-16B LoRA config peaked at 1.0 GB of GPU memory against
-  3.1 GB fused (NF4 experts against bf16, different cache tiers), at about 2.7x the step time
-  ([record](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` /
-  `auto` keeps streamed activations instead of recomputing them, with bit-identical gradients:
-  on the same card's RAM tier a Mistral-7B NF4 step is 22% faster at 512 tokens and 8.5% at 2048
-  ([record](benchmarks/gate-stream-recompute.md)). Opt-in (`stream_layers: true`), BETA.
-- **Provenance you can check.** `soup registry push --data <file>` records the training file's
-  SHA-256, and `--idempotency-key` makes a push safe to retry; on the transformers backend,
-  resident, layer-streamed and multi-GPU runs record the Hub commit of the base they loaded;
-  `soup ship --require-provenance` checks the evidence against the adapter, task and source
-  bytes, suite version and verdict policy it was stamped with.
-- **Also new.** `soup --version`; `pip install "soup-cli[documents]"` for PDF and DOCX in
-  `soup data ingest`; `soup merge --low-memory`; GRPO can score with an LLM judge
-  (`training.reward_fn: judge_rank`); and [`docs/config-reference.md`](docs/config-reference.md)
-  and [`docs/cli-reference.md`](docs/cli-reference.md) are generated from the code, and the test
-  suite fails when either stops stating what the code does.
+- **A continual-learning loop.** `soup serve` gives every answer an id and takes feedback on it
+  (thumbs, ratings, edits); `soup loop` trains a candidate from that feedback, judges it with
+  `soup ship --gate loop-v2`, runs it as a canary and rolls back on its own.
+- **`soup ship` shows what its number is made of.** Better/worse/same counts per task, a per-row
+  audit file, `--task-mode reward --reward-fn` to score with a function you supply (a `.py` file is
+  executed), how much the adapter changes the base, and `--base-adapter` to compare two adapters.
+- **New commands.** `soup eval retention` (forgetting across model versions), `soup data leakage`
+  (train/eval overlap), `soup docs search` (offline), `soup prune-layer-cache`, and
+  `soup eval quant-check --performance`.
+- **More on Apple Silicon.** Native MLX chat, merge, selective loss masks, preprocessing caches,
+  vocabulary expansion, RoPE extension and dense Llama SFT.
+- **Layer streaming does more.** A forward-only inference mode, pre-quantised NF4 import, and BCO,
+  IPO and `task: preference` training on a streamed base.
+- **VRAM estimates that fit short rows.** A padded SFT run is priced by its longest row, 8-bit
+  checkpointing, cuBLAS workspaces and a distillation teacher are charged, and the pre-flight says
+  why a fit is not checked.
+- **8 new recipes** (181 in all), and a Triton kernel library for Qwen2 QLoRA SFT (no config key).
+- **Text shown as typed.** Dozens more commands print paths and names with brackets and `:name:`
+  text kept and terminal control characters removed.
+
+**Behaviour changes to know.** A boolean in a numeric `training` field is refused. `--push-as`
+creates the repository private (`--push-public` to change that). An enabled eval gate on MLX,
+`prm`, `unlearn` or `moe_lora_routing` is refused. `soup serve --max-tokens` stops at 16384.
+`soup adapters merge` weights and the `tool_call_args_subset` score changed, so merges and ship
+verdicts can differ. Evidence files written by `soup ship` are version 2, which v0.77.x refuses.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -340,7 +322,7 @@ Run Soup without installing CUDA or PyTorch locally (image published to GHCR on 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # or build locally
 ```
 

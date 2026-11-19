@@ -295,6 +295,37 @@ class TestRunsHandlers:
         with pytest.raises(reg.McpToolError):
             reg.tool_runs_list({"limit": "ten"})
 
+    def test_runs_list_and_show_output_dir_under_and_outside_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        db = tmp_path / "exp.db"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+
+        monkeypatch.setenv("SOUP_DB_PATH", str(db))
+        monkeypatch.chdir(proj)
+
+        tracker = ExperimentTracker(db_path=db)
+        try:
+            r_under = tracker.start_run({"base": "m"}, "cpu", "CPU", {})
+            tracker.finish_run(r_under, 1.0, 0.5, 1, 1.0, output_dir=str(proj / "output"))
+            r_outside = tracker.start_run({"base": "m"}, "cpu", "CPU", {})
+            tracker.finish_run(r_outside, 1.0, 0.5, 1, 1.0, output_dir=str(outside / "mcp_out"))
+        finally:
+            tracker.close()
+
+        out_list = reg.tool_runs_list({})
+        runs = {r["run_id"]: r["output_dir"] for r in out_list["runs"]}
+        assert runs[r_under] == "output"
+        assert runs[r_outside] == "mcp_out"
+
+        assert reg.tool_runs_show({"run_id": r_under})["output_dir"] == "output"
+        assert reg.tool_runs_show({"run_id": r_outside})["output_dir"] == "mcp_out"
+
 
 class TestRegistryHandlers:
     def test_list_returns_entries_key(self, tmp_path, monkeypatch):

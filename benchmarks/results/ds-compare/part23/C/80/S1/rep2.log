@@ -1,0 +1,3 @@
+[soup_arm] arm S1 shape C config /workspace/out/results/C/80/S1/rep2.work/soup.yaml
+[soup_arm] cwd /workspace/out/results/C/80/S1/rep2.work
+[soup_arm] command soup train --config soup.yaml --yes

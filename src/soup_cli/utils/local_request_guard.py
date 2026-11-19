@@ -14,12 +14,14 @@ forward or a container mapping, and an ``Origin`` port names the page's server
 The hostname is the part that says which site the request is for.
 
 Dependency-free on purpose: imported by ``soup serve`` at app construction, and
-must not pull in the optional ``mcp`` SDK or any heavy dependency.
+must not pull in the optional ``mcp`` SDK or any heavy dependency. Only
+:func:`browser_origin_dependency` imports FastAPI, when it is called.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 LOOPBACK_HOSTNAMES: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -140,3 +142,57 @@ def check_browser_origin(
     421.
     """
     return _check_origin(_normalise_bind(bind_host), host_header, origin_header)
+
+
+_ORIGIN_NOT_OWN = (
+    403,
+    "Origin not allowed: this route accepts only requests from the server's own origin",
+)
+
+
+def check_own_origin(host_header: str | None, origin_header: str | None) -> tuple[int, str] | None:
+    """Decide whether an ``Origin`` header names THIS server (scheme, host AND port).
+
+    Stricter than :func:`check_local_request`, which accepts a page on ANY ``localhost``
+    port: here the ``Origin`` must be ``http(s)://<the Host header>``, the origin a page
+    served by this very server sends. No ``Origin`` header means the request is not from a
+    browser (curl, an SDK, a desktop app) and is allowed; ``Origin: null`` and every other
+    site are refused with 403.
+    """
+    if origin_header is None:
+        return None
+    try:
+        parts = urlsplit(origin_header)
+        netloc = parts.netloc.lower()
+    except ValueError:
+        return _ORIGIN_NOT_OWN
+    own = (host_header or "").strip().lower()
+    if parts.scheme not in ("http", "https") or not own or netloc != own:
+        return _ORIGIN_NOT_OWN
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        return _ORIGIN_NOT_OWN
+    return None
+
+
+def browser_origin_dependency(bind_host: str) -> Callable[..., None]:
+    """A FastAPI dependency that applies :func:`check_browser_origin` for ``bind_host``.
+
+    For the generation routes of every ``soup serve`` backend: put it in the
+    route's ``dependencies`` and a request whose ``Origin`` names another site
+    gets 403 before the route runs.
+    """
+    from fastapi import HTTPException, Request
+
+    def origin_check(request: Request) -> None:
+        refusal = check_browser_origin(
+            bind_host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    # Annotations in this module are postponed, so the one above is the string
+    # "Request", which FastAPI would look up in this module's globals and not
+    # find. Hand it the class, so the request is injected.
+    origin_check.__annotations__["request"] = Request
+    return origin_check

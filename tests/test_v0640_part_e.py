@@ -86,7 +86,7 @@ def test_render_bash_script_basic():
     from soup_cli.utils.completions import render_bash_script
 
     text = render_bash_script()
-    assert "_soup_complete" in text or "complete -F" in text
+    assert "_soup_completion" in text or "complete -F" in text
     assert "soup" in text
 
 

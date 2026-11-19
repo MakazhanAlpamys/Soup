@@ -1,0 +1,148 @@
+[2026-11-07 13:19:23,285] [WARNING] [runner.py:214:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+Detected VISIBLE_DEVICES=0 but ignoring it because one or several of --include/--exclude/--num_gpus/--num_nodes cl args were used. If you want to use CUDA_VISIBLE_DEVICES don't pass any of these arguments to deepspeed.
+[2026-11-07 13:19:23,285] [INFO] [runner.py:618:main] cmd = /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMF19 --master_addr=127.0.0.1 --master_port=29503 --enable_each_rank_log=None --log_level=info /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 1 --out /workspace/out/results/B/80/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.25.1-1+cuda12.8
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NCCL_VERSION=2.25.1-1
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE=libnccl2=2.25.1-1+cuda12.8
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_NAME=libnccl2
+[2026-11-07 13:19:24,651] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:19:24,651] [INFO] [launch.py:152:main] WORLD INFO DICT: {'localhost': [0]}
+[2026-11-07 13:19:24,651] [INFO] [launch.py:158:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-11-07 13:19:24,651] [INFO] [launch.py:169:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-11-07 13:19:24,651] [INFO] [launch.py:170:main] dist_world_size=1
+[2026-11-07 13:19:24,651] [INFO] [launch.py:174:main] Setting CUDA_VISIBLE_DEVICES=0
+[2026-11-07 13:19:24,652] [INFO] [launch.py:245:main] process 4178 spawned with command: ['/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python', '-u', '/workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py', '--local_rank=0', '--model', '/workspace/payload/benchmarks/harness/ds_compare/model', '--rows', '/workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl', '--max-length', '512', '--epochs', '2', '--arm', 'D1', '--shape', 'B', '--rep', '1', '--out', '/workspace/out/results/B/80/D1/rep1.raw.json', '--deepspeed', '/workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json']
+/opt/conda/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  warnings.warn(  # warn only once
+{'loss': '6.182', 'grad_norm': '1.537', 'learning_rate': '0.0002', 'epoch': '0.01562'}
+{'loss': '6.233', 'grad_norm': '0.6198', 'learning_rate': '0.0002', 'epoch': '0.03125'}
+{'loss': '6.176', 'grad_norm': '0.6116', 'learning_rate': '0.0002', 'epoch': '0.04688'}
+{'loss': '6.118', 'grad_norm': '0.6995', 'learning_rate': '0.0002', 'epoch': '0.0625'}
+{'loss': '6.079', 'grad_norm': '1.087', 'learning_rate': '0.0002', 'epoch': '0.07812'}
+{'loss': '6.006', 'grad_norm': '1.041', 'learning_rate': '0.0002', 'epoch': '0.09375'}
+{'loss': '6.03', 'grad_norm': '1.22', 'learning_rate': '0.0002', 'epoch': '0.1094'}
+{'loss': '5.985', 'grad_norm': '1.149', 'learning_rate': '0.0002', 'epoch': '0.125'}
+{'loss': '5.9', 'grad_norm': '1.387', 'learning_rate': '0.0002', 'epoch': '0.1406'}
+{'loss': '5.855', 'grad_norm': '1.422', 'learning_rate': '0.0002', 'epoch': '0.1562'}
+{'loss': '5.792', 'grad_norm': '1.349', 'learning_rate': '0.0002', 'epoch': '0.1719'}
+{'loss': '5.76', 'grad_norm': '1.392', 'learning_rate': '0.0002', 'epoch': '0.1875'}
+{'loss': '5.751', 'grad_norm': '1.537', 'learning_rate': '0.0002', 'epoch': '0.2031'}
+{'loss': '5.813', 'grad_norm': '1.842', 'learning_rate': '0.0002', 'epoch': '0.2188'}
+{'loss': '5.706', 'grad_norm': '2.384', 'learning_rate': '0.0002', 'epoch': '0.2344'}
+{'loss': '5.697', 'grad_norm': '1.813', 'learning_rate': '0.0002', 'epoch': '0.25'}
+{'loss': '5.633', 'grad_norm': '2.016', 'learning_rate': '0.0002', 'epoch': '0.2656'}
+{'loss': '5.601', 'grad_norm': '2.225', 'learning_rate': '0.0002', 'epoch': '0.2812'}
+{'loss': '5.655', 'grad_norm': '1.97', 'learning_rate': '0.0002', 'epoch': '0.2969'}
+{'loss': '5.612', 'grad_norm': '2.282', 'learning_rate': '0.0002', 'epoch': '0.3125'}
+{'loss': '5.572', 'grad_norm': '2.283', 'learning_rate': '0.0002', 'epoch': '0.3281'}
+{'loss': '5.486', 'grad_norm': '2.834', 'learning_rate': '0.0002', 'epoch': '0.3438'}
+{'loss': '5.541', 'grad_norm': '2.39', 'learning_rate': '0.0002', 'epoch': '0.3594'}
+{'loss': '5.455', 'grad_norm': '2.223', 'learning_rate': '0.0002', 'epoch': '0.375'}
+{'loss': '5.483', 'grad_norm': '2.404', 'learning_rate': '0.0002', 'epoch': '0.3906'}
+{'loss': '5.428', 'grad_norm': '2.56', 'learning_rate': '0.0002', 'epoch': '0.4062'}
+{'loss': '5.41', 'grad_norm': '2.727', 'learning_rate': '0.0002', 'epoch': '0.4219'}
+{'loss': '5.372', 'grad_norm': '2.753', 'learning_rate': '0.0002', 'epoch': '0.4375'}
+{'loss': '5.378', 'grad_norm': '2.986', 'learning_rate': '0.0002', 'epoch': '0.4531'}
+{'loss': '5.379', 'grad_norm': '2.99', 'learning_rate': '0.0002', 'epoch': '0.4688'}
+{'loss': '5.39', 'grad_norm': '3.229', 'learning_rate': '0.0002', 'epoch': '0.4844'}
+{'loss': '5.345', 'grad_norm': '2.837', 'learning_rate': '0.0002', 'epoch': '0.5'}
+{'loss': '5.4', 'grad_norm': '2.916', 'learning_rate': '0.0002', 'epoch': '0.5156'}
+{'loss': '5.347', 'grad_norm': '3.204', 'learning_rate': '0.0002', 'epoch': '0.5312'}
+{'loss': '5.366', 'grad_norm': '3.267', 'learning_rate': '0.0002', 'epoch': '0.5469'}
+{'loss': '5.301', 'grad_norm': '2.926', 'learning_rate': '0.0002', 'epoch': '0.5625'}
+{'loss': '5.32', 'grad_norm': '2.925', 'learning_rate': '0.0002', 'epoch': '0.5781'}
+{'loss': '5.293', 'grad_norm': '2.843', 'learning_rate': '0.0002', 'epoch': '0.5938'}
+{'loss': '5.314', 'grad_norm': '2.461', 'learning_rate': '0.0002', 'epoch': '0.6094'}
+{'loss': '5.35', 'grad_norm': '2.735', 'learning_rate': '0.0002', 'epoch': '0.625'}
+{'loss': '5.329', 'grad_norm': '3.11', 'learning_rate': '0.0002', 'epoch': '0.6406'}
+{'loss': '5.293', 'grad_norm': '2.899', 'learning_rate': '0.0002', 'epoch': '0.6562'}
+{'loss': '5.29', 'grad_norm': '2.811', 'learning_rate': '0.0002', 'epoch': '0.6719'}
+{'loss': '5.275', 'grad_norm': '3.184', 'learning_rate': '0.0002', 'epoch': '0.6875'}
+{'loss': '5.285', 'grad_norm': '3.159', 'learning_rate': '0.0002', 'epoch': '0.7031'}
+{'loss': '5.333', 'grad_norm': '3.273', 'learning_rate': '0.0002', 'epoch': '0.7188'}
+{'loss': '5.291', 'grad_norm': '2.77', 'learning_rate': '0.0002', 'epoch': '0.7344'}
+{'loss': '5.28', 'grad_norm': '3.065', 'learning_rate': '0.0002', 'epoch': '0.75'}
+{'loss': '5.273', 'grad_norm': '2.866', 'learning_rate': '0.0002', 'epoch': '0.7656'}
+{'loss': '5.236', 'grad_norm': '3.058', 'learning_rate': '0.0002', 'epoch': '0.7812'}
+{'loss': '5.289', 'grad_norm': '3.157', 'learning_rate': '0.0002', 'epoch': '0.7969'}
+{'loss': '5.323', 'grad_norm': '3.05', 'learning_rate': '0.0002', 'epoch': '0.8125'}
+{'loss': '5.283', 'grad_norm': '2.72', 'learning_rate': '0.0002', 'epoch': '0.8281'}
+{'loss': '5.291', 'grad_norm': '2.776', 'learning_rate': '0.0002', 'epoch': '0.8438'}
+{'loss': '5.281', 'grad_norm': '2.632', 'learning_rate': '0.0002', 'epoch': '0.8594'}
+{'loss': '5.235', 'grad_norm': '3.194', 'learning_rate': '0.0002', 'epoch': '0.875'}
+{'loss': '5.248', 'grad_norm': '2.582', 'learning_rate': '0.0002', 'epoch': '0.8906'}
+{'loss': '5.26', 'grad_norm': '3.069', 'learning_rate': '0.0002', 'epoch': '0.9062'}
+{'loss': '5.283', 'grad_norm': '3.274', 'learning_rate': '0.0002', 'epoch': '0.9219'}
+{'loss': '5.226', 'grad_norm': '2.63', 'learning_rate': '0.0002', 'epoch': '0.9375'}
+{'loss': '5.257', 'grad_norm': '2.607', 'learning_rate': '0.0002', 'epoch': '0.9531'}
+{'loss': '5.241', 'grad_norm': '2.783', 'learning_rate': '0.0002', 'epoch': '0.9688'}
+{'loss': '5.245', 'grad_norm': '2.941', 'learning_rate': '0.0002', 'epoch': '0.9844'}
+{'loss': '5.28', 'grad_norm': '2.605', 'learning_rate': '0.0002', 'epoch': '1'}
+{'loss': '5.243', 'grad_norm': '2.768', 'learning_rate': '0.0002', 'epoch': '1.016'}
+{'loss': '5.246', 'grad_norm': '2.993', 'learning_rate': '0.0002', 'epoch': '1.031'}
+{'loss': '5.234', 'grad_norm': '2.954', 'learning_rate': '0.0002', 'epoch': '1.047'}
+{'loss': '5.256', 'grad_norm': '2.639', 'learning_rate': '0.0002', 'epoch': '1.062'}
+{'loss': '5.257', 'grad_norm': '2.888', 'learning_rate': '0.0002', 'epoch': '1.078'}
+{'loss': '5.227', 'grad_norm': '2.686', 'learning_rate': '0.0002', 'epoch': '1.094'}
+{'loss': '5.218', 'grad_norm': '3.137', 'learning_rate': '0.0002', 'epoch': '1.109'}
+{'loss': '5.257', 'grad_norm': '2.603', 'learning_rate': '0.0002', 'epoch': '1.125'}
+{'loss': '5.207', 'grad_norm': '2.752', 'learning_rate': '0.0002', 'epoch': '1.141'}
+{'loss': '5.209', 'grad_norm': '2.565', 'learning_rate': '0.0002', 'epoch': '1.156'}
+{'loss': '5.25', 'grad_norm': '2.756', 'learning_rate': '0.0002', 'epoch': '1.172'}
+{'loss': '5.241', 'grad_norm': '2.887', 'learning_rate': '0.0002', 'epoch': '1.188'}
+{'loss': '5.224', 'grad_norm': '2.792', 'learning_rate': '0.0002', 'epoch': '1.203'}
+{'loss': '5.296', 'grad_norm': '3.167', 'learning_rate': '0.0002', 'epoch': '1.219'}
+{'loss': '5.216', 'grad_norm': '2.519', 'learning_rate': '0.0002', 'epoch': '1.234'}
+{'loss': '5.196', 'grad_norm': '2.872', 'learning_rate': '0.0002', 'epoch': '1.25'}
+{'loss': '5.243', 'grad_norm': '2.81', 'learning_rate': '0.0002', 'epoch': '1.266'}
+{'loss': '5.223', 'grad_norm': '2.436', 'learning_rate': '0.0002', 'epoch': '1.281'}
+{'loss': '5.236', 'grad_norm': '2.618', 'learning_rate': '0.0002', 'epoch': '1.297'}
+{'loss': '5.245', 'grad_norm': '2.977', 'learning_rate': '0.0002', 'epoch': '1.312'}
+{'loss': '5.244', 'grad_norm': '2.825', 'learning_rate': '0.0002', 'epoch': '1.328'}
+{'loss': '5.25', 'grad_norm': '3.04', 'learning_rate': '0.0002', 'epoch': '1.344'}
+{'loss': '5.247', 'grad_norm': '3.211', 'learning_rate': '0.0002', 'epoch': '1.359'}
+{'loss': '5.208', 'grad_norm': '2.437', 'learning_rate': '0.0002', 'epoch': '1.375'}
+{'loss': '5.219', 'grad_norm': '2.982', 'learning_rate': '0.0002', 'epoch': '1.391'}
+{'loss': '5.28', 'grad_norm': '3.068', 'learning_rate': '0.0002', 'epoch': '1.406'}
+{'loss': '5.25', 'grad_norm': '3.118', 'learning_rate': '0.0002', 'epoch': '1.422'}
+{'loss': '5.252', 'grad_norm': '2.741', 'learning_rate': '0.0002', 'epoch': '1.438'}
+{'loss': '5.234', 'grad_norm': '2.632', 'learning_rate': '0.0002', 'epoch': '1.453'}
+{'loss': '5.217', 'grad_norm': '2.744', 'learning_rate': '0.0002', 'epoch': '1.469'}
+{'loss': '5.235', 'grad_norm': '2.577', 'learning_rate': '0.0002', 'epoch': '1.484'}
+{'loss': '5.225', 'grad_norm': '2.599', 'learning_rate': '0.0002', 'epoch': '1.5'}
+{'loss': '5.201', 'grad_norm': '2.428', 'learning_rate': '0.0002', 'epoch': '1.516'}
+{'loss': '5.21', 'grad_norm': '2.642', 'learning_rate': '0.0002', 'epoch': '1.531'}
+{'loss': '5.243', 'grad_norm': '2.961', 'learning_rate': '0.0002', 'epoch': '1.547'}
+{'loss': '5.205', 'grad_norm': '2.34', 'learning_rate': '0.0002', 'epoch': '1.562'}
+{'loss': '5.234', 'grad_norm': '2.544', 'learning_rate': '0.0002', 'epoch': '1.578'}
+{'loss': '5.26', 'grad_norm': '2.554', 'learning_rate': '0.0002', 'epoch': '1.594'}
+{'loss': '5.24', 'grad_norm': '2.44', 'learning_rate': '0.0002', 'epoch': '1.609'}
+{'loss': '5.173', 'grad_norm': '2.428', 'learning_rate': '0.0002', 'epoch': '1.625'}
+{'loss': '5.227', 'grad_norm': '2.673', 'learning_rate': '0.0002', 'epoch': '1.641'}
+{'loss': '5.181', 'grad_norm': '2.651', 'learning_rate': '0.0002', 'epoch': '1.656'}
+{'loss': '5.243', 'grad_norm': '2.648', 'learning_rate': '0.0002', 'epoch': '1.672'}
+{'loss': '5.238', 'grad_norm': '2.635', 'learning_rate': '0.0002', 'epoch': '1.688'}
+{'loss': '5.224', 'grad_norm': '2.349', 'learning_rate': '0.0002', 'epoch': '1.703'}
+{'loss': '5.196', 'grad_norm': '2.556', 'learning_rate': '0.0002', 'epoch': '1.719'}
+{'loss': '5.214', 'grad_norm': '2.693', 'learning_rate': '0.0002', 'epoch': '1.734'}
+{'loss': '5.182', 'grad_norm': '2.774', 'learning_rate': '0.0002', 'epoch': '1.75'}
+{'loss': '5.224', 'grad_norm': '2.68', 'learning_rate': '0.0002', 'epoch': '1.766'}
+{'loss': '5.231', 'grad_norm': '2.812', 'learning_rate': '0.0002', 'epoch': '1.781'}
+{'loss': '5.25', 'grad_norm': '3.073', 'learning_rate': '0.0002', 'epoch': '1.797'}
+{'loss': '5.241', 'grad_norm': '2.558', 'learning_rate': '0.0002', 'epoch': '1.812'}
+{'loss': '5.219', 'grad_norm': '2.741', 'learning_rate': '0.0002', 'epoch': '1.828'}
+{'loss': '5.218', 'grad_norm': '2.73', 'learning_rate': '0.0002', 'epoch': '1.844'}
+{'loss': '5.231', 'grad_norm': '2.895', 'learning_rate': '0.0002', 'epoch': '1.859'}
+{'loss': '5.237', 'grad_norm': '2.8', 'learning_rate': '0.0002', 'epoch': '1.875'}
+{'loss': '5.226', 'grad_norm': '2.368', 'learning_rate': '0.0002', 'epoch': '1.891'}
+{'loss': '5.186', 'grad_norm': '2.631', 'learning_rate': '0.0002', 'epoch': '1.906'}
+{'loss': '5.224', 'grad_norm': '2.512', 'learning_rate': '0.0002', 'epoch': '1.922'}
+{'loss': '5.196', 'grad_norm': '2.501', 'learning_rate': '0.0002', 'epoch': '1.938'}
+{'loss': '5.216', 'grad_norm': '2.461', 'learning_rate': '0.0002', 'epoch': '1.953'}
+{'loss': '5.244', 'grad_norm': '2.48', 'learning_rate': '0.0002', 'epoch': '1.969'}
+{'loss': '5.191', 'grad_norm': '2.475', 'learning_rate': '0.0002', 'epoch': '1.984'}
+{'loss': '5.234', 'grad_norm': '2.622', 'learning_rate': '0.0002', 'epoch': '2'}
+{'train_runtime': '106.6', 'train_samples_per_second': '1.201', 'train_steps_per_second': '1.201', 'train_loss': '5.365', 'epoch': '2'}
+[2026-11-07 13:21:58,674] [INFO] [launch.py:285:main] Process 4178 exits successfully.

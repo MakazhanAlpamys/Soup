@@ -1,0 +1,204 @@
+{
+  "schema": 1,
+  "kind": "stream_infer_throughput",
+  "started_unix": 1793959726.3632119,
+  "device": "cuda",
+  "torch": "2.14.0+cu130",
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "gpu_total_bytes": 8518041600,
+  "model": "unsloth/mistral-7b-instruct-v0.3",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+  "index": {
+    "n_layers": 32,
+    "dtype": "bfloat16",
+    "quant": "nf4",
+    "total_params": 7248023552
+  },
+  "settings": {
+    "tier": "ram",
+    "buffers": 2,
+    "read_ahead": null,
+    "pin": "auto",
+    "dtype": null,
+    "batches": [
+      1,
+      2,
+      4
+    ],
+    "seq_lens": [
+      128,
+      512,
+      2048
+    ],
+    "warmup": 2,
+    "repeats": 5,
+    "vocab_size": 32768
+  },
+  "points": [
+    {
+      "batch": 1,
+      "seq_len": 128,
+      "tokens": 128,
+      "runs_s": [
+        0.41100490000098944,
+        0.24590619996888563,
+        0.23176260001491755,
+        0.2184407999739051,
+        0.2055801999522373
+      ],
+      "median_s": 0.23176260001491755,
+      "tokens_per_s": 552.2892821868636,
+      "peak_vram_bytes": 656109056,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 1,
+      "seq_len": 512,
+      "tokens": 512,
+      "runs_s": [
+        0.27394230000209063,
+        0.2784642999758944,
+        0.2774327999795787,
+        0.2729568000067957,
+        0.2760361999971792
+      ],
+      "median_s": 0.2760361999971792,
+      "tokens_per_s": 1854.8291854663703,
+      "peak_vram_bytes": 690914816,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 1,
+      "seq_len": 2048,
+      "tokens": 2048,
+      "runs_s": [
+        0.8899621000164188,
+        0.889669900003355,
+        0.8901016999734566,
+        0.8953377999714576,
+        0.8927148000220768
+      ],
+      "median_s": 0.8901016999734566,
+      "tokens_per_s": 2300.8606770002493,
+      "peak_vram_bytes": 830137856,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 2,
+      "seq_len": 128,
+      "tokens": 256,
+      "runs_s": [
+        0.20473429997218773,
+        0.2227398999966681,
+        0.22250609996262938,
+        0.21600449999095872,
+        0.2039570999913849
+      ],
+      "median_s": 0.21600449999095872,
+      "tokens_per_s": 1185.1604943911602,
+      "peak_vram_bytes": 663974400,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 2,
+      "seq_len": 512,
+      "tokens": 1024,
+      "runs_s": [
+        0.4546027999604121,
+        0.45394460001261905,
+        0.461407600028906,
+        0.4535730999778025,
+        0.4634624000173062
+      ],
+      "median_s": 0.4546027999604121,
+      "tokens_per_s": 2252.515822799975,
+      "peak_vram_bytes": 737056256,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 2,
+      "seq_len": 2048,
+      "tokens": 4096,
+      "runs_s": [
+        1.7814199000131339,
+        1.7750865999842063,
+        1.77198869996937,
+        1.76409190002596,
+        1.7632381999865174
+      ],
+      "median_s": 1.77198869996937,
+      "tokens_per_s": 2311.52715594112,
+      "peak_vram_bytes": 1014703616,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 4,
+      "seq_len": 128,
+      "tokens": 512,
+      "runs_s": [
+        0.27493689995026216,
+        0.28289829997811466,
+        0.27744169998914003,
+        0.27877179998904467,
+        0.2780421000206843
+      ],
+      "median_s": 0.2780421000206843,
+      "tokens_per_s": 1841.4477518401384,
+      "peak_vram_bytes": 690715136,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 4,
+      "seq_len": 512,
+      "tokens": 2048,
+      "runs_s": [
+        0.8559535999665968,
+        0.8582171999732964,
+        0.858281499997247,
+        0.8587989999796264,
+        0.8589753999840468
+      ],
+      "median_s": 0.858281499997247,
+      "tokens_per_s": 2386.1635139596615,
+      "peak_vram_bytes": 829339136,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    },
+    {
+      "batch": 4,
+      "seq_len": 2048,
+      "tokens": 8192,
+      "runs_s": [
+        3.486207199981436,
+        3.4737231000326574,
+        3.4813821999705397,
+        3.498571800009813,
+        3.4756719000288285
+      ],
+      "median_s": 3.4813821999705397,
+      "tokens_per_s": 2353.0883796870457,
+      "peak_vram_bytes": 1501275648,
+      "layer_loads_per_forward": 32.0,
+      "large_loads_per_forward": 2.0,
+      "bytes_loaded_est_per_forward": 4137812864
+    }
+  ],
+  "finished_unix": 1793959822.3840322
+}

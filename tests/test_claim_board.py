@@ -800,6 +800,158 @@ def test_quiet_days_fixed_now():
     assert board.quiet_days(comments, None, NOW) is None
 
 
+_CLAIM_THREAD = [
+    comment("alice", "I'd like to take this", "2026-10-01T10:00:00Z"),
+    comment("MakazhanAlpamys", "Confirmed, it is yours", "2026-10-02T10:00:00Z"),
+    comment("alice", "working on it", "2026-10-04T12:00:00Z"),
+]
+
+
+def test_quiet_counts_the_claimants_pull_request_activity():
+    # alice last wrote on the issue 10 days ago but pushed and commented on PR 91 two days ago.
+    asked = []
+
+    def pr_activity(number):
+        asked.append(number)
+        return [
+            comment("alice", "pushed a fix", "2026-10-12T09:00:00Z"),
+            comment("alice", "an older reply", "2026-10-05T09:00:00Z"),
+        ]
+
+    prs = [pull(90, "bob", "Fixes #7"), pull(91, "alice", "Fixes #7")]
+    row = board.classify(
+        issue(7, ("claimed",)), _CLAIM_THREAD, prs, NOW, pr_activity=pr_activity
+    )
+    assert row["pr"] == 91 and asked == [91]
+    assert row["quiet"] == 2
+    assert "| #91 | quiet 2 d |" in board.render([row], NOW)
+
+
+def test_quiet_ignores_other_peoples_pull_request_activity():
+    # The maintainer commenting on, or pushing to, the claimant's PR is not the claimant.
+    def pr_activity(number):
+        return [
+            comment(board.MAINTAINER, "please rebase", "2026-10-13T09:00:00Z"),
+            comment("bob", "looks good", "2026-10-14T09:00:00Z"),
+        ]
+
+    prs = [pull(91, "alice", "Fixes #7")]
+    row = board.classify(
+        issue(7, ("claimed",)), _CLAIM_THREAD, prs, NOW, pr_activity=pr_activity
+    )
+    assert row["pr"] == 91 and row["quiet"] == 10
+
+
+def test_quiet_keeps_the_issue_comment_when_the_pull_request_is_older():
+    def pr_activity(number):
+        return [comment("alice", "first push", "2026-10-03T09:00:00Z")]
+
+    prs = [pull(91, "alice", "Fixes #7")]
+    row = board.classify(
+        issue(7, ("claimed",)), _CLAIM_THREAD, prs, NOW, pr_activity=pr_activity
+    )
+    assert row["quiet"] == 10
+
+
+def test_quiet_without_a_linked_pull_request_never_asks_for_pull_request_activity():
+    def pr_activity(number):
+        raise AssertionError(f"no PR is linked, yet PR {number} was asked for")
+
+    prs = [pull(90, "bob", "Fixes #7")]
+    row = board.classify(
+        issue(7, ("claimed",)), _CLAIM_THREAD, prs, NOW, pr_activity=pr_activity
+    )
+    assert row["pr"] is None and row["quiet"] == 10
+    free = board.classify(issue(8), [], [pull(91, "alice", "Fixes #8")], NOW,
+                          pr_activity=pr_activity)
+    assert free["kind"] == "free" and free["quiet"] is None
+
+
+def test_quiet_days_takes_extra_activity_and_needs_the_claimant_in_it():
+    comments = [comment("dan", "hi", "2026-10-10T11:00:00Z")]
+    extra = [comment("dan", "pushed", "2026-10-13T11:00:00Z"),
+             comment("eve", "pushed", "2026-10-14T11:00:00Z")]
+    assert board.quiet_days(comments, "dan", NOW, extra) == 1
+    assert board.quiet_days(comments, "dan", NOW) == 4
+    # A claimant who has only pushed to the PR still has a last-activity day.
+    assert board.quiet_days([], "dan", NOW, extra) == 1
+    assert board.quiet_days([], "frank", NOW, extra) is None
+
+
+def test_pr_activity_reads_comments_review_comments_and_the_claimants_commits(monkeypatch):
+    asked = []
+
+    def fake(args):
+        path = args[0]
+        asked.append(path.split("?")[0])
+        if path.startswith(f"repos/{board.REPO}/issues/91/comments"):
+            return [comment("alice", "conversation comment", "2026-10-06T00:00:00Z")]
+        if path.startswith(f"repos/{board.REPO}/pulls/91/comments"):
+            return [comment("alice", "inline reply", "2026-10-07T00:00:00Z")]
+        if path.startswith(f"repos/{board.REPO}/pulls/91/commits"):
+            return [
+                {   # authored and committed by the claimant
+                    "author": {"login": "alice"}, "committer": {"login": "alice"},
+                    "commit": {"author": {"date": "2026-10-08T00:00:00Z"},
+                               "committer": {"date": "2026-10-12T00:00:00Z"}},
+                },
+                {   # authored by the claimant, rebased by the maintainer
+                    "author": {"login": "alice"}, "committer": {"login": board.MAINTAINER},
+                    "commit": {"author": {"date": "2026-10-09T00:00:00Z"},
+                               "committer": {"date": "2026-10-14T00:00:00Z"}},
+                },
+                {   # no GitHub account behind the git identity
+                    "author": None, "committer": None,
+                    "commit": {"author": {"date": "2026-10-14T00:00:00Z"},
+                               "committer": {"date": "2026-10-14T00:00:00Z"}},
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(board, "gh_json", fake)
+    items = board.pr_activity(91)
+    assert sorted(asked) == sorted([
+        f"repos/{board.REPO}/issues/91/comments",
+        f"repos/{board.REPO}/pulls/91/comments",
+        f"repos/{board.REPO}/pulls/91/commits",
+    ])
+    mine = [item["created_at"] for item in items if board._login(item) == "alice"]
+    assert sorted(mine) == [
+        "2026-10-06T00:00:00Z", "2026-10-07T00:00:00Z", "2026-10-08T00:00:00Z",
+        "2026-10-09T00:00:00Z", "2026-10-12T00:00:00Z",
+    ]
+    # The maintainer's rebase is the maintainer's activity, so it cannot make alice active.
+    theirs = [item["created_at"] for item in items if board._login(item) == board.MAINTAINER]
+    assert theirs == ["2026-10-14T00:00:00Z"]
+    assert board.quiet_days([], "alice", NOW, items) == 2
+
+
+def test_fetch_counts_pull_request_activity_in_quiet(monkeypatch):
+    # The reported case: claimed on the issue weeks ago, still pushing to the PR.
+    def fake(args):
+        path = args[0]
+        if "/issues?" in path:
+            label = parse_qs(urlsplit(path).query)["labels"][0]
+            return [issue(7, ("claimed",))] if label == "claimed" else []
+        if "/pulls?" in path:
+            return [pull(91, "alice", "Fixes #7")]
+        if path.endswith("/issues/7/comments?per_page=100"):
+            return _CLAIM_THREAD
+        if "/pulls/91/commits" in path:
+            return [{
+                "author": {"login": "alice"}, "committer": {"login": "alice"},
+                "commit": {"author": {"date": "2026-10-13T00:00:00Z"},
+                           "committer": {"date": "2026-10-13T00:00:00Z"}},
+            }]
+        if "/issues/91/comments" in path or "/pulls/91/comments" in path:
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr(board, "gh_json", fake)
+    (row,) = board.fetch(NOW)
+    assert row["pr"] == 91 and row["quiet"] == 1
+
+
 def test_ordering_is_deterministic():
     rows = [
         {"number": 4, "difficulty": 5, "kind": "blocked", "quiet": None},

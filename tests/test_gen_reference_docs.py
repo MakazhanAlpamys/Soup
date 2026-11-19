@@ -190,6 +190,49 @@ def test_check_names_only_the_page_that_lost_a_row(
     assert "docs/cli-reference.md" not in out, out
 
 
+def test_check_catches_a_description_written_on_a_page_by_hand(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    pages: dict[str, str],
+) -> None:
+    """#2706 wrote a multi-line paragraph under ``soup runs compare`` on the CLI page and
+    left the command's help alone. The structure check reads no wording, so it passes
+    that page; only the byte-exact check fails it, and its message must send the author
+    to the code, because a sentence on the page is replaced at the next regeneration."""
+    _mirror(tmp_path, pages)
+    monkeypatch.setattr(gen, "_REPO_ROOT", tmp_path)
+    page = tmp_path / gen.CLI_PAGE
+    lines = page.read_bytes().decode("utf-8").split("\n")
+    usage = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("Usage: `soup ")
+        and lines[i - 1] == ""
+        and lines[i - 2] != ""
+        and not lines[i - 2].startswith("#")
+    )
+    lines[usage - 2 : usage - 1] = [
+        lines[usage - 2],
+        "A sentence the command's help does not carry,",
+        "wrapped over two lines by hand.",
+    ]
+    page.write_bytes("\n".join(lines).encode("utf-8"))
+
+    assert gen.main(["--check-structure"]) == 0, capsys.readouterr().out
+    capsys.readouterr()
+
+    assert gen.main(["--check"]) == 1
+    out = _plain(capsys.readouterr().out)
+    assert "docs/cli-reference.md is stale" in out, out
+    assert "docs/config-reference.md" not in out, out
+    assert f"first difference at line {usage}" in out, out
+    assert "A sentence the command's help does not carry," in out, out
+    assert "edit the command's docstring or help=" in out, out
+    assert "not the page" in out, out
+    assert out.endswith("Run `python scripts/gen_reference_docs.py` and commit the result."), out
+
+
 def test_check_fails_when_the_schema_gains_a_field(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

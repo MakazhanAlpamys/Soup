@@ -1200,7 +1200,7 @@ class TestPretrainLisaWiring:
         real_from_pretrained = AutoModelForCausalLM.from_pretrained
 
         def _capture_load_dtype(*args, **kwargs):
-            captured_dtypes.append(kwargs["torch_dtype"])
+            captured_dtypes.append(kwargs["dtype"])
             return real_from_pretrained(*args, **kwargs)
 
         monkeypatch.setattr(

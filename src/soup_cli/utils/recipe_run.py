@@ -141,6 +141,21 @@ def _node_output_path(output_dir: str, node_name: str) -> str:
     return os.path.join(output_dir, f".node-{safe}.jsonl")
 
 
+def _sampler_output_path(output_dir: str, node_name: str) -> str:
+    safe = re.sub(r"[^a-z0-9_\-]", "_", node_name.lower())
+    return os.path.join(output_dir, f"{safe}.jsonl")
+
+
+def _recipe_write_paths(dag: "RecipeDAG", output_dir: str) -> List[str]:
+    """Predict the runner's writes without opening an input or creating output."""
+    paths = [_checkpoint_path(output_dir)]
+    for node in dag.nodes:
+        paths.append(_node_output_path(output_dir, node.name))
+        if node.kind == "sampler":
+            paths.append(_sampler_output_path(output_dir, node.name))
+    return paths
+
+
 def _save_node_output(
     output_dir: str, node_name: str, rows: Sequence[Mapping[str, Any]]
 ) -> None:
@@ -602,8 +617,7 @@ def _node_sampler(
     pre-validated ``output_dir`` (caller checks containment before running).
     """
     rows = _merge_inputs(inputs)
-    safe_name = re.sub(r"[^a-z0-9_\-]", "_", node.name.lower())
-    out_path = os.path.join(output_dir, f"{safe_name}.jsonl")
+    out_path = _sampler_output_path(output_dir, node.name)
     # M-E: mkstemp + os.replace for atomic write without symlink-TOCTOU
     # exposure at a predictable ``.tmp`` path.
     parent = output_dir or "."

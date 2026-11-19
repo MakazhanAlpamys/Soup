@@ -58,7 +58,7 @@ RUNNER_OS = {
     "ubuntu-latest": "Linux",
     "windows-latest": "Windows",
     "macos-latest": "macOS",
-    "macos-14": "macOS",
+    "macos-15": "macOS",
 }
 
 #: (workflow file, job) pairs whose install step sets the CPU index on Linux.

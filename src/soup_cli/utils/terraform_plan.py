@@ -35,14 +35,18 @@ Public surface:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+
+if TYPE_CHECKING:
+    from soup_cli.config.schema import SoupConfig
 
 DEFAULT_STATE_FILE = "soup.tfstate"
 _SHA_REGEX_LEN = 64
@@ -249,45 +253,71 @@ def _estimate_runtime_minutes(config: Mapping[str, Any]) -> float:
     return max(0.5, base)
 
 
-def estimate_peak_vram(config: Mapping[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+def estimate_peak_vram(
+    config: "SoupConfig", *, on_hub_request: Optional[Callable[[], None]] = None
+) -> Tuple[Optional[float], Optional[str]]:
     """The train pre-flight's peak (GB, before its margin), or ``None`` and why.
 
     #2049: the plan used to record a fixed 8.0 GB whatever the run. It now records
     the shared estimate when the model's ``config.json`` can be read, and says why
     it cannot price a run instead of printing a number that is not about it.
+    #2306: ``config`` is the validated config, so the run is validated once; when the
+    estimate cannot price it, the reason names the field that stops it.
+    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
     """
-    import yaml
-
-    from soup_cli.config.loader import load_config_from_string
     from soup_cli.utils.hardware_fit import (
+        FitUnavailable,
         estimate_peak_vram_gb,
-        hardware_fit_input_from_config,
+        hardware_fit_input_or_reason,
     )
 
-    try:
-        cfg = load_config_from_string(yaml.safe_dump(dict(config)))
-    except (ValueError, TypeError, yaml.YAMLError):
-        return None, "the config does not validate"
-    if getattr(cfg.training, "stream_layers", False):
+    if getattr(config.training, "stream_layers", False):
         return None, "layer streaming: the streaming planner sizes this run when it starts"
-    if getattr(cfg, "backend", None) == "mlx":
+    if getattr(config, "backend", None) == "mlx":
         return None, "backend mlx: no CUDA estimate"
-    inp = hardware_fit_input_from_config(cfg)
-    if inp is None:
-        return None, (
-            "batch_size auto, a quantization with no memory model, or dims out of range"
-        )
+    inp = hardware_fit_input_or_reason(config, on_hub_request=on_hub_request)
+    if isinstance(inp, FitUnavailable):
+        return None, inp.reason
     if inp.shape is None or inp.shape.guessed:
         return None, "could not read the model's config.json (local, cache or Hub)"
     return round(estimate_peak_vram_gb(inp).total_gb, 3), None
+
+
+def _validated_or_none(config: Mapping[str, Any]) -> Optional["SoupConfig"]:
+    """``config`` validated, or ``None`` when it does not validate."""
+    from soup_cli.config.loader import config_from_mapping
+
+    # A guard, not a known need: no validator is known to change the mapping it is
+    # given (those that rewrite one copy it first), and the caller's dict must stay
+    # as the YAML round trip this replaces left it.
+    try:
+        return config_from_mapping(copy.deepcopy(dict(config)))
+    except (ValueError, TypeError):
+        return None
 
 
 def _estimate_cost(minutes: float, spot_price: float) -> float:
     return max(0.0, (minutes / 60.0) * spot_price)
 
 
-def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
-    """Render a TrainingPlan from a soup-config-shaped dict."""
+def build_plan(
+    config: Mapping[str, Any],
+    *,
+    estimate_vram: bool = True,
+    on_hub_request: Optional[Callable[[], None]] = None,
+    soup_config: Optional["SoupConfig"] = None,
+) -> TrainingPlan:
+    """Render a TrainingPlan from a soup-config-shaped dict.
+
+    ``estimate_vram=False`` leaves the peak-VRAM estimate out (``peak_vram_gb`` is
+    ``None`` with a reason): ``soup apply`` compares hashes only, and pricing the model
+    can mean requests to the Hub. ``on_hub_request`` is called just before the first
+    request the estimate makes to the Hub, if it makes one.
+
+    ``soup_config`` is ``config`` already validated; the estimate prices it and the
+    hashes still come from ``config``. Without it, the estimate validates ``config``
+    itself and records "the config does not validate" if it does not (#2306).
+    """
     if not isinstance(config, Mapping):
         raise TypeError(f"config must be a mapping, got {type(config).__name__}")
     base = config.get("base")
@@ -325,7 +355,17 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
 
     minutes = _estimate_runtime_minutes(config)
     cost = _estimate_cost(minutes, _DEFAULT_SPOT_PRICE)
-    peak_vram_gb, peak_vram_reason = estimate_peak_vram(config)
+    if estimate_vram:
+        if soup_config is None:
+            soup_config = _validated_or_none(config)
+        if soup_config is None:
+            peak_vram_gb, peak_vram_reason = None, "the config does not validate"
+        else:
+            peak_vram_gb, peak_vram_reason = estimate_peak_vram(
+                soup_config, on_hub_request=on_hub_request
+            )
+    else:
+        peak_vram_gb, peak_vram_reason = None, "not estimated: soup apply compares hashes only"
     return TrainingPlan(
         base=base,
         task=task,

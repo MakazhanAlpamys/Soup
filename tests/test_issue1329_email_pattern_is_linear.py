@@ -125,19 +125,11 @@ def test_documented_email_snippet_differences_are_pinned(
     )
 
 
-def test_soup_expect_completes_for_pathological_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The public gate completes a <50 KB pathological row within two seconds."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(data_score, "_presidio_pii", lambda _text: None)
-
-    data_file = tmp_path / "pathological.jsonl"
-    text = "1-" * 24_991
-    data_file.write_text(
-        '{"text": "' + text + '"}\n', encoding="utf-8"
-    )
-    suite_file = tmp_path / "suite.yaml"
+def _expect_elapsed(tmp_path: Path, name: str, text: str) -> float:
+    """Run the public gate on one row and return the wall-clock time it took."""
+    data_file = tmp_path / f"{name}.jsonl"
+    data_file.write_text('{"text": "' + text + '"}\n', encoding="utf-8")
+    suite_file = tmp_path / f"{name}.yaml"
     suite_file.write_text(
         "expectations:\n  - name: expect_no_pii\n", encoding="utf-8"
     )
@@ -147,4 +139,35 @@ def test_soup_expect_completes_for_pathological_row(
     elapsed = time.perf_counter() - start
 
     assert result.exit_code == 0, f"output: {result.output}\nexc: {result.exception!r}"
-    assert elapsed < 2.0, f"pathological `soup expect` took {elapsed:.3f}s"
+    return elapsed
+
+
+def test_soup_expect_completes_for_pathological_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public gate does not go quadratic on a row of near-miss local parts.
+
+    The bound is relative, not a wall-clock one: a fixed two-second bound failed
+    on a loaded macOS runner (10.5 s for the linear scan, #2302). A harmless row
+    of the same length is timed first, and the pathological row must stay within
+    a small factor of it; restoring the old quadratic email pattern fails this by
+    orders of magnitude.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(data_score, "_presidio_pii", lambda _text: None)
+
+    length = 24_991 * 2
+    harmless_text = "word " * (length // 5)
+    pathological_text = "1-" * (length // 2)
+
+    harmless = min(
+        _expect_elapsed(tmp_path, "harmless", harmless_text) for _ in range(2)
+    )
+    pathological = min(
+        _expect_elapsed(tmp_path, "pathological", pathological_text) for _ in range(2)
+    )
+
+    assert pathological < 5 * harmless, (
+        f"pathological `soup expect` took {pathological:.3f}s against "
+        f"{harmless:.3f}s for a harmless row of the same length"
+    )

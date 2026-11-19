@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 from typer.testing import CliRunner
@@ -602,6 +603,103 @@ class TestLineage:
                               relation="forked_from")
         store.close()
 
+    def test_concurrent_opposite_edges_preserve_dag(self, tmp_path):
+        """Only one of two simultaneous opposite edges may be committed.
+
+        The barrier makes both callers complete their reachability check on an
+        empty graph on an unprotected implementation.  With a write transaction
+        opened before that check, the second caller instead blocks at
+        ``BEGIN IMMEDIATE``; the first barrier wait times out, commits its edge,
+        and the second caller then sees the cycle.
+        """
+        from soup_cli.registry.store import RegistryStore
+
+        db_path = tmp_path / "reg.db"
+        setup = RegistryStore(db_path=db_path)
+        a = setup.push(name="a", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        b = setup.push(name="b", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        setup.close()
+
+        # This stays below sqlite's default five-second busy timeout: after
+        # BEGIN IMMEDIATE, the second caller must remain blocked long enough
+        # for the first caller to finish without a transient locked error.
+        checked = threading.Barrier(2, timeout=0.5)
+        results: list[object] = []
+
+        def add_opposite_edge(child_id: str, parent_id: str) -> None:
+            store = RegistryStore(db_path=db_path)
+            original_reaches_ancestor = store._reaches_ancestor
+
+            def synchronized_reaches_ancestor(start_id: str, target_id: str) -> bool:
+                result = original_reaches_ancestor(start_id, target_id)
+                try:
+                    checked.wait()
+                except threading.BrokenBarrierError:
+                    pass
+                return result
+
+            store._reaches_ancestor = synchronized_reaches_ancestor  # type: ignore[method-assign]
+            try:
+                store.add_lineage(
+                    child_id=child_id,
+                    parent_id=parent_id,
+                    relation="forked_from",
+                )
+            except Exception as exc:
+                results.append(exc)
+            else:
+                results.append(None)
+            finally:
+                store.close()
+
+        first = threading.Thread(target=add_opposite_edge, args=(a, b))
+        second = threading.Thread(target=add_opposite_edge, args=(b, a))
+        first.start()
+        second.start()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert results.count(None) == 1
+        cycle_errors = [
+            result for result in results
+            if isinstance(result, ValueError) and "cycle" in str(result)
+        ]
+        assert len(cycle_errors) == 1
+
+        verify = RegistryStore(db_path=db_path)
+        forward = verify._reaches_ancestor(a, b)
+        backward = verify._reaches_ancestor(b, a)
+        edge_count = verify._get_conn().execute(
+            "SELECT COUNT(*) FROM registry_lineage"
+        ).fetchone()[0]
+        verify.close()
+        assert edge_count == 1
+        assert not (forward and backward)
+
+    def test_refused_lineage_edges_roll_back_the_open_transaction(self, tmp_path):
+        """A caller that catches a refusal can safely reuse its RegistryStore."""
+        from soup_cli.registry.store import RegistryStore
+
+        store = RegistryStore(db_path=tmp_path / "reg.db")
+        a = store.push(name="a", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        b = store.push(name="b", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        store.add_lineage(child_id=a, parent_id=b, relation="forked_from")
+
+        with pytest.raises(ValueError, match="cycle"):
+            store.add_lineage(child_id=b, parent_id=a, relation="forked_from")
+        assert store._get_conn().in_transaction is False
+
+        with pytest.raises(ValueError, match="child entry not found"):
+            store.add_lineage(child_id="reg_missing", parent_id=a, relation="forked_from")
+        assert store._get_conn().in_transaction is False
+        store.close()
+
     def test_lineage_rejects_missing_child(self, tmp_path):
         from soup_cli.registry.store import RegistryStore
 
@@ -734,6 +832,22 @@ class TestTrackerHook:
         store.close()
         tracker.close()
 
+    def test_register_from_uncompleted_run_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama-3.1-8b", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        store = RegistryStore(db_path=tmp_path / "reg.db")
+        with pytest.raises(ValueError, match="only a completed run can be registered"):
+            store.register_from_run(tracker, run_id, tag="auto", name="auto-chat")
+        store.close()
+        tracker.close()
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
@@ -802,6 +916,70 @@ class TestRegistryCLI:
                   "--name", "m1", "--tag", "v1"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
+
+    @pytest.mark.parametrize("status", ["failed", "running", "terminated", "launching"])
+    def test_push_rejects_uncompleted_run_statuses(self, tmp_path, monkeypatch, status):
+        self._setup_dbs(tmp_path, monkeypatch)
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+        from tests.conftest import strip_ansi
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        if status == "running":
+            pass
+        elif status == "failed":
+            tracker.fail_run(run_id, error="diverged")
+        else:
+            tracker._get_conn().execute(
+                "UPDATE runs SET status = ? WHERE run_id = ?", (status, run_id)
+            )
+            tracker._get_conn().commit()
+        tracker.close()
+
+        result = runner.invoke(
+            app, ["registry", "push", "--run-id", run_id,
+                  "--name", "m1", "--tag", "v1"],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        message = " ".join(strip_ansi(result.output).split())
+        expected = (
+            f"run {run_id} has status '{status}'; only a completed run can be registered"
+        )
+        assert expected in message
+        with RegistryStore() as store:
+            assert store.list() == []
+
+    def test_push_completed_run_control(self, tmp_path, monkeypatch):
+        self._setup_dbs(tmp_path, monkeypatch)
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+        from tests.conftest import strip_ansi
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
+        tracker.close()
+
+        result = runner.invoke(
+            app, ["registry", "push", "--run-id", run_id,
+                  "--name", "m1", "--tag", "v1"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        message = " ".join(strip_ansi(result.output).split())
+        assert "Registered m1:v1" in message
+        with RegistryStore() as store:
+            entries = store.list()
+            assert len(entries) == 1
+            assert entries[0]["name"] == "m1"
+            assert "v1" in entries[0]["tags"]
+            assert entries[0]["run_id"] == run_id
 
     def test_show(self, tmp_path, monkeypatch):
         self._setup_dbs(tmp_path, monkeypatch)

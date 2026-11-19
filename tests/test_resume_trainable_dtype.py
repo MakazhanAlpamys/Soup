@@ -170,10 +170,28 @@ def _reward_wrapper(tmp_path, trainer):
     return wrapper
 
 
+def _pretrain_wrapper(tmp_path, trainer):
+    """Pretraining builds TRL's SFTTrainer too, so a 4/8-bit run gets the same cast."""
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+    wrapper = object.__new__(PretrainTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model",
+        task="pretrain",
+        data={"train": "data.jsonl", "format": "plaintext"},
+        training={},
+    )
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    return wrapper
+
+
 @pytest.mark.parametrize(
     "builder",
-    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper],
-    ids=["dpo", "ipo", "grpo", "reward_model"],
+    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper, _pretrain_wrapper],
+    ids=["dpo", "ipo", "grpo", "reward_model", "pretrain"],
 )
 def test_other_trl_trainers_keep_the_adapter_dtype_across_a_resume(builder, tmp_path):
     trainer = _FakeTrainer(_model())
@@ -183,8 +201,8 @@ def test_other_trl_trainers_keep_the_adapter_dtype_across_a_resume(builder, tmp_
 
 @pytest.mark.parametrize(
     "builder",
-    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper],
-    ids=["dpo", "ipo", "grpo", "reward_model"],
+    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper, _pretrain_wrapper],
+    ids=["dpo", "ipo", "grpo", "reward_model", "pretrain"],
 )
 def test_other_trl_trainers_without_resume_leave_the_loader_alone(builder, tmp_path):
     trainer = _FakeTrainer(_model())
@@ -276,3 +294,52 @@ def test_qlora_sft_resume_keeps_bf16_adapter(tmp_path):
     resumed.train(resume_from_checkpoint=str(tmp_path / "checkpoint-2"))
     dtypes = {p.dtype for p in resumed.model.parameters() if p.requires_grad}
     assert dtypes == {torch.bfloat16}
+
+
+@pytest.mark.gpu
+def test_qlora_pretrain_resume_keeps_bf16_adapter(tmp_path, monkeypatch):
+    """A real 4-bit pretrain run, resumed from its checkpoint-2, against the run straight through.
+
+    Both train and save the adapter in bf16. Before the fix the resumed run held fp32
+    adapter weights from the reload onwards and wrote an fp32 adapter_model.safetensors.
+    """
+    from safetensors import safe_open
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+    from tests._tiny_hf_models import tiny_model_dir
+
+    monkeypatch.chdir(tmp_path)
+    base = tiny_model_dir("llama")
+    rows = [{"text": f"the quick brown fox jumps {i} hello world"} for i in range(8)]
+
+    def run(output, resume=None):
+        cfg = SoupConfig(
+            base=base,
+            task="pretrain",
+            data={"train": "data.jsonl", "format": "plaintext", "max_length": 64,
+                  "val_split": 0},
+            training={
+                "quantization": "4bit", "batch_size": 2, "gradient_accumulation_steps": 1,
+                "epochs": 1, "save_steps": 2, "logging_steps": 1, "seed": 0,
+                "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+            },
+            output=output,
+        )
+        wrapper = PretrainTrainerWrapper(cfg, device="cuda")
+        wrapper.setup({"train": rows})
+        wrapper.train(resume_from_checkpoint=resume)
+        return wrapper
+
+    def saved_dtypes(output):
+        with safe_open(str(tmp_path / output / "adapter_model.safetensors"), "pt") as f:
+            return {f.get_slice(key).get_dtype() for key in f.keys()}
+
+    straight = run("straight")
+    resumed = run("resumed", resume=str(tmp_path / "straight" / "checkpoint-2"))
+
+    assert resumed.trainer.state.global_step == straight.trainer.state.global_step == 4
+    for wrapper in (straight, resumed):
+        dtypes = {p.dtype for p in wrapper.trainer.model.parameters() if p.requires_grad}
+        assert dtypes == {torch.bfloat16}
+    assert saved_dtypes("straight") == saved_dtypes("resumed") == {"BF16"}

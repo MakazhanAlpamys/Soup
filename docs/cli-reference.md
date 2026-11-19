@@ -46,7 +46,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 
 | Command | Summary |
 |---|---|
-| [`soup ab`](#soup-ab) | Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0). |
+| [`soup ab`](#soup-ab) | Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule): reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0). |
 | [`soup adapters`](#soup-adapters) | Adapter management: list, info, compare LoRA adapters. |
 | [`soup advise`](#soup-advise) | Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO. Run BEFORE you spend 8 hours on a GPU (v0.54.0). |
 | [`soup agent`](#soup-agent) | Agent Forge: spec -> tool-calling dataset / train / eval (v0.46.0). |
@@ -73,6 +73,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
+| [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
 | [`soup doctor`](#soup-doctor) | Check system dependencies, GPU, and compatibility. |
 | [`soup draft`](#soup-draft) | Train + measure a speculative-decoding draft model: distil your tuned model into a tiny draft, then serve it with --auto-spec (v0.71.33). |
 | [`soup drift-alarm`](#soup-drift-alarm) | Rolling-KL drift alarm on output-token distribution with optional Slack/Discord webhook (v0.63.0). |
@@ -101,6 +102,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup plugins`](#soup-plugins) | Discover, list, enable, and disable Soup plugins. |
 | [`soup probe`](#soup-probe) | Activation probes: sleeper-agent defection / honesty / misuse / pairwise interference / SAE feature diff / probe pack (v0.66.0, truth+harm v0.71.8). |
 | [`soup profile`](#soup-profile) | Estimate memory, speed, and GPU requirements BEFORE training. |
+| [`soup prune-layer-cache`](#soup-prune-layer-cache) | Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes. |
 | [`soup prune-prompt`](#soup-prune-prompt) | Detect + strip a shared system-prompt prefix across training data so the FT model internalises it (v0.63.0). |
 | [`soup push`](#soup-push) | Push a trained model to HuggingFace Hub (or alternate hub). |
 | [`soup quantize`](#soup-quantize) | Quantize a model - ergonomic alias for `soup export --format <to>`. |
@@ -127,7 +129,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 
 ## `soup ab`
 
-Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0).
+Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule): reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0).
 
 Usage: `soup ab [OPTIONS]`
 
@@ -204,7 +206,7 @@ Usage: `soup adapters bisect [OPTIONS] HISTORY...`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `HISTORY...` | text, any number |  | yes | Ordered checkpoint identifiers (oldest first). At least 2. Example: `soup adapters bisect ckpt-100 ckpt-200 ckpt-300 ckpt-400` |
-| `--eval-command` | text |  | yes | Shell command template; '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
+| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
 | `--plan-only` | flag | off |  | Print the plan and exit without running the bisect |
 | `--output`, `-o` | text |  |  | Write JSON result to path |
 
@@ -545,7 +547,8 @@ Usage: `soup apply [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml. |
 | `--state` | text | `soup.tfstate` |  | Path to the state file written by `soup plan`. |
-| `--dry-run` | flag | off |  | Verify drift and exit without invoking training. |
+| `--dry-run` | flag | off |  | Verify drift and exit without marking the plan as applied. |
+| `--minillm-on-policy` | flag | off |  | Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill. |
 
 ## `soup attest`
 
@@ -662,7 +665,7 @@ Usage: `soup bench infer [OPTIONS] MODEL`
 |---|---|---|---|---|
 | `MODEL` | text |  | yes | Path to model (LoRA adapter or full model) to benchmark |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
-| `--max-tokens` | integer | `128` |  | Maximum tokens to generate per prompt |
+| `--max-tokens` | integer, at least 1 | `128` |  | Maximum tokens to generate per prompt |
 | `--num-prompts`, `-n` | integer | `3` |  | Number of prompts to run for averaging (ignored when --prompts-file is set) |
 | `--prompts-file` | text |  |  | Path to custom prompts file (.txt or .jsonl) |
 | `--p50` | flag | off |  | Print p50 (median) per-prompt latency. v0.53.9 #26. |
@@ -835,9 +838,10 @@ Usage: `soup chat [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
-| `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
+| `--max-tokens` | integer, at least 1 | `512` |  | Maximum number of tokens to generate |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0.0 = greedy, 1.0 = creative) |
 | `--system`, `-s` | text |  |  | System prompt for the conversation |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
@@ -864,7 +868,7 @@ Usage: `soup ci init [OPTIONS]`
 | `--data` | text | `./data/train.jsonl` |  | Training data path (repo-relative) |
 | `--suite` | text | `expectations.yaml` |  | Expectations suite YAML (repo-relative) |
 | `--evidence` | text | `ship_evidence.json` |  | Ship evidence JSON (repo-relative) |
-| `--python` | text | `3.11` |  | Python version for the CI runner (e.g. 3.11) |
+| `--python` | text | `3.11` |  | Python version for the CI runner (3.11 to 3.13, e.g. 3.11) |
 | `--branch` | text | `main` |  | Branch the workflow triggers on |
 | `--config` | text |  |  | Bind the ship gate to a committed soup.yaml (refuses stale evidence) |
 | `-o`, `--output` | text | `.github/workflows/soup-gate.yml` |  | Workflow output path |
@@ -954,6 +958,7 @@ Subcommands:
 - [`ingest`](#soup-data-ingest)
 - [`inspect`](#soup-data-inspect)
 - [`langdetect`](#soup-data-langdetect)
+- [`leakage`](#soup-data-leakage)
 - [`lint`](#soup-data-lint)
 - [`merge`](#soup-data-merge)
 - [`mix`](#soup-data-mix)
@@ -1317,7 +1322,7 @@ Usage: `soup data generate [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--prompt`, `-p` | text |  | yes | System prompt describing what kind of data to generate |
-| `--count`, `-n` | integer | `100` |  | Number of examples to generate |
+| `--count`, `-n` | integer | `100` |  | Number of examples requested |
 | `--output`, `-o` | text | `generated.jsonl` |  | Output file path |
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
@@ -1377,6 +1382,19 @@ Usage: `soup data langdetect [OPTIONS]`
 |---|---|---|---|---|
 | `--input`, `-i` | text |  | yes | Input JSONL file to tag. |
 | `--output`, `-o` | text | `langdetect.jsonl` |  | Output JSONL file with language tags. |
+
+### `soup data leakage`
+
+Check input-text overlap without writing datasets.
+
+Usage: `soup data leakage [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--train` | text |  | yes | Training JSONL under cwd. |
+| `--eval` | text |  | yes | Evaluation JSONL under cwd. |
+| `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
+| `--json` | flag | off |  | Print a machine-readable JSON report. |
 
 ### `soup data lint`
 
@@ -1545,8 +1563,8 @@ Usage: `soup data sample [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_sampled.jsonl) |
-| `--n`, `-n` | integer |  |  | Number of samples to select |
-| `--pct` | float |  |  | Percentage of dataset to sample (0-100) |
+| `--n`, `-n` | integer |  |  | Number of samples to select (positive integer) |
+| `--pct` | float |  |  | Percentage of dataset to sample in (0, 100] |
 | `--strategy`, `-s` | text | `random` |  | Sampling strategy: random, diverse (TF-IDF + clusters), hard (by length) |
 | `--seed` | integer |  |  | Random seed for reproducibility |
 
@@ -1707,8 +1725,9 @@ Usage: `soup deploy hf-space [OPTIONS]`
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | HuggingFace model repo id to wrap in the Space (e.g. user/my-model) |
 | `--space`, `-s` | text |  | yes | HuggingFace Space repo id to create (e.g. user/my-space) |
-| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat |
+| `--template`, `-t` | text | `gradio-chat` |  | Space template: gradio-chat, streamlit-chat. Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer creates new Streamlit Spaces. Use gradio-chat. |
 | `--template-dir` | text |  |  | Custom template directory (overrides --template). Must contain app.py + README.md, optionally requirements.txt. Use {MODEL_REPO} placeholder for substitution. |
+| `--hardware` | text |  |  | Hugging Face Space hardware tier (lowercase slug, e.g. cpu-basic or zero-a10g) |
 | `--private` | flag | off |  | Create the Space as private |
 | `--yes`, `-y` | flag | off |  | Skip confirmation |
 
@@ -1751,6 +1770,7 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--citation-style` | text | `bracket` |  | Citation style for the live RAFT citation probe: bracket (\[doc-id]) / inline ((doc-id)) / footnote (\[^id]). Must match the style the model was trained to emit. (v0.71.17 #254) |
 | `--allow-not-run` | flag | off |  | Exit 0 even when a requested probe did not run (verdict NOT_RUN). Without it such a run exits 3. |
+| `--require-all-modes` | flag | off |  | With --evidence: a mode missing from the file is NOT_RUN instead of a neutral OK, so the run exits 3 unless --allow-not-run (#1525). |
 | `--shuffle-seed` | integer |  |  | RAFT document-shuffle seed for the live citation probe (composes the \[doc-N] ids the model is scored against). (v0.71.17 #254) |
 
 ## `soup diff`
@@ -1791,6 +1811,28 @@ Usage: `soup distill-prompt [OPTIONS]`
 | `--max-rows` | integer |  |  | Cap the number of distilled rows. |
 | `--output`, `-o` | text | `distilled.jsonl` |  | Output JSONL path |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live preparation). |
+
+## `soup docs`
+
+Documentation search &amp; offline reference guides.
+
+Usage: `soup docs <command> [ARGS]...`
+
+Subcommands:
+
+- [`search`](#soup-docs-search)
+
+### `soup docs search`
+
+Search Soup documentation for flags, configs, training tasks, and guides.
+
+Usage: `soup docs search [OPTIONS] QUERY`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `QUERY` | text |  | yes | Search query (e.g. 'safetensors export') |
+| `--top-k`, `-k` | integer | `5` |  | Number of results to return |
+| `--format`, `-f` | text | `table` |  | Output format: 'table' (default) or 'json' |
 
 ## `soup doctor`
 
@@ -2008,6 +2050,7 @@ Subcommands:
 - [`leaderboard`](#soup-eval-leaderboard)
 - [`lock`](#soup-eval-lock)
 - [`quant-check`](#soup-eval-quant-check)
+- [`retention`](#soup-eval-retention)
 - [`unlearning`](#soup-eval-unlearning)
 
 ### `soup eval against`
@@ -2300,6 +2343,31 @@ Usage: `soup eval quant-check [OPTIONS]`
 | `--tasks` | text |  | yes | JSONL eval tasks file (see 'soup eval custom') |
 | `--format` | text | `table` |  | Output format: table \| json \| markdown |
 | `--allow-stub` | flag | off |  | Allow deterministic stub generators if live model loading fails. |
+| `--performance` | flag | off |  | Also measure generation latency, tokens/s and CUDA memory sequentially. |
+| `--performance-warmup` | integer, at least 0 | `1` |  | Unscored first-prompt warm-ups per model (requires --performance). |
+| `--performance-repeats` | integer, at least 1 | `3` |  | Measured greedy generations per task (requires --performance). |
+| `--device` | text |  |  | Device for --performance: auto (default), cpu, cuda, cuda:&lt;index> or mps. |
+
+### `soup eval retention`
+
+Measure accumulated forgetting across a series of versions (exit 0 / 2 / 3 / 1).
+
+Usage: `soup eval retention [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model`, `-m` | text |  | yes | Base or merged model (HF id or path) to evaluate. |
+| `--label` | text |  | yes | Version label for this candidate (unique in the ledger), e.g. v3. |
+| `--ledger` | text | `retention.json` |  | Retention ledger JSON (cwd-contained; created by --add-task + --record). |
+| `--adapter` | text |  |  | LoRA adapter directory to evaluate on top of --model. |
+| `--add-task` | text, repeatable |  |  | Register a control task as NAME=PATH (a task-eval JSONL, the format of soup ship --task-eval). Repeatable. Its sha256 is pinned: a later change to the file is refused. Re-pass an existing NAME with the new PATH of a moved file to update the stored path. |
+| `--record` | flag | off |  | Append this version's scores (and any new tasks) to the ledger. |
+| `--threshold` | float | `0.05` |  | A drop below the best earlier score larger than this regresses (0.0-1.0, an absolute accuracy difference as a fraction). |
+| `--output`, `-o` | text |  |  | Write the full task x version matrix and summary as JSON. |
+| `--device` | text |  |  | Device for the live run (cuda / cpu). |
+| `--config` | text |  |  | soup.yaml of the training run: its training.quantization (4bit / 8bit) is reused for the live load, as soup ship --config does. Nothing else in the file is used. |
+| `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--require-history` | flag | off |  | Refuse (exit 3) unless the ledger already holds a recorded version. Use it in CI: a lost or reset ledger would otherwise make every task new. |
 
 ### `soup eval unlearning`
 
@@ -2342,6 +2410,9 @@ Usage: `soup export [OPTIONS]`
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
+| `--validate-onnx` | flag | off |  | ONNX logits check on --prompts: 0=PASS, 2=numerical FAIL, 3=unusable validation. Other export option conflicts also use 2; inspect the diagnostic. |
+| `--prompts` | text |  |  | Explicit text/JSONL prompts for --validate-onnx (at most 32). |
+| `--atol` | float |  |  | Absolute logits tolerance for --validate-onnx. Default 1e-4 (FP32 smoke check, not a quality threshold). |
 | `--deploy` | text |  |  | Auto-deploy after export. Currently supported: ollama |
 | `--deploy-name` | text |  |  | Model name for deployment (used with --deploy) |
 | `--calibration-data` | text |  |  | Path to calibration JSONL for imatrix GGUF export. |
@@ -2664,6 +2735,8 @@ Subcommands:
 - [`pause`](#soup-loop-pause)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
+- [`rollback`](#soup-loop-rollback)
+- [`set`](#soup-loop-set)
 - [`status`](#soup-loop-status)
 - [`watch`](#soup-loop-watch)
 
@@ -2678,6 +2751,7 @@ Usage: `soup loop canary [OPTIONS] NEW_ADAPTER`
 | `NEW_ADAPTER` | text |  | yes | Adapter id/path to canary. |
 | `--traffic` | text | `5%` |  | Traffic share, e.g. "5%" or "5". |
 | `--autoroll-on-regress` / `--no-autoroll-on-regress` | flag | on |  | Roll back automatically on MAJOR verdict. |
+| `--allow-dont-ship` | flag | off |  | Canary the adapter although its last verdict was DON'T SHIP. Recorded in loop.yaml, the progress log and, if it is promoted, the line that records the promotion. |
 
 ### `soup loop init`
 
@@ -2694,6 +2768,28 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--max-runs-per-day` | integer |  |  | Cap on iteration starts per UTC day. |
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
 | `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
+| `--base-model` | text |  |  | Model the pre-wired train stage starts from. Default: the registry entry's base model for a registry://&lt;id> served model, the base_model_name_or_path of a LoRA adapter directory, otherwise the served model itself. |
+| `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, \*.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
+| `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
+| `--canary-traffic` | text | `5%` |  | Share of keyed traffic a newly deployed adapter gets while its canary runs, e.g. "5%" (the default) or "10". |
+| `--canary-max-wait` | text | `24h` |  | How long after a canary started its ratings may stay short of the 30 per side the quality verdict needs: &lt;int>m, &lt;int>h or &lt;int>d, or plain seconds (at most 30d, default 24h). Then --canary-on-timeout applies. |
+| `--canary-on-timeout` | text |  |  | What happens when --canary-max-wait runs out: errors-only (the request-error verdict alone decides; the default), rollback (withdraw the canary) or wait (keep waiting, no time limit). A canary with no canary answers at all is withdrawn (timeout_no_answers) unless errors-only is given here: then it promotes with no evidence. |
+| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. An sft loop with a feedback log uses --min-new-edits and --min-new-rated instead. |
+| `--min-new-edits` | integer | `8` |  | An sft loop with a feedback log trains once at least this many new edits (corrected answers newer than the last training run) have arrived, or --min-new-rated new rated answers, whichever comes first. Default 8. |
+| `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
+| `--feedback-log` | text |  |  | Feedback log (JSONL: thumbs, ratings, edits and comments on logged answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. SOUP_LOOP_FEEDBACK_LOG overrides it. |
+| `--train-method` | text | `sft` |  | What the pre-wired loop trains: sft (the default; corrected answers and answers rated good), dpo (preference pairs) or kto (answers labelled good or bad). A loop.yaml without this field keeps dpo. |
+| `--sft-target-modules` | text |  |  | sft only: the LoRA target modules of the training config: all-linear, auto (the config schema's default) or a comma-separated list such as q_proj,v_proj. Default: the loop's built-in sft recipe (soup loop status). |
+| `--sft-lora-r` | integer |  |  | sft only: LoRA rank of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-lora-alpha` | integer |  |  | sft only: LoRA alpha of the training config, 1 to 4096. Default: the built-in recipe. |
+| `--sft-lr` | float |  |  | sft only: learning rate of the training config, above 0 and at most 1 (for example 2e-4). Default: the built-in recipe. |
+| `--sft-epochs` | integer |  |  | sft only: epochs of the training config, 1 to 100. Default: the built-in recipe. |
+| `--sft-batch-size` | integer |  |  | sft only: per-device micro-batch of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-grad-accum` | integer |  |  | sft only: gradient accumulation steps of the training config, 1 to 1024 (micro-batch x accumulation = the batch per optimizer step). Default: the built-in recipe. |
+| `--sft-seed` | integer |  |  | sft only: training seed of the training config, 0 to 4294967295. Default: the built-in recipe. |
+| `--sft-quantization` | text |  |  | sft only: quantization of the training config: 4bit, none or auto (none if the base model fits in free VRAM when training starts, else 4bit). Default: the built-in recipe. |
+| `--paraphraser-endpoint` | text |  |  | OpenAI-compatible base URL (this machine or LAN) of the model that writes paraphrases of the prompts of corrected answers, which the loop's verdict asks the new version instead of the original prompts. Needs --paraphraser-model. Default: the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT) with the tool token. |
+| `--paraphraser-model` | text |  |  | Model name sent to --paraphraser-endpoint, recorded as the generator of the paraphrases. A small served model paraphrases poorly: name a better one here. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`
@@ -2723,6 +2819,25 @@ Usage: `soup loop resume`
 
 Takes no options or arguments.
 
+### `soup loop rollback`
+
+Return to the version that was production before the last promotion.
+
+Usage: `soup loop rollback`
+
+Takes no options or arguments.
+
+### `soup loop set`
+
+Change ONE setting of an existing loop: base_model, trace_dir or verify.
+
+Usage: `soup loop set KEY VALUE`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `KEY` | text |  | yes | base_model, trace_dir or verify. |
+| `VALUE` | text |  | yes | The new value. |
+
 ### `soup loop status`
 
 Show counters and current status.
@@ -2740,7 +2855,7 @@ Usage: `soup loop watch [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--foreground` | flag | off |  | Run in foreground (default). |
-| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. |
+| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
 | `--pre-wired` | flag | off |  | Force the pre-wired production stages even if loop.yaml didn't set it. |
@@ -2787,8 +2902,8 @@ Usage: `soup mcp serve [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--allow-mutating` | flag | off |  | Enable the plan-only mutating tools (train_start / export). Even when enabled they only render the command that would run - v1 never executes training or export. Off by default: those tools refuse. |
-| `--allow-execute` | flag | off |  | Reserve the execution gate for future MCP tools. Implies --allow-mutating, but train_start and export remain plan-only and never execute in this version. |
+| `--allow-mutating` | flag | off |  | Enable the plan-only mutating tools (train_start / export): they only render the command that would run. They never execute training or export unless --allow-execute is also given. Off by default: those tools refuse. |
+| `--allow-execute` | flag | off |  | Enable the execution tools train_execute / export_execute, which run a plan once the confirmation token from train_start / export is sent back. Implies --allow-mutating. Refused with --transport sse or http: execution is stdio only. |
 | `--transport` | text | `stdio` |  | stdio (default), sse, or http. stdio speaks JSON-RPC over the process pipes and is what a client that spawns Soup wants. sse and http open a local listener instead, for remote or multi-client setups, and require a Bearer token. |
 | `--host` | text |  |  | Interface to bind for --transport sse/http. Defaults to 127.0.0.1. Binding anything else exposes the server to the network, where the Bearer token is the only gate. |
 | `--port` | integer |  |  | Port to bind for --transport sse/http. Defaults to 8765. |
@@ -2803,6 +2918,8 @@ Usage: `soup merge [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--adapter`, `-a` | text |  | yes | Path to the LoRA adapter directory |
+| `--backend` | text | `transformers` |  | Merge backend: transformers or mlx |
+| `--dequantize` | flag | off |  | Explicitly dequantize an MLX base for dense fused output |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--output`, `-o` | text | `./merged` |  | Output directory for the merged model |
 | `--dtype` | text | `float16` |  | Data type for the merged model: float16, bfloat16, float32 |
@@ -2859,6 +2976,7 @@ Usage: `soup plan [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml. |
 | `--state` | text | `soup.tfstate` |  | Path to write the state file (default: ./soup.tfstate). |
+| `--minillm-on-policy` | flag | off |  | Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill. |
 
 ## `soup plugins`
 
@@ -3015,9 +3133,28 @@ Usage: `soup profile [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
+| `--config`, `-c` | text |  |  | Path to soup.yaml config file (default soup.yaml) |
 | `--gpu`, `-g` | text |  |  | Target GPU for recommendations (e.g., rtx3090, rtx4090, a100, h100). Auto-detects if not set. |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--model`, `-m` | text |  |  | A Hugging Face model id or a local model directory, priced without a soup.yaml from its config.json (works offline once cached). |
+| `--seq` | integer, 64 to 1048576 |  |  | With --model: sequence length (default 2048) |
+| `--batch` | integer, 1 to 1024 |  |  | With --model: batch size (default 4) |
+| `--method` | text |  |  | With --model: lora, qlora (default) or full |
+| `--lora-r` | integer, 1 to 4096 |  |  | With --model: LoRA rank (default 64) |
+| `--optimizer` | text |  |  | With --model: optimizer (default adamw_torch) |
+| `--gradient-checkpointing` | text |  |  | With --model: off (default), full, medium, selective or auto |
+
+## `soup prune-layer-cache`
+
+Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes.
+
+Usage: `soup prune-layer-cache [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup prune-prompt`
 
@@ -3354,7 +3491,7 @@ Usage: `soup runs clean [OPTIONS] [RUN_ID]`
 
 ### `soup runs compare`
 
-Compare two training runs side by side.
+Compare two local training runs side by side. The summary includes stored dataset SHA-256 hashes and the Code commit and Code state startup observations. The config table shows differing paths and labels fields absent from one run as not stored. If either full config is unavailable, the command identifies that run and skips the config table. The evaluation table uses the latest stored score for each benchmark and shows the right-minus-left delta when both runs have a score.
 
 Usage: `soup runs compare RUN_1 RUN_2`
 
@@ -3419,7 +3556,7 @@ Usage: `soup serve [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--port`, `-p` | integer | `8000` |  | Port to serve on |
-| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs and adapter routes only: the generation routes take no token. |
+| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs, feedback and adapter routes only: the generation routes take no token. |
 | `--device` | text |  |  | Device: cuda, cuda:&lt;index>, mps or cpu. Auto-detected if not set. With the transformers backend, cpu loads on the CPU in float32 (unless --kv-cache-type bf16/f16 picks the dtype); cuda:&lt;index> and mps are pinned to that device; cuda uses device_map=auto, all in float16. |
 | `--max-tokens` | integer | `512` |  | Default max tokens for generation |
 | `--backend` | text | `transformers` |  | Inference backend: transformers (default), vllm, sglang, or mii |
@@ -3429,6 +3566,7 @@ Usage: `soup serve [OPTIONS]`
 | `--speculative-decoding` | text |  |  | Draft model for speculative decoding (smaller/faster model ID or path) |
 | `--num-speculative-tokens` | integer | `5` |  | Number of tokens the draft model generates per step (speculative decoding) |
 | `--adapters` | text, repeatable |  |  | LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter |
+| `--adapter-dir` | text |  |  | Directory runtime adapters may be loaded from through POST /v1/adapters/load (needs --tool-auth-token). Not set: the route is off. |
 | `--prefix-cache` | flag | off |  | Enable vLLM prefix caching for shared system prompts (RAG/agent workloads). |
 | `--auto-spec` | flag | off |  | Auto-pair draft model for speculative decoding based on target model. |
 | `--structured-output` | text | `off` |  | Constrain generation: off (default) \| json \| regex. |
@@ -3439,9 +3577,10 @@ Usage: `soup serve [OPTIONS]`
 | `--trace-endpoint` | text |  |  | OTLP endpoint URL (default: http://localhost:4317). |
 | `--auto-quant` | flag | off |  | Unavailable until Soup can measure each loaded candidate; the command refuses instead of guessing a format. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
-| `--trace-log` | text |  |  | Append per-request {prompt, response, latency_ms, tokens, ts} to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
+| `--trace-log` | text |  |  | Append one conversation record per answer (the v1 format of docs/loop-formats.md) to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
 | `--trace-log-cap-mb` | integer | `100` |  | Rotation cap in MB for --trace-log (1 - 10000). Default 100. |
 | `--record-thumbs` | text |  |  | Auto-capture thumbs-up/down feedback into a local-rl SQLite at this path via POST /v1/thumbs. Path must stay under cwd. Transformers backend only. v0.71.1 (#230). |
+| `--feedback-log` | text |  |  | Append feedback (POST /v1/feedback) as JSONL records to this path; must stay under cwd. |
 | `--reasoning-parser` | text |  |  | Strip reasoning-trace blocks from responses. One of: deepseek-r1 \| qwen3 \| phi4 \| openthinker. v0.53.9 #98. |
 | `--steer` | text |  |  | Apply a stored activation-steering vector at decode time (CAA / ITI / RepE). Pass the name registered via `soup steer train`; the transformers backend installs the decode hook after loading the model. |
 | `--steer-strength` | float | `1.0` |  | Steering strength multiplier (\|s\| &lt;= 10.0). Ignored when --steer is unset. |
@@ -3450,7 +3589,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
 | `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
-| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. Env: `SOUP_TOOL_AUTH_TOKEN`. |
+| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
 
@@ -3464,8 +3603,10 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--base` | text |  |  | Base model id/path (the 'before'). |
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
+| `--base-adapter` | text |  |  | LoRA adapter applied to the base side (before = base + this adapter), e.g. the current production version. Live run with --adapter only. |
 | `--task-eval` | text |  |  | JSONL of leg-1 task-win eval tasks. |
-| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate). |
+| `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs --reward-fn). |
+| `--reward-fn` | text |  |  | Reward function for --task-mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| path/to/file.py. A .py file is EXECUTED as Python code on this machine (it must sit under the working directory and not be a symlink): only use a file you trust. It is called once per row and returns one number in \[0, 1]; the verdict is decided on the mean. |
 | `--noise-floor` | integer |  |  | Re-run the BASE model N times (2-10) to measure what this instrument can resolve, print it beside the verdict, and refuse to call any delta smaller than the measured floor significant. Costs N extra base passes. The leg-1 task floor is measured in every --task-mode; in judge_score / pairwise each repeat is N extra JUDGE passes (N x the judge API calls), and the floor is labelled decode + judge. |
 | `--judge-model` | text |  |  | Judge model URL for --task-mode judge_score or pairwise. |
 | `--general-suite` | text |  |  | Comma list of leg-2 benchmarks (default: the bundled offline suite — MCQ/arithmetic + tool-call/JSON/safety; non-bundled names route through lm-eval). |
@@ -3480,6 +3621,9 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
+| `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
+| `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
 
 ## `soup shrink`
 
@@ -3642,7 +3786,8 @@ Usage: `soup train [OPTIONS]`
 | `--master-port` | integer |  |  | Shared coordinator port for multiple nodes (default 29500) |
 | `--no-reexec` | flag | off |  | Print the distributed launch command instead of launching it |
 | `--gate` | text |  |  | Enable eval-gated training with a suite file (shortcut for training.eval_gate.enabled=true + suite=&lt;path>) |
-| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model) |
+| `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model). A repository created by this flag is private unless --push-public is given; an existing repository is used as it is and its visibility is not changed. |
+| `--push-public` | flag | off |  | Create the --push-as repository public instead of private. Requires --push-as. It does not change the visibility of a repository that already exists. |
 | `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured. |
 | `--find-lr` | flag | off |  | LR range finder (v0.32.0): run a short geometric LR sweep, write a JSON report with the recommended LR, then exit without training. |
 | `--find-lr-start` | float | `1e-07` |  | LR range finder: starting LR (default 1e-7) |
@@ -3662,6 +3807,7 @@ Usage: `soup train [OPTIONS]`
 | `--profile` | flag | off |  | Record a torch.profiler trace (Chrome trace JSON) during early training steps. Output: &lt;output>/profiles/&lt;run_id>.trace.json |
 | `--allow-oom-attempt` | flag | off |  | Bypass the analytical hardware-fit VRAM gate and launch even when the run is predicted to run out of GPU memory (opt-out). |
 | `--diagnose-gate` | text |  |  | After training, run `soup diagnose` against the supplied evidence JSON (or scratch evidence). Refuses to mark the run successful if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3). |
+| `--diagnose-gate-require-all-modes` | flag | off |  | With --diagnose-gate: a mode missing from the evidence JSON counts as NOT_RUN (exit 3) instead of a neutral OK, so the gate proves coverage. |
 | `--annex-xi` | text |  |  | After training, render an EU AI Act Annex XI/XII auto-doc to the given output path (cwd-contained). Markdown body now; PDF in v0.59.1. |
 | `--repro-receipt` | text |  |  | After training, write an SR 11-7-style reproducibility receipt (seeds + kernel versions + GPU + OS) to the given path. v0.59.0. |
 | `--capture-activations` | text |  |  | After training, capture residual-stream activations at the named decoder layer (e.g. model.layers.5) on --capture-prompts and write them to &lt;output>/activations/activations.json for soup probe sae-diff / sleeper. v0.71.8 #219. |
@@ -3670,7 +3816,7 @@ Usage: `soup train [OPTIONS]`
 | `--energy-country` | text | `USA` |  | ISO 3166-1 alpha-3 country code for the CO2 grid-intensity estimate used by --track-energy (default USA). |
 | `--energy-out` | text |  |  | Write the --track-energy measurement to this JSON file (cwd-contained) so `soup bom emit --energy <path>` can consume it. v0.71.15. |
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
-| `--gpu` | text | `a100` |  | Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / l40s / h100 / a6000). Default a100. Provider-specific allowlists apply. |
+| `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
 
 ## `soup tui`

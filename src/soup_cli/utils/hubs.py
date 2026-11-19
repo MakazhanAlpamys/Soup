@@ -722,7 +722,10 @@ def prefetch_model_from_hub(
     import os
     import re
 
+    from rich.text import Text
+
     from soup_cli.utils.paths import is_under_cwd
+    from soup_cli.utils.terminal import strip_control
 
     canonical = validate_hub_name(hub)
     if canonical == "hf":
@@ -747,11 +750,6 @@ def prefetch_model_from_hub(
         raise ValueError(
             "resolved hub cache dir escapes the current working directory"
         )
-    # v0.53.10 security-review HIGH: escape Rich markup on every
-    # user-controlled string before embedding in console.print. A crafted
-    # ``base`` like ``[bold red]evil[/bold red]`` must NOT render styled.
-    from rich.markup import escape as _markup_escape
-
     existing_cfg = os.path.join(cache_dir, "config.json")
     if os.path.isfile(existing_cfg):
         if console is not None:
@@ -761,8 +759,7 @@ def prefetch_model_from_hub(
                 except (ValueError, OSError):
                     display_dir = os.path.basename(cache_dir)
                 console.print(  # type: ignore[attr-defined]
-                    f"[dim]Using cached snapshot at "
-                    f"{_markup_escape(display_dir)}[/]"
+                    Text(f"Using cached snapshot at {strip_control(display_dir)}", style="dim")
                 )
             except Exception:  # noqa: BLE001 — advisory is best-effort
                 pass
@@ -779,9 +776,11 @@ def prefetch_model_from_hub(
             except (ValueError, OSError):
                 display_path = os.path.basename(local_path)
             console.print(  # type: ignore[attr-defined]
-                f"[dim]Fetched {_markup_escape(base)} "
-                f"from hub={_markup_escape(canonical)} → "
-                f"{_markup_escape(str(display_path))}[/]"
+                Text(
+                    f"Fetched {strip_control(base)} from hub={canonical} → "
+                    f"{strip_control(display_path)}",
+                    style="dim",
+                )
             )
         except Exception:  # noqa: BLE001
             pass

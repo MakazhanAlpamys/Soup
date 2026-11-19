@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,55 +92,36 @@ soup train
 
 ## ما الجديد
 
-**v0.77.0 — ما حذّر منه v0.76 صار يُرفَض الآن.** لم تعد 31 حقلًا من حقول الإعداد لا يقرؤها شيء، ولا ثلاث
-قيم مُهمَلة (deprecated)، تُحمَّل مع تحذير: بل يتوقف التحميل بسطر لكل إعداد يسمّيه ويقول ما ينبغي حذفه.
-وقد يتوقف على v0.77 تحميلُ إعداد كان يُحمَّل على v0.76، مع تحذيرات أو بصمت: شغّل `soup doctor --config soup.yaml`
-أولًا.
+**v0.78.0 — قطع من `main` بعد v0.77.2: 271 طلب سحب (pull request)، منها 218 من 48 شخصًا من خارج
+المشرف.** يضيف ميزات وعدة قواعد ترفض مدخلات كان v0.77.2 يقبلها، لذا اقرأ
+[ملاحظات إصدار v0.78.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) قبل ترقية إعداد أو نص برمجي. إن كنت قادمًا من 0.76.x
+فشغّل `soup doctor --config soup.yaml` أولًا واقرأ [ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **تغيير غير متوافق مع الإصدارات السابقة: تُرفَض الحقول المرحلية (staged) والقيم المُهمَلة.** ومن الحقول
-  `training.lr_groups` و`early_stop_patience` و`forgetting_eval_steps` و`checkpoint_eval_*`
-  و`quantize_ref_model` و`long_context_grpo` و`vision_grpo` و`data.split_thinking` ومفاتيح
-  `data.video_*`. وقد أُدرج `training.rl_checkpoint_include_ref_model`
-  و`rl_checkpoint_include_rollout_buffer` بعد v0.76.0، فلم يحذّر منهما أي إصدار قبل ذلك. أما القيم فهي:
-  `data.remove_unused_columns: true`، و`training.quantization: 4bit` / `8bit` (أو
-  `load_in_8bit: true`) في مهمة لا تُكمِّم النموذج أبدًا، و`soup ab --beta`.
-  وتُرفَض أيضًا خمسة عشر إعدادًا كان v0.76 يتجاهلها دون أي كلمة، مثل `use_mod` أو `neftune_alpha` حيث
-  لا يطبّقهما شيء، و`expand_layers` مع رتبة LoRA، و`8bit` أو SFT للرؤية على Unsloth، و`lora.rank_pattern`
-  على MLX أو Unsloth: راجع ملاحظات الترقية في CHANGELOG.
-- **تغيير غير متوافق مع الإصدارات السابقة: Python 3.11–3.13، ولا تصدير بصيغتي AWQ أو GPTQ، ورمز مصادقة
-  لمسارين في `soup serve`.** لم يعد Python 3.10 مدعومًا (انتهى عمر دعمه في 2026-10-01)؛ وعلى 3.10 يواصل
-  pip اختيار v0.76.x. وأُزيل `soup export --format awq` / `gptq` و`soup quantize --to awq` / `gptq`، لأن
-  كلا المشروعين الأصليين مؤرشف: استخدم `gguf` أو `onnx` أو `tensorrt` أو `bitnet` أو `tq1_0`، أو ابقَ على
-  v0.76.x. ويجيب `/v1/tools/python` و`/v1/tools/bash` بالرمز 401 ما لم يُشغَّل الخادم مع
-  <span dir="ltr">`--tool-auth-token`</span> (أو `SOUP_TOOL_AUTH_TOKEN`)، على أي عنوان ربط، ويجيب
-  `/v1/tools/python` بالرمز 501 حيث لا يوفّر المضيف عزلًا على مستوى نظام التشغيل، كما يفعل bash من قبل.
-- **يعمل DPO وORPO وSimPO وKTO أصليًا على Apple Silicon.** يتدرّب `task: dpo` و`orpo` و`simpo` و`kto` مع
-  `backend: mlx` عبر حلقة MLX الخاصة بـ Soup وفق أهداف TRL (ORPO وSimPO دون نموذج مرجعي). ويكتسب SFT
-  النصي على MLX دعم DoRA الأصلي و`training.eval_steps` و`training.seed` ومراقب الخسارة (loss watchdog).
-  وصار `lora.use_rslora` يُطبَّق على MLX وUnsloth، فيتدرّب تشغيل rsLoRA هناك بالمقياس الذي طلبه، وتتغيّر
-  نتائجه.
-- **بثّ الطبقات يصل إلى نماذج MoE من عائلة DeepSeek-V3.** صار بثّ الطبقات في Soup (وهو تطبيق لـ L2L،
-  Pudipeddi et al. 2020) يبثّ `model_type: deepseek_v3` مع تطابق بين النموذج المقيم والمبثوث في
-  التمريرتين الأمامية والخلفية، ويُزيل تكميم نقاط الحفظ (checkpoints) المكمَّمة بالكتل بصيغة FP8 وقت
-  التقسيم (shard). ويُقبَل Kimi-K2-Base و-Instruct بعد فحص حقلًا بحقل (تُبَثّ نقطة حفظ صغيرة بشكل K2
-  مطابقةً بتًّا ببت على CPU؛ ولم يُدرَّب أي شيء على K2 نفسه). ويبثّ
-  `training.stream_expert_layout: per_expert` خبيرًا موجَّهًا واحدًا في كل مرة: على جهاز
-  RTX 5070 Laptop واحد سعة 8 GB، بلغت ذروة ذاكرة GPU لتدريب LoRA على Moonlight-16B بالإعداد نفسه
-  مقدار 1.0 GB مقابل 3.1 GB في التخطيط المدمج (fused)، بخبراء NF4 مقابل bf16 وبطبقتَي تخزين مؤقت مختلفتين، بزمن خطوة أطول بنحو 2.7x
-  ([السجل](benchmarks/probe-rtx5070-moonlight-16b.md)). ويحتفظ `training.stream_recompute: off` /
-  `auto` بتنشيطات الطبقات المبثوثة بدل إعادة حسابها، مع تدرّجات مطابقة بتًّا ببت: على طبقة RAM في البطاقة
-  نفسها تصير خطوة Mistral-7B NF4 أسرع بنسبة 22% عند 512 رمزًا و8.5% عند 2048
-  ([السجل](benchmarks/gate-stream-recompute.md)). لا يُفعَّل إلا بطلب صريح (`stream_layers: true`)، BETA.
-- **مصدر (provenance) يمكنك التحقق منه.** يسجّل `soup registry push --data <file>` بصمة SHA-256 لملف
-  التدريب، ويجعل <span dir="ltr">`--idempotency-key`</span> إعادة محاولة الدفع آمنة؛ وعلى الواجهة الخلفية
-  transformers تسجّل التشغيلات المقيمة والمبثوثة الطبقات والمتعددة وحدات GPU الـ commit على Hub للنموذج
-  الأساسي الذي حمّلته؛ ويقارن `soup ship --require-provenance` الدليلَ بما خُتم به من بايتات المهايئ
-  والمهمة والمصدر، وإصدار الحزمة (suite)، وسياسة الحكم.
-- **وجديد أيضًا.** `soup --version`؛ و`pip install "soup-cli[documents]"` لملفات PDF وDOCX في
-  `soup data ingest`؛ و<span dir="ltr">`soup merge --low-memory`</span>؛ ويمكن لـ GRPO أن يقيّم بحَكَم من
-  نموذج لغوي كبير (`training.reward_fn: judge_rank`)؛ وصارت
-  [`docs/config-reference.md`](docs/config-reference.md) و[`docs/cli-reference.md`](docs/cli-reference.md)
-  تُولَّد من الشيفرة، وتفشل مجموعة الاختبارات حين تكفّ إحداهما عن ذكر ما تفعله الشيفرة فعلًا.
+- **حلقة تعلّم مستمر.** يمنح `soup serve` كل إجابة معرّفًا ويستقبل عليها ملاحظات (إعجاب، تقييم، تصحيح)؛
+  ويدرّب `soup loop` مرشّحًا من هذه الملاحظات، ويحكم عليه عبر `soup ship --gate loop-v2`، ويشغّله
+  كنسخة canary ويتراجع عنه تلقائيًا.
+- **`soup ship` يُظهر مم يتكوّن رقمه.** أعداد الأفضل/الأسوأ/المتساوي لكل مهمة، وملف تدقيق لكل صف،
+  و`--task-mode reward --reward-fn` للتقييم بدالة تقدّمها أنت (يُنفَّذ ملف `.py`)، ومقدار ما يغيّره
+  المحوّل في النموذج الأساسي، و`--base-adapter` للمقارنة بين محوّلين.
+- **أوامر جديدة.** `soup eval retention` (النسيان عبر إصدارات النموذج)، و`soup data leakage`
+  (التداخل بين التدريب والتقييم)، و`soup docs search` (دون اتصال)، و`soup prune-layer-cache`،
+  و`soup eval quant-check --performance`.
+- **مزيد على Apple Silicon.** محادثة MLX أصلية، والدمج، وأقنعة الخسارة الانتقائية، وذاكرات المعالجة
+  المسبقة، وتوسيع المفردات، وتمديد RoPE، وSFT كثيف لـ Llama.
+- **بثّ الطبقات يفعل أكثر.** وضع استدلال للأمام فقط، واستيراد NF4 مُكمَّم مسبقًا، وتدريب BCO وIPO
+  و`task: preference` على قاعدة مبثوثة.
+- **تقديرات VRAM تناسب الصفوف القصيرة.** يُسعَّر تشغيل SFT المحشوّ بحسب أطول صف فيه، ويُحتسب
+  gradient checkpointing بـ 8 بت ومساحات عمل cuBLAS ومعلّم التقطير، ويقول الفحص المسبق لماذا لم
+  يُفحص الاتّساع.
+- **8 وصفات جديدة** (181 في المجموع)، ومكتبة نوى Triton لـ SFT بـ QLoRA لنموذج Qwen2 (بلا مفتاح إعداد).
+- **النص يُعرض كما كُتب.** عشرات الأوامر الأخرى تطبع المسارات والأسماء مع الإبقاء على الأقواس ونص
+  `:name:` وإزالة محارف التحكم في الطرفية.
+
+**تغييرات في السلوك يجب أن تعرفها.** تُرفض القيمة المنطقية في حقل رقمي ضمن `training`. وينشئ `--push-as`
+المستودع خاصًا (و`--push-public` لتغيير ذلك). ويُرفض تفعيل eval gate على MLX أو `prm` أو `unlearn`
+أو `moe_lora_routing`. ويتوقف `soup serve --max-tokens` عند 16384. وتغيّرت أوزان `soup adapters merge`
+ودرجة `tool_call_args_subset`، فقد تختلف نتائج الدمج وأحكام ship. وملفات الأدلة التي يكتبها `soup ship`
+من الإصدار 2، وهو ما يرفضه v0.77.x.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -345,7 +326,7 @@ soup doctor                           # افحص GPU / الاعتماديات / 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # أو ابنِ الصورة محليًا
 ```
 

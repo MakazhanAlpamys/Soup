@@ -32,6 +32,7 @@ from soup_cli.utils.loop_budget import (
     check_budget,
     parse_budget_string,
     reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
 )
 from soup_cli.utils.loop_daemon import (
     WatchConfig,
@@ -651,6 +652,39 @@ class TestDailyCounter:
             reset_daily_counter_if_new_day(-1, "2026-05-15")
 
 
+class TestMonthlySpend:
+    def test_same_month_keeps_spend(self):
+        now = datetime(2026, 5, 31, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-01", now=now) == 4.5
+
+    def test_new_month_resets(self):
+        now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-31", now=now) == 0.0
+
+    def test_new_year_same_month_number_resets(self):
+        now = datetime(2027, 5, 15, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-15", now=now) == 0.0
+
+    def test_december_to_january_resets(self):
+        now = datetime(2027, 1, 1, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-12-31", now=now) == 0.0
+
+    def test_none_prior_date_keeps_spend(self):
+        now = datetime(2026, 5, 15, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, None, now=now) == 4.5
+
+    @pytest.mark.parametrize(
+        "spent", [-0.01, True, float("nan"), float("inf"), "1.0", None]
+    )
+    def test_invalid_spend_rejected(self, spent):
+        with pytest.raises(ValueError):
+            reset_monthly_spend_if_new_month(spent, "2026-05-15")  # type: ignore[arg-type]
+
+    def test_non_str_date_rejected(self):
+        with pytest.raises(ValueError):
+            reset_monthly_spend_if_new_month(1.0, 20260515)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # Part D — iteration artifact
 # ---------------------------------------------------------------------------
@@ -802,11 +836,33 @@ class TestRunOnce:
         state, _ = init_state("m", "e", "b")
         state = state.with_status("running")
         write_state(state)
-        cfg = WatchConfig()
+        # A cycle that trains something is an iteration: it is recorded and counted.
+        cfg = WatchConfig(train_fn=lambda s, c: {"run_id": "run-1", "skipped": False})
         new_state, record, decision = run_once(state, cfg)
         assert decision.proceed is True
-        assert record.gate_verdict == "SKIPPED"  # default train stub sets skipped
+        assert record.gate_verdict == "OK"  # the default gate stub, for a run that trained
         assert new_state.iteration_count == 1
+        assert new_state.last_idle is None
+
+    def test_default_stubs_are_an_idle_poll_that_records_nothing(self, tmp_path, monkeypatch):
+        """The default train stub skips: a poll with nothing to train is not an iteration.
+
+        It returns ``proceed=False`` (so ``watch`` writes no manifest), bumps no counter and
+        leaves the time and the reason in ``last_idle`` (review 5b, N2).
+        """
+        monkeypatch.chdir(tmp_path)
+        state, _ = init_state("m", "e", "b")
+        state = state.with_status("running")
+        write_state(state)
+        new_state, record, decision = run_once(state, WatchConfig())
+        assert decision.proceed is False
+        assert decision.reason == "idle poll: nothing to train"
+        assert record.gate_verdict == "SKIPPED"
+        assert (new_state.iteration_count, new_state.runs_today) == (0, 0)
+        assert new_state.last_idle["reason"] == "nothing to train"
+        assert not (tmp_path / ".soup-loops").exists() or not any(
+            name.startswith("iter-") for name in os.listdir(tmp_path / ".soup-loops")
+        )
 
     def test_budget_skip_records_iteration_with_zero_counters(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -897,11 +953,22 @@ class TestWatchDaemon:
         cfg = WatchConfig(
             poll_interval_sec=1.0,
             max_iterations=3,
+            train_fn=lambda s, c: {"run_id": "run-1", "skipped": False},
         )
         final_state, ran = watch(cfg)
         assert ran == 3
         assert final_state.iteration_count == 3
         assert final_state.status == "stopped"
+
+    def test_watch_finite_idle_polls_run_then_stop_without_counting(self, tmp_path, monkeypatch):
+        """Three polls that find nothing to train end the run; none is counted (review 5b, N2)."""
+        monkeypatch.chdir(tmp_path)
+        init_state("m", "e", "b")
+        final_state, ran = watch(WatchConfig(poll_interval_sec=1.0, max_iterations=3))
+        assert ran == 3
+        assert final_state.iteration_count == 0
+        assert final_state.status == "stopped"
+        assert final_state.last_idle["reason"] == "nothing to train"
 
     def test_watch_respects_pause(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

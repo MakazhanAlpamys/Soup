@@ -12,8 +12,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
@@ -330,7 +332,8 @@ def doctor(
 
     loaded_cfg = None
     if config:
-        # Load and validate the config before the environment summary (#2100).
+        # Load and validate the config before the "All checks passed!" line (#2100);
+        # the environment tables above have already printed.
         # If the config is refused or cannot be loaded, doctor terminates with exit 2
         # before asserting that "All checks passed!".
         loaded_cfg = _load_doctor_config(config)
@@ -375,7 +378,9 @@ def _load_doctor_config(config_path: str):
 
         return load_config(config_path)
     except FileNotFoundError as exc:
-        console.print(f"\n[red]Config not found:[/] {config_path}")
+        console.print(
+            Text.assemble(("\nConfig not found:", "red"), " ", strip_control(config_path))
+        )
         # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
         # config that cannot be read is not a clean bill of health. `doctor`
         # without --config keeps its old exit status.
@@ -410,6 +415,11 @@ def _report_config_support(cfg) -> None:
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    task = cfg.task
+    if backend == "mlx":
+        from soup_cli.config.schema import resolve_mlx_task
+
+        task = resolve_mlx_task(task, cfg.training.preference_loss)
     gaps = check_config(cfg)
 
     modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
@@ -418,7 +428,7 @@ def _report_config_support(cfg) -> None:
         f"backend=[bold]{backend}[/]{modality_str}"
     )
     if not gaps:
-        known = unsupported_for(cfg.task, backend, modality)
+        known = unsupported_for(task, backend, modality)
         modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
@@ -555,6 +565,39 @@ def _format_gpu_capability(torch, idx: int) -> tuple[str, bool]:
     return f"sm_{major}{minor} ({architecture})", supported
 
 
+#: #776 - the one architecture the NF4 dispatch note was measured on (RTX 5070 Laptop, bnb 0.50.2).
+_NF4_NOTE_CAPABILITY = (12, 0)
+
+_NF4_SM120_NOTE: tuple[str, ...] = (
+    "NF4 on sm_120: bitsandbytes' fused 4-bit GEMM and dequantize + matmul round",
+    "differently at small row counts, so NF4 outputs can differ in the last bits",
+    "between the two (measured with bitsandbytes 0.50.2). Streamed NF4 follows",
+    "bitsandbytes' own choice of kernel. Details and numbers:",
+    "https://github.com/MakazhanAlpamys/Soup/issues/776",
+)
+
+
+def _nf4_blackwell_note(major: int, minor: int) -> list[str]:
+    """Return the NF4 rounding note for sm_120 (RTX 50-series), else an empty list.
+
+    Only the architecture the divergence was measured on carries the note: sm_121,
+    sm_100 and older cards select bitsandbytes kernels by different rules and have
+    not been measured, so saying the same thing there would be a guess.
+    """
+    if (major, minor) != _NF4_NOTE_CAPABILITY:
+        return []
+    return list(_NF4_SM120_NOTE)
+
+
+def _nf4_note_lines_for_device(torch, idx: int) -> list[str]:
+    """Return the NF4 note for one CUDA device; a failed capability probe gives none."""
+    try:
+        major, minor = torch.cuda.get_device_capability(idx)
+    except (AttributeError, RuntimeError, AssertionError):
+        return []
+    return _nf4_blackwell_note(major, minor)
+
+
 def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     """Return hardware/software support for the reported precision features."""
     from soup_cli.utils.advanced_precision import (
@@ -609,6 +652,10 @@ def _check_gpu():
                 gpus.append(
                     f"  GPU {idx}: [bold]{name}[/] "
                     f"({total_gb:.1f} GB) — {capability}{arch_warning}"
+                )
+                # #776 — rounding note for sm_120; plain text, no brackets to escape.
+                gpus.extend(
+                    f"    [dim]{line}[/]" for line in _nf4_note_lines_for_device(torch, idx)
                 )
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"
@@ -774,6 +821,21 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     )
 
 
+def _cuda_visibility_hides_every_gpu(value: str | None, gpu_count: int) -> bool:
+    """CUDA exposes only the devices listed before the first invalid entry."""
+    if value is None:
+        return False
+    first = value.split(",", 1)[0].strip()
+    if first.startswith(("GPU-", "MIG-")):
+        return False  # UUID validation would require a separate nvidia-smi -L query.
+    if not (first.isascii() and first.isdigit()):
+        return True
+    try:
+        return int(first) >= gpu_count
+    except ValueError:
+        return True  # An oversized integer must not crash the diagnostic.
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
@@ -794,14 +856,22 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         return ""
     if completed.returncode != 0:
         return ""
-    gpu_name = (completed.stdout or "").strip().splitlines()[:1]
-    raw_label = gpu_name[0] if gpu_name else "GPU"
+    gpu_names = (completed.stdout or "").strip().splitlines()
+    raw_label = gpu_names[0] if gpu_names else "GPU"
     # v0.40.1 review fix — security: nvidia-smi output is embedded in a
-    # Rich-markup string at the call site; escape `[`/`]` so a GPU name like
-    # "NVIDIA Quadro [T4]" cannot break or inject markup.
-    from rich.markup import escape as _markup_escape
+    # Rich-markup string at the call site; strip controls and escape markup
+    # in both the card name and the visibility setting.
+    from soup_cli.utils.terminal import for_terminal
 
-    gpu_label = _markup_escape(raw_label)
+    gpu_label = for_terminal(raw_label)
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if _cuda_visibility_hides_every_gpu(visibility, len(gpu_names)):
+        return (
+            f"GPU hardware present ({gpu_label}) but "
+            f"CUDA_VISIBLE_DEVICES={for_terminal(visibility)} "
+            "hides it from torch. Unset CUDA_VISIBLE_DEVICES to use the GPU."
+        )
+
     try:
         from importlib.metadata import version as _pkgver
 

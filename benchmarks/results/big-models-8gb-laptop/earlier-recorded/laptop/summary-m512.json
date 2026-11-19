@@ -1,0 +1,143 @@
+{
+  "label": "earlier-recorded-m512",
+  "train_guard": {
+    "outcome": "completed",
+    "failure": null,
+    "elapsed_s": 728.8120000000054,
+    "worker_returncode": 0,
+    "sampled_device_peak_mib": 5602.0,
+    "gpu_samples": 509,
+    "min_host_available_mib": 6636.87890625,
+    "min_commit_headroom_mib": 2355.94921875,
+    "max_own_private_commit_mib": 10717.53125,
+    "max_own_peak_working_set_mib": 4357.1171875
+  },
+  "train_worker": {
+    "status": "passed",
+    "pid": 39232,
+    "seq_len": 512,
+    "device": "cuda:0",
+    "elapsed_seconds": 588.6678084000014,
+    "torch_peak_allocated_mib": 4738.06103515625,
+    "torch_peak_reserved_mib": 5428.0,
+    "torch_peak_allocated_bytes": 4968217088,
+    "torch_peak_reserved_bytes": 5691670528,
+    "adapter_params": 26673152,
+    "adapter_tensors": 352,
+    "step_seconds": [
+      58.88371240001288,
+      57.38913219999813,
+      55.294751699999324
+    ],
+    "step_losses": [
+      1.005373477935791,
+      1.1508463621139526,
+      1.0639897584915161
+    ],
+    "heldout_before": [
+      1.0790772438049316,
+      1.0983805656433105
+    ],
+    "heldout_after": [
+      1.0505433082580566,
+      1.0581854581832886
+    ],
+    "heldout_reloaded": [],
+    "fresh_process_exact": null,
+    "adapter_hashes": {
+      "adapter_config.json": "9b0c4283901fb949fe39f19002c79fa63d08ad882f2aa8515e1ba8ade1d09128",
+      "adapter_model.safetensors": "ef5940b8bdb81b27d4acbf73e17f8a2f71246150b294d70afc90046b428ae735",
+      "README.md": "ae2cc136b10f488a1bea808bc286050b6eb0fd2daa018eabb8c42fb50b3bf8b7",
+      "stage35_full512_trim_v2_provenance.json": "bece5169afa7909803208fbfeed57de8ef226b7c00dacd117fc04616e7643511"
+    },
+    "reloaded_artifact_hashes": null,
+    "runtime_manifest_sha256": "dd429e47af337550e10f0b16a463a1a9ab1085e062a584a944b6f87430ac10e3",
+    "runner_sha256": "6d33b47aa517c719ccdb5fed75a51178ac46342ecdea2e3630ddb92cb5a55da4",
+    "environment": {
+      "python": "3.12.10",
+      "executable": "<HOME>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "packages": {
+        "torch": "2.14.0+cu130",
+        "transformers": "5.17.0",
+        "peft": "0.20.0",
+        "accelerate": "1.15.0",
+        "bitsandbytes": "0.50.2",
+        "safetensors": "0.8.0"
+      }
+    },
+    "runtime_path": "<ASSETS>\\soup-runtime-f215941b",
+    "runtime_layer_loads_initial": 0,
+    "runtime_layer_loads_final": 868
+  },
+  "reload_guard": {
+    "outcome": "completed",
+    "failure": null,
+    "elapsed_s": 478.35899999999674,
+    "worker_returncode": 0,
+    "sampled_device_peak_mib": 3764.0,
+    "gpu_samples": 298,
+    "min_host_available_mib": 7047.65234375,
+    "min_commit_headroom_mib": 4569.89453125,
+    "max_own_private_commit_mib": 8631.171875,
+    "max_own_peak_working_set_mib": 4056.80078125
+  },
+  "reload_worker": {
+    "status": "passed",
+    "pid": 44284,
+    "seq_len": 512,
+    "device": "cuda:0",
+    "elapsed_seconds": 348.4164802000014,
+    "torch_peak_allocated_mib": 3130.53662109375,
+    "torch_peak_reserved_mib": 3598.0,
+    "torch_peak_allocated_bytes": 3282605568,
+    "torch_peak_reserved_bytes": 3772776448,
+    "adapter_params": 26673152,
+    "adapter_tensors": 352,
+    "step_seconds": [],
+    "step_losses": [],
+    "heldout_before": [],
+    "heldout_after": [],
+    "heldout_reloaded": [
+      1.0505433082580566,
+      1.0581854581832886
+    ],
+    "fresh_process_exact": true,
+    "adapter_hashes": null,
+    "reloaded_artifact_hashes": {
+      "adapter_config.json": "9b0c4283901fb949fe39f19002c79fa63d08ad882f2aa8515e1ba8ade1d09128",
+      "adapter_model.safetensors": "ef5940b8bdb81b27d4acbf73e17f8a2f71246150b294d70afc90046b428ae735",
+      "README.md": "ae2cc136b10f488a1bea808bc286050b6eb0fd2daa018eabb8c42fb50b3bf8b7",
+      "stage35_full512_trim_v2_provenance.json": "bece5169afa7909803208fbfeed57de8ef226b7c00dacd117fc04616e7643511"
+    },
+    "runtime_manifest_sha256": "dd429e47af337550e10f0b16a463a1a9ab1085e062a584a944b6f87430ac10e3",
+    "runner_sha256": "6d33b47aa517c719ccdb5fed75a51178ac46342ecdea2e3630ddb92cb5a55da4",
+    "environment": {
+      "python": "3.12.10",
+      "executable": "<HOME>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "packages": {
+        "torch": "2.14.0+cu130",
+        "transformers": "5.17.0",
+        "peft": "0.20.0",
+        "accelerate": "1.15.0",
+        "bitsandbytes": "0.50.2",
+        "safetensors": "0.8.0"
+      }
+    },
+    "runtime_path": "<ASSETS>\\soup-runtime-f215941b",
+    "runtime_layer_loads_initial": 0,
+    "runtime_layer_loads_final": 176
+  },
+  "reload_vs_train": {
+    "reloaded_losses_equal_after_losses": true,
+    "reloaded_losses": [
+      1.0505433082580566,
+      1.0581854581832886
+    ],
+    "trained_after_losses": [
+      1.0505433082580566,
+      1.0581854581832886
+    ],
+    "fresh_process_exact_flag": true,
+    "distinct_pids": true
+  }
+}

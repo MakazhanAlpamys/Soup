@@ -16,6 +16,11 @@ its default" is declared but read by nothing: leave it out, or at its default.
 The guides linked from the [docs index](README.md) explain what the settings do
 together; this page is the lookup table.
 
+For fields directly under `training` and under `training.lora`, booleans
+`true` and `false` (including YAML aliases such as `yes` and `no`) are refused
+for scalar `int` and `float` fields. Write an explicit numeric value instead.
+The `training.lora.r` field requires an integer, not `false`.
+
 How to read a table:
 
 - **Key** is the full YAML path: `training.lora.r` is `r:` under `lora:` under
@@ -89,8 +94,8 @@ Sections:
 | `data.image_resize_algorithm` | `str \| null` | `null` | one of `"nearest"`, `"bilinear"`, `"bicubic"`, `"lanczos"` | Pillow resize algorithm for image preprocessing. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.video_fps` | `float \| null` | `null` |  | Target frames-per-second for video preprocessing. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.video_maxlen` | `int \| null` | `null` |  | Max number of frames per video clip. Bounds (0, 4096]. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
-| `data.add_new_tokens` | `list[str] \| null` | `null` |  | Add these tokens to the tokenizer vocab + resize embeddings. Cap 10_000 entries; per-token &lt;= 256 chars; no duplicates. (v0.42.0) |
-| `data.new_special_tokens` | `list[str] \| null` | `null` |  | Like add_new_tokens but registered as additional_special_tokens so they are not split by the tokenizer. (v0.42.0) |
+| `data.add_new_tokens` | `list[str] \| null` | `null` |  | Add these tokens to the tokenizer vocab + resize embeddings on transformers backend and MLX text SFT (`quantization: none`). Cap 10_000 entries; per-token &lt;= 256 chars; no duplicates. (v0.42.0, #1994) |
+| `data.new_special_tokens` | `list[str] \| null` | `null` |  | Like add_new_tokens but registered as additional_special_tokens so they are not split by the tokenizer. Supported on transformers backend and MLX text SFT (`quantization: none`). (v0.42.0, #1994) |
 | `data.resize_vocab` | `bool` | `false` |  | Resize the model's input/output embedding matrix when add_new_tokens / new_special_tokens grew the vocab. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.extend_conversation` | `bool` | `false` |  | Unsloth-style conversation extension — extend the last assistant turn with N more tokens for 'continue' prompts. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
 | `data.skip_prepare_dataset` | `bool` | `false` |  | Axolotl skip_prepare_dataset — escape hatch when the input is already in the trainer's expected schema. (v0.42.0). Refused at load when set away from its default (v0.77, #808). |
@@ -142,7 +147,7 @@ Sections:
 | `training.dpo_beta_schedule` | `str \| null` | `null` | one of `"linear"`, `"cosine"`, `"exponential"` | Anneal DPO β over training. None = constant β (default). Requires dpo_beta_end. DPO-family tasks only (dpo, ipo, preference+dpo). |
 | `training.dpo_beta_end` | `float \| null` | `null` | `> 0` | Target β at the end of training when dpo_beta_schedule is set. Must be > 0. The starting β is dpo_beta. |
 | `training.dpo_ref_regen_epochs` | `int \| null` | `null` | `>= 1`, `<= 1000` | Replace the frozen ref adapter with the current active adapter every N epochs. Copies .default. adapter weights into .ref. under torch.no_grad(). Requires LoRA (lora.r >= 1); full fine-tuning is not supported. |
-| `training.preference_loss_weights` | `dict[str, float] \| null` | `null` |  | Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys must be members of {dpo, simpo, orpo, ipo, bco}. Requires task='preference'; mutually exclusive with preference_loss (the scalar form). Capped at 5 components (the supported set). |
+| `training.preference_loss_weights` | `dict[str, float] \| null` | `null` |  | Weighted blend of preference losses, e.g. {'dpo': 0.7, 'simpo': 0.3}. Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys must be members of {dpo, simpo, orpo, ipo, bco}. Requires task='preference'; mutually exclusive with preference_loss (the scalar form). Capped at 5 components (the supported set). A blend that contains bco is refused when the trainer is set up, because the bco trainer splits each row into unpaired completion and label rows. |
 | `training.grpo_beta` | `float` | `0.1` | `>= 0.0`; finite | GRPO beta - KL penalty coefficient (default 0.1). Set to 0 to disable the KL penalty entirely (KL-free recipes like DAPO and Dr. GRPO, #1247). |
 | `training.num_generations` | `int` | `4` | `>= 2` | Number of generations per prompt for GRPO |
 | `training.reward_fn` | `str \| null` | `"accuracy"` |  | Reward function: 'accuracy', 'format', 'verifiable', 'judge_rank' (GRPO only, an LLM judge ranks each prompt's completions; see grpo_judge, #2047), a path to a custom .py file, or a comma-separated ensemble of the above (e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40). |
@@ -164,7 +169,7 @@ Sections:
 | `training.grpo_delta` | `float \| null` | `null` | `> 0.0`, `<= 1.0` | Symmetric clipping radius for grpo_variant='two_sided' (required) or grpo_variant='gspo' (optional sequence clipping radius, defaults to 0.2). Rejected for all other variants. |
 | `training.grpo_fp16` | `bool` | `false` |  | Force FP16 mixed precision for GRPO/RL (unsloth parity). On CUDA, the GRPO trainer forwards fp16=True and bf16=False; on non-CUDA devices this flag does not enable FP16. |
 | `training.long_context_grpo` | `bool` | `false` |  | Enable long-context GRPO (unsloth: 380K B200 / 110K H100). Compatibility validation only: no trainer consumes this flag yet. Requires task='grpo' on a non-mlx backend and use_ring_attention=False. Refused at load when set away from its default (v0.77, #808). |
-| `training.vllm_sleep_mode` | `bool` | `false` |  | Enable vLLM sleep/standby between rollouts (memory savings during the optimisation step). Requires backend in {transformers, unsloth}; forwarded to compatible TRL and vLLM runtimes by the GRPO trainer. |
+| `training.vllm_sleep_mode` | `bool` | `false` |  | vLLM sleep/standby between rollouts. Has no effect in this version: GRPO does not use a vLLM server for rollouts, so there is no engine to put to sleep. Refused at load as of v0.78.0 when set to true. |
 | `training.rollout_backend` | `str \| null` | `null` | one of `"art"`, `"ruler"`, `"nemo_gym"`, `"openenv"` | Multi-turn agent rollout backend (unsloth / axolotl parity): art (OpenPipe ART) / ruler / nemo_gym / openenv. Requires task='grpo'. openenv runs live (v0.71.21 #125) via training.rollout_func; art/ruler/nemo_gym are lazy-import gated. |
 | `training.rollout_func` | `str \| null` | `null` |  | OpenEnv rollout function as 'module.path:function_name' (v0.71.21 #125). Requires rollout_backend='openenv'. The callable receives the seed prompts list and returns rollout rows ({'prompt': str\|messages, 'answer'?: str}) that replace the GRPO prompt dataset. Trusted-input policy: names operator-controlled code (mirrors data.prompt_strategy). |
 | `training.ref_model_ema_alpha` | `float \| null` | `null` | `> 0.0`, `<= 1.0` | Exponential moving average coefficient for ref-model sync (policy → reference). Must be in (0, 1]. None = disabled. Axolotl parity. |
@@ -199,7 +204,7 @@ Sections:
 | `training.train_router_only` | `bool` | `false` |  | Freeze every expert + train only the gating router (unsloth MoE recipe). Requires moe_lora=true. (v0.52.0) |
 | `training.reasoning_effort` | `str \| null` | `null` | one of `"low"`, `"medium"`, `"high"` | gpt-oss train-time reasoning effort level. Injected as a prompt prefix by the SFT data formatter; task sft, tts or distill only. |
 | `training.train_on_eot` | `bool` | `false` |  | Include explicit EOT / EOS control tokens in the SFT loss (axolotl ``train_on_eot``). Default False matches HF Trainer convention. Applied by the SFT data formatter; task sft, tts or distill only. (v0.52.0) |
-| `training.kv_cache_type` | `str \| null` | `null` | one of `"q8_0"`, `"bf16"`, `"f16"`, `"fp8"` | KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). Applied by soup serve on the transformers backend; backend and hardware compatibility are validated before model loading. |
+| `training.kv_cache_type` | `str \| null` | `null` | one of `"q8_0"`, `"bf16"`, `"f16"`, `"fp8"` | KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). Recorded in soup.yaml only: neither soup train nor soup serve reads this key (fp8 is refused with backend: mlx). To apply a type, pass soup serve --kv-cache-type &lt;type> (transformers backend). |
 | `training.fp8_attention` | `bool` | `false` |  | Extend the v0.28.0 FP8 menu to FP8 attention (axolotl-parity flag). Requires quantization_aware='fp8'. DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through the shared advanced-precision setup; the default SFT path does not consume it. |
 | `training.nvfp4` | `bool` | `false` |  | Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through torchao conversion; the default SFT path does not consume it. |
 | `training.unsloth_bnb_4bit` | `bool` | `false` |  | Promote Unsloth Dynamic 4-bit from 'inferable' to a native flag. Requires backend='unsloth' and quantization='4bit'. (v0.53.0) |
@@ -266,7 +271,7 @@ Sections:
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
-| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); refused at config load anywhere else (#1697). |
+| `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); on backend: mlx, task sft text supports rope_scaling_type: linear with quantization: none (#1995); refused at config load anywhere else (#1697). |
 | `training.yarn_factor` | `float \| null` | `null` | `> 1.0`, `<= 1024.0` | YaRN scaling factor (s). Optional — when omitted, the runtime falls back to ``target_length / original_length`` (HF default behaviour). |
 | `training.yarn_attn_factor` | `float \| null` | `null` | `>= 0.0`, `<= 10.0` | YaRN attention temperature multiplier (default 1.0 in HF). |
 | `training.yarn_beta_fast` | `int \| null` | `null` | `>= 1`, `<= 1024` | YaRN beta_fast cutoff (HF default 32). |
@@ -302,19 +307,19 @@ Sections:
 | `training.convergence_detection` | `bool` | `false` |  | Watch for loss plateau / oscillation and surface advice (continue / early_stop / lower_lr) at the end of training. |
 | `training.convergence_window` | `int` | `50` | `>= 5`, `<= 10000` | Staged, not enforced during training: number of recent losses to inspect for plateau / oscillation. Refused at load when set away from its default (v0.77, #808). |
 | `training.convergence_rel_tol` | `float` | `0.005` | `> 0.0`, `<= 1.0` | Staged, not enforced during training: relative range threshold below which the window is a plateau. Refused at load when set away from its default (v0.77, #808). |
-| `training.warmup_auto` | `bool` | `false` |  | Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. Overrides any manual warmup_steps in the trainer. |
+| `training.warmup_auto` | `bool` | `false` |  | Deprecated, no effect: no trainer reads it, and warmup_ratio already sets the warmup over the real optimizer steps. Setting it to true warns at load; refused as of v0.79.0. |
 | `training.auto_mixed_precision` | `bool` | `false` |  | Pick bf16/fp16 based on model + GPU compute capability. Applied by task='sft' (and 'tts', which trains through the SFT trainer); refused on every other task, whose trainers pick their own precision. |
 | `training.grad_accum_auto_tune` | `bool` | `false` |  | Monitor VRAM each step; warn (and recommend new batch/accum) when memory pressure is high. Advisory only: it does not rebuild the DataLoader or change accumulation during a run. |
 | `training.grad_accum_pressure_threshold` | `float` | `0.92` | `> 0.05`, `< 0.99` | VRAM utilisation fraction that triggers a recommendation |
-| `training.freeze_layers` | `int \| null` | `null` | `>= 1`, `<= 1000` | Freeze first N layers (from bottom). Train only remaining layers. Applied by tasks sft and tts on the text path with backend transformers and no layer streaming; refused everywhere else. |
-| `training.freeze_ratio` | `float \| null` | `null` | `> 0.0`, `< 1.0` | Freeze this fraction of layers (0.75 = freeze 75% from bottom). Applied by tasks sft and tts on the text path with backend transformers and no layer streaming; refused everywhere else. |
+| `training.freeze_layers` | `int \| null` | `null` | `>= 1`, `<= 1000` | Freeze first N layers (from bottom). Train only remaining layers. Applied by tasks sft and tts on the text path with backend transformers and no layer streaming, or native MLX text SFT with lora.r=0. |
+| `training.freeze_ratio` | `float \| null` | `null` | `> 0.0`, `< 1.0` | Freeze this fraction of layers (0.75 = freeze 75% from bottom). Applied by tasks sft and tts on the text path with backend transformers and no layer streaming, or native MLX text SFT with lora.r=0. |
 | `training.unfrozen_parameters` | `list[str] \| null` | `null` |  | Spectrum (#266) targeted training: regex patterns of parameter names to keep trainable — every other parameter is frozen. Full fine-tuning, LoRA off. Generate with `soup spectrum scan`. Mutually exclusive with LoRA features / freeze_layers / freeze_ratio / train_router_only; sft + transformers backend only. |
 | `training.lisa_enabled` | `bool` | `false` |  | Enable LISA layerwise importance sampling (#267): every lisa_interval_steps, freeze all decoder layers except a random lisa_num_layers set (embeddings + head always trainable). Full fine-tuning, LoRA off. sft or pretrain + transformers + text + quantization=none only; mutually exclusive with LoRA features / freeze_layers / freeze_ratio / unfrozen_parameters. |
 | `training.lisa_num_layers` | `int` | `2` | `>= 1`, `<= 64` | LISA: number of decoder layers kept trainable per interval (clamped to the model's layer count). Small = LoRA-like memory. |
 | `training.lisa_interval_steps` | `int` | `20` | `>= 1`, `<= 1000000` | LISA: re-sample the active decoder layers every N global steps. |
 | `training.lisa_reset_optimizer` | `bool` | `true` |  | Clear optimizer state for decoder layers that LISA re-freezes on each interval (avoids stale Adam moments). Mirrors relora_reset_optimizer. |
 | `training.lisa_train_embeddings` | `bool` | `true` |  | Keep the always-on group (input embeddings + LM head + final norm) trainable every LISA interval. Default true is LISA as published (#267). Set false to freeze that group so only the sampled lisa_num_layers decoder layers train — the always-on set is the majority of LISA's memory, so this is the knob that buys the memory saving (#377). It is a real trade: the always-on set may be load-bearing for quality, so measure both ways. |
-| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. sft + transformers + text + quantization=none only; batch_size 1, no gradient accumulation. Slower than resident training, but these models did not run on the card at all. |
+| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto, bco and ipo, including task='preference' with a single preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. Weighted preference_loss_weights do not stream yet. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
 | `training.stream_buffers` | `int` | `2` | `>= 2`, `<= 8` | Pre-allocated VRAM layer buffers. 2 = double buffering, which is what lets the next layer load while the current one computes. A single buffer cannot overlap load with compute. |
@@ -332,7 +337,7 @@ Sections:
 | `training.neftune_alpha` | `float \| null` | `null` | `>= 0.0`, `<= 50.0` | NEFTune noise alpha (0-50). Adds noise to embeddings for better chat quality. |
 | `training.forgetting_detection` | `bool` | `false` |  | Staged, not enforced during training: enable periodic general-knowledge eval to detect catastrophic forgetting |
 | `training.forgetting_eval_steps` | `int` | `100` | `>= 10`, `<= 10000` | Staged, not enforced during training: run forgetting eval every N steps. Refused at load when set away from its default (v0.77, #808). |
-| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Staged, not enforced during training: warn if accuracy drops beyond this threshold (0.01-0.50) |
+| `training.forgetting_threshold` | `float` | `0.1` | `>= 0.01`, `<= 0.5` | Deprecated, no effect: nothing reads it (soup ship reads eval.ship.forgetting_threshold). Setting it away from the default warns at load; refused as of v0.79.0. |
 | `training.forgetting_benchmark` | `str` | `"mini_mmlu"` | one of `"mini_mmlu"`, `"mini_common_sense"`, `"mini_instruction"` | Staged, not enforced during training: built-in mini benchmark for forgetting detection. Refused at load when set away from its default (v0.77, #808). |
 | `training.forgetting_stop` | `bool` | `false` |  | Staged, not enforced during training: stop on severe forgetting. Refused at load when set away from its default (v0.77, #808). |
 | `training.checkpoint_intelligence` | `bool` | `false` |  | Staged, not enforced during training: track best checkpoints by quality |
@@ -384,7 +389,7 @@ Sections:
 | `training.eval_gate.suite` | `str \| null` | `null` |  | Path to eval-suite YAML (evals/gate.yaml) |
 | `training.eval_gate.every_n_epochs` | `int` | `1` | `>= 1`, `<= 100` | Run gate every N epochs (1-100) |
 | `training.eval_gate.regression_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max absolute drop vs baseline before regression fires |
-| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| 'previous' \| file path - scores to compare against |
+| `training.eval_gate.baseline` | `str \| null` | `null` |  | registry://&lt;id> \| file path - scores to compare against |
 | `training.eval_gate.on_regression` | `str` | `"stop"` | one of `"stop"`, `"warn"`, `"continue"` | Action on regression: stop training \| warn only \| continue |
 
 ## `eval`
@@ -395,14 +400,15 @@ Sections:
 | `eval.benchmarks` | `list[str] \| null` | `null` |  | lm-evaluation-harness benchmark names to run |
 | `eval.custom_tasks` | `str \| null` | `null` |  | Path to custom eval JSONL file |
 | `eval.judge` | `dict \| null` | `null` |  | LLM-as-a-judge config: model, rubric, provider |
-| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
+| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / reward_fn / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
 
 ## `eval.ship`
 
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `eval.ship.task_eval` | `str \| null` | `null` |  | JSONL of leg-1 task-win eval tasks |
-| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) |
+| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"`, `"reward"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs reward_fn or --reward-fn) |
+| `eval.ship.reward_fn` | `str \| null` | `null` |  | Reward function for task_mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| the path of a .py file, which soup ship EXECUTES as Python code (under the working directory, never a symlink): only name a file you trust. Only meaningful with task_mode reward; it is read by soup ship, never by soup train. |
 | `eval.ship.general_suite` | `str \| null` | `null` |  | Comma list of leg-2 benchmarks (default: bundled offline suite) |
 | `eval.ship.forgetting_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max allowed leg-2 drop in absolute points before DON'T SHIP |
 | `eval.ship.judge_model` | `str \| null` | `null` |  | Judge model URL for task_mode judge_score / pairwise |

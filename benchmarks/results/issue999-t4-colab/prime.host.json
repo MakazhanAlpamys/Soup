@@ -1,0 +1,25 @@
+{
+  "name": "prime",
+  "config": "soup-a.yaml",
+  "command": [
+    "soup",
+    "bench",
+    "train",
+    "--config",
+    "/content/issue999/soup-a.yaml",
+    "--steps",
+    "2",
+    "--warmup",
+    "1",
+    "-o",
+    "/content/issue999/prime.json"
+  ],
+  "fixes_applied": [
+    "fingerprint",
+    "fp16-adapter-alignment"
+  ],
+  "exit_code": 1,
+  "wall_seconds": 432.4,
+  "peak_rss_bytes": 8868257792,
+  "min_available_bytes": 4017762304
+}

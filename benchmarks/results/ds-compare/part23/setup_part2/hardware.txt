@@ -1,0 +1,154 @@
+## date
+2026-11-07T13:11:56Z
+## uname
+Linux 7390eb718af2 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+## os-release
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+## nvidia-smi
+Sat Nov  7 13:11:56 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 615.71.09              KMD Version: 615.71.09     CUDA UMD Version: 13.4     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:26:00.0 Off |                    0 |
+| N/A   30C    P0             70W /  700W |       0MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+## nvidia-smi query
+index, name, memory.total [MiB], driver_version, clocks.current.sm [MHz], clocks.max.sm [MHz], pcie.link.gen.current, pcie.link.width.current
+0, NVIDIA H100 80GB HBM3, 81559 MiB, 615.71.09, 345 MHz, 1980 MHz, 5, 16
+## nvidia-smi topo
+	[4mGPU0	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	0-95,192-287	0		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+## nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Fri_Feb_21_20:23:50_PST_2025
+Cuda compilation tools, release 12.8, V12.8.93
+Build cuda_12.8.r12.8/compiler.35583870_0
+## lscpu
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           52 bits physical, 57 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  384
+On-line CPU(s) list:                     0-383
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD EPYC 9684X 96-Core Processor
+CPU family:                              25
+Model:                                   17
+Thread(s) per core:                      2
+Core(s) per socket:                      96
+Socket(s):                               2
+Stepping:                                2
+Frequency boost:                         enabled
+CPU max MHz:                             3716.8860
+CPU min MHz:                             1500.0000
+BogoMIPS:                                5099.94
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin cppc amd_ibpb_ret arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 rdpid overflow_recov succor smca fsrm flush_l1d debug_swap ibpb_exit_to_user
+Virtualization:                          AMD-V
+L1d cache:                               6 MiB (192 instances)
+L1i cache:                               6 MiB (192 instances)
+L2 cache:                                192 MiB (192 instances)
+L3 cache:                                2.3 GiB (24 instances)
+NUMA node(s):                            2
+NUMA node0 CPU(s):                       0-95,192-287
+NUMA node1 CPU(s):                       96-191,288-383
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Mitigation; Safe RET
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Mitigation; Clear CPU buffers
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Mitigation; IBPB before exit to userspace
+## free -g
+               total        used        free      shared  buff/cache   available
+Mem:            1511          74          34          10        1402        1412
+Swap:              7           0           7
+## ulimit -l (KB)
+8192
+## df -h
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         120G  4.7M  120G   1% /
+tmpfs            64M     0   64M   0% /dev
+shm             188G     0  188G   0% /dev/shm
+/dev/loop0      3.3T  1.2T  2.1T  35% /etc/hosts
+tmpfs           152G  101M  152G   1% /run/nvidia-persistenced/socket
+/dev/nvme0n1p2  3.6T  1.9T  1.6T  54% /usr/bin/nvidia-smi
+tmpfs           756G     0  756G   0% /proc/acpi
+tmpfs           756G     0  756G   0% /proc/scsi
+tmpfs           756G     0  756G   0% /sys/firmware
+tmpfs           756G     0  756G   0% /sys/devices/virtual/powercap
+## block devices (ROTA=1 means the guest reports a rotational disk)
+NAME    ROTA TYPE  SIZE MODEL
+loop0      0 loop  3.2T
+nvme3n1    0 disk    0B Samsung SSD 9100 PRO 4TB
+nvme0n1    0 disk  3.6T Samsung SSD 9100 PRO 4TB
+nvme2n1    0 disk  3.5T KIOXIA KCD8XRUG3T84
+nvme4n1    0 disk  3.5T KIOXIA KCD8XRUG3T84
+nvme1n1    0 disk  3.5T KIOXIA KCD8XRUG3T84
+nvme5n1    0 disk  3.5T KIOXIA KCD8XRUG3T84
+/sys/block/loop0/queue/rotational: 0
+/sys/block/loop1/queue/rotational: 1
+/sys/block/loop2/queue/rotational: 1
+/sys/block/loop3/queue/rotational: 1
+/sys/block/loop4/queue/rotational: 1
+/sys/block/loop5/queue/rotational: 1
+/sys/block/loop6/queue/rotational: 1
+/sys/block/loop7/queue/rotational: 1
+/sys/block/md0/queue/rotational: 1
+/sys/block/nvme0n1/queue/rotational: 0
+/sys/block/nvme1n1/queue/rotational: 0
+/sys/block/nvme2n1/queue/rotational: 0
+/sys/block/nvme3n1/queue/rotational: 0
+/sys/block/nvme4n1/queue/rotational: 0
+/sys/block/nvme5n1/queue/rotational: 0
+## root mount
+overlay on / type overlay (rw,relatime,lowerdir=/var/lib/docker/overlay2/l/AFBERJGZYK7ZTVDK5YB2JAFQOS:/var/lib/docker/overlay2/l/DS7VODCW7FTYR7JGGFFOVMH73J:/var/lib/docker/overlay2/l/FPDNSE277WHRM7YG54RG6BABMG:/var/lib/docker/overlay2/l/NGOP56SBEEITWU7TYUFF25EJAD:/var/lib/docker/overlay2/l/O747VUT7WMK2CMW3IR5VD3RCL7:/var/lib/docker/overlay2/l/YW66PLYYLGEFSYXQK7JKZ5N5KN:/var/lib/docker/overlay2/l/R2Z4BED6ESVEM75OSYR2QRGUIO:/var/lib/docker/overlay2/l/3CAWHJYQXLYQLMGV3TAJ7TVT4K:/var/lib/docker/overlay2/l/2G4MBRILKQNMMPPIQ4EYLWW7R2:/var/lib/docker/overlay2/l/CABTX5XXN4EFF2A5QBKJS3NKDO:/var/lib/docker/overlay2/l/Z54MPPSPC337I2BLZY3ASE3TTC:/var/lib/docker/overlay2/l/7KKX2H75XO6Q2NLVUJEUXH33P3:/var/lib/docker/overlay2/l/P2A5GXDUA4FX2KEVT44RQYTTHZ:/var/lib/docker/overlay2/l/3VKFJWATDTRCMWEYUJ525BUE5U:/var/lib/docker/overlay2/l/TVA5I3WSN52Y6PJZVPFN2P6OMB:/var/lib/docker/overlay2/l/OMSTTI44QEZ6QVWTMUG7ITMWED:/var/lib/docker/overlay2/l/P2YG25R7PQ3UDCIZKKA5JBSAJ3:/var/lib/docker/overlay2/l/YCFHY3ADX5P7OPPC2IJNWCR7PF:/var/lib/docker/overlay2/l/XOEG3VGQWG4AAOATBENW6YOSVL:/var/lib/docker/overlay2/l/YJ3MKSAFBJOXSB347ZRE5XHTNS:/var/lib/docker/overlay2/l/DLHKX7DYZ2EU6Y3T7BSDMEKI66,upperdir=/var/lib/docker/overlay2/b250640188c3ca6ecafc68452af8c496ef5ff1033b61cbc651d3865784cf5016/diff,workdir=/var/lib/docker/overlay2/b250640188c3ca6ecafc68452af8c496ef5ff1033b61cbc651d3865784cf5016/work,nouserxattr)
+## python
+/opt/conda/bin/python3
+Python 3.11.14
+## g++
+g++ (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0

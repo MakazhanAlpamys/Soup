@@ -178,7 +178,7 @@ def _top_drift_tokens(
 
 def _read_jsonl_outputs(path: str) -> list[str]:
     rows: list[str] = []
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped:
@@ -240,7 +240,17 @@ def run_drift_check(
             )
     ref_dist = compute_token_distribution(ref_rows)
     live_dist = compute_token_distribution(live_rows)
-    kl = rolling_kl(live_dist, ref_dist) if (ref_dist and live_dist) else 0.0
+    for label, path, rows, distribution in (
+        ("reference", reference_path, ref_rows, ref_dist),
+        ("live", live_path, live_rows, live_dist),
+    ):
+        if not distribution:
+            raise ValueError(
+                f"{label} file {os.path.basename(path)!r} has {len(rows)} readable "
+                f"row{'s' if len(rows) != 1 else ''} but no tokens. "
+                "Nothing was compared, so no drift verdict is possible."
+            )
+    kl = rolling_kl(live_dist, ref_dist)
     return DriftReport(
         kl_divergence=kl,
         threshold=thr,

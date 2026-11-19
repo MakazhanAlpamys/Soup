@@ -12,6 +12,1275 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-11-18
+
+### Upgrade notes
+
+A `soup.yaml` that loads on 0.77.2 loads on 0.78.0, except for the values listed in the first item (refused now). Coming from 0.76.x or older, read the 0.77.0 and 0.77.2 upgrade notes below first, and run `soup doctor --config soup.yaml` before the first run of an existing config.
+
+- **Config values that loaded on 0.77.2 and are refused now.** Each message names the field and what to change.
+  - A boolean in a numeric field of `training` or `training.lora` (`lr: true`, `batch_size: true`, `lora.r: false`): 0.77.2 coerced `false` to `0` and `true` to `1`; 0.78.0 refuses it with `<field> must be a number, not a bool` (or `an int`). Write the number you meant (#2462).
+  - `training.vllm_sleep_mode: true` on `task: grpo`: it never reached a vLLM engine; delete the line (#2773).
+  - `training.eval_gate.enabled: true` (or `--gate`) on `backend: mlx` and on `task: prm`, `unlearn`, `moe_lora_routing`: these paths never attached a gate and trained without one; set `enabled: false` or remove the block, and run `soup eval` or `soup ship` after training instead (#2564). A `training.eval_gate.suite` that cannot load now stops `soup train` with exit 1 instead of training without a gate: fix the suite file the message names, or disable the gate (#2264). `training.eval_gate.baseline: previous` is refused; use a path to a baseline results file (#2640).
+  - Eval suites and rubrics: a boolean `threshold`, a repeated key in a task mapping, duplicate rubric criterion names and a non-finite rubric weight are refused (#2697, #2873, #2699, #2701); `--write-baseline` onto the suite, custom-task or judge-prompts file exits 3 (#2694); a calibration file with `calibrated: true` and `num_pairs: 0` is refused (#2513).
+  - Data: reranker / cross_encoder `query_id` of mixed or non-string/non-integer types (#2637), `task: embedding` rows where only some have a `negative` (#2563), a `task: unlearn` `retain_set` with no usable row (#2577).
+- **Deprecated, refused in v0.79.0:** `training.warmup_auto: true` and `training.forgetting_threshold` set away from `0.1` load with a warning that they do nothing; delete them (#2814). `soup deploy hf-space` with the Streamlit template prints a deprecation warning (#2834).
+- **Commands that stop where they used to continue.**
+  - `soup train --push-as <repo>` now creates the repository private; add `--push-public` to keep creating a public one (#2802). `soup train --cloud` refuses a config with local input files at plan time, and `--push-as` / `--gate` with `--cloud` (#2627).
+  - `soup serve --max-tokens` above 16384 exits 2 before any model loads (#2898); `soup chat --max-tokens` and `soup bench infer --max-tokens` below 1 exit 2 (#2787, #2788). `soup serve --trace-log`, `--record-thumbs` and `--feedback-log` are refused with `--backend vllm`, `sglang` and `mii` (exit 2; they were silently ignored there): drop the flag, or serve with `--backend transformers` to keep recording (#2532).
+  - `soup train --resume` / `--hf-resume` on `task: ppo` is refused (#2772). One Ctrl+C no longer stops a Hugging Face Trainer run: the first saves and continues, the second saves and stops, the third interrupts (#2414).
+  - `soup ci init --python` with a leading zero (`03.11`) exits 1 (#2632); `soup airgap-bundle` with a missing folder exits 1 (#2568); `soup adapters merge` of adapters it cannot merge exits 2 (#2926); `soup merge --low-memory` of an adapter whose init rewrites the base is refused (#2732); `soup data generate` asks again until `--count` and exits 1 after three empty requests (#2418).
+  - `nan` is refused like `inf` on `soup data validate --min-valid-fraction`, `soup draft measure --min-acceptance`, `soup data toxicity --threshold`, `soup data decontaminate --threshold`, `soup data score --threshold` and `soup data forge --uncertainty-threshold`, with a usage error that names the option (exit 3 for `data validate`, 2 for the others) before any input is read; pass a number (#2917). `soup data sample` refuses `-n` below 1 and a `--pct` that is not in (0, 100] with exit 1 (#2931). `soup drift-alarm` exits 1 on an input with no tokens instead of reporting `OK`; fix the producer of that input (#2955). `soup iterative-dpo` with no usable prompt row exits 1 before it loads a model or writes pairs (#2958). `soup tokenizer train --output` naming an existing file is refused before training (#2947).
+  - Exit codes: `soup data mix --apply` with invalid YAML or invalid recipe weights 1 -> 2, so a script that tests for 1 must test for 2 (#2905, #2946); `soup expect` with an unreadable suite or dataset 1 -> 3, and exit 1 now means the judge was unreachable (#2945).
+  - `soup ship`: when every task generation fails on one side, `--task-mode metric` exits 1 (#2870); `--output` names that cannot hold `<stem>.task-rows.jsonl` exit 3 (#2894); an `--output` or `--emit-evidence` that is the same file as one of the run's inputs, or as the other output, exits 3 before anything is read, loaded or written, where it used to replace the input with the verdict (#2894); an adapter directory whose weights are a pickle (an `adapter_model.bin`, `.pt`, `.pth`, `.pkl`, `.pickle` or `.ckpt` file, or a pickle posing as `.safetensors`) is refused on `--adapter` and `--base-adapter` with exit 3 (`unsafe weight file (pickle / PyTorch-classic): adapter_model.bin`): re-save the adapter as safetensors, for example `model.save_pretrained(path, safe_serialization=True)`, and pass that directory (#2897); the verdict, the evidence and `--output` gain keys, none removed, including a top-level `base_adapter` that is `null` unless `--base-adapter` is used.
+  - `soup can run` refuses a can that holds `<redacted>` values and names their key paths: supply the values in the can's `config.yaml` and run `soup train` on it, and keep credentials out of a config before packing it (#2883).
+- **`soup ship --emit-evidence` writes `schema_version: 2`.** soup-cli 0.77.x refuses such a file (`evidence has unsupported field(s): 'judged', 'schema_version', 'task_rows'`, exit 3); upgrade whatever reads the evidence (the CI gate, the MCP `ship_evidence` tool). 0.78.0 reads versions 1 and 2 (#2870).
+- **`soup adapters merge` weights.** Each input's own term is now scaled by its weight, where 0.77.2 used the weight squared: the numbers of every `linear`, `dare` and `svd` merge of two or more inputs change (an equal-weight pair doubles each input's own term, 0.25 to 0.5), and the weights an earlier `--strategy cmaes` run printed reproduce a different adapter. Re-run merges whose output you compare or ship (#2927).
+- **A scoring rule got stricter.** `scoring: "tool_call_args_subset"` counts a row as Correct only at full credit, so `soup eval custom`, `soup ship` metric mode and `soup eval retention` report a lower Accuracy for suites that use it, and the exit status can change for an unchanged model (a `soup ship` that ended 0 can end 2). Record base and tuned scores again with this version before comparing (#2939).
+- **The VRAM pre-flight prices differently.** An 8-bit run with gradient checkpointing is priced higher (#2860 in #2925), layer streaming charges the cuBLAS workspaces (#2749), on Windows it checks system commit headroom before page-locking (#2658), and a `task: distill` run is priced with its teacher and divergence (#2950): a run that launched close to the card's limit can be refused; `--allow-oom-attempt`, a lower `batch_size` or `data.max_length` launch it. A padded text SFT run the old pre-flight refused because of `data.max_length` now starts when its longest row fits (#2934). `soup profile` / the MCP `profile` tool take `seq_len` and `shape` (#2871), and their JSON gains `teacher_memory_gb`, `distill_memory_gb` and `teacher_generation_memory_gb` (0 outside `task: distill`).
+- **Runs are not bit-comparable with 0.77.2 for:** resident 4-bit / 8-bit on a bf16 card (embeddings, norms and an untied head stay bf16; faster, lower peak, #2683), fp16 `auto_mixed_precision` on a bf16 card (#2921), `curriculum: true` (rows now in sorted order, #2924), the BOS token kept after a `keep_end` prompt cut (#2544, #2561, #2572), the DPO / ORPO / MLX prompt cut (#2555, #2659), `soup data split --stratify` and `--stratify-semantic`, which now give the requested validation and test counts, so the same seed can place different rows in train, validation and test (#2954), Fast-LoRA 4-bit dtype boundary (#2383, #2546), `soup ship` on a CUDA card without bf16, which now evaluates in float16 (#2669), and `task: classifier`, `reranker`, `cross_encoder` and `asr`, which now full fine-tune on fp32 master weights: twice the memory over a 16-bit checkpoint, so a run that fit the card on 0.77.x can run out of memory (train an adapter with `classifier_lora: true` or `asr_lora: true`, or lower `training.batch_size`; #2949).
+- **`soup loop` (already in 0.77.2) behaves differently.** `soup loop init` without `--train-method` now creates an sft loop that trains on corrections (existing `loop.yaml` files keep their method; pass `--train-method dpo` to keep preference pairs, #2560); the pre-wired harvest reads the feedback log and trains only when new feedback arrived (#2538, #2531); a canary is judged by the ratings on its answers with a significance test, needs 30 rated answers on each side unless `--canary-max-wait` ends the wait, and a canary that got no answers is withdrawn (#2539); the iteration, version and progress logs are written (#2554); `soup loop watch --detach` leaves `.soup/loop.pid` and `.soup/loop.log` and refuses a second `--detach` (#2540); a `--trace-log` line has `ts` as an ISO 8601 UTC string and `tokens` as an object, and a line whose `schema_version` is not 1 is skipped by `soup loop` and `soup data from-traces` (#2532). A hand-edited `loop.yaml` with a `monthly_budget_usd` or `spent_this_month_usd` that is not finite or is above 1e15 was read before and is refused now (exit 2, naming the field): write a number from 0 to 1e15, or remove the line (#2897).
+- **Databases, servers and files.** `~/.soup/experiments.db` gains nullable columns in place on first use; loss, lr and speed may be NULL where 0.77.2 stored `0.0` (#2589, #2810, #2891); a database written by 0.78.0 stays readable by 0.77.2. `soup ui` and the MCP run tools return `output_dir` relative to the working directory, or a bare folder name; read the absolute path from your own records or from `soup runs show` on the host (#2807). `soup serve --backend transformers` honours `stop` / `stop_sequences` and streams while it generates (#2514, #2630).
+- **Crash bundles and `.can` files are redacted before they are written;** read a bundle before sharing it (#2883). RL-checkpoint optimizer state loads with `weights_only=True` (#2916).
+- **GGUF export:** the llama.cpp pin moved from `b5270` to `b12423`; delete `~/.soup/llama.cpp` to have the next export clone the pinned tag (#2910). The `mlx` extra now needs `mlx>=0.31.2` (#2779).
+- **Python API:** `JudgeResults.compute()` and the calibration helpers raise `ValueError` for non-finite or oversized inputs (#2701, #2838); `decide_performance_flags` treats an explicit `vram_headroom_gb=0.0` as zero headroom (#2885); `soup_cli.utils.profiler.profile_from_config` returns a truthy `soup_cli.utils.hardware_fit.FitUnavailable` (with `.field` and `.reason`) instead of `None` when a run cannot be priced, so test `isinstance(result, dict)` (#2871).
+
+### Added
+
+- **Native MLX chat** — `soup chat --backend mlx` reuses the shared strict loader/generator for native text LoRA and base models, with interactive history, commands and cancellation. Dense and actual 4-bit saved adapters change fresh-process output against a base-only control. (#1986 by @Amix29 in #2123)
+
+- **Native MLX fusion** — `soup merge --backend mlx` validates ordinary native text LoRA and writes a staged standalone dense checkpoint with explicit dtype/dequantization, complete tokenizer/config, and no live adapter or stale quantization metadata. Dense and genuine 4-bit fixtures reload without their original inputs. Partial Hub caches remain usable offline with MLX-LM 0.31.3, without requiring uncached repository metadata. Unsupported tensor-streaming `--low-memory` is refused before loading. (#1988 by @Amix29 in #2124)
+
+- **Selective MLX text-SFT masks** — honor per-message training flags and last-assistant history selection with verified token alignment, explicit unsafe/zero-target refusals, and retained adapter metadata. Doctor omits supported text masks and options already refused by the multimodal schema. (#1985 by @Amix29 in #2128)
+
+- **Native MLX preprocessing caches** — consume existing Arrow IDs and explicit labels through the shared fingerprint gate, validate every cached row, preserve causal/padding targets and rewind loss, and refuse corrupt or incompatible caches without retokenizing or falling back to raw rows. (#1991 by @Amix29 in #2131)
+
+- Add an experimental internal Torch objective for AutoDistill teacher-expert capture rows: explicit CE plus coarse-tail forward KL, token-normalized chunking, and optional objective checkpointing. This builds on #613 and #629 by @Amix29 and adds no training task, cache consumer, or resume workflow (#580 by @kok-o in #2443).
+
+- **Loop data formats** (#2505, merged in #2897): the six append-only JSONL logs of the `soup loop` cycle (conversation, feedback, paraphrase, iteration, version, progress) are defined in `docs/loop-formats.md`, with a Draft 2020-12 JSON Schema and an example file for each shipped under `soup_cli/schemas/loop/` and located by `soup_cli.utils.loop_formats`. The writers move to these formats in follow-up changes.
+
+- **Layer streaming can run a model, not only train it: a forward-only inference mode (#2509, #2510).** `soup_cli.utils.stream_inference.build_streamed_inference_model()` builds a streamed model from an existing shard cache with no adapter and no training config, so a model larger than VRAM can be used for prefill, scoring and batch forward. `logits()` and `score_sequences()` (per-token log-probs) run under `torch.inference_mode()`; quantisation and dtype come from the shard index. `build_streamed_model()` takes `lora_config=None` for the same mode, and its training path is unchanged. There is no KV cache, no token-by-token generation and no CLI command yet. `benchmarks/harness/stream_infer_throughput.py` times forward-only throughput over a batch x sequence-length grid.
+
+- **`soup ship --base-adapter`** (#2511, merged in #2897): a LoRA adapter applied to the before side, so a live verdict compares `base + --adapter` against `base + --base-adapter` (e.g. a new candidate against the version in production). Refused, naming both flags, without `--adapter`, with `--evidence`, `--require-provenance`, `--emit-evidence` or `--baseline`, with a non-bundled benchmark, or when both adapters are the same path; `--output` gains a `base_adapter` key: every verdict JSON `soup ship --output` writes now has a top-level `"base_adapter"` entry, `null` unless `--base-adapter` is used (an additive output key; a strict consumer of the verdict file must accept it).
+
+- **`soup serve --adapter-dir` and `POST /v1/adapters/load`** (#2516, merged in #2897): a LoRA adapter from `--adapter-dir` can be loaded into a running server (transformers backend) without a restart; it is not activated. The route needs `--tool-auth-token` on every bind, refuses a path outside `--adapter-dir` (realpath), a directory without `adapter_config.json`, pickle weights and a duplicate name. At most 16 runtime adapters are loaded at once: at the cap, the oldest runtime adapter that is not the active one, nor production, its rollback target or the canary named in `loop.yaml`, is unloaded to make room, and the load answers 409 only when none can be unloaded (every one is in use, the unload fails, or `loop.yaml` cannot be read).
+
+- **`soup loop` deploys a canary and rolls back honestly** (#2518, merged in #2897): the pre-wired deploy stage no longer cuts an adapter over to 100% of traffic (which also answered 404 for every newly trained adapter). It loads the adapter into the running server (`soup serve --adapter-dir`, `POST /v1/adapters/load`) and starts a canary on `soup loop init --canary-traffic` (default 5%) of keyed traffic; `soup loop watch` waits while it collects answers, promotes it at 30 healthy answers, or withdraws it on regression with production untouched. The new `soup loop rollback` returns to the version that was production before the last promotion; before any promotion it withdraws the running canary. Migration: the deploy stage now loads the adapter through `POST /v1/adapters/load`, which a server answers only when it was started with `--adapter-dir` and `--tool-auth-token` (a token is required on every bind, loopback included) — start `soup serve --adapter-dir .soup-loops/adapters --tool-auth-token <token>` and give `soup loop watch` the same token with `--tool-auth-token` or `SOUP_TOOL_AUTH_TOKEN`.
+
+- Added `qwen3.5-4b-grpo`, a text reasoning recipe with the inherited Qwen3.5 GRPO settings for `Qwen/Qwen3.5-4B`. (#275 by @kok-o in #2522)
+
+- **`soup loop` learns from thumbs, ratings and edits with dpo, kto or sft** (#2538, merged in #2897): the pre-wired harvest reads the feedback log (`soup loop init --feedback-log`, default `.soup-loops/feedback.jsonl`, `SOUP_LOOP_FEEDBACK_LOG` overrides it), joins it to the logged answers by id, and builds three datasets: edits become DPO pairs (next to the pairs from serve traces and the thumbs database), thumbs, ratings and edits become KTO rows labelled good or bad, and edits become SFT answers. `soup loop init --train-method dpo|kto|sft` picks the one the loop trains on; the default stays `dpo`. `--min-new-pairs` counts new rows of that dataset.
+
+- **`soup loop watch --detach` leaves a PID file and a log, and refuses a second `--detach`** (#2540, merged in #2897): the detached daemon's pid goes to `.soup/loop.pid` (JSON: pid, start time, log path) and its output to `.soup/loop.log` (appended; it used to be discarded; rotated at 10 MB, keeping one old file as `.soup/loop.log.1`). A second `--detach` is refused while that pid is alive (a foreground `soup loop watch` never reads the PID file, so it is not refused), a stale file is replaced, the daemon removes its own file when it exits, and `soup loop status` shows whether it runs. The detached child starts in its own session (POSIX `start_new_session`) or process group without a console (Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`) with stdin on the null device, so closing the terminal or pressing Ctrl+C there no longer reaches the daemon and its training child.
+
+- **`soup eval retention` measures forgetting across a series of model versions (#2551, #2552).** It keeps a ledger of control tasks (held-out task-eval JSONL files, the format `soup ship --task-eval` reads, each pinned by SHA-256) and the accuracy every recorded version got on each. A run scores the candidate (`--model`, optional `--adapter`) on every control task with one loaded model, compares each task with the best score any earlier version had, and reports mean forgetting and backward transfer; a drop beyond `--threshold` (default 0.05) exits `2`. `--record` appends the version; without it the ledger is not touched. The model is loaded the way `soup ship` loads it (`--config` quantization, `--chat-template-kwargs`) and that load is stamped on every recorded version: a run under different numerics is refused, a failed generation exits `1` instead of scoring as a wrong answer, a ledger another run changed is not overwritten, and `--require-history` refuses a lost ledger. It is a measurement only and not part of the `soup ship` verdict.
+
+- **`soup loop` writes the iteration, version and progress logs** (#2554, merged in #2897): the pre-wired loop now appends `.soup-loops/iterations.jsonl` (one line per iteration, and another whenever its canary is promoted or withdrawn), `versions.jsonl` (initial version, promotions, `soup loop rollback`) and `progress.jsonl` (each stage, and the rating progress of a waiting canary) in the documented loop formats, so an application can follow the loop without reading `loop.yaml`. Lines are only ever appended, one write per line, and a failed write becomes a note on the iteration instead of stopping the loop.
+
+- **`soup ship --gate loop-v2` judges a continual-learning candidate by the corrections it learned** (#2570, merged in #2897): with `--corrections` (the trained edits and paraphrases of their prompts) and `--held-out` (edits kept out of training), ship answers both with the production and the candidate version and scores each answer by how many of the words the correction added it contains. It ships only when the corrections were learned (a one-sided exact sign test over the edits, at least 5 that changed), the held-out edits did not get significantly worse, and the benchmark suites did not regress; the task win and the style judge are recorded but no longer decide. The evidence is written to `--output` in the loop formats. Without `--gate`, `soup ship` is unchanged.
+
+- **`soup loop` paraphrases the prompts people corrected, and `soup serve` keeps the loop's own calls out of its logs** (#2573, merged in #2897): before training, the pre-wired loop asks a model for two paraphrases of each corrected prompt (once per answer, reused by every later iteration), drops ones that repeat the prompt or give the answer away, and appends them to `.soup-loops/paraphrases.jsonl`; they are what the corrections check of `soup ship --gate loop-v2` answers and never become training data. The model is the loop's own `soup serve` by default or `soup loop init --paraphraser-endpoint/--paraphraser-model`. A `soup serve` request with `X-Soup-Internal: loop-check` and a valid tool token writes no conversation record or thumbs and is never routed to a canary.
+
+- **`soup doctor` prints a short NF4 rounding note under an `sm_120` (RTX 50-series) GPU, and `benchmarks/nf4-on-blackwell.md` records the two NF4 problems found on that card (#776, #331, #2587).** bitsandbytes' fused 4-bit GEMM and dequantize + `F.linear` differ by at most 1 ulp of the output dtype on the row counts where bitsandbytes picks its fused kernel; the note says so and links #776. The new page gives the status of both problems, the 2026-11-07 re-measurement on bitsandbytes 0.50.2 and `main`, and the scripts that reproduce them, including the standalone `benchmarks/harness/bnb_nf4_path_divergence.py`, which needs no Soup code.
+
+- **The continual-learning loop judges a candidate by the corrections it learned (#2588, merged in #2897).** Held-out corrections (a 30% split by the last user message, kept aside one training iteration, then graduated into training) and paraphrases of trained corrections go to `soup ship --gate loop-v2` in the verify stage, and its evidence is recorded in the iteration line (`verdict.gate`, `corrections`, `held_out`). With 1 to 4 trainable corrections the loop waits and says so (`Waiting: 4/5 trainable corrections ...`, also a `waiting` row in `soup loop status`). Rows count as trained only when the version that used them is promoted, so a rejected candidate's rows come back; `soup loop rollback` restores the cursor. When there are no corrections to check, the canary's ratings decide.
+
+- **A stored loss says what it is, and a run that observed no loss no longer reads as a perfect run:** `soup train` and `soup sweep` store NULL instead of a `0.0` placeholder (the completion panel prints `Loss: unavailable`, `soup runs` shows an empty cell, such a sweep arm is never ranked best), and HF's final runtime-summary log event no longer writes a metrics row carrying the last loss forward. Two nullable columns are added in place to an existing `experiments.db` (older rows read NULL): `runs.loss_summary_kind` (`per_step`, `mean` or `unavailable`) and `metrics.kind` (`train`, `eval` or `summary`), returned by `GET /api/runs/{id}`, `GET /api/runs/{id}/metrics` and the live metric event. HF's final runtime summary keeps its throughput (#2810) as one `kind = summary` row whose `loss`, `lr` and `grad_norm` are NULL (#2589). Migration: nothing to run; the two columns are added in place on first use and older rows stay NULL. A run whose loss ended in NaN stores NULL for both losses with `loss_summary_kind = unavailable` (SQLite cannot hold a NaN; an infinite loss is kept as logged). A reader of `experiments.db` must now expect NULL in `runs.initial_loss` / `final_loss` and in `metrics.loss` / `lr`, and should skip `metrics` rows whose `kind` is `summary` when it plots the training curve.
+
+- Add the Qwen3.5-27B text GRPO recipe as a reasoning-training starting configuration. (#275 by @kok-o in #2605)
+
+- Add the Qwen3.5-122B-A10B text DPO recipe as a preference-training starting configuration. (#275 by @kok-o in #2606)
+
+- Add a CUDA micro-benchmark for the fused Fast-LoRA SwiGLU MLP, `benchmarks/harness/fast_lora_mlp_bench.py`, and a Tesla T4 record of it: one Llama-3.1-8B-shaped block under Fast-LoRA, plain PEFT and PEFT + Liger, in emulated bf16 and NF4. Fast-LoRA's derived activation-only saved-tensor count is lower than both, its time difference is inside the spread of the run, and its peak allocated memory is higher in both dtypes on that card. (#837 by @capyriver in #2621)
+
+- **A library of Triton kernels for the Qwen2 QLoRA SFT step, `soup_cli.kernels.packed_lora` (#2623).** No config key and no CLI change: nothing in `soup train` reads it. NF4 decode (bit-identical to bitsandbytes), RMSNorm, RoPE, SwiGLU, a logit-free head and loss, an int8 MLP input gradient with a start-up check and stochastic rounding of the gradients, a saved-activation stash in GPU or pinned host memory instead of gradient checkpointing, and a planner for a GPU memory budget. On an RTX 5070 Laptop the loss matches the stock forward to 6e-5 and the worst LoRA-gradient error is 1.0 to 2.4 % in bf16 on tiny models; on Qwen2.5-1.5B the gradient cosine to the stock step is 0.9990 to 0.9994 in the exact mode and 0.9941 to 0.9955 with the default numerics. Built on the Soup Kernel Challenge submission of team Luck, with ideas from teams 21, Null Pointers, DarkDaur and OrbiTeam.
+
+- **A pre-quantised bitsandbytes NF4 checkpoint can be imported into the layer-stream shard store byte for byte (#2628).** `soup_cli.utils.nf4_serialized.import_nf4_checkpoint()` copies the published packed weights and statistics of a double-quantised NF4 checkpoint (for example `unsloth/Qwen3-32B-bnb-4bit`) into Soup's shard layout with no dequantise or requantise step, and re-reads every shard to compare it with the source. It reads a plain checkpoint directory or a Hugging Face cache snapshot: inside a snapshot a link is followed only into the same repo's own `blobs/` directory (or the cache-wide Xet store) and any other link is refused, and with a `model.safetensors.index.json` only the files it names are read (a `consolidated.safetensors` beside them is ignored). It refuses anything it cannot carry over exactly, naming the tensor and the fix: FP4, 8-bit, non-nested, a `bnb_4bit_compute_dtype` other than bfloat16, a `llm_int8_skip_modules` list that covers a decoder projection, an unsupported block size, a mismatched shape, a corrupt scale, a truncated file. It copies in bounded 8 MiB reads and never maps a file.
+
+- **A LoRA adapter trained on a layer-streamed base can be reloaded into a streamed base for inference (#2636).** `soup_cli.utils.stream_inference.build_streamed_inference_model(adapter=...)` takes the directory `soup train` saved, places the adapter on the streamed base the way the trainer does, keeps every parameter frozen, and refuses by name a missing or partial adapter, a non-LoRA adapter, one that uses `modules_to_save` or DoRA, or one whose tensors do not fit the base; on CPU its logits equal the trained model's bit for bit.
+
+- `task: reranker` and `task: cross_encoder` report ranking quality at evaluation when validation rows carry the new optional `query_id` key: `eval_mrr@10`, `eval_recall@{1,5,10}` and `eval_ndcg@10`, averaged over queries, beside `eval_loss`. `num_labels: 2` ranks by `logit[1] - logit[0]`, and `num_labels: 1` ranks by its logit with `classifier_kind: multi_label`; other heads print one line saying why ranking is skipped. A query with no relevant candidate, or whose rows are split between training and validation, is left out and counted. The recorded validation number stays `val_loss`. Behaviour change: reranker and cross_encoder data whose `query_id` is a boolean, a float, a list, an empty string or a string over 512 characters, or that mixes integer and string ids across the training and validation rows, loaded on 0.77.2 but is now refused at load with the row that differs; give every `query_id` one type, all non-empty strings or all integers (rows without `query_id` are still fine). (#2618 by @AlibekBerik in #2637)
+
+- **`soup prune-layer-cache` removes stale layer-stream cache slots, and the disk pre-flight panel lists them (#2196 by @AaronProbha18 in #2647).** The panel lists the other `<slug>@<commit>` slots of the base with sizes and paths. `soup prune-layer-cache --model <base>` lists them as a dry run; `--yes` removes the unreferenced ones and keeps the newest complete slot.
+
+- **`soup train` with `training.stream_layers: true` now trains on a pre-quantised bitsandbytes NF4 base under `training.quantization: 4bit` (#2653).** A double-quantised NF4 checkpoint with bf16 compute, such as `unsloth/Qwen3-32B-bnb-4bit`, is imported into the layer cache byte for byte instead of being refused; every other quantised source (bitsandbytes 8-bit, FP4 or not double-quantised, GPTQ, AWQ, compressed-tensors) is still refused as before, and so is the same NF4 base under `quantization: none`.
+
+- Layer streaming now switches a checkpointed NF4 layer to a packed-state backward on its own when the VRAM pre-flight predicts the dense-retaining backward would not fit, charging the largest matrix instead of the whole layer (about 0.7 GB instead of 2.77 GB per Mistral Large layer) with the same arithmetic and no new config key. (#2655)
+
+- **Layer streaming on Windows now checks system commit headroom before it page-locks the disk tier's host staging (#2658).**
+  Windows charges host memory against the commit limit (RAM + pagefile), which the free-RAM
+  pre-flight does not show, and page-locked staging is the larger charge because it is packed
+  into power-of-two arenas (3 GiB for the 123B plan at `stream_read_ahead: 1`, against 2.17 GiB
+  of slots). An experimental 123B run on a 32 GB laptop was stopped twice by the harness's own
+  commit floor with pinned staging. With `training.stream_pin` unset and less than 12 GiB of
+  commit left after the arenas, Soup now stages in pageable memory and says so in the panel;
+  when even the pageable staging does not fit, it refuses before any weight is staged.
+  `stream_pin: true` is refused the same way when the arenas cannot fit at all, naming the
+  numbers and the fixes (`stream_pin: false`, close programs, a larger pagefile, a lower
+  `stream_read_ahead`). `stream_pin: false` and every other OS are unchanged, and a failed read
+  of the counters skips the check, logged at info.
+
+- Add the Qwen3.5-122B-A10B text MoE GRPO recipe with accuracy rewards and expert LoRA, with documented workload and validation limits. (#275 by @nazek52 in #2660)
+
+- **Native MLX vocabulary expansion** — `backend: mlx` supervised fine-tuning supports native vocabulary expansion and trainable new tokens (`data.add_new_tokens` and `data.new_special_tokens`) with unquantized embeddings, preserving 100% frozen base embeddings while training additive parameter slices under MLX autograd. (#1994 by @here-2007 in #2684)
+
+- Publish a reproducible real-model H200 comparison of dense and chunked/checkpointed distillation: 31.66 versus 21.40 GiB allocated training peak, with the measured step-time cost, all eight runs and BF16 repeat controls. The kernel remains credited to @kok-o / #743. (#722 by @AubakirovArman in #2686)
+
+- Add opt-in `soup eval quant-check --performance` reporting generation latency, actual generated tokens/s and CUDA allocated peak alongside quality, with sequential model loading, repeat/noise metadata and table/JSON/markdown changes. Quality remains the only gate. (#2677 proposed by @duysengali-kuanysh, implemented by @AubakirovArman in #2689)
+
+- Publish a reproducible H200 FlashAttention/Liger sequence and checkpointing sweep with 120 successful timings, all activation probes, per-run clocks and shared-session OOM limitations; document the measured curve without changing training defaults. (#378 by @AubakirovArman in #2691)
+
+- Record the launching project's Git commit and clean/dirty/unknown working-tree state for local tracked training runs, preserve unknown values in old databases, and show the saved provenance in runs show/compare. (#2675 by @AubakirovArman in #2692)
+
+- Add opt-in `soup export --format onnx --validate-onnx --prompts FILE --atol N` to compare all logits of a single no-past causal-LM graph against its source on explicit CPU-float32 inputs, reporting max/mean error and refusing mismatched exports before completion or registry attachment. (#2676 proposed by @duysengali-kuanysh, implemented by @AubakirovArman in #2695)
+
+- Show estimated remaining time and local finish time in the live training panel when total steps and a usable training speed are known. Show speed measured by the panel when needed and keep displayed progress within 0–100%. (#2678 by @nazek52 in #2707)
+
+- **Native MLX RoPE context extension** — support explicitly scoped linear RoPE scaling on MLX text SFT for unquantized base models, recording scaling parameters in adapter metadata and re-applying them during native generation and fusion. (#1995 by @here-2007 in #2710)
+
+- Add `soup docs search` with offline BM25 search over bundled documentation. (#2716 by @here-2007 and @harshitthek)
+
+- Add the Qwen3.5-397B-A17B text MoE GRPO recipe with accuracy rewards and expert LoRA, with documented workload and validation limits. (#275 by @abdumutalipabay0 in #2718)
+
+- Add the `minimax-m3-dpo` recipe back: MiniMax-M3 preference training through DPO's vision path (`modality: vision`), attention-only LoRA on the language tower, untuned starting values. (#275 by @abdumutalipabay0 in #2719)
+
+- Add the `qwen3.5-9b-pretrain` recipe: continued pre-training of `Qwen/Qwen3.5-9B-Base` with the `qwen3.5-4b-pretrain` settings. (#275 by @abdumutalipabay0 in #2720)
+
+- Add the `qwen3.5-2b-pretrain` recipe: continued pre-training of `Qwen/Qwen3.5-2B-Base` with the `qwen3.5-4b-pretrain` settings. (#275 by @abdumutalipabay0 in #2721)
+
+- Kimi-K2-Base and Kimi-K2-Instruct gain a guarded native DeepSeek-V3 resident route on transformers 5.x for sft/grpo (bf16-only: set ``training.quantization: none``; 4-bit stays on the streamed ``training.stream_layers: true`` route): the checkpoint's config is rewritten in memory behind the existing guard, FP8-block weights are dequantised per-tensor to bf16 at load, and a parity gate compares the route against the pinned modeling_deepseek.py on a tiny checkpoint — the ``kimi-k2-sft`` recipe stays unavailable while enablement on tiny-checkpoint evidence is decided; migration: for ``task: sft`` and ``task: grpo`` with ``modality: text`` on the transformers backend, a local directory whose ``config.json`` declares ``model_type: kimi_k2`` no longer loads through ``from_pretrained``; it loads through the guarded native route or is refused naming every failing field, and ``training.rope_scaling_type`` on it is refused; other tasks, other model types and ``training.stream_layers: true`` are unchanged (#2104 by @1DMB1 in #2759)
+
+- `task: classifier` reports classification quality at evaluation when there are validation rows: `eval_accuracy` and `eval_f1_macro` for a single-label head, and `eval_subset_accuracy`, `eval_f1_micro` and `eval_f1_macro` for a multi-label head, beside `eval_loss`. A single-label prediction is the argmax of the logits; a multi-label label is predicted when its logit is above 0. A class with no true and no predicted row is left out of the macro average instead of counting as 0. `num_labels: 1` with the default single-label kind prints one line saying why the metrics are skipped. The recorded validation number stays `val_loss`, and `reranker` / `cross_encoder` keep their ranking metrics. (#2638 by @AlibekBerik in #2789)
+
+- `soup deploy hf-space` can select a Hugging Face hardware tier and generates a ZeroGPU-aware built-in Gradio chat app (#2745 by @capyriver in #2815).
+
+- Add dense native MLX Llama text SFT with selective bottom-layer freezing, token-weighted accumulation, float32 trainable weights, and standalone model checkpoints. Starting in v0.78.0, `training.lora.r: 0` with `backend: mlx` trains every weight by default for unquantized Llama text SFT after being rejected at config load in v0.77.2, so check the [unified memory budget](docs/training.md#dense-llama-training-on-mlx) before running it (#1992 by @here-2007 in #2818).
+
+- Show GRPO zero-spread reward groups in the Transformers live panel and warn once after five high-fraction measurements, without changing training. (#2674 proposed by @duysengali-kuanysh, implemented by @AubakirovArman in #2819)
+
+- `soup ship --adapter` prints how much of the base the adapter's update actually changes — the share of the elements of the adapter's target modules whose value differs once the LoRA update is added in the base's own dtype — beside the verdict, and adds a warning line when that share is below 1 %. The number is display only: the verdict, `failed_rule` and the exit code are unchanged, and it is not part of the `--evidence` schema, so a verdict still replays as input. An adapter the low-memory reader refuses (DoRA, `bias`, `modules_to_save`, embeddings, `lm_head`, non-LoRA) prints `not measured` with the reason. Calibrated on 42 adapters (7 Soup runs on Qwen2.5-1.5B-Instruct plus 9 public adapters on 6 bases): the highest near-zero-learning-rate control (6.51e-03) sits above the lowest real adapter (2.47e-03), so no fraction separates the two and the bound warns rather than gates — see `docs/evaluation.md`. (#2762 by @artikulus1301 in #2831)
+
+- The text that `soup ship` and the other live checks generate now carries a flag saying whether it stopped at the token limit (true, false, or unknown when the generator cannot tell). Nothing visible changes yet: the flag is recorded for the ship evidence that follows, and no migration is needed (#2832).
+
+- Add read-only `soup data leakage` exact input-text overlap reports for train/eval JSONL, including short questions and machine-readable output. Refs #2672 (proposed by @duysengali-kuanysh, implemented by @AubakirovArman in #2833).
+
+- **Added `--require-all-modes` to `soup diagnose --evidence` (#1525 by @bakdauletbaktygaliyev and @Erizoned in #2857).** By default a mode missing from the evidence file reads as a neutral OK, so an evidence file with no scores passes. With `--require-all-modes`, every absent mode is recorded as `NOT_RUN` (`"no evidence supplied"`), exiting 3 unless `--allow-not-run` is passed while `MAJOR` still exits 2; the same opt-in switch is available on `soup train` as `--diagnose-gate-require-all-modes` (requires `--diagnose-gate`) and on the MCP `diagnose_evidence` tool as `require_all_modes`.
+
+- `soup ship` shows what the task-leg number is made of, without changing any verdict or exit code apart from the refusal below. Per task it counts the rows that got better, worse and stayed the same between base and tuned (`task_win.rows`), the answers that stopped at the token cap for base and for tuned (`task_win.truncated`, from the generator's token ids and `null`, never `0`, when it was not measured), and the generations that failed (`task_win.generation_failures`); a `judged` block records the base, the adapter or tuned model exactly as given and the checkpoint step when the last path component of `--adapter` is exactly `checkpoint-N`. The terminal panel prints the same lines and, when the tuned model's cut-off answers exceed the base's by at least `max(3, ceil(0.10 * n))` rows, a yellow `truncation_growth` warning (a warning only, not calibrated: no table of real runs exists yet). `--output` gains `schema_version: 2`, `judged`, `task_win.rows`, `task_win.truncated` and `task_win.generation_failures`; none of the 0.77.x keys is removed or renamed. Migration: `--emit-evidence` now writes `schema_version: 2` with `task.rows`, `task.truncated`, `task.generation_failures` and `judged` whenever it has them, and soup-cli 0.77.x refuses such a file with `evidence has unsupported field(s): 'judged', 'schema_version', 'task_rows'` (exit 3), so upgrade whatever reads the evidence (the CI gate, the MCP `ship_evidence` tool) to 0.78.0 or later; a reader of 0.78.0 takes an absent `schema_version` as 1, reads 1 and 2, and refuses any other value or version-2 keys under version 1. One run that worked before is now refused: when every task generation fails on one side, `--task-mode metric` stops with exit 1 and `every task generation failed on the base side (8 of 8)` instead of scoring that side 0.0 (a base that could not generate was beaten by any tuned model, a SHIP no model earned; a side with only some failed rows is still judged and the count is shown), so check that the model loads and generates, then run it again. (#2870)
+
+- Reinforcement-style runs record their per-step training reward in the experiment tracker, so a program can read a reward curve the way it reads a loss curve: two nullable columns, `metrics.reward` (the mean reward over the logging window that ends at the step) and `metrics.reward_std` (where the trainer logs one: GRPO's window mean of the per-batch standard deviations), added in place after the existing columns of `~/.soup/experiments.db`. `soup train` fills them from TRL's `reward` / `reward_std` (GRPO) and `objective/scores` (PPO, and online DPO scored by a reward model or function), by exact key name; a PPO log, which carries no `loss` (TRL logs it as `loss/policy_avg`, and the learning rate as `lr`; neither is read), now writes a row for its reward with NULL `loss`, `lr` and `grad_norm`, and `soup why` and `soup runs show` say that the run recorded a reward and no loss. NULL means "not measured": every other run, a row that logged no reward, and a value that is not a finite number. `soup runs show` and `soup runs compare` print the reward only for a run that has one, `GET /api/runs/{run_id}/metrics` returns both columns, and the live `metric` event carries them when set. `benchmark:reward` and `benchmark:reward_std` are refused as evaluation metrics, like `benchmark:val_reward`. Databases written before this change read NULL; a database written after it stays readable by 0.77.2. (#2891)
+
+- `soup ship` writes its audit trail: a live `--task-mode metric` or `judge_score` run with `--output verdict.json` now also writes `verdict.task-rows.jsonl` (only with `--output`; `--emit-evidence` alone writes nothing new), one JSON line per task row with the prompt, the expected text, both answers, both scores in [0, 1], whether each answer hit the token cap, whether a generation failed, and whether the row got better, worse or stayed the same, so a verdict can be checked row by row. The mean of each score column, added up left to right in `index` order and divided by the row count, is the reported `task_win.base` / `task_win.tuned` exactly for `metric` and within 1e-12 for `judge_score`, whose reported number is still the judge's own (no verdict changes); `soup_cli.utils.ship_task_rows.load_task_rows` reads the file back strictly. `--output` gains `task_rows` (the file's bare name, or `null`) and the evidence a `task_rows` pointer when it sits beside `--output`; no key is removed or renamed. The `rows` block of a `judge_score` run now classifies the rescaled scores (with or without `--output`), so on the default 1-5 scale a raw gap of 1e-9 to 4e-9 counts as the same row (display only). The file holds your prompts and answers, so it stays local: it is never part of the verdict, the evidence or the `--push` comment, it is mode 0600 on POSIX and inherits its folder's permissions on Windows, and a run killed while writing can leave a `.soup.*.tmp` file with partial rows beside it. Migration: a failed write of the file ends a SHIP with exit 1 after the verdict is written (a DON'T SHIP keeps exit 2), and these are now refused with exit 3 before any model loads, once the run is known to evaluate: an `--output` whose stem plus `.task-rows.jsonl` cannot be a file name (over 255 bytes on POSIX or 255 UTF-16 code units on Windows, so a stem of more than 239 characters that worked before), a name with a control character or, on POSIX, a backslash (use a shorter or plainer `--output` name), a network share or a device, a file of yours that the rows would replace, a `.task-rows.jsonl` file already at that path that `soup ship` did not write, and a path that cannot be examined. Migration: `soup ship` also refuses, with exit 3 and before any model loads and before anything is written, an `--output` or `--emit-evidence` that is the same file as one of the run's inputs (`--evidence`, `--task-eval` as given or taken from `--config`, `--config`, `--corrections`, `--held-out`, a `--baseline` file or the scoring-function file) or as the other output, by real path (a link, a hard link, a different case or, on Windows, a trailing dot or space counts); `soup ship --evidence ev.json --output ev.json` used to exit 0 and replace the evidence it had just read with the verdict, and a live run replaced its task file or config the same way, so write the output to another path. (#2894)
+
+- Enable layer-streamed BCO training through both task spellings with shared-base references and guarded adapter saves. (#2766 by @here-2007 in #2896)
+
+- Enable layer-streamed IPO through both task spellings with frozen-reference resume and guarded adapter saves, qualified with FP16 scaler recovery on a Tesla T4, while keeping weighted blends refused. (#2766 by @here-2007 in #2915)
+
+- `soup ship --task-mode reward --reward-fn <accuracy|format|verifiable:math|verifiable:json_schema|path.py>` scores leg 1 with a reward function: each generated answer is scored from 0 to 1, one row per call, and the verdict is decided on the mean of the per-row numbers with the same strict rule as the other modes. A tie stays DON'T SHIP: the mean is the exact mean of the decimal numbers in the per-row file, so the same scores in another order, or scores that add up to the same decimal, never win by a rounding. A `.py` file is code and `soup ship` executes it, so it runs only when `--reward-fn` or `eval.ship.reward_fn` names it, only from under the working directory (no symlink, no network path), never on an offline `--evidence` replay, and the verdict JSON and the evidence record its name and the sha256 of the source bytes that were compiled and run (`task_win.reward`, `task.reward`; the file is read once, no `__pycache__` is consulted, the modules it imports are not hashed). A reward file is code you trust: the hash tells you which file scored a verdict, it is not a defence against a hostile file (it can end the process), and a run that ends without a verdict is not a verdict whatever its exit code. `verifiable:code` and `judge_rank` are refused. Anything but one finite number in [0, 1] per row is a runtime error that names the row and the side, and `--noise-floor` measures a reward run decode-only. A reward run also reports a descriptive paired summary of tuned minus base per row (`task_win.paired`, `task.paired`: the mean difference, a 95% bootstrap interval with its seed, better / worse / same, and `underpowered`, a sign-test heuristic for too few rows); it is informational, decides nothing and changes no verdict or exit code. This is a new opt-in setup, so no existing mode changes its verdict, numbers or exit codes; every mode's `--output` gains `task_win.reward` and `task_win.paired`, which are `null` outside the reward mode. The warning that `soup train` prints before it runs a custom reward file now prints the file's path as plain text, so markup or control characters in a path cannot restyle the terminal. (#2933)
+
+### Changed
+
+- **`soup serve` answer ids, v1 trace records and feedback by id; recording flags refused on other backends** (#2532, merged in #2897): every `/v1/chat/completions` and `/v1/messages` answer carries a UUID as `response_id` and the `X-Response-Id` header (the OpenAI `id` field is unchanged); `--trace-log` writes one v1 conversation record per answer (`docs/loop-formats.md`, with a legacy `prompt` key kept); the new `--feedback-log` enables `POST /v1/feedback` (thumb, rating, edit, comment by response id; token-checked like `/v1/thumbs`). **Behaviour change:** `--trace-log`, `--record-thumbs` and `--feedback-log` used to be silently ignored with `--backend vllm`, `sglang` or `mii`; `soup serve` now refuses to start with them there (exit 2).
+ Migration: `--trace-log`, `--record-thumbs` and `--feedback-log` are refused with `--backend vllm`, `sglang` and `mii` (exit 2) — drop the flag there, or serve with `--backend transformers` to keep recording. Migration: a `--trace-log` line now has `ts` as an ISO 8601 UTC string (was epoch seconds), `tokens` as an object with `prompt` and `completion` (was one integer) and no `stream` key — update any script of your own that reads these lines (`soup data from-traces` and `soup loop` read both shapes). Migration: a trace or feedback line whose `schema_version` is not 1 is skipped by `soup loop` and `soup data from-traces` (not guessed at); lines without one are read as version 0.
+
+- **A `soup loop` canary is judged by what people say about its answers, not only by failed requests** (#2539, merged in #2897): once a feedback log exists, the pre-wired loop compares the share of negative feedback (thumb down, rating 1-2, an edit) on canary answers with the stable answers of the same rollout. A canary more than 5 points worse is withdrawn (with `--autoroll-on-regress`) even when every request succeeded, and one is promoted only when both its requests and its ratings are fine. The gap must also be significant (a one-sided z-test, z > 1.645), so a few dozen ratings that happen to differ by 5 points no longer withdraw a canary, and an `OK` at the minimum means no significant regression, not proven equal. This needs at least 30 rated answers on each side, so the canary waits, and `soup loop watch` starts no new iteration, until people have rated that many; the iteration notes show the progress, and `soup loop rollback` ends a wait. The wait has an end: `soup loop init --canary-max-wait` (default `24h`; `90m`, `24h`, `7d` or plain seconds, at most `30d`) is how long after the canary started its ratings may stay short, and by default (`--canary-on-timeout errors-only`) the canary is then decided on its request errors alone and the notes say `promoted on timeout` with the answer counts (decided whatever the count: a canary with fewer than 30 answers, or with no feedback log, is no longer left waiting for ever; `--canary-on-timeout rollback` withdraws it); `--canary-on-timeout rollback` withdraws it instead and `wait` never gives up. A loop without a feedback log is judged by failed requests alone, as before. A canary that got NO answers at all by the time its wait is over is no longer promoted by the default `errors-only`: it is withdrawn (reason `timeout_no_answers`, notes `withdrawn on timeout: 0 canary answers`), because a serve that restarted without the adapter, a wrong rollout id or too little traffic leaves nothing to judge it by. `soup loop init --canary-on-timeout errors-only` given explicitly keeps the old behaviour and promotes with no evidence (the option now has no static default; `loop.yaml` records `canary_on_timeout_explicit`), and `rollback` and `wait` are unchanged.
+
+- `task: dpo` and `task: orpo` on trl 0.29 now cut a prompt longer than `data.max_length // 2` only when the row does not fit in `data.max_length`, the rule BCO, IPO, KTO and SimPO already follow; a row that fits keeps its whole prompt, and a row that overflows is cut as before (DPO keeps the start of the prompt, ORPO the end). `backend: mlx` is unchanged. Migration: no config change is needed; a row that fits `data.max_length` now keeps its whole prompt, so to reproduce a v0.77.2 run shorten prompts longer than `data.max_length // 2` tokens in the data first (#1209 by @Srinivasan8888 in #2555).
+
+- **New `soup loop` loops train sft on corrections by default** (#2560, merged in #2897): `soup loop init` now defaults to `--train-method sft` (existing `loop.yaml` files keep their method). SFT trains on corrected answers and on answers rated good; an answer that was only rated bad gives no row, and an edit always decides its answer for every method, whatever thumbs come later. With a feedback log, training starts at 8 new edits or 30 new rated answers (`--min-new-edits`, `--min-new-rated`). The sft recipe (target modules, LoRA r/alpha, lr, epochs, micro-batch, gradient accumulation, seed, quantization) is configurable in `loop.yaml` and through `soup loop init --sft-*`; its default (all linear modules, r 64 / alpha 128, lr 2e-4, 8 epochs, micro-batch 2, gradient accumulation 4, seed 42, every value written into the training config so none is inherited) is the one measured best, and `quantization: auto` trains without quantization when the base fits in free VRAM. Migration: `soup loop init` without `--train-method` now creates an sft loop (the loop of v0.77.2 trained dpo on preference pairs) — pass `--train-method dpo` to keep preference-pair training. The default learning rate is 2e-4 (the A/B fit runs used 5e-4): in a study on one project (13 harvested rows, one seed, a 0.6B model), both runs at 5e-4 regressed a format suite by 0.10 to 0.175 with and without replay, and all five runs at 2e-4 or 1e-4 kept both quick suites within 0.05; whether the lower rate still learns the corrections as well was not measured. A `loop.yaml` that stores its own value keeps it and `--sft-lr` overrides.
+
+- **`soup train --cloud` refuses a config whose local files cannot be shipped, and ships the effective config rather than the file's text.** Both cloud backends built the remote job from the bytes of the config file, so two things were lost silently and only surfaced after the paid instance booted. A local `data.train` — which is what all 21 built-in templates set — was never uploaded, so the remote run died with `FileNotFoundError: Data file not found`; and the CLI overrides applied before the cloud branch (`--reward-hack-detector`, `--reward-hack-halt`, `--reward-hack-mitigation`, `--echo-trap-tokenizer-aware`, `--minillm-on-policy`, `--replay*`) were printed locally as enabled but were absent from the shipped config. The stub now embeds the loaded config with every override applied, and a plan naming any local input the stub cannot carry stops at plan time, naming the field and pointing at a Hub dataset id. The effective config is loaded again before anything is written, so an override combination the schema refuses (for example `--reward-hack-detector rm_ensemble` with a mitigation and the default `reward_hack_signals`, or the detector flag on an `sft` config) stops at plan time too. `--push-as` and `--gate` run locally against local files, so they are now refused with `--cloud` instead of being dropped. Migration: with `--cloud`, give every input a Hub dataset or model id or a `scheme://` URI, run `--push-as` and `--gate` without `--cloud`, and drop any command-line override flag you do not want on the remote run, since the shipped config now includes them. (#1430 by @umran666 in #2627)
+
+  **Behaviour changes:**
+  - `soup train --cloud lambda|modal|runpod` on a config with a local `data.train` (or image/audio/video directory, replay set, tokenized path, reward `.py`, eval-gate suite or baseline) now exits non-zero at plan time rather than after a paid boot. Hub dataset ids and `scheme://` URIs are unaffected (the plan does not check the scheme).
+  - The embedded config is the effective one, so a `--reward-hack-*` or `--minillm-on-policy` flag now takes effect on the remote run, and a flag combination that makes the config invalid is refused at plan time.
+  - `--push-as` and `--gate` with `--cloud` are refused rather than silently ignored.
+  - A local model path (base, teacher_model, reward_model, mole_task_adapters) is refused at plan time rather than silently shipped.
+
+  Uploading the input files is the remaining half and is deliberately out of scope: it needs a per-backend upload path, size limits, and either an image or a volume. Refusing before the paid call is the part that can land safely today.
+
+- Native MLX DPO, ORPO and SimPO keep the whole prompt when both preference inputs fit `data.max_length`. Only an overflowing pair applies the half-length prompt cap and clips answers to the remaining room, matching the transformers backend. Migration: no config change is needed; a pair that fits `data.max_length` now keeps its whole prompt, so to reproduce a v0.77.2 run shorten prompts longer than `data.max_length // 2` tokens in the data first. (#2199 by @nazek52 in #2659)
+
+- A resident 4-bit or 8-bit run on a card with bf16 hardware now keeps the embeddings, the norms and an untied output head in bf16. PEFT's `prepare_model_for_kbit_training` cast them to fp32 and ran an fp32 residual stream through the model; every trainer that prepares a quantised base now goes through `prepare_kbit_model` (`utils/kbit_prepare.py`), which calls PEFT and casts back what it upcast. Measured on Qwen2.5-7B-Instruct NF4 (LoRA r16, 8 x 512 tokens, gradient checkpointing, RTX 4090, three seeds): about 25% faster resident 4-bit SFT step (2.256 s to 1.695 s) and a 3.8 GiB lower peak (17,425 to 13,520 MiB), with the loss unchanged within the tolerance written down before the run (`benchmarks/gate-2609-kbit-fp32-ab.md`). A card without bf16 hardware, the CPU, `grpo_fp16` and an `auto_mixed_precision` pick of fp16 keep fp32; there is no new config key. The VRAM pre-flight prices the bf16 default (`KBIT_UNQUANTIZED_BYTES` 4 to 2 bytes) and fp32 on a card without bf16, and the logits term is unchanged. 8-bit, tied embeddings, other models and another card are not measured (#2609 in #2683).
+
+- `soup runs compare` shows full stored config differences, training-data hashes and the latest stored evaluation scores without a registry push. The shared diff also shows empty mapping values in `soup registry diff`. (#2675 by @nazek52 in #2706)
+
+- `training.vllm_sleep_mode: true` is refused at load on `task: grpo` as of v0.78.0. GRPO never starts a vLLM server for rollouts (`use_vllm` is not set, so TRL generates with the model's own `generate`), so the key was accepted, printed "vLLM sleep mode enabled via TRL GRPOConfig" (on trl 0.29) and changed nothing; the trainer no longer forwards the key to TRL or prints that line. Migration: delete `training.vllm_sleep_mode` from your config (and from any saved config, registry entry or `.can` you replay); training is unchanged. The task and backend refusals the key already had on other tasks and on `backend: mlx` are unchanged. (#2765 in #2773)
+
+- The `mlx` extra now declares `mlx>=0.31.2`, the floor `mlx-lm>=0.31.3` already requires; the previous `mlx>=0.20.0` named a floor the extra could never install on macOS (#2471 by @Sofia5050 in #2779).
+
+- `soup train --push-as <repo>` now creates the Hub repository private, and `--push-public` creates it public instead; `--push-public` requires `--push-as` and is refused without it. A repository that already exists is used as it is and its visibility is not changed, and one line printed before training says whether the repository was created (private or public) or already existed. Migration: pass `--push-public` to keep creating a public repository. (#2802)
+
+- **`benchmarks/run-big-models-8gb-laptop.md` now names the cause of the live-versus-reload logit difference instead of saying it was not determined (#2816).** On Qwen2.5-0.5B-Instruct on the same RTX 5070 Laptop (8 GB), across eight configurations (layer-streamed and resident, NF4 and BF16), the saved adapter equals the live LoRA bitwise and the difference is the arithmetic of the LoRA branch: bfloat16 under autocast in training, float32 without autocast in a fresh reload. Reloading under autocast, or casting the reload's LoRA weights to bfloat16, gave 0 differing logit elements in seven of the eight configurations; the eighth, resident NF4 with float32 embeddings and norms, also needs those cast. Qwen3-32B and Mistral Large were not re-measured, and the record's numbers for them are unchanged. The `benchmarks/README.md` row says the same.
+
+- `soup_cli.utils.profiler.profile_from_config`, which `soup profile --config` and the MCP `profile` tool call and which builds the train pre-flight's input (except `kbit_fp32`, which the pre-flight passes on a card without bf16 hardware), is documented as the entry point for programs that want the VRAM estimate without running `soup train`, and takes two optional arguments. `seq_len` prices that many tokens per row instead of `data.max_length`, clamped to 64 up to `data.max_length`, for a run that pads each micro-batch to its longest row (text SFT without packing, multipack, streamed data or layer streaming); any other run, and a value above `data.max_length`, is priced at `data.max_length` with `seq_len_source: "max_length"` and a note naming why, since a shorter length would under-price it. A bool or non-int raises `TypeError` and a value below 1 `ValueError`. The estimate prices rows that fill the length it is given and training data with short rows peaks far lower: Qwen3-0.6B with LoRA r16 on rows of at most 79 tokens peaked at 2108 MiB allocated and 2462 MiB on the whole card of an RTX 5070 Laptop, against 9,718 MiB (10.19 GB) estimated at `data.max_length` 1024 and 2,728 MiB at the rows' own length (`benchmarks/evidence/vram-qwen3-0.6b-realised-length.json`). The estimate alone is below the uncapped whole-card peak on three of eleven clean runs measured before #2683, so a caller keeps the pre-flight's 10% margin. That peak includes allocator cache the allocator gives back: with torch's allocator capped, the 4-bit run re-measured after #2683 trains in 1,646 MiB on the card (and fails at a 1,450 MiB cap, while the model is prepared) against an estimate of 2,003 MiB, and the one measured case where the estimate is below what a run needs is a micro-batch that fills 512 tokens (it fails at caps up to 6,000 MiB, estimate 5,930 MiB), so the margin matters most for large filled micro-batches; the docs say so. `shape` gives the model's `hidden_size`, `num_layers`, `intermediate_size`, `vocab_size` and `params` (a raw count, at least `vocab_size * hidden_size`) when its `config.json` cannot be read, so the logits term is still priced (a parameter count alone is refused); a readable `config.json` wins. The result gains `seq_len_source` and `seq_len_requested` only when `seq_len` is passed, a note for each argument, and `shape_source: "caller"` for a supplied shape; with neither argument the result is unchanged. As of v0.78.0 `profile_from_config` returns a `soup_cli.utils.hardware_fit.FitUnavailable` (with `.field` and `.reason`) instead of `None` when the run cannot be priced (#2444): code that tests `result is None` or `not result` must test `isinstance(result, dict)` instead, because the failure object is truthy. The pre-flight and `soup profile` price what they priced (#2871).
+
+- Parse and validate all JSONL judge task rows before generation so an invalid row is refused before any row reaches generation. (#2535 by @Shubham-dev-stack in #2881)
+
+- `soup serve --max-tokens` above 16384 is refused at startup with exit 2 as of v0.78.0, before any backend loads, with the message a value below 1 already gets: `--max-tokens: must be between 1 and 16384 (got N).` A request that omits `max_tokens` takes `--max-tokens`, so a larger value let such a request generate more than the 16384 tokens any request can ask for. The check is the same on the transformers, vLLM, SGLang and MII backends. Migration: pass a `--max-tokens` of 16384 or less; 16384 is also the most a request's own `max_tokens` can be (#2730 reported by @abdumutalipabay0, fixed by @abdulwaarith0 in #2898).
+
+- The VRAM estimate behind the `soup train` pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` now charges a `quantization: 8bit` run with `gradient_checkpointing` for the inputs bitsandbytes' int8 matmul keeps outside checkpointing: on every checkpointed layer, 3 bf16 values per hidden unit and 1 per intermediate unit a token with the bf16 norms of a card with bf16 hardware, and 5 and 2 where the norms are priced as fp32 (a card without bf16 hardware, `grpo_fp16`). With full checkpointing such runs were priced at as little as 0.82 of their measured peak with bf16 norms and 0.64 with fp32 norms, so the pre-flight let through runs that then ran out of memory; they are now priced at 1.05 to 1.15 of it, measured on Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-360M (`benchmarks/gate-int8-checkpointing-vram.md`). On a card with bf16 hardware, `gradient_checkpointing: medium` runs, which were already priced at 1.13 to 1.21 of their peak, move to 1.23 to 1.29; that is outside the calibrated range, so the pre-flight only warns there. 4-bit, bf16, full fine-tuning and 8-bit without checkpointing are priced as before. Migration: from v0.78.0 `soup train` can refuse an 8-bit run with checkpointing that launched on 0.77.x close to the card's limit, and `soup profile` and `soup plan` report a higher peak for such runs; pass `--allow-oom-attempt` to launch it anyway, or lower `training.batch_size` or `data.max_length`. (#2860 by @abdumutalipabay0 in #2925)
+
+- `soup adapters merge` scales each input's own term by its weight as of v0.78.0, where it used the weight squared: `linear`, `dare` and `svd` applied the normalised weight to both `lora_A` and `lora_B`, so `--weights 0.7,0.3` kept 0.49 and 0.09 of the two inputs' own deltas and the default equal weights kept a quarter of each of two inputs. Each factor now takes the square root of the weight, the rule `soup adapters arithmetic` uses, so the same command keeps 0.7 and 0.3, and half of each; inputs that use the same rank slots still add cross terms, and the exact weighted sum of the deltas is `soup adapters arithmetic ... --rank N`. Migration: the numbers of every `linear`, `dare` and `svd` merge of two or more inputs change (an equal-weight pair doubles each input's own term, 0.25 to 0.5), and the weights printed by an earlier `--strategy cmaes` run reproduce a different adapter, so re-run merges whose output you compare or ship. `ties` is unchanged. For adapters saved with `lora_bias=True`, `soup adapters arithmetic` without `--rank` gave the `lora_B.bias` tensor the square root of its coefficient, as if it were a factor, where the `--rank` path gave it the coefficient; both paths now give it the coefficient, so with coefficients other than 1 and -1 that bias changes on `soup adapters arithmetic`, and `soup adapters merge` keeps scaling it by the weight. On `soup adapters arithmetic`, adapters without a LoRA bias give the same bytes as before (#2908 and #2935 reported and fixed by @abdulwaarith0 in #2927).
+
+- **The `soup train` VRAM pre-flight now passes padded SFT runs it refused before (#2934).** For a text SFT run that pads each micro-batch to its longest row (the transformers backend, no packing, multipack, streamed data or layer streaming) whose estimate at `data.max_length` does not fit the card, the refusal is held back until the data is loaded; before a run is registered the longest row of the train and validation splits is measured with the trainer's own tokenisation (the base model's tokenizer, the chat template, `data.chat_template`, truncation at `data.max_length`; no model is loaded), and the run is priced at that length. A run that fits there starts, and the pre-flight prints one line with both numbers (`priced at 79 tokens, the longest row; data.max_length is 1024`); one that still does not fit is refused as before, with both numbers on the panel. Qwen3-0.6B with LoRA r16 on rows of at most 79 tokens was priced at 9,718 MiB (10.19 GB) at `data.max_length` 1024 against 2,108 MiB allocated, and refused on an 8 GB card. For a held-back run the verdict comes after the data is loaded and before the run is registered, and the "Start training?" prompt follows the verdict instead of preceding it. At most 20,000 rows and about 90 seconds are read, because a sample is not a maximum: past either, or with no readable tokenizer, a model that ships its own code, or data that is not chat messages, the run is priced at `data.max_length` as before and the panel says why. A run that already fits reads nothing; a run that would not fit even at 64 tokens, every other task, backend and modality, packed or streamed data, a run that only warns outside the calibrated range, and `--allow-oom-attempt` are decided as before. No run is refused that was not refused before (the decision to refuse stays the one made at `data.max_length`; a test compares the old and new decision over 1,440 pre-flights), and the estimate, `soup profile` and the MCP `profile` tool print the numbers they printed.
+
+- `scoring: "tool_call_args_subset"` counts a row as Correct only at full credit: the right function with every expected argument present and matching. The function name and the arguments are worth `0.5` each, and a row used to be matched at `0.5`, so a call with every argument wrong, with no arguments, to the wrong tool, with malformed arguments, or with extra arguments where the gold expects none counted as Correct, and a model that never got an argument right could report 100% Accuracy. The per-row `score` keeps its partial credit, so the eval gate and the other callers that average it are unchanged. This reverses the `0.5` matched threshold that #1755 kept. **Migration:** `soup eval custom`, `soup ship` metric mode and `soup eval retention` now report a lower Accuracy for suites that use this scorer. Stored results are not rewritten and do not compare with new ones, and the exit status can change for an unchanged model: a `soup ship` that ended 0 on v0.77.2 can end 2 (DON'T SHIP), and `soup eval retention` against scores stored by v0.77.2 can report a regression and end 2. Re-run base and tuned with this version for `soup ship`, and record the retention scores again with this version, to get comparable numbers. (#2811 by @AlibekBerik in #2939)
+
+- The VRAM estimate behind the `soup train` pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` now prices a `task: distill` run's teacher. With `distill_mode: token` it adds the frozen teacher's weights at the dtype its checkpoint stores, and the divergence over the vocabulary by kernel, divergence and `distill_chunk_size`: one chunk (the default) costs 38 bytes per element of batch x sequence x vocabulary for forward and reverse KL and 50 for JS, and with `distill_checkpoint: true` 38 and 46, while smaller chunks cost less, down to 18 bytes an element with checkpointing. With `distill_mode: sequence` the teacher is priced while it writes the training text before the first step, with its generation cache, and the peak is the larger of that phase and training. `uld_strategy` and `minillm_enabled` are not measured, so they are priced at the largest measured figure and the estimate says so. The estimate used to read only `base` and priced these runs at 0.11 to 0.45 of their measured peak. On 38 runs on an RTX PRO 5000 Blackwell and the two arms of the #722 H200 record it now reads 1.001 to 1.134 of it for token-level distillation and 1.005 and 1.007 where a sequence-level teacher's generation sets the peak (`benchmarks/gate-distill-teacher-vram.md`). A distillation step counts as outside the calibrated range: a run whose student fits the card but not with its teacher gets a warning that names the teacher's terms and still launches. The student's own estimate is judged as before, so a run whose student alone does not fit the card is still refused inside the calibrated range. A teacher over 1,000B parameters is not priced: the pre-flight then checks the student alone, and `soup profile` and the MCP `profile` tool report the student's estimate with a note. `soup profile --json`, the MCP result and the dict that `soup_cli.utils.profiler.profile_from_config` returns gain `teacher_memory_gb`, `distill_memory_gb` and `teacher_generation_memory_gb` for every task, 0 outside `task: distill` (additive output keys; a strict consumer of that dict must accept them). Upgrade note: from v0.78.0 the numbers that the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool give for a `task: distill` run change, and no run that launches today is refused. (#2909 by @abdumutalipabay0 in #2950)
+
+### Deprecated
+
+- `training.warmup_auto: true` and a `training.forgetting_threshold` set away from its default of `0.1` now load with a warning that says the field has no effect (no trainer reads `warmup_auto`, and nothing reads `training.forgetting_threshold`; `soup ship` reads the separate `eval.ship.forgetting_threshold`), and v0.79.0 refuses both; the value is kept and nothing else changes. `soup train` no longer lists `forgetting_threshold` in its "not enforced during training" note, because the load warning reports it. Migration: delete the `warmup_auto` line and the `training.forgetting_threshold` line from `soup.yaml` before v0.79.0; set `training.warmup_ratio` to change the warmup, and use `soup train --gate <suite.yaml>` for regression checks (#1814 in #2814). The warning text and the dead-function gate follow the design @ndablizov wrote and we reviewed in #2033 and #2034.
+
+- Print a v0.78.0 deprecation warning when deploying the built-in `streamlit-chat` template or a custom template directory detected as Streamlit. If Hugging Face rejects the Streamlit SDK, name the refusal, suggest `--template gradio-chat`, and include the Hub response; unrelated Hub errors are unchanged (#2746 by @capyriver in #2834).
+
+### Fixed
+
+- **An unknown config key with no close field name now names a next step (#1816 by @bernalalexis-try in #1823).** The line says to check the spelling against the docs or a `soup init` template, or to upgrade if the key comes from a newer Soup; a key with a suggestion prints as before. Tests also pin that `soup train` and `soup doctor --config` name a cross-field validator error without a bare `:` or pydantic's `Value error, ` prefix.
+
+- Refuse eval-gate suites with a non-string top-level key with a usage error 3 instead of an unhandled `TypeError`. (#1915 by @george07-t in #2021)
+
+- The `preference_loss_weights` docs and field description no longer say a `bco` blend is rejected at config load or use one as the example; it loads and is refused when the trainer is set up. (#2222 by @canakyuz in #2252)
+
+- The `training.neftune_alpha` refusal no longer prints reStructuredText double backticks, and `soup export --verbose` / `--no-install-deps` on a format other than gguf says "requires" when only one of them is given. (#2220 by @wanjinhao1 in #2259)
+
+- `soup train` now refuses a `training.eval_gate.suite` set in `soup.yaml` that cannot load, printing `Invalid training.eval_gate.suite: <message>` and exiting 1 before `--dry-run` returns and before any data is loaded, the same check `--gate <path>` already ran. Previously the callback logged the loader's error at WARNING and trained with no gate, so `on_regression: stop` could never stop the run. Migration: fix the suite file named in the message, or set `training.eval_gate.enabled: false` to train without a gate (#2231 by @deven1003 in #2264).
+
+- `soup merge --low-memory` with a Hub base now downloads the same support files a local base gets (`.model`, `.txt`, `.tiktoken`, `.jinja`, and `.py` only with `--trust-remote-code`), so a remote-code model's merged folder loads, and it no longer downloads the unused `consolidated.safetensors`. Previously only `*.safetensors` and `*.json` were fetched (#2235 by @deven1003 in #2267).
+
+- **`soup train --deepspeed` stopped before the first step whenever the trainer ran fp16, with "`--mixed_precision` arg cannot be set to `fp16` when `bf16` is set in the DeepSpeed config file" (#2266 by @VanshSharmaPES in #2276).**
+  Every DeepSpeed preset declares bf16, so a card without bf16 hardware (a T4 or V100) and GRPO's `grpo_fp16` could not use DeepSpeed at all. The config's `bf16` / `fp16` are now matched to the trainer's precision before it is written, and the change is printed: fp16 on a card without bf16 and under `grpo_fp16`, `"auto"` under `auto_mixed_precision`, and the preset unchanged on a card with bf16. A `--deepspeed my.json` whose precision contradicts the trainer's is repaired into a temp copy; your file is never modified. ZeRO++ keeps its quantised weights and gradients on an fp16 run.
+
+- **`freeze_layers` / `freeze_ratio` now combine with a string `training.lora.target_modules` (`all-linear` or a regex).** The combination was refused because peft applies `layers_to_transform` only to a list target, so the adapter would have attached to layers the plan just froze. The string is now resolved to the module names peft would pick, the names outside the trainable layers are dropped, and the explicit list is passed without `layers_to_transform`; a string that reaches no trainable layer refuses and names the range it resolved against. `target_parameters` and VeRA keep their refusals, since neither path reads `layers_to_transform` at all. (#2201 by @xiemocun in #2289)
+
+- `soup export` now creates a fresh, uniquely named merge directory for every adapter export and removes only that directory, so a leftover `.soup_merge_tmp_<adapter>*` directory from an earlier run is never reused or deleted (#2299 by @bfs2021 in #2310).
+
+- SFT with `training.stream_layers: true` now releases the layer-streaming runtime (with `stream_source: disk`, also its reader thread) when `setup()` fails after the model is loaded, instead of leaving it open for the rest of the process, such as the next arm of `soup sweep` (#1464 by @ShivanshShukla in #2378).
+
+- A wrong-typed value in one of 38 `training` fields (for example `minillm_enabled: 0`, `fp8_attention: "false"` or `num_labels: true`) is now a config validation error that names `training -> <field>`, with exit 1 from both `soup train` and `soup plan`. It used to escape the schema as a bare `TypeError`: `soup train` printed `Error: TypeError: ...` and `soup plan` exited 2, and `load_config_from_string` raised `TypeError` instead of its documented `ValueError`. The bool-flag messages now name the field rather than a release (#2382 by @shu-chen-dot-ca, closes #2366).
+
+- Fast-LoRA now keeps PEFT's dtype boundary for 4-bit base projections: only the base matmul runs in bitsandbytes' compute dtype, and its result returns to the input dtype before the LoRA add and SwiGLU/activation work. Previously the whole block input was cast to the compute dtype, which rounded the LoRA branch's input before its own cast. The change applies when the input dtype differs from bitsandbytes' compute dtype; where the two are the same, nothing changes (#792 by @Faisal-Fayaz in #2383).
+
+- HF Trainer-backed training, including embedding, now handles `.checkpoint_now` and graceful Ctrl+C at optimizer-step boundaries: the first signal saves and continues, the second saves and stops, and the third interrupts immediately. Failed saves retain the trigger, symlink triggers are ignored, and prior signal handlers are restored on every exit, including errors. Native MLX and custom loops such as `task: unlearn` are excluded. Migration: one Ctrl+C or SIGINT no longer stops a run (it used to exit 130 with nothing saved); send it twice to save and stop, or three times to interrupt at once (#2357, reported by @Batyrkhantzy111, by @kok-o in #2414).
+
+- `soup data generate` asks again for rows the provider did not deliver or that failed validation, until `--count` is reached; rows dropped as duplicates count toward `--count` and are shown in the summary, and after three requests in a row with no valid row the command saves what it has and exits 1. Migration: a run that used to stop below `--count` and exit 0 now makes more provider requests and exits 1 after three requests in a row bring no valid row, so lower `--count` or fix the provider output if you relied on the short file, and check the exit code in scripts (#2415, reported by @Samearth17, by @ANO3457 in #2418).
+
+- `soup train` (and `--dry-run`) with `task: kto` now refuses rows that are not `{prompt, completion, label}` before any model is loaded, naming the task, the format the rows were detected as, the three required fields, and the fix (`data.format: kto`). Previously a real run would load the base model and apply LoRA before failing with `KeyError: 'prompt'` (#2423 by @Pandiaraj-1 in #2435).
+
+- `soup plan`, `soup profile` and the MCP `profile` tool now name the field that stops the VRAM estimate instead of listing every possible cause, `soup plan` validates the config once, `soup profile` prints the line `soup plan` prints before the estimate first reads the Hub, and the train pre-flight prints it without the offline hint (#2306 by @abdulwaarith0 in #2444).
+
+- This compatibility-breaking change rejects booleans in scalar numeric fields under `training` and `training.lora`; previously, `false` could be coerced to `0`. Validation errors identify the field. Ships in v0.78.0. Migration: a `training` or `training.lora` numeric field set to `true` or `false` (for example `lr: true` or `lora.r: true`) now exits 1 with `<field> must be an int, not a bool` (or `must be a number, not a bool`); write the number you meant (`0` or `1`) instead. (#2375 by @Samearth17 in #2462)
+
+- **`soup loop` trains the real base model** (#2506, merged in #2897): with a `registry://<id>` served model the pre-wired train stage trained `hf-internal-testing/tiny-random-gpt2` and reported success. The base now comes from the new `soup loop init --base-model`, the registry entry's `base_model`, the `base_model_name_or_path` of a served LoRA adapter directory, or the served model itself, and is saved in `loop.yaml`; when none is known, `soup loop init --pre-wired` and `soup loop watch --pre-wired` refuse with the reason, and the train stage skips with a `base_model_unknown` note. Migration: on an existing loop whose base model is unknown, `soup loop set base_model <hf-id-or-path>` fixes it without `--force` (nothing else in `loop.yaml` or the version log is reset).
+
+- **`soup loop` no longer reads the served model directory as traces** (#2507, merged in #2897): the pre-wired harvest tried the served model path when it was a local directory, so a model directory holding `*.jsonl` files (a dataset next to the weights) was harvested as serve logs. The trace directory is now `SOUP_LOOP_TRACE_DIR`, else the new `soup loop init --trace-dir` (saved as `trace_dir` in `loop.yaml`), else `.soup-loops/traces` as before; `soup loop init` and `soup loop status` show which one applies, and a path that is a file is refused. Migration: on an existing loop, `soup loop set trace_dir <dir>` points the harvest at the right directory without `--force`.
+
+- **`soup loop` verifies with `soup ship` and never skips silently** (#2512, merged in #2897): the pre-wired check loaded `--eval` as an eval-gate suite while the docs passed a `soup eval lock` file, so every verdict was `SKIPPED` without a reason and nothing rolled out. The new `soup loop init --verify` (default `ship`: a `soup ship` verdict of the trained adapter against the production version, `--eval` = a task-eval JSONL; or `eval-gate`) is saved in `loop.yaml`; `--eval` is checked at `init --pre-wired` and `watch --pre-wired`, a lock file gets its own message, and a skipped verdict keeps its reason in the iteration record. Older `loop.yaml` files keep the eval gate. Migration: on an existing loop, `soup loop set verify ship` (or `eval-gate`) changes the check without `--force`; `soup loop init` on an existing loop would reset production, canary, cursors, counters and versions.
+
+- A `JudgeCalibrationReport`, or a file loaded by `load_judge_calibration`, with `calibrated=true` and `num_pairs=0` is now refused with `ValueError('num_pairs must be positive when calibrated is true')`; zero-count reports with `calibrated=false` still load and are still refused by `ensure_judge_calibrated`. A calibration file with `calibrated: true` and `num_pairs: 0` loaded on v0.77.2 and is refused from v0.78.0; re-run the calibration so that `num_pairs` counts its pairs, or set `calibrated: false`, which the gate still refuses (#2496 reported by @taljeon, fixed by @SajjadPSavoji in #2513).
+
+- **`soup serve --backend transformers` streams a `"stream": true` reply while it is generated (#2508, #2514).** It used to generate the whole reply and only then split it into chunks, so a client saw nothing until generation ended. `generate()` now runs on a worker thread; the chunk fields, final chunk, `finish_reason` and `[DONE]` are unchanged. The streamer keeps the leading space of a line start with Llama-2-style SentencePiece tokenizers, so the joined deltas equal the non-streamed reply, unless a tokenizer's decode of the finished reply differs from the text already sent: then what was sent stays and nothing more is added. Once the server closes the stream, generation stops after the current token and the worker releases the adapter lock on its own thread; on Windows a client disconnect may not reach the server's generator promptly, so generation can run on until the reply ends. A request served with `--reasoning-parser`, a draft model, n-gram lookup or MoLE routing, a model whose generation config sets beam search (`num_beams` above 1) or several return sequences, and the `/v1/messages` stream, are still generated in full and then sent.
+
+- `soup local-rl harvest`, nightly local-RL training and the pre-wired loop skip a prompt whose latest upvote and downvote contain identical responses. (#2521 by @kok-o)
+
+- `soup env lock` preserves a backslash before an unmatched `[` in the receipt filename and snapshot values (#2525 by @Nari-Ab).
+
+- `soup lock write` and `soup lock show` preserve a backslash before an unmatched `[` in displayed values (#2526 by @Nari-Ab).
+
+- `soup ingest` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the offline output receipt and outside-cwd refusal (#2527 by @Nari-Ab).
+
+- `soup export` shows unsupported format and deploy values literally while stripping terminal controls (#2528 by @Nari-Ab).
+
+- `soup prune-prompt` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the missing-input diagnostic (#2529 by @Nari-Ab).
+
+- `soup data mix --apply` preserves backslashes, astral Unicode and long paths in single-string `data.train` snippets (#2530 by @Nari-Ab).
+
+- **`soup loop` trains only when new feedback arrived** (#2531, merged in #2897): a cycle that had just promoted a canary retrained on the same old feedback and started a new canary. Training now runs only when at least `soup loop init --min-new-pairs` (default 1) preference pairs are newer than the last training run; it still trains on all pairs collected so far, since each iteration trains a fresh adapter from the base. Two cursors in `loop.yaml` keep count: `attempt_cursor_ts` moves when a training run's verdict is decided (SHIP deployed, DON'T SHIP, or a deploy that failed for good; a skipped verdict or a deploy that will be retried keeps the batch), and the data cursor `harvest_cursor_ts` follows the version in production and moves when a canary is promoted; `soup loop status` shows the data cursor as `new_data_since`.
+
+- `task: kto` on trl 0.29 no longer reads the whole `answer_input_ids` and `answer_attention_mask` columns into Python lists, and pickles them into the `datasets` fingerprint, each time the prompt cap runs on a split; the cap now maps in batches of whole KL chunks and reads each row's KL answer from its own batch, and the capped rows are unchanged (#2486 by @ybai08 in #2543).
+
+- `task: kto` and `task: bco` on trl 0.29 keep the tokenizer's BOS token at the start of a prompt that the length cap cuts to `data.max_length // 2` with `keep_end`, followed by the prompt's last `data.max_length // 2 - 1` tokens, on the matched and the KL rows; before, such rows trained on a sequence starting mid-prompt with no BOS. Rows that fit, `keep_start` and tokenizers without a BOS token are unchanged (#2487 by @ybai08 in #2544).
+
+- Fast-LoRA now adds the SwiGLU LoRA dX gradient to the base gradient in fp32 and rounds once after the add. The early bf16 rounding lost an ulp in `grad_m`, which doubled in the up-projection B gradient and left the bf16 MLP parity test failing on one seed (#2187 by @Faisal-Fayaz in #2546).
+
+- `soup compile-tools` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the plan and result panels, the model and engine names and the compile errors (#2550 by @Nari-Ab).
+
+- `build_streamed_model` now refuses a hand-built PEFT `modules_to_save` that names a streamed embedding or head by suffix, such as `["head"]` or `["_tokens"]`, the way PEFT matches it; before, only the full name or a dotted suffix was refused, and such a config built and then failed at the first forward pass with `KeyError: "attribute 'weight' already exists"` (#2548 by @ybai08 in #2553).
+
+- `soup distill-prompt` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the plan and result panels, the provider and model ids and the errors of the preparation (#2557 by @Nari-Ab).
+
+- `soup ra-dit` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the plan and result panels, the output directories read from the recipes, the manual retriever model and the errors of the run (#2558 by @Nari-Ab).
+
+- `soup advise` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the dataset and analysis errors, the recorded history path, the projects and times of the history table and the cached verdict shown by `explain` (#2559 by @Nari-Ab).
+
+- `task: orpo` and `task: simpo` on trl 0.29 keep the tokenizer's BOS token at the start of a prompt that the length cap cuts to `data.max_length // 2` with `keep_end`, in `prompt_*` and in the prompt part of `chosen_*` and `rejected_*`; before, such rows trained on a sequence starting mid-prompt with no BOS (#2545 by @ybai08 in #2561).
+
+- `task: embedding` now refuses, before the model loads, a train or validation set where only some rows have a non-blank `negative`, naming how many rows have one and how many lack one; before, the choice between triplet and contrastive was read from the first row, so such a set trained without any negative or crashed in the collator. Migration: give every row of the train set, and of the validation set if you use one, a non-blank `negative` (triplet), or remove `negative` from every row of that set (contrastive) (#2556 by @ybai08 in #2563).
+
+- `soup train` now refuses an enabled `training.eval_gate` or `--gate` on `backend: mlx` and on `task: prm`, `unlearn` or `moe_lora_routing`, naming the unsupported path and exiting 1 before model construction instead of training without the requested gate. Disabled and omitted gates remain accepted. Migration: a config that enabled a gate on those paths trained without any gate on v0.77.2 and is refused as of v0.78.0; set `training.eval_gate.enabled: false` (or remove the block and `--gate`) to train there, and check the result with `soup eval` or `soup ship` afterwards (#1811 by @vaputa in #2564).
+
+- `soup agent` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the spec warnings, the endpoint paths, the plan and result panels and the spec, dataset and predictions errors of `synth`, `train` and `eval` (#2565 by @Nari-Ab).
+
+- `soup steer` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the plan and result panels, the registry attach line, the stored-vector directory, the registry list and the input and load errors of `train`, `apply` and `list` (#2566 by @Nari-Ab).
+
+- **`soup airgap-bundle` refuses a missing `--model`, `--dataset`, `--wheel` or `--kernel` folder before building an archive:** exits 1 with a diagnostic naming the missing path rather than writing an empty bundle. Migration: make `--model` name an existing folder, and create each `--dataset`, `--wheel` and `--kernel` folder or drop that flag; a missing path or a file now exits 1 where an empty bundle was written (#2453 by @Shubham-dev-stack in #2568).
+
+- `backend: mlx` with `task: orpo` and `task: simpo` keeps the tokenizer's BOS token at the start of a prompt that the length cap cuts to `data.max_length // 2` with `keep_end`; before, such rows trained on a sequence starting mid-prompt with no BOS (#2567 by @ANO3457 in #2572).
+
+- `task: unlearn` now refuses a `retain_set` that is set but yields no usable row, naming the file, and reads both the forget and retain rows before any model loads, so either refusal comes before the policy or reference is loaded; before, such a retain set trained NPO and SimNPO with the "no retain_set" warning and RMU without any message. Migration: set `data.retain_set` to a file with at least one usable row, or remove `data.retain_set` to train without a retain anchor (#2574 by @ybai08 in #2577).
+
+- `soup quantize` prints the suggested `soup export` command on one row, so a narrow terminal no longer cuts a quoted argument, keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls in it and in the refused `--to` value (#2580 by @Nari-Ab).
+
+- `soup data clean` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the input and output paths, the loader and write errors, the format-detection warning and the saved-dataset receipt, and keeps `--json` output parseable (#2581 by @Nari-Ab).
+
+- `soup tunability` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in the refusals for the dataset and output paths, the error lines and the report receipt (#2582 by @Nari-Ab).
+
+- `soup ui` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in startup URLs and authentication refusals while preserving bind arguments and the startup panel layout (#2583 by @Nari-Ab).
+
+- `soup data forge` keeps emoji aliases and backslashes before unmatched brackets, and strips terminal controls, in paths, teacher labels, provider/model names and failures while preserving original metadata and output files (#2584 by @Nari-Ab).
+
+- `soup audit-log tail` no longer crashes when the audit log holds a line that is valid JSON but not an object (an array, a string, a number): such lines are skipped like a line that is not JSON, and `--limit` counts only real records (#2460 by @akkupratap323 in #2591).
+
+- Non-Hugging Face prefetch advisories show model IDs and snapshot paths literally, strip terminal controls, and keep paths relative when possible (#2594 by @Nari-Ab).
+
+- The remote-code warning shows the model name literally and strips terminal controls (#2595 by @Nari-Ab).
+
+- `soup ship --progress jsonl` prints literal runtime diagnostics on stdout and keeps structured progress on stderr (#2596 by @Nari-Ab).
+
+- Friendly errors and verbose tracebacks display exception text literally and strip terminal controls (#2597 by @Nari-Ab).
+
+- `soup autopilot` displays input names, paths and errors literally while preserving the original values in generated configs (#2598 by @Nari-Ab).
+
+- On Windows, split `soup adapters bisect --eval-command` templates using Microsoft C runtime rules so options like `--opt="a b"` and single-quoted placeholders `'{ckpt}'` group correctly instead of triggering premature `BROKEN_AT` verdicts (#2488 by @Shubham-dev-stack in #2603).
+
+- Registry lineage writes serialize their cycle check and insert transaction, preventing concurrent stores from committing opposite edges. (#2593 by @harshitthek in #2604)
+
+- `soup can` displays manifest metadata, receipts and diagnostics literally and strips terminal controls (#2612 by @Nari-Ab).
+
+- `soup rewind` displays recorded values, paths and previews literally while preserving the original data in JSON reports (#2613 by @Nari-Ab).
+
+- `soup diagnose` displays evidence, report labels, paths and errors literally and strips terminal controls (#2614 by @Nari-Ab).
+
+- `soup data doctor` and `soup data lint` display report messages, paths and errors literally while preserving the original JSON values (#2615 by @Nari-Ab).
+
+- `soup edit set` and `soup edit diff` display plans, results, diagnostics and probe values literally while preserving the original data (#2616 by @Nari-Ab).
+
+- A run id prefix that matches several runs is now reported as ambiguous (`Run id prefix '<id>' matches N runs; give more characters`) by `soup runs` (show, compare, delete, clean, replay, curriculum-curve), `soup eval compare`, `soup eval aider --run-id`, `soup registry push`, `soup rewind`, `soup why` and the web UI run endpoints, instead of `Run not found` (#2470 by @akkupratap323 in #2617).
+
+- `SOUP_LAYER_STREAM_CACHE_DIR` and `SOUP_SPECTRUM_CACHE_DIR` set to a folder outside `$HOME`, the working directory and the temp directory (or carrying a control character) are still ignored, but Soup now logs one warning per run naming the variable, the rejected value, the reason and the folder used instead, rather than writing the cache to `~/.soup` without a word (#2620, closes #2610).
+
+- **The claim board's Quiet column now counts the claimant's work on their pull request (#2629).**
+  Quiet was computed from the claimant's issue comments only, so a claimant who kept pushing to
+  their pull request showed as quiet for weeks. It now also counts their comments, inline review
+  comments and commits on the linked open pull request; a maintainer's or a third person's
+  activity there does not reset it.
+
+- **`soup serve --backend transformers` honours the OpenAI `stop` parameter and Anthropic `stop_sequences` (#2549, #2630).** Both were dropped before: a client that sent `"stop": ["\nUser:"]` got the text after the stop string, with `finish_reason` set as if no stop was asked for. `stop` on `/v1/chat/completions` takes a string, a list of at most four strings, or `null`; an empty list means no stop; `stop_sequences` on `/v1/messages` takes a list of at most four strings. An empty string, a non-string entry, more than four entries or an entry over 256 characters is a 400 whose message names the field. The reply is cut before the first stop string that completes (the stop string is not returned), `finish_reason` is `stop`, and `/v1/messages` answers `stop_reason: "stop_sequence"` with `stop_sequence` echoing the match (the reply now always carries a `stop_sequence` field, `null` when none matched). Whitespace left before the cut is dropped, as it is from the end of an uncut reply. A streamed reply holds back the last characters that could start a stop string (one fewer than the longest) and any trailing whitespace, ends generation at the match, and sends the held text when the reply ends without one, so the joined deltas equal the non-streamed reply. Generation is ended at the stop string on the plain `generate` path; with a draft model, n-gram lookup, beam search, `--reasoning-parser` or MoLE the full reply is generated and then cut. `X-User-Id` and `X-Conversation-Id` now reach `/v1/messages` generation as they do on `/v1/chat/completions`. The vLLM, SGLang and MII backends still ignore `stop`. Migration: send `stop` as a string or a list of at most four non-empty strings of at most 256 characters, and `stop_sequences` as such a list, or omit the field; anything else is now a 400, and a valid value now cuts the reply where it used to be ignored.
+- **`soup serve --backend transformers` streams `/v1/messages` events while the model generates (#2515, #2630).** `"stream": true` used to run the whole reply first and only then cut it into one `content_block_delta` per word, so Anthropic clients saw nothing until generation ended. The events now come from the same generator `/v1/chat/completions` streams with, and follow the sequence the Anthropic SDKs expect: `message_start`, `content_block_start`, a `content_block_delta` per piece of text, `content_block_stop`, `message_delta` (`stop_reason`, `stop_sequence`, `output_tokens`), `message_stop`. `content_block_start` and `content_block_stop` were missing before. A failure after the stream has started is an `error` event. A request served with `--reasoning-parser`, a draft model, n-gram lookup, MoLE routing or a beam-search model is still generated in full and then sent, as on `/v1/chat/completions`.
+
+- In `soup ci init --python`, refuse leading-zero version strings (such as `03.11` and `3.011`) with exit 1, and document the supported 3.11 to 3.13 range. Migration: write the version without leading zeros, for example `--python 3.11` instead of `--python 03.11` or `3.011`; those now exit 1 where they wrote the string into the workflow (#2534 by @Shubham-dev-stack in #2632).
+
+- In `soup draft distill --plan-only`, preserve long paths in the YAML preview by passing `soft_wrap=True` to avoid line breaks in double-quoted scalars on narrow consoles (#2536 by @Shubham-dev-stack in #2633).
+
+- `training.eval_gate.baseline: previous` is now refused when the config loads, and a configured baseline that cannot be resolved stops training instead of running the gate with an empty baseline. To migrate, set `baseline` to `registry://<id>` or to the path of a baseline JSON file, or remove the line to run the gate without a baseline (#2523 by @BDaaac in #2640).
+
+- Use a supported thumbnail color in the built-in Gradio and Streamlit Space READMEs so Hugging Face accepts the generated metadata. (#2639 by @harshitthek in #2641)
+
+- The GRPO gradient watchdog now names the parameters whose gradient was non-finite before the gradient clip, and records `nan_param_names_source` (`before_clip`, or `after_clip` when that is not known) on each skipped step and in the run summary; before, it read the gradients after the clip, which one NaN makes non-finite everywhere (also with `max_grad_norm: 0`, whose norm logging runs the same clip), so a single NaN listed every trainable parameter (#2601 by @ybai08 in #2645).
+
+- Publish the rendered Hugging Face Space files in one commit so a rejected update leaves the files of an existing Space intact (#2648 by @harshitthek in #2649).
+
+- User-facing text that told you to point `training.base` at a bf16 or FP8-block copy of a quantised model now says `base`, the top-level config key (`training.base` is not a key and is refused as unknown); the layer-streaming refusal message and the layer-streaming docs are fixed, and a test keeps `training.base` out of `src/` and `docs/` (#2656).
+
+- Fix the built-in Gradio and Streamlit chat Space templates: their chat message dictionaries were written with doubled braces and raised `TypeError: unhashable type: 'dict'` when the Space ran (#2652 by @capyriver in #2657).
+
+- `soup sweep` now applies the same quantization guard as `soup train`: on a CPU, where bitsandbytes cannot run, an arm that asked for `4bit` or `8bit` trains with `quantization: none` and prints "Switching to quantization: none." once for that arm, instead of passing the unsupported value to the trainer. `soup train` and the sweep arms share one helper (`apply_quantization_guard`), so the decision and the text cannot drift apart (#2665).
+
+- `soup ship` selects native BF16 or FP16 for the requested CUDA card, including indexed devices on mixed-GPU hosts, and uses FP32 on CPU or without an available CUDA runtime. Both loaders, console output and verdict/evidence agree on that dtype; FP16 evidence replays in the full-precision family without importing torch. Calls to `cuda_supports_bf16()` without a device retain their current-device behavior. Existing pre-Ampere `soup eval retention` histories stamped BF16 refuse the new FP16 runs before model loading (exit 3); start a separate ledger with `--ledger NEW.json`, register the control tasks again, and record a new FP16 baseline. Historical BF16 scores keep their original stamp. Migration: on a CUDA card without native bf16 (T4, V100, RTX 20xx) `soup ship` now evaluates in float16 instead of bfloat16, so its numbers and the stamped dtype can change; re-run `soup ship` there to refresh stored results. (#2409 by @AubakirovArman in #2669)
+
+- `soup sweep` now binds each single-process Hugging Face Transformers arm to its own base revision and records it in the run and final artifact, leaving the training-data hash unknown. (#1902 by @vaputa in #2671)
+
+- The train pre-flight now says why the VRAM fit is not checked: `training.batch_size: auto` gets an informational line, and other inputs the estimate cannot price get their shared reason. The quantization skip line, explicit-batch refusal and `--allow-oom-attempt` behavior stay unchanged (#2363 by @abdulwaarith0 in #2673).
+
+- Added `terminal_text()` in `utils/terminal.py` and migrated the eight confirmed `env`, `init`, and `shrink` output sites so paths and names containing `\[` or emoji aliases print literally (#2533 by @Shubham-dev-stack in #2685).
+
+- Preserve original LF, CRLF and CR line endings inside quoted CSV fields when loading
+  local datasets, with or without a UTF-8 BOM (#2687 by @Ziyadin23).
+
+- `soup airgap-bundle` hashed a file to completion before checking it
+  against `--bundle-size-cap`, so a single oversized file under a dataset, wheel or
+  kernel dir hung for as long as the full read took before the cap error
+  ever surfaced. The aggregate-size check now runs from the file's
+  `os.stat` size alone, before any read, so an oversized file is refused
+  instantly (#2690 by @SID-6921).
+
+- Keep leaderboard means finite for extreme finite scores without changing ordinary averages or benchmark sorting (#2503 by @taljeon in #2693).
+
+- Refuse eval-gate baseline outputs that resolve to the suite or custom/judge input files before model construction, preserving input bytes and atomic hard-link outputs. Migration: give `--write-baseline` its own path, not the suite, custom-task or judge-prompts file; that now exits 3 before the model is built, where it used to overwrite the input file after the run (#1961 by @taljeon in #2694).
+
+- Refuse boolean eval-suite task thresholds before numeric coercion or model loading. Migration: a suite with a boolean threshold (`false`, `no` or `off` loaded as `0`; `true`, `yes` or `on` as `1`) is refused from v0.78.0, so write `threshold: 0` or `threshold: 1` to keep the same cutoff (#2696 by @taljeon in #2697).
+
+- Refuse duplicate criterion names in rubric files for `soup eval judge --rubric` and `training.grpo_judge_rubric`. In v0.78.0, previously accepted duplicate names must be renamed or removed (#2698 by @taljeon in #2699).
+
+- Keep representable weighted and aggregate judge means finite across intermediate overflow. From v0.78.0, replace `.nan`, `.inf`, `-.inf` or a non-number rubric weight with a finite number before judging. The three non-finite weights previously produced `0.0`, `nan` and `0.0` respectively. SDK callers of `JudgeResults.compute()` must supply finite aggregate inputs or handle `ValueError` (#2700 by @taljeon in #2701).
+
+- Use the full run ID after resolving a unique prefix in eval compare and eval aider (#2703 by @taljeon in #2705).
+
+- `soup merge --low-memory` refuses an adapter whose `init_lora_weights` rewrites the base at init (PiSSA / OLoRA from `lora.init_strategy`, CorDA, LoftQ, LoRA-GA) instead of silently writing wrong weights; use the regular merge for these. The low-memory merge and the streamed-base adapter loader now share one rule, so the streamed loader also loads `"Gaussian"`, `"eva"` and `"orthogonal"` adapters it refused before, and refuses an `init_lora_weights` of `1` by name. (#2722 by @abdumutalipabay0 in #2732)
+
+- `soup export` without `--registry-id` now auto-attaches the export to the registry entry of the run that wrote `--model`, as documented: the lookup read a column registry entries do not have and matched nothing. Entries are matched through their run id and the experiment tracker's output directory; when several match, the most recently registered entry wins, and `--registry-id` still overrides the match. Exports that attached nothing before will now add artifact rows to the matching registry entry. A registry or tracker database that cannot be read prints a warning instead of failing an export that has already succeeded. (#2726 by @abdumutalipabay0 in #2739)
+
+- The experiment tracker stores a run's `output_dir` as an absolute path, so `soup runs --cwd-only`, `soup runs clean`, `soup runs curriculum-curve` and `soup rewind` find a newly finished run's output in the directory it trained in, not in the directory they are run from. Runs recorded before this release keep their relative `output_dir`, which is still resolved against the current directory exactly as before: run `soup runs clean <id>` or `curriculum-curve` for such a run from the directory it trained in, as today. (#2725 by @abdumutalipabay0 in #2741)
+
+- `soup eval benchmark --run-id` and `soup eval custom --run-id` now look the run up before the model is loaded and save the result under the run's full id, so a unique prefix no longer files the result under the prefix. A `--run-id` that names no run, or a prefix that names several, now exits 1 with the shared run-lookup message instead of saving a row under that id; create the run first or drop the flag. Rows stored so far keep the id they were stored with (#2742 by @Faisal-Fayaz in #2743).
+
+- Fixed `soup diff --prompts` to exit 1 with clear messages for missing paths, directories, unreadable or non-UTF-8 files, and empty prompt files (even alongside `--prompt`), and to open prompt files with `utf-8-sig`. A `--prompts` path that was missing, or a prompts file with no rows, used to be skipped when `--prompt` was also given; in v0.78.0 `soup diff` exits 1 with a named message, so fix the path or drop `--prompts` (#2547 by @Shubham-dev-stack in #2744).
+
+- `soup adapters audit` no longer raises `OverflowError` when a config or an adapter record holds an integer past the double range, such as `10**400`: the learning-rate, warmup and LoRA rows now report `diverged` (or, for an unreadable alpha, `unknown`) instead of ending the command with a traceback (#2370 by @Faisal-Fayaz in #2748).
+
+- Layer-streaming VRAM pre-flight charges two PyTorch allocator-visible cuBLAS workspaces, using the active device default or `CUBLAS_WORKSPACE_CONFIG`; its `SIZE:COUNT` parsing follows PyTorch 2.14.0 `aten/src/ATen/cuda/CublasHandlePool.cpp` (`parseChosenWorkspaceSize`). `TORCH_CUBLAS_WORKSPACE_CACHE=1` retains ATen workspaces per handle/stream; unset, they are allocated and released per operation. cuBLAS-private handle-creation buffers are outside this estimate. On the measured RTX 3050 grid, predictions before/after the added term were 100.58/106.57%, 100.53/104.15%, 100.59/102.61%, 100.75/101.83%, 100.82/101.37%, 100.47/102.32%, 100.62/101.78%, 100.63/101.28%, 100.73/101.09%, and 100.85/101.04% of measured peak (in grid order). The budget rises by 2 × 8,320 KiB below compute capability 9 or 2 × 32 MiB on capability 9–12; when capability cannot be read, Soup uses the conservative 64 MiB total. On capability 9–12, configurations within that added amount of available VRAM may now receive a named pre-flight refusal or switch to packed NF4 backward instead of reaching an OOM. Below capability 9, the 13.5 MB fixed allowance is unchanged, so runs that passed the v0.77.2 pre-flight may now be refused; reduce `training.batch_size` or `data.max_length`, or use packed NF4 backward when available. (#1407 by @capyriver in #2749)
+
+- `soup merge` loads the tokenizer from the adapter directory before it loads the base model or writes anything, so an adapter directory without usable tokenizer files fails without leaving merged weights and no tokenizer in `--output` (#2760 by @artikulus1301 in #2761).
+
+- `soup train --resume` and `--hf-resume` on `task: ppo` are refused before the dataset is read or a model is loaded. trl's PPO trainer cannot continue from a checkpoint, so they used to print a warning, train again from step 0 and write over the files in `output`; the error now says `--resume` is not supported for `task 'ppo'` and to remove the flag, or to point `output` at a new directory to keep the old run. `--hf-resume` is refused even when the Hub has no checkpoint branch, where it used to start a fresh run. Migration: drop `--resume` / `--hf-resume` from the command; the run restarted from step 0 anyway. (#2764 in #2772)
+
+- `soup ui` sends a non-finite float (`inf`, `-inf` or `NaN`) as `null` from every JSON route, from the live metrics and training streams, and in the 422 body that echoes a request's input. One run with an infinite `final_loss`, `grad_norm` or eval score, or a dataset row with `NaN`, made the dashboard, the run detail view and the data inspector answer 500, and the training stream wrote `Infinity` tokens that the browser could not parse. Finite values and the stored rows are unchanged. (#2750 by @abdumutalipabay0 in #2780)
+
+- `soup runs compare --help` now carries the description that #2706 wrote only into the generated `docs/cli-reference.md` (stored dataset SHA-256 hashes, the differing config paths, the evaluation delta), so `python scripts/gen_reference_docs.py --check` passes on `main` again and the next regeneration keeps the paragraph. The `soup runs --help` panel still shows the one-line summary. When `--check` finds a page that differs from the code, it now says to edit the command's docstring or `help=` (or the field's description) and run the script again, not to edit the page (#2774 in #2781, reported by @Faisal-Fayaz).
+
+- Clarify MLX evaluation-step support, DoRA refusals and standalone installation requirements, with config-derived docs and runtime-isolation coverage. (#2223 by @capyriver in #2786)
+
+- `soup chat --max-tokens` now refuses a count below 1 at parse time, with exit 2, before the model loads: 0 and a negative value used to load the model and then end the first message with `ValueError: max_new_tokens must be greater than 0`. The MLX backend keeps its own 1-16384 check, and no upper bound is added (#2756 reported by @abdumutalipabay0, fixed by @Faisal-Fayaz in #2787).
+
+- `soup bench infer` now refuses `--max-tokens` below 1 at parse time, and `--num-prompts` below 1 when no `--prompts-file` is given, with exit 2, before the model loads: both used to load the model and then fail in the warm-up with `IndexError` or `ValueError`. A call with a prompts file keeps running every prompt in the file, as before (#2757 reported by @abdumutalipabay0, fixed by @Faisal-Fayaz in #2788).
+
+- Web UI metrics and comparison endpoints now read metrics under the full run ID resolved from a unique prefix and return that full ID. Exact IDs, unresolved comparison entries and ambiguous-prefix errors keep their existing behaviour. (#2751 reported by @abdumutalipabay0, fixed by @nurpeisovnurbolofficial in #2794)
+
+- `soup runs curriculum-curve` now refuses a history that mixes bucket counts, has a truncated line or has a row that is not an object with `history malformed` and exit 2, instead of crashing with exit 1 (#2731 reported by @abdumutalipabay0, fixed by @akkupratap323 in #2796).
+
+- `soup sweep --param quantization=4bit,none` trains the `none` arm. `--param` read `none` as null, which `training.quantization` refuses because `"none"` is one of its values, so that arm failed config validation every time while the sweep exited 0 on the other arm. `none` now stays the word for a field that refuses null, as it is in `soup.yaml` and `--sweep-config`, and stays null for an optional field such as `neftune_alpha`. (#2758 by @abdumutalipabay0 in #2799)
+
+- The MCP `runs_show` tool answers a run id prefix that matches several runs with "Run id prefix '<id>' matches N runs; give more characters", as `soup runs show` and the Web UI do since #2470; it used to say `run not found`, as for a run that does not exist. A missing run still gets `run not found`, and the tool now closes the experiment database after the lookup. (#2752 by @abdumutalipabay0 in #2800)
+
+- The Web UI API (`GET /api/runs`, `GET /api/runs/{id}`) and MCP tools (`runs_list`, `runs_show`) return a run's `output_dir` relative to the server working directory when under it, and only its last path component otherwise, keeping the host filesystem layout private. A program that read an absolute path from `output_dir` there must take the run's output location from its own records, or from `soup runs show` on the host. (#2782 by @Deadpool2000 in #2807)
+
+- A training run's step rows record the speed the live panel shows: optimizer steps per second since the first logged step. Hugging Face sets `train_steps_per_second` only in the final summary log, so every step row used to store `speed` 0.0, as if measured, and the Web UI speed chart drew a flat zero line. The first step row now stores `null`, since there is no interval to measure yet, and the chart leaves a gap there; the chart's axis now reads Steps/sec instead of Tokens/sec, which was never what the column held; the final summary row still records Hugging Face's `train_steps_per_second`. Runs recorded before this change keep their 0.0 step speeds; nothing rewrites them. PPO, on the trl versions Soup supports, records through this callback too, and the MLX trainers measure their own speed. (#2791 by @AlibekBerik in #2810)
+
+- `soup runs clean` keeps every run's best checkpoint when several runs share an output directory: each directory is pruned once, the checkpoints kept whole are the best of every run recorded there (including runs not being cleaned), and each file is listed, counted and deleted once, so `--all` no longer ends in "Failed to delete" warnings (#2724 reported by @abdumutalipabay0, fixed by @abdulwaarith0 in #2812).
+
+- `soup migrate --from axolotl` migrates a dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*` names and a `format` template) to `data.format: auto`, with one warning that names the mapping's keys and says the template is not carried over. It used to stop with `TypeError: unhashable type: 'dict'` and write nothing. (#2755 by @abdumutalipabay0 in #2817)
+
+- Resuming a DPO, IPO, preference or GRPO run on transformers 5.23.0 no longer reads the checkpoint's trained adapter twice. From 5.23.0 the HF Trainer loads that adapter itself, so the reload Soup added for resumes (#1768) ran a second time over the same weights: no error and the same trained adapter, but a redundant read of the adapter file on every resume. Soup now reloads it only when the Trainer did not, so transformers 5.16.1 through 5.22 behave exactly as before. No migration is needed: a resume that worked before still works and resumes from the same weights. The resume tests and the gradient-checkpointing recompute test were also updated for 5.23.0, which moved the checkpoint from a layer's `__call__` to its `forward` (#2822).
+
+- Refuse integers beyond float range in calibration SDK numeric inputs with the existing field-specific `ValueError` instead of leaking `OverflowError`, including persisted judge reports (#2837 reported by @taljeon, implemented by @AubakirovArman in #2838).
+
+- `soup plan` and `soup apply` display model names, config/state paths and diagnostics
+literally: emoji aliases stay typed, backslashes survive brackets, and terminal control
+characters and bidi marks are stripped from the display. Persisted config values, hashes,
+state files, label colours and exit codes are unchanged.
+(#2489 by @AubakirovArman in #2839)
+
+- `soup attest emit` and `soup attest verify` keep emoji aliases and backslashes before brackets, and strip terminal controls, in the written-file and registry receipts, the `signature valid` receipts with the statement name, the sidecar backend warning and every error line (#2489 by @noncalan in #2841).
+
+- MLX GRPO's validation-reward row records `speed` as `null`, as it already records `loss`: the row measures no step rate, and it used to store 0.0, which read as a measured zero speed. The training rows, which record a measured rate, are unchanged. Rows recorded before this change keep their 0.0. (#2830 by @AlibekBerik in #2842)
+
+- From v0.78.0, `task: preference` with a single `training.preference_loss: dpo`, `orpo` or `simpo` can use `training.stream_layers: true`, which v0.77.2 rejected at config load; use a concrete batch size and the existing streaming restrictions, while IPO, BCO and weighted preference losses remain refused. (#2766 by @here-2007 in #2843)
+
+- Display config-loader paths, key names, warnings and validation diagnostics literally,
+  preserving emoji aliases and backslashes while stripping terminal controls and bidi
+  marks only from terminal output. Config values, API/UI exception text, warning
+  deduplication, label styles and exit codes are unchanged. (#2489 by @AubakirovArman in #2844)
+
+- `soup profile` keeps emoji aliases and backslashes before brackets, and strips terminal controls, in the refusals for the config path, an unknown `--method`, `--optimizer`, `--gradient-checkpointing` or `--gpu` value and an unreadable `--model`, and in the model name and LoRA target modules of the `Training Profile` panel (#2489 by @noncalan in #2847).
+
+- Render canary dataset/report paths, diagnostics and exposure secrets literally,
+  preserving emoji aliases and backslashes and removing controls only from display.
+  Keep artifact contents and permissions, scoring inputs, verdicts and exit codes.
+  (#2489 by @AubakirovArman in #2852)
+
+- `soup serve --max-tokens` now refuses a count below 1 at startup, with exit 2, before any backend loads: 0 and a negative value used to start the server and then fail every request that omits `max_tokens` with HTTP 500. The message is the same on the transformers, vLLM, SGLang and MII backends (#2730 reported by @abdumutalipabay0, fixed by @abdulwaarith0 in #2855).
+
+- An eval-gate suite with schema errors is refused with a message naming the file and each failing field. (#2295 by @1DMB1 in #2869)
+
+- Eval-gate suites now reject repeated explicit keys in task mappings. Migration: delete the repeated key. (#2714 by @capyriver in #2873)
+
+- soup fetch explains directory destinations and other write errors when copying bundled examples (#2874 by @Nari-Ab).
+
+- soup data topics reports the path and error when a dataset cannot be loaded or its JSON report cannot be written (#2875 by @Nari-Ab).
+
+- `soup train --cloud runpod --cloud-submit` now talks to RunPod's REST API v2 (`https://api.runpod.io/v2`), because RunPod retired REST API v1 on 2026-11-15 and an installed `soup-cli` could no longer create a Pod. The command line and environment variables are unchanged. The Pod create body is the nested v2 body (`gpu`, `disk`, `cloud`, `entrypoint`/`cmd`); the wait reads `status` (a Pod in `ERROR` stops it with its own message) and takes the SSH address from `ssh.direct` or `runtime.ports`; a create whose response was lost is found again by walking the paginated `{"pods": [...]}` list; and a Pod record in `TERMINATED` counts as deleted. RunPod's `application/problem+json` error body (title, detail, the first three `errors`) is now shown after the HTTP status, with terminal controls and the API key removed and capped at 400 characters. A redirect, or an HTTP 404 or 410 without RunPod's own problem body, for the Pod create is reported as one message that says RunPod has probably retired or moved the API and names `pip install -U soup-cli` and the manual path, with no Pod created or cleaned up; an ordinary v2 not-found keeps its problem text. A 404 to a DELETE is no longer taken as proof that a billed Pod is gone: the Pod must be absent from the Pod list, or the DELETE must have been accepted, or RunPod must report it as `TERMINATED`, and the notice names the evidence. A 429 waits for an integer `Retry-After` (at most 60 seconds) inside the existing deadlines, a failed list read while reconciling a lost create is retried within its 60 seconds, and the CRITICAL line names the Pod id and says it may still be running and billed. The API key is also removed in its percent-encoded, base64 and lower-case spellings and from text that echoes it with a control character inside; it travels in an unredirected header; requests carry `User-Agent: soup-cli/<version>`; and one line names the 80 GB container disk, which `/workspace` now shares with the venv and the model cache. `/workspace` now lives on the 80 GB container disk, because v2 attaches no volume unless asked. Implemented against the published v2 reference; not exercised against the live service, which stays with #2098 (#2854 in #2877, reported by @noncalan).
+
+- soup data active-sample keeps the first trace when a JSONL input starts with a UTF-8 BOM (#2879 by @Nari-Ab).
+
+- soup recipes use reports directory destinations and other output errors when writing a recipe (#2880 by @Nari-Ab).
+
+- Bind single-process native MLX text training to one qualified Hugging Face base
+  commit across the first RoPE config read and model/tokenizer loads, keeping run
+  rows and final artifacts consistent while preserving unbound provider, offline
+  and local loading behavior. Local base diagnostics no longer blame an unused
+  provider. (#1902 by @vaputa in #2884)
+
+- Pass signed VRAM headroom in `soup autopilot` without clamping at `0.0`, enabling
+  `gradient_checkpointing: true` for budgets at or below the fp16 weights. Callers
+  omitting `vram_headroom_gb` in `decide_performance_flags` still get checkpointing off,
+  while callers explicitly passing `0.0` now receive checkpointing on.
+  (#2865 reported by @abdumutalipabay0, fixed by @Shubham-dev-stack in #2885)
+
+- Render inference/training benchmark model names, paths, diagnostics and report
+  receipts literally, preserving emoji aliases and backslashes and stripping controls
+  only from terminal display. Keep measurement parameters, JSON reports and exit codes.
+  Backend parsing and its messages are unchanged.
+  (#2489 by @AubakirovArman in #2886)
+
+- `soup probe` keeps emoji aliases and backslashes before brackets, and strips terminal controls, in every line that names a base, a path, an adapter, an SAE id or an error: the refusals, receipts and reports of `pack`, `sleeper`, `truth`, `harm`, `interference` and `sae-diff`, the no-evidence panel and the `--measure` / `--auto-download` progress lines. An adapter named `a]b` no longer shows as `a\]b` in the interference matrix (#2489 by @noncalan in #2887).
+
+- `soup env` keeps emoji aliases and backslashes before brackets, and strips terminal controls, in every line that shows a lock-file field, a path, a format, a declared bound or an error: the refusals of `lock`, `status`, `check` and `fix`, the `status` table rows, the drift and declared-bound lines of `check`, and the install plan of `fix` with its title (#2489 by @noncalan in #2890).
+
+- `soup merge --low-memory` with a Hub base now downloads the shards that `model.safetensors.index.json` names, by name, so an indexed `consolidated*.safetensors` shard reaches the merge as it does from a local directory. An unindexed consolidated copy is still skipped. The index and support files come first and the weights second, both from one commit (the recorded revision, or for a legacy adapter the commit of the first snapshot). (#2856 reported by @taljeon, fixed by @akkupratap323 in #2900)
+
+- soup drift-alarm includes the first record when a reference or live JSONL log starts with a UTF-8 BOM (#2901 by @Nari-Ab).
+
+- soup prune-prompt preserves the first trace in BOM-prefixed JSONL files in both pruning modes (#2902 by @Nari-Ab).
+
+- soup lock show and check report directory arguments as invalid lock files (#2903 by @Nari-Ab).
+
+- soup prune-layer-cache displays literal cache paths containing emoji shortcodes (#2904 by @Nari-Ab).
+
+- soup data mix --apply reports the parser diagnostic for invalid YAML and changes the exit code from 1 to 2, so a script that tests for exit code 1 there must test for 2 (#2905 by @Nari-Ab).
+
+- The shared llama.cpp pin moved from `b5270` to `b12423`: Qwen3.5 GGUF exports pass the capability check on a fresh default checkout, and the converter advertises `--no-mtp`, so MTP-declared checkpoints convert instead of erroring. An existing `~/.soup/llama.cpp` checkout is not updated automatically; remove it to have the next export clone the pinned tag, then rebuild the quantizer. GGUF export needs `transformers` from `soup-cli[train]`, which the converter imports at load; Soup now reports it missing before cloning for default GGUF export instead of letting the converter fail later, and never auto-installs it. A file written by the new converter can differ from a `b5270`-written file for the same model. (#1911 by @1DMB1 in #2910)
+
+- Replaying an evidence file whose task side records every generation failed is refused with exit 3 and the first part of the live message, for `soup ship --evidence` and the MCP `ship_evidence` tool, under every task mode. Measured-zero, partial-failure and schema-1 files are unchanged. (#2899, reported by @taljeon, by @1DMB1 in #2911)
+
+- Oversized integers in seven training scalars, `training.lr_groups[].lr` and
+`data.interleave.probs[]` now produce a field-named config refusal instead of
+escaping as `OverflowError`. Existing staged-field refusals retain precedence;
+the oversized value is not printed. Reported by @Keshemir.
+(#2882 by @AubakirovArman in #2912)
+
+- `nan` (in any case, with or without a sign) is now refused like `inf` on the six ranged float options, `soup data validate --min-valid-fraction`, `soup draft measure --min-acceptance`, `soup data toxicity --threshold`, `soup data decontaminate --threshold`, `soup data score --threshold` and `soup data forge --uncertainty-threshold`: a usage error that names the option, with each command's usage exit code (3 for `data validate`, 2 for the others), before any input is read. Click's range check compares the value with its bounds and every comparison with NaN is false, so `nan` used to pass: the `data validate` and `draft measure` gates were off (exit 0), `data toxicity` wrote an empty file, and `decontaminate`, `score` and `forge` refused it only after reading their inputs, with exit 1. One shared check, `refuse_nan` in `soup_cli/commands/_common.py`, runs after Click's conversion on each of the six. As of v0.78.0 a `nan` value for `--min-valid-fraction`, `--min-acceptance` or `soup data toxicity --threshold` is refused where it was accepted before; pass a number in range or leave the option out. (#2906 by @Keshemir in #2917).
+
+- `soup push --hub hf` prints the `--token` deprecation warning only when `--token` is
+  typed on the command line, not when the token comes from `HF_TOKEN`, and its
+  missing-token hint names `HF_TOKEN` and the login command instead of the deprecated
+  flag. Other hubs keep `--token` in their hint.
+  (#2792, reported by @baurvtm-stack, by @Izumx in #2918)
+
+- Layer streaming now prints drive roots and reasons for falling back to the page cache or keeping recompute literally, with terminal control characters removed from the display. (#2489 by @AubakirovArman in #2919)
+
+- `soup export --format torchao` merges a LoRA adapter into its base (`--base`, or the adapter's `base_model_name_or_path` at the revision its training run recorded) before it quantizes, as the other export formats do. It used to write only the adapter files, with no `config.json` and no model weights, report "TorchAO Export Complete" and attach that output to the registry. An adapter without a recorded base now exits 2 and asks for `--base` instead of failing with `KeyError`. (#2862 by @abdumutalipabay0 in #2920)
+
+- With `training.auto_mixed_precision: true`, an SFT or TTS LoRA run that picks fp16 on a card with bf16 (Qwen2, Qwen2.5, Phi-3 and Phi-3.5 on Ampere or newer) now loads its unquantized frozen base in fp16, the dtype it trains in, as it already did on a card without bf16. The base used to stay in bf16, so fp16 autocast kept an fp16 copy of every frozen weight through the step: a Qwen2.5-1.5B LoRA run peaked at 7.4 GB instead of 4.4 GB, which the VRAM pre-flight did not price. The pick is now asked once per run, so a 4-bit or 8-bit run prints "Auto mixed-precision picked" once instead of twice, and its quantized base loads and trains as before. Existing runs of this kind, including the sft and tts configs `soup autopilot` writes for those models, now store the frozen base in fp16 instead of bf16 and train with fp16 rather than fp32 hidden states. Measured on that setup alone (Qwen2.5-1.5B-Instruct, LoRA r16, batch 4 x 128 tokens, eight steps, RTX PRO 5000 Blackwell, five runs each): the median step time fell from 143 ms to 126 ms and the eight losses moved by at most 0.003; larger Qwen2 and Phi-3 models and longer runs are not measured. Setting `auto_mixed_precision: false` keeps the base in bf16 but also computes in bf16, so it does not restore the old state of bf16 storage with fp16 compute. (#2858 by @abdumutalipabay0 in #2921)
+
+- `training.curriculum: true` on an SFT run trains the length-sorted rows in their sorted order, shortest first, as documented: the Trainer's default random sampler used to shuffle the sorted list. This holds for text, vision, audio and RAFT rows on the transformers and unsloth backends; a pre-tokenised dataset, `packing: true`, `multipack: true` and `backend: mlx` keep the shuffled order, and nothing is refused. The loss curve of a `curriculum: true` SFT run changes, because the run now sees its rows in another order. (#2863 by @abdumutalipabay0 in #2924)
+
+- soup adapters merge refuses adapters it cannot merge instead of writing an adapter with no weights and exiting 0: inputs whose LoRA rank differs on a shared module (on every strategy, including `--strategy svd --rank N` and `cmaes`), inputs that share no tensor at all, a shared LoRA tensor of the same rank and another shape, and inputs where no shared tensor has one shape. It exits 2 before anything is written and names the module and each input's rank. Migration: a merge of adapters whose ranks differ on some modules only (`rank_pattern`) exited 0 before and wrote an adapter without those modules; it is now refused with exit 2. Use `soup adapters arithmetic ... --rank N`, which merges mixed ranks, or merge adapters of one rank (#2907 reported and fixed by @abdulwaarith0 in #2926).
+
+- Concurrent `--mole` requests now wait for each other instead of switching the shared
+  PEFT model's active adapter concurrently during decode.
+  (#2866 reported by @abdumutalipabay0, fixed by @Shubham-dev-stack in #2928)
+
+- `soup data sample` refuses non-positive `-n` counts and non-finite or out-of-range `--pct` values
+  (`<= 0` or `> 100`) with exit 1 instead of crashing or returning inverted slices (#2931, #2929
+  by @Shubham-dev-stack). Inputs that previously exited 0 now exit 1: `-n 0` (wrote empty file
+  with random and hard), `-n 0` with a valid `--pct` (where `--pct` previously won), `-n -1`
+  with `--strategy hard` (inverted slice), `--pct 0` or negative `--pct` (one row), and
+  `--pct` above 100 (entire dataset). Pass `-n` of at least 1 and a `--pct` in (0, 100].
+
+- `soup recipes search --size <size>` matches declared `recipe.size` for size queries: recipes
+  previously missing when queried by declared model size are now listed, while false hits where
+  a longer size token contained the query (such as `7B` matching `17B`) are excluded (#2932, #2930
+  by @Shubham-dev-stack). Size token queries match strictly against declared `recipe.size` rather
+  than name or model id, so recipes whose name carries a different size figure (e.g. `--size 17B`
+  for `llama4-scout-17b-*` declared `109B` or `--size 7B` for `magicoder-7b-sft` declared `6.7B`)
+  are no longer listed under that size, and the MCP `recipes_search` tool reflects this change.
+
+- Resuming a 4-bit or 8-bit `task: pretrain` run with `soup train --resume` keeps the LoRA adapter in bf16, as the uninterrupted run does and as SFT, DPO, IPO, GRPO and Reward runs already did. The checkpoint reload upcast it to fp32, so the resumed run trained and saved in another dtype than the uninterrupted one and wrote an adapter twice the size. A run that is not resumed is unchanged. (#2859 by @abdumutalipabay0 in #2936)
+
+- soup iterative-dpo extracts the first prompt correctly from a JSONL file with a UTF-8 BOM (#2943 by @Nari-Ab).
+
+- soup lock write reports filesystem failures with the requested output path (#2944 by @Nari-Ab).
+
+- soup expect reports failures reading the suite or dataset and exits 3 for these input errors, previously 1, so a script that tests for exit code 1 there must test for 3 (exit 1 now means the judge was unreachable) (#2945 by @Nari-Ab).
+
+- soup data mix --apply reports invalid recipe weights before printing a YAML snippet and exits 2 for these errors, previously 1 (#2946 by @Nari-Ab).
+
+- soup tokenizer train reports an existing file passed as its output directory before starting training (#2947 by @Nari-Ab).
+
+- `task: classifier`, `reranker`, `cross_encoder` and `asr` now full fine-tune on fp32 master weights, as every other full fine-tune does. They loaded the base with no `dtype`, so transformers 5 kept the checkpoint's own: bf16 for most decoder bases, fp16 for `whisper-large-v3` and `-large-v3-turbo`. AdamW then stepped 16-bit weights with 16-bit state, and at the default lr every norm and most other weights stayed where they started: after 8 steps on an RTX PRO 5000 Blackwell, 100% of the norms and 69.7% of the attention and MLP weights were bit-identical. With `classifier_lora: true` under bf16/fp16 mixed precision, the classification head the adapter trains (`modules_to_save`) is now upcast to fp32 too, and on a CUDA card without bf16 hardware the frozen base of a `classifier_lora` or `asr_lora` run loads in fp16, where v0.77.2 loaded the checkpoint's own dtype. Migration: from v0.78.0 a default `classifier`, `reranker`, `cross_encoder` or `asr` run over a 16-bit checkpoint holds fp32 weights, gradients and optimizer state, twice the memory (the pre-flight already budgeted it, but a run that fit the card on 0.77.x can now run out of memory), saves an fp32 model and trains to different losses; for the old footprint, train an adapter with `classifier_lora: true` or `asr_lora: true`, or lower `training.batch_size`. (#2941 by @abdumutalipabay0 in #2949)
+
+- Display filenames, skip diagnostics and the output path literally in the
+  `soup infer --task asr` terminal output, with terminal controls removed.
+  (#2489 by @AubakirovArman in #2952)
+
+- Display run IDs, benchmark and model names, and refusal messages literally
+  in `soup eval compare` and `soup eval leaderboard`, with terminal controls
+  removed from the display.
+  (#2489 by @AubakirovArman in #2953)
+
+- Stratified data splits now produce the requested global validation and test counts. Because rows are allocated differently, the same seed can place different rows in train, validation, and test than before. (#2954 by @Samearth17)
+
+- `soup drift-alarm` now refuses a tokenless input instead of reporting OK. On v0.77.2, a side containing only whitespace could report `OK` with KL `0.0000` and exit 0; it now exits 1, naming the side and file without a verdict, so fix the producer of that input if an automated check starts failing. (#2940, reported by @taljeon, by @1DMB1 in #2955)
+
+- With no usable prompt rows, `soup iterative-dpo` exits 1 before loading a model or writing pairs. Previously, it loaded the sampling model, overwrote the pairs file with an empty file, and exited 1 after `soup train` refused the empty dataset. Supply a prompts file with at least one usable row to run training (#2958 by @Nari-Ab).
+
+- soup distill-prompt keeps the first trace when a JSONL input starts with a UTF-8 BOM (#2959 by @Nari-Ab).
+
+- soup cost uses its default estimate when a Hub dataset has no split metadata (#2960 by @Nari-Ab).
+
+- `soup version --json --full` sends optional-library import diagnostics to stderr so stdout remains parseable JSON (#2962 by @Nari-Ab).
+
+- Fixed streamed requests queued behind the first runtime adapter load so they generate with the wrapped model and the new adapter disabled (#2517 by @harshitthek in #2978).
+
+- The loop-v2 verdict reader no longer raises on oversized integers in optional evidence. (#2971, reported by @taljeon, by @1DMB1 in #2979)
+
+- `soup loop canary` refuses an adapter whose last verdict was DON'T SHIP, whether it is named by its run name or by the path to its directory in `.soup-loops/adapters`; pass `--allow-dont-ship` to canary it anyway. v0.77.2 had no such check, so a script that canaries such an adapter by hand needs the flag now. (#2897, #3002)
+
+### Security
+
+- A crash bundle (`.crash`) and a `.can` written by `soup can pack` or `soup can fork` are now redacted before they are written: URL userinfo and sensitive query parameters, common API-token shapes, `Authorization` / `Bearer` headers, JWTs, private-key blocks and values stored under credential-named config keys are replaced with `<redacted>`. Redaction is pattern-based and best-effort: read a bundle or a can before sharing it. `soup can pack` and `soup can fork` print the key paths they changed, never the values, so a can packed from a config that carried a credential now holds `<redacted>` in its place, `soup can run` refuses such a can before it fetches anything, and `soup can publish` warns about key paths that still look like credentials; a crash bundle records counts only. Migration: `soup can run` names the redacted key paths and refuses such a can as of v0.78.0; supply the values in the can's `config.yaml` (inside the `.tar.gz`) and run `soup train` on it, and keep credentials out of a config before you pack it. (#2883)
+
+- **Hardening of `soup loop`, its state files and the loop's endpoints on `soup serve`** (#2897): taking over a dead holder's `loop.yaml` lock is serialised by a kernel lock and re-checks the holder, so two waiters can no longer both enter the critical section; `merge_state` never writes an iteration's stale copy (a change that does not fit what the file holds now is left out and named in the iteration notes, and an unreadable file stops the daemon with a reason, `WatchAbortedError`, exit 1); `loop.yaml` and `iteration.json` are fsynced before the rename and `read_state` rides out a short Windows permission denial; `soup loop watch` logs and retries an `OSError` (a Windows permission denial, a lock timeout) instead of dying; `pause`, `resume`, `set`, `canary` and `rollback` print one line for a locked file (exit 1) or an invalid value (exit 2) instead of a traceback; `soup loop watch --detach` claims its PID file before it spawns; `soup loop status` strips control characters from `loop.yaml` fields. The new `POST /v1/feedback` refuses a browser request whose `Origin` is not the server's own, a `response_id` the server did not issue (`404 unknown response_id`), an `edited_text` over 20000 characters, and a feedback log that reached 256 MiB (`507`, nothing appended); the serve trace and feedback logs are created owner-only on POSIX; more token shapes are redacted from them (GitHub, AWS, Slack, JWT, PEM keys, `api_key=...` assignments) and `user_ref` / `conversation_id` are redacted too. The canary's quality verdict counts at most 3 rated answers per conversation id and side, and a request with invalid input is no canary failure; log lines dated more than 24 h ahead are skipped with a warning instead of freezing the data cursor. `--adapter-dir` may not be a filesystem root and Windows UNC and drive-relative adapter paths are refused. The train and ship children write their output to `.soup-loops/adapters/<run>.train.log` and `.soup-loops/verdicts/<run>.ship.log` (named in `iteration.json` as `train_log` / `verify_log`) instead of holding it in memory, and the loop reads the conversation records `soup serve` rotated into `serve.jsonl.<n>`. A foreground `soup loop watch` is refused (exit 2, naming the pid and how to stop it) while a live daemon holds `.soup/loop.pid`, as `--detach` already was. A promotion the server refused ends the cycle there instead of training on top of the refused canary; a stage of the cycle that raises (a locked thumbs database, say) is recorded with its name and exception type in `last_failure` and the iteration, waits 5 minutes after the first failure and 30 after the second, is held after the third until `soup loop resume`, and no longer stops the daemon. The loop's JSONL logs (`iterations.jsonl`, `versions.jsonl`, `progress.jsonl`, `paraphrases.jsonl`, the holdout log) are created owner-only on POSIX and an older, wider one is tightened on its next append (on Windows the folder's permissions apply); the serve trace and feedback logs refuse a link put at their path after the server started; the loop's Python children start with `-P`, so a file in the project directory named like a library is not imported by them. The secret filter of `soup serve --trace-log` runs in linear time on long messages, and it redacts a JWT whole after `Bearer` and when other token characters stand directly before it (#2982). A `loop.yaml` whose `canary_traffic_pct`, `deploy_traffic_pct`, `monthly_budget_usd` or `spent_this_month_usd` holds an integer of hundreds of digits is refused by the field's name (exit 2) instead of a traceback, and `soup ship` refuses an `--output` and an `--emit-evidence` that differ only by a trailing dot or space on Windows (#2982). A `soup ship --gate loop-v2` verdict says in words when the held-out edits were not checked (`held-out edits not checked: N of 5 needed`, and `held_out_note` in `--output`), so a SHIP is never read as "held-out passed". `soup ship` refuses an adapter directory whose weights are a pickle on `--adapter` and `--base-adapter` (a `.bin`, `.pt`, `.pth`, `.pkl`, `.pickle` or `.ckpt` weight file, or a pickle or zip posing as `.safetensors`); a safetensors file that is merely unreadable or truncated is still only a warning, as before. **Migration:** an adapter saved as `adapter_model.bin` worked with `soup ship` on v0.77.2 and is now refused (exit 3, `unsafe weight file (pickle / PyTorch-classic): adapter_model.bin`); re-save it as safetensors, e.g. `model.save_pretrained(path, safe_serialization=True)`, and pass that directory. A hand-edited `loop.yaml` with a `monthly_budget_usd` or `spent_this_month_usd` that is not finite or is above 1e15 was read before and is now refused (exit 2, naming the field); write a number from 0 to 1e15, or remove the line. (#2982)
+
+- The optimizer state of an RL checkpoint (`<output>/rl-checkpoints/step-N/optimizer.pt`, read when the `pid_lagrangian` rollback restores a checkpoint) is now loaded with `torch.load(weights_only=True)`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory; the adapter is loaded under the same containment. A file that needs more than tensors and plain containers, or that is truncated or corrupt, is refused by name in the log and the optimizer is left as it was, instead of being loaded. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. Migration: as of v0.78.0 a checkpoint whose `optimizer.pt` holds anything other than tensors and plain containers is refused; checkpoints written by soup are plain and load as before, so delete such a file or restore from a checkpoint written by soup. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on, so remove the link or the file. A `mole_gate.pt` that `soup serve --mole` or a MoLE resume cannot load with `weights_only=True` is refused by name with a `ValueError` instead of a raw traceback. A rollback with `rl_checkpoint_include_optimizer: false` restores the adapter only and no longer reads an `optimizer.pt` found in the checkpoint directory. (#2916)
+
+## [0.77.2] - 2026-11-05
+
+### Upgrade notes
+
+A `soup.yaml` that loads on 0.77.1 loads on 0.77.2, unless it is a `task: sft` config that sets
+one of four settings on a path that never applied it (second item). Coming from 0.76.x or older,
+read the 0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the
+first run of an existing config.
+
+- **`soup serve --tool-auth-token` follows the token rule of `soup ui` and `soup mcp serve`:**
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. 0.77.1 accepted any non-empty
+  value; 0.77.2 exits 2 before the model loads, on every bind, whether the value comes from the
+  option or from `SOUP_TOOL_AUTH_TOKEN`, and the message names the rule, never the value. All
+  three commands now match the whole value, so a token with a trailing newline is refused too.
+  Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` and send the
+  same value as `Authorization: Bearer <token>` (#2329).
+- **`task: sft` refuses four settings on the paths that never applied them** (#2278). 0.77.1
+  loaded them and trained without them; 0.77.2 refuses the config at load and names the field,
+  the setting that selects the path and what to change. A value of `false` or `null` loads.
+
+  | Path | Refused when set |
+  |---|---|
+  | `modality: vision` or `modality: audio` | `reasoning_effort`, `train_on_eot`, `use_flash_attn`, `use_liger` |
+  | `backend: mlx` | `reasoning_effort`, `train_on_eot` (`use_flash_attn` / `use_liger` keep their ignore warning) |
+  | `backend: unsloth` | `use_flash_attn`, `use_liger` |
+  | `data.format: raft` | `reasoning_effort`, `train_on_eot` |
+  | `data.format: pre_tokenized` | `reasoning_effort` (`train_on_eot` loads: the cache is keyed on it) |
+
+  Remove the key, or move the run to the path the message names. `stream_layers: true` and the
+  other tasks are unchanged.
+- **More commands refuse an output that names one of their inputs**, before reading (exit 1).
+  `soup data ingest <document> --output <same document>` replaced the document with JSONL;
+  `soup data persona-mix`, `generate`, `canary check`, `mix --optimize`, `forge` and
+  `recipe --execute`, and `soup adapters arithmetic` and `merge` with an `--output` that is an
+  input adapter, overwrote their input. Write to a new path. The shared refusal no longer starts
+  with `Error:` (`soup data doctor`, `lint`) or `Plan failed:` (`soup data forge`); exit codes
+  are unchanged (#2274, #2349, #2379).
+- **MLX: two refusals are lifted, one is added (Apple Silicon only).** `backend: mlx` with
+  `task: preference` and `training.preference_loss: dpo`, `orpo` or `simpo` was refused at load;
+  it now runs the native trainer, the config keeps `task: preference`, and `adapter_config.json`
+  records the native task, so a resume matches whichever of the two spellings the config uses.
+  `ipo`, `bco` and `preference_loss_weights` blends stay refused (#2333). `task: grpo` now trains
+  on a base pre-quantized by mlx-lm at 4 bits in `affine` mode (`mlx-community/...-4bit`,
+  `mlx_lm.convert -q`); any other quantized base is refused right after the load, naming the
+  first layer outside the rule; `quantization: 8bit` stays refused at load, reworded; and
+  `adapter_config.json` gains `base_quantization` (#2386). MLX DPO `--resume` now refuses an
+  adapter of another task or base, an MLX SFT adapter included (#2321).
+- **Exit codes that changed:**
+
+  | Command and case | 0.77.1 | 0.77.2 |
+  |---|---|---|
+  | `soup eval quant-check`, unparseable `--tasks` file | 1, after loading both models | 3, before (#2185) |
+  | `soup distill-prompt`, no trace row has a prompt | 0, empty output written | 3, output untouched (#2209) |
+  | `soup data evolve` / `gen-magpie`, every provider call failed, no row | 0, output emptied | 1, output kept (#2348) |
+  | `soup data filter --perplexity` / `--score-only` without torch or transformers | 0, unfiltered or partial | 1 (#2377) |
+  | `soup data dedup --field <key>` absent from every row | 0, distinct rows dropped | 1 (#2336) |
+  | `soup registry push --run-id` on a run that is not `completed` | 0, entry registered | 1 (#2248) |
+  | `soup plan` / `soup apply`, malformed YAML or a config that cannot be read | 1, with the raw parser or OS error | 2, naming the config and the YAML location (#2323) |
+  | `soup quantize --to "[/]"` (a value Rich read as markup) | 1 | 2 (#2217) |
+  | `soup ship --progress jsonl`, Ctrl+C | 1 | 130 (#2417) |
+  | `soup loop status`, stored spend `NaN` or `Infinity` | 0, printed `$nan` | 2 (#2424) |
+
+- **The VRAM pre-flight prices some runs differently.** A short full fine-tune with
+  `adamw_torch` is priced higher (the optimizer step is its own phase), so inside the fitted range
+  the pre-flight can now refuse one it let through; `--allow-oom-attempt` still launches it
+  (#2338). A run sharded with `--fsdp full_shard`, `full_offload`, `shard_grad` or DeepSpeed
+  ZeRO-2/3 is priced per card and only warned about (#2313). A `task: prm` step is priced lower
+  (#2337, #2372); a `stream_loss_chunk` step higher (#2290); `backend: unsloth` is priced with its
+  seven automatic LoRA targets and 16-bit embeddings and output head (#2376).
+- **Server replies.** On the transformers backend and MoLE, a reply cut at `max_tokens` without
+  an end token now ends with `finish_reason: "length"` (`/v1/chat/completions`) or
+  `stop_reason: "max_tokens"` (`/v1/messages`) (#2380). `/v1/messages` applies the request's
+  `temperature` and `top_p`; a value out of range or `null` is 400 instead of the default (#2388).
+  The vLLM, SGLang and MII servers answer a generation request whose `Origin` names another site
+  with 403, as the transformers server did (#2329).
+- **Shell completion:** scripts written by `soup completions bash|zsh|fish` before 0.77.2 do not
+  complete; run the command again and replace the installed script (#2283).
+- **Python API:** `soup_cli.utils.profiler` no longer has `estimate_model_memory`,
+  `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`,
+  `estimate_activation_memory` or `estimate_total` (no caller since #2146 in 0.77.1, so their
+  numbers were not what `soup profile` printed). Use `soup profile --json`; the estimate itself is
+  `soup_cli.utils.vram_estimate.estimate_vram` (#2369).
+- **Smaller changes that alter a result:**
+  - `soup data from-traces --signal thumbs_up`, and the harvest stage of `soup loop`, pair a
+    thumbs-up and a thumbs-down answer that differ, and skip a prompt whose answers are all the
+    same text; 0.77.1 could write a pair whose `chosen` and `rejected` were identical, so the
+    number of pairs from the same logs can change (#2495).
+  - MLX Adafactor (`backend: mlx`, `training.optimizer: adafactor`) applies the configured learning
+    rate, warmup and schedule, so an existing run trains differently (#2484).
+  - Both `soup merge` paths load the base at the Hub commit recorded in the adapter's training
+    provenance, not the latest one. With `HF_HUB_OFFLINE` set and that commit not cached, the
+    merge now fails where 0.77.1 merged whatever was cached (#2485).
+  - `soup ci init --python` refuses a version outside 3.11 to 3.13 with exit 1 (#2249).
+  - `soup eval compare` and `soup eval leaderboard` refuse a stored score that is not finite, with
+    exit 1 (#2477); `ensure_judge_calibrated` (Python API) refuses a non-finite `min_agreement` or
+    `max_bias` (#2493); a judge task refuses a JSONL row that is not an object or whose `prompt` is
+    not a string, naming the file and line (#2494).
+  - `soup ship --adapter` returns DON'T SHIP with the rule `adapter_noop` for an adapter whose
+    `lora_B` tensors are all zero (#2434).
+  - On Windows, `soup adapters bisect --eval-command` splits the template without POSIX quoting:
+    single quotes and a quote inside a word no longer group words, so write `"{ckpt}"` in double
+    quotes (#2314).
+
+### Added
+
+- Add the `qwen3.5-0.8b-dpo` text-preference recipe for `Qwen/Qwen3.5-0.8B`, using inherited Qwen3.5 DPO settings rather than hyperparameters tuned for 0.8B. (#275 by @kok-o in #2184)
+
+- **`soup profile --model` answers whether a model fits without a `soup.yaml`, and Apple Silicon is checked against Metal's working set (#2049 by @abdulwaarith0 in #2285).** `soup profile --model <id or directory>` prices the run set by `--seq`, `--batch`, `--method lora|qlora|full`, `--lora-r`, `--optimizer` and `--gradient-checkpointing`, with the same estimate and the same bytes as a `soup.yaml` describing that run. It reads the model's `config.json` from a local directory, the Hugging Face cache or the Hub, so it works offline once the config is cached; when none can be read it exits 1 with the reason instead of pricing a shape guessed from the name. `--model` with `--config`, the run flags without `--model`, and `--lora-r` with `--method full` are refused. `soup profile --json` and the MCP `profile` tool now return a `lora_r` field on every platform: the LoRA rank priced, or `null` for a full fine-tune (including Spectrum and LISA). On Apple Silicon, `soup profile` and the MCP `profile` tool now compare the estimate to Metal's recommended working-set size from mlx, not the whole unified memory, and report the memory as assumed when mlx cannot read it. The `soup train` pre-flight still skips `backend: mlx`.
+
+- **On-policy MiniLLM planning.** Add `--minillm-on-policy` to `soup plan` and `soup apply`, validating and hashing the effective configuration without rewriting YAML. Apply preserves the supplied flag in its suggested train command and states that it records the plan without starting training. (#2303 by @Nari-Ab in #2315)
+
+- MLX accepts `task: preference` with `training.preference_loss: dpo`, `orpo` or `simpo`, using the corresponding native trainer, config restrictions and doctor support report while keeping the native task in saved adapter metadata (#2202 by @vaputa in #2333).
+
+- **MLX GRPO trains on pre-quantized 4-bit bases (#1976 by @ybai08 in #2386).** `task: grpo` with
+  `backend: mlx` refused any base that loaded quantized. It now also trains on a base
+  pre-quantized by mlx-lm at 4 bits in `affine` mode, as `mlx_lm.convert -q` and the
+  `mlx-community/...-4bit` repos write it, with the same loop and objective as on a dense
+  base. The quantized `QuantizedLinear` and `QuantizedEmbedding` layers (a tied output head
+  included) stay frozen and only the LoRA adapter trains; a quantized tensor left trainable is
+  refused before the first update, and the reference is the same quantized base with the
+  adapter off. Any other quantized base is refused right after the load, naming the first
+  layer outside the rule with its bits and mode: 8-bit and mixed-bit recipes, `mxfp4`,
+  `mxfp8`, `nvfp4`, quantized MoE layers and BitNet `BitLinear` layers. `quantization: 8bit` stays refused at load.
+  `adapter_config.json` records the base's quantization as `base_quantization` (bits, group
+  size, mode and the number of quantized linear and embedding layers; `null` for a dense
+  base). Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx`,
+  `quantization: 4bit` and a `mlx-community/...-4bit` base.
+
+- Add `qwen3.5-27b-dpo`, a text-only preference-training starting configuration for `Qwen/Qwen3.5-27B`, with inherited Qwen3.5 DPO settings, LoRA and 4-bit quantization. Register it in the language-decoder family audit and synchronize the catalog count and configuration snapshot (#275 by @kok-o in #2445).
+
+### Changed
+
+- Use the supported `dtype` argument throughout Transformers model loading instead of deprecated `torch_dtype`, preserving existing precision and quantization choices (#2200 by @Nari-Ab in #2257).
+
+- **`benchmarks/gate-h100-validation.md` now says under finding 9 that the pinned arm in the 6.56x comparison was the WRONG one.** The item read "measured with correctness asserted in the same process", which reads as both arms having passed; STEP 8 records `pin=True` as WRONG 8/256 on all three repetitions against an exact 256/256 for `pin=False`, so the 6.56x is a defective fast arm over a correct slow one. The sentence and every number are unchanged; the note is added in the record's existing dated-clarification form, and a CPU test pins the table rows, the two medians and the note. (#2224 by @xiemocun in #2271)
+
+- **`soup serve` checks `--tool-auth-token` with the rule `soup ui` and `soup mcp serve` use**:
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. A value from the option or from
+  `SOUP_TOOL_AUTH_TOKEN` that does not match stops the command with exit 2 before the model
+  loads, on every bind; the message names the rule, never the value. The shared check now
+  matches the whole value, so a valid token followed by a newline is refused by all three
+  commands. Upgrade note: a token shorter than 16 or longer than 128 characters, or with other
+  characters, now stops `soup serve` at start; generate one with
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+  The notice `soup serve` prints for a non-loopback bind now also says that requests travel as
+  plain HTTP and that TLS belongs in a proxy in front. The `--backend vllm`, `sglang` and `mii`
+  servers answer a generation request whose `Origin` names another site with 403, as the
+  transformers server already did, so on a LAN or wildcard bind a browser page from another
+  origin now gets 403 from these apps too; requests without an `Origin` header are served as
+  before. `/v1/tools/python` compiles the caller's code under the file name `<code>`, so
+  tracebacks give the caller's own line numbers (the first line was reported as line 7). When
+  the sandbox cannot start, `/v1/tools/bash` answers 501 with
+  `bash sandbox requires OS-level isolation`, as `/v1/tools/python` answers with its own fixed
+  sentence (#2329).
+
+- Data commands share one terminal-safe refusal for outputs that alias an input, including links and alternate path spellings, while preserving each command's exit code; the refusal no longer starts with `Error:` in `soup data doctor` and `lint` or `Plan failed:` in `soup data forge`. `soup data ingest` also refuses an output that names its source document before reading or writing it (#2298 by @kok-o in #2349; #2359 reported by @Batyrkhantzy111, fixed by @kok-o in #2349).
+
+- `soup ship --progress jsonl` reports live evaluation items after each generation chunk, before generating the next chunk, instead of waiting for the whole suite. Failed chunks retry only their own items; scores and event schema are unchanged. `soup eval custom` and the forgetting probe use the same path and also generate in chunks of the generator's `batch_size` when it has one, with unchanged results (#2288 reported by @abdulwaarith0, fixed by @kok-o in #2421).
+
+### Removed
+
+- Remove `utils/profiler.py`'s unused `estimate_model_memory`, `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`, `estimate_activation_memory` and `estimate_total`, along with their tests; they had had no caller in `src/` since #2146 moved every estimate onto `utils/vram_estimate.py`, and `soup profile` output is unchanged (#2305 by @qwist1233-cpu in #2369).
+
+- Remove the unreachable `minillm_enabled` check and redundant assignment in `soup train` when `--minillm-on-policy` is supplied, as the prerequisite is enforced at config load time (#2367 by @Shubham-dev-stack in #2422).
+
+### Fixed
+
+- Restored `data.max_length` enforcement for SimPO and KTO on TRL releases that removed `max_prompt_length`, rebuilding the KTO/BCO completion from the untruncated `answer_input_ids` so an over-length prompt no longer discards it, and covering the same measured over-length path for IPO and BCO. For SimPO, KTO, IPO and BCO a prompt is cut only when the row does not fit in `data.max_length`, which replaces the unconditional cut that #2116 introduced (#1185 by @ousamabenyounes in #1196).
+
+- User paths and flags in `soup data` are rendered as text, so a `[/]` in a path or `--format` / `--to` no longer raises `MarkupError` (#1859 by @mvanhorn in #1882).
+
+- `soup infer --cuda-graphs` and `soup bench infer --cuda-graphs` on a local
+  adapter given without `--base` now inspect the base its `adapter_config.json`
+  records, when that names a local directory, and refuse a non-Qwen2/Llama or
+  quantized base before the model loads; an explicit `--base` still wins, and a
+  Hub id or an unreadable value is left to the loader (#1817 by @Nick-800 in #1942).
+
+- **`soup eval quant-check` now reports an unparseable `--tasks` file as the usage error 3, before any model is loaded (#2053 by @Faisal-Fayaz in #2185).** The command validated the `--tasks` path up front but parsed the file only inside `run_quant_check`, after both models had been loaded, and the loader's `ValueError` then escaped as `Error: ValueError: ...` with exit 1 — while the command's docstring, `docs/commands.md` and the `[0.76.0]` entry already promise exit 3 for unparseable inputs. The input check now pre-parses the file: every loader failure — a suffix that is not `.jsonl`, an invalid JSON line, a row without `prompt`, a file with no tasks, and a file over `MAX_EVAL_TASKS`, plus any `OSError` or `ValueError` edge (`FileNotFoundError`, a path that exists but cannot be read, a decoding failure) — prints the loader's own message through `for_terminal` and exits 3, exactly like the already-refused missing file, so the mistake no longer costs the full model load. The pre-parsed list is also handed to `run_quant_check`, whose command path no longer reads the file once per model; its existing `tasks_file` parameter keeps working for other callers and `soup eval custom` is deliberately untouched, as the issue scopes.
+
+- Report when `CUDA_VISIBLE_DEVICES=-1` or an invalid device list hides every detected NVIDIA GPU in `soup doctor`, with the actual setting safely displayed and advice to unset it instead of reinstalling PyTorch (#2191 by @Nari-Ab in #2206).
+
+- `soup distill-prompt` now exits 3 when no trace row has a prompt it recognises, before any
+  provider call and without touching the output, and names the row count and the keys it
+  looked for. It used to print "done" with `Rows: 0`, exit 0 and replace an existing output
+  with an empty file. When only some rows have no prompt, the done panel shows how many were
+  skipped (#1854 by @akkupratap323 in #2209).
+
+- Keep the Docker image's `latest` tag on the highest stable release when publishing an older release line. Full-version and major/minor image tags are still published for every release. Maintenance lines need `docker.yml` and `scripts/docker_release_tags.py` backported before their next tag (#2195 by @Nari-Ab in #2214).
+
+- **`soup bench train` could not measure any 4-bit or 8-bit config: it crashed before the first step with `TypeError: Got unsupported ScalarType BFloat16`, and on a T4 or V100 it then failed in the GradScaler (#2215 by @VanshSharmaPES in #2216).**
+  TRL 0.29 casts the adapters of every 4-bit and 8-bit model to bf16, on every card. The bench fingerprint hashed parameters through numpy, which has no bf16; it now hashes their raw bytes, unchanged for every other dtype. On fp16 cards `soup train` casts those adapters back to fp32 before training, and `bench train` now does the same, so it measures the run `soup train` makes. `soup train` itself was not affected.
+
+- `soup quantize --to awq` and `--to gptq` (any case) now add `--to awq was removed in v0.77.0.` (or `gptq`) after the "must be one of" line, as `soup export --format` already does, and a rejected `--to` value is printed as typed instead of being read as Rich markup, so `--to "[/]"` exits 2 with the usage message rather than 1 with a `MarkupError` (#2210 by @ColumbusLabs in #2217).
+
+- In `soup registry push --run-id`, refuse runs whose status is not `completed` (such as `failed`, `running`, `terminated`, or `launching`) with exit 1 instead of registering an unusable entry (#2236 by @Guts1005 in #2248).
+
+- In `soup ci init --python`, validate the Python version against the supported range (3.11 to 3.13) with exit 1 and a diagnostic naming the running Soup version instead of writing a workflow that fails or installs an older release in CI (#2233 by @Guts1005 in #2249).
+
+- In `soup train --gpus N` without `--yes`, ask the `Start training?` confirmation once in the parent launcher process before spawning `accelerate launch` and forward `--yes` to the child ranks so they do not re-prompt (#2239 by @CG-5228 in #2250).
+
+- `soup adapters audit` rebuilds an MLX rsLoRA alpha as `scale * sqrt(rank)` when `lora.use_rslora` is set. A run that wrote `scale = alpha / sqrt(rank)` now agrees. The old `scale * rank` reading reported that run DIVERGED (rank 8, alpha 16 came back as about 45.25). A plain scale checked against an rsLoRA config still diverges (#2228 by @MbappeWU in #2255).
+
+- Preserve the last 50 lines, at most 50 KB, of failed RunPod remote stderr and training logs before verified Pod deletion, strip unsafe terminal controls, redact URL credentials and common token patterns, and distinguish SSH-readiness timeouts from remote training-command timeouts (#2193 by @Nari-Ab in #2256).
+
+- `soup doctor --config` now excludes MLX support-table settings that config loading refuses, so its all-clear counts include only settings that can reach the doctor (#2238 by @Samearth17 in #2258).
+
+- `soup mcp serve`, `soup ab`, `soup train --gpu` and `soup serve --tool-auth-token` help, and the `training.kv_cache_type` description, now say what each does today (#2221 by @TejasS1233 in #2268).
+
+- Refuse input/output aliases in `soup data persona-mix`, `generate`,
+  `canary check`, `mix --optimize`, `forge` and `recipe --execute` before
+  destructive writes. Protect optional persona/style/context files, live mix
+  configuration, forge provenance and recipe seed/checkpoint/sidecar targets;
+  keep distinct outputs working (#2226 by @kok-o in #2274).
+
+- **`task: sft` now refuses `reasoning_effort`, `train_on_eot`, `use_flash_attn` and
+  `use_liger` on the paths that never read them.**
+  `task: sft` is several code paths. The vision and audio setups, `data.format: raft`,
+  a pre-tokenised cache, `backend: mlx` and `backend: unsloth` loaded these fields and
+  applied none or only some of them, so a run trained with a setting that was silently
+  dropped. Each refused config names the field, the path and what to change, from one
+  table of the sft dispatch that the `freeze_layers` / `freeze_ratio` refusal reads too.
+  `train_on_eot` still loads with `data.format: pre_tokenized`, where
+  `soup data preprocess` keys the cache on it. Streaming keeps the kernel flags refused
+  by #1692 and MLX keeps its own ignore warning. (#1698 by @abdulwaarith0 in #2278)
+
+- Stop and remove the Aider benchmark Docker container on timeout or Ctrl-C (#1464 by @ShivanshShukla in #2280).
+
+- **A row Soup cannot interpret is named, not silently dropped.** `soup data clean` now warns that the rows are in no recognised format and prints the detection error with the first offending key set (on stderr under `--json`) before it sanitises them as plaintext; it used to fall back without a word, so its `No issues found` read as a checked file; `soup ab` counts the rows it could not use by reason (invalid JSON, not an object, arm missing or not control/treatment, metric missing or non-numeric, metric not finite) and prints them when the usable total is below the threshold; and `soup rewind --json` writes a non-finite loss, baseline or ratio as `null` with `non_finite: true`, so the file parses as strict JSON instead of carrying bare `NaN` / `Infinity` (#1818 by @EtherealMelon in #2281).
+
+- **`soup train --cloud lambda` shows the install steps when they fail.** The generated cloud-init script now creates `/home/ubuntu/soup/train.log` before the first step that can fail and appends the `apt-get` and `pip install` output to it, so a failure before training starts (for example a `Requires-Python` mismatch) appears in the tail the controller prints instead of `Could not fetch remote log tail` (#2234 by @EtherealMelon in #2282).
+
+- Restored command and option completion in scripts emitted by `soup completions bash|zsh|fish` by using the installed Typer's matching completion protocol and response format. Regenerate previously installed completion scripts after upgrading. (#2283 by @Nari-Ab)
+
+- `soup init` now displays bracketed output paths literally instead of failing after writing the config or hiding part of the path; unknown template names are escaped and stripped of terminal controls. (#2284 by @Nari-Ab)
+
+- **The layer-streaming VRAM pre-flight no longer under-predicts a `training.stream_loss_chunk`
+  step.** Such a step peaks in the backward of the last decoder layer, at the end of its
+  checkpoint recompute, not in the loss: on the NF4 dequantise + linear path all seven of that
+  layer's weights are live as dense bf16 copies (436 MB on Llama-3.1-8B), beside its recomputed
+  activations. The pre-flight now charges the larger of the loss and that recompute phase, on top
+  of the resident weights and the checkpoint boundaries. On the measured Llama-3.1-8B NF4 rows
+  (RTX 3060 Laptop) the chunked predictions go from 0.848-0.890 to 1.037-1.050 of the real peak
+  at 512, 1024 and 2048 tokens; the unchunked ones do not move. A short NF4 run without the
+  option can be predicted higher. Separate q/k/v/o and gate/up/down projections only: fused
+  `gate_up`, MoE layers and LoRA on MLP modules are not covered (#1693 by @ybai08 in #2290).
+
+- The `soup train` VRAM pre-flight now prices a run sharded across more than one process per card, so FSDP-QLoRA of a 70B model in 4-bit on two 24 GB cards is no longer refused before it starts (#2300 by @ybai08 in #2313).
+  Under `--fsdp full_shard` / `full_offload` and DeepSpeed ZeRO-3 the weights and the adapters in the floor are divided by the process count, and under those and `--fsdp shard_grad` / ZeRO-2 the gradients and optimizer state; the CUDA context is not. The DeepSpeed stage is read from the resolved preset or JSON, and the process count is `WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`. The estimate is fitted on one card, so for a sharded run it only warns, and the panel says the run is sharded and that the floor is per card. Data-parallel `--gpus N` without sharding, and every single-process run, are checked as before.
+
+- **Reliable adapter-bisect commands.** Preserve Windows paths and checkpoint argument boundaries in `--eval-command`, including Windows executable paths that omit `.exe`. Refuse missing or unstartable programs without reporting a broken checkpoint or writing a result; actual failed evaluations and timeouts still count as failed probes. (#2293 by @Nari-Ab in #2314)
+
+- `task: ppo` no longer crashes at the first rollout with `AttributeError: 'PolicyAndValueWrapper' object has no attribute 'gradient_checkpointing_disable'` when the policy has gradient checkpointing on, as `quantization: 4bit` / `8bit` with `gradient_checkpointing: true` sets it. trl's wrapper copies `is_gradient_checkpointing` from the policy but has neither method its rollout calls, so Soup gives the trainer's own wrapper instance both, forwarding to the policy, and keeps the checkpoint kwargs the policy had before the rollout instead of letting transformers reset them (#2311 by @ybai08 in #2319).
+
+- MLX DPO `--resume` now refuses an adapter of another task or another base
+  model, or one without `adapter_config.json`, before any tensor loads, as ORPO,
+  SimPO and KTO already did. This means a DPO run can no longer resume from an
+  MLX SFT adapter: its `adapter_config.json` has no `task` key, so it is refused
+  with `was trained with task=None, not 'dpo'` (#2232 by @mayuriphad in #2321).
+
+- **Terminal-safe environment reports.** Strip terminal controls and bidi marks from `soup env` metadata, package versions, drift descriptions, displayed install plans and paths while keeping markup literal. Lock files and generated requirements keep their original contents. (#2322 by @Nari-Ab)
+
+- **Actionable plan/apply read errors.** Report the config path and YAML location, UTF-8 byte offset or OS read failure before changing state. Invalid inputs exit 2 with terminal-safe diagnostics; a missing config retains exit 1. (#2323 by @Nari-Ab)
+
+- `training.activation_offloading` now reaches the VRAM estimate: the `soup train`
+  pre-flight, `soup profile` (text and `--json`), `soup plan` and the layer-streaming
+  plan panel say, when it is set, that the activation term is still charged as if every
+  saved tensor stayed on the card, since what `cpu` or `disk` offloading moves off it
+  is not modelled. The estimate and the pre-flight's refuse or warn decision are
+  unchanged (#2327 by @ybai08 in #2331).
+
+- Ship the corrected DPO and chat preference demo pairs in package data, keeping their quality signal independent of response length. (#2324 by @kok-o in #2335)
+
+- Refuse `soup data dedup --field` when a nonempty selected key is absent from every row, before either backend runs or an output is written; an empty field keeps the all-text default. (#2325 by @kok-o in #2336)
+
+- The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool no longer charges a `task: prm` step the cross-entropy chain it never builds: the PRM trainer runs the causal-LM forward without labels and takes its loss from the reward head, so its `logits` term is now the logits alone, 6 bytes an element (`LOGITS_TENSOR_BYTES_PER_ELEMENT`: the half-precision output and the fp32 copy Accelerate makes of it), where it was 12. With #2372 below, most bases are charged that on one position; the model types without `logits_to_keep` and remote-code bases keep every position: at 2,048 tokens, batch 4 and a 32,000-token vocabulary, 1.57 GB in place of 3.15 GB. Every other task with an LM head is charged as before (#2332 by @ybai08 in #2337).
+
+- **The VRAM estimate prices the optimizer step as its own phase of the peak.**
+  On a short full fine-tune with `adamw_torch` the step, not the forward and backward
+  pass, sets the peak: the weights, gradients and AdamW state stay resident while the
+  foreach update allocates one fp32 copy of `exp_avg_sq`. The estimate now takes the
+  larger of the two phases, through a new `optimizer_step` term shown by the train
+  pre-flight and `soup profile` (`optimizer_step_memory_gb`); a 64-token SmolLM2-135M
+  full fine-tune went from 0.810 of its measured peak to 0.976. (#2277 by
+  @abdulwaarith0 in #2338)
+
+- `task: ppo` now switches gradient checkpointing on for the policy when `training.gradient_checkpointing` asks for it. trl's PPO trainer runs its own loop instead of `Trainer.train()`, so outside `quantization: 4bit` / `8bit`, where `prepare_model_for_kbit_training` already turned it on, the setting reached `PPOConfig` and nothing else and the policy trained without checkpointing. Soup now calls `gradient_checkpointing_enable()` on the policy after LoRA is attached; 4-bit and 8-bit runs keep what kbit prep set, with its own kwargs, and the value and reward models are unchanged (#2197 by @ybai08 in #2340).
+
+- `soup recipes show` and `use` display recipe names and output paths literally, strip terminal controls from diagnostics and overwrite prompts, keep the requested filenames, and write the recipe's YAML unchanged (#2343 by @Nari-Ab).
+
+- `soup why` preserves recorded zero losses and step counts in its run summary; only absent measurements display as `-` (#2344 by @Nari-Ab).
+
+- `soup cost --json` sends configuration and GPU-filter diagnostics to stderr, leaving stdout for successful JSON estimates while preserving refusal exit codes and human-readable output (#2345 by @Nari-Ab).
+
+- `soup data evolve` and `soup data gen-magpie` now exit 1 and preserve their output when no rows survive failed provider calls. Empty completions count as failed calls. Partial failures report counts and the first error while retaining usable rows (#2294 by @kok-o in #2348).
+
+- RunPod jobs create a virtual environment with access to the image's system packages, install Soup with its Python and run the environment's `soup` by absolute path, avoiding system-pip restrictions and SSH PATH dependence (#2352 by @kok-o).
+
+- A `task: prm` step no longer builds full-vocabulary logits that nothing reads: the PRM trainer's forward and the two forwards of the GRPO PRM reward (`prm_reward`) pass `logits_to_keep=1` where the model's `forward` takes it, so the LM head runs on the last position only and the `[batch, seq_len, vocab]` tensor (and Accelerate's fp32 copy of it) shrinks to `[batch, 1, vocab]`; the hidden states the reward head reads, the loss and every gradient are unchanged. A forward without the argument keeps the old call. The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool charges a PRM step's `logits` term on one position, `vocab × batch × 6` bytes, except for the eight causal-LM model types whose forward has no `logits_to_keep` (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and remote-code bases (`auto_map` in `config.json`), which keep the full-sequence charge. At 2,048 tokens, batch 4 and a 32,000-token vocabulary the term drops from 3.15 GB in 0.77.1 to 0.77 MB (#2368 by @ybai08 in #2372).
+
+- `task: ppo`, `grpo` and `online_dpo` with `gradient_checkpointing` on no longer add a forward hook to the policy's input embedding at every step. The trl loops switch checkpointing off and back on around generation, and each switch registered one more input-gradient hook that transformers never removed, so every generated token ran one more hook per step already taken. Soup now makes each registration remove the previous hook first, so the count stays at its value after the first step and the embedding output still requires grad (#2365 by @ybai08 in #2373).
+
+- Price Unsloth's automatic LoRA targets with the same seven projections as its
+  loader, and its 4-bit embeddings and output head at the measured 16-bit precision.
+  This corrects the hardware-fit floor and charges saved activation inputs for all
+  seven projections when checkpointing is off or medium, while preserving
+  Transformers estimates (#2301 by @ryznren in #2376).
+
+- `soup data filter --perplexity` and `--score-only` now exit 1 with installation instructions if torch or transformers cannot be imported, preserving any existing output instead of silently writing unfiltered rows or incomplete scores. Coherence-only filtering still works without those dependencies (#2360 reported by @Batyrkhantzy111, fixed by @kok-o in #2377).
+
+- Refuse `soup adapters arithmetic` and `soup adapters merge` runs whose `--output` names one of the input adapters, instead of overwriting that adapter's weights and config in place (#2358 by @ShryukGrandhi in #2379).
+
+- Report why Transformers-backend generation stopped: a reply cut off at `max_tokens` without an end token now ends with `finish_reason` `length` on `/v1/chat/completions` and `stop_reason` `max_tokens` on `/v1/messages`, in the reply and the last stream frame, and the MoLE runtime does the same; an end token, even the last one the budget allows, still reports `stop` / `end_turn` (#2361 by @abdulwaarith0 in #2380).
+
+- **`soup loop watch` resets the monthly spend when the UTC month changes.** The
+  spend kept growing across month ends, so a loop that reached its
+  `monthly_budget_usd` stayed skipped for good. The reset reads the previous
+  `last_run_date` in the same step as the daily counter reset, so the year change
+  is covered too. (#2362 by @abdulwaarith0 in #2387)
+
+- `/v1/messages` forwards `temperature` and `top_p` from the request (defaults only when omitted), matching `/v1/chat/completions`; out-of-range or `null` values now return 400 instead of being served with defaults (#2381 by @MbappeWU in #2388).
+
+- **`soup train --resume` says which path it searched when it finds no checkpoint.** The message now names the path and the reason: an explicit `--resume` path that does not exist or is not a directory, an `auto` output directory that does not exist or holds no `checkpoint-N` directory (with `experiment_name` applied), and the MLX adapter-file variants. The successful path is unchanged (#2296 by @EtherealMelon in #2389).
+
+- In `resolve_device`, resolve `"auto"` to `"cuda"` when available else `"cpu"` instead of returning `"auto"` verbatim, preventing PyTorch `RuntimeError` on `nn.Module.to("auto")` in `embed_texts` and default-device commands (`soup data topics`, `soup data dedup --semantic`) (#2279 by @harshitthek in #2396).
+
+- `soup profile --json` sends configuration, flag and model refusals to stderr, leaving stdout for the JSON estimate while preserving exit codes and human-readable output (#2398 by @Nari-Ab).
+
+- `soup migrate` now shows the paths in its success, refusal, JSONL and overwrite-prompt messages as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2399 by @Nari-Ab).
+
+- `soup push` now shows the model path in the upload plan and refusals, repo id, hub, collection slug and upload errors as typed: brackets, `:name:` text and `[/]` in an error no longer change or break the message, and terminal control characters are stripped from the display only (#2400 by @Nari-Ab).
+
+- `soup runs delete`, `clean` and `compare` now show run ids and checkpoint paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2401 by @Nari-Ab).
+
+- `soup quickstart` now shows the directory and the data and config paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2402 by @Nari-Ab).
+
+- `soup sweep` now shows the config path, parameters and run names as typed in its plan, per-run lines, errors and result tables: brackets, `[/]` and `:name:` text are kept, and terminal control characters are stripped from the display only (#2403 by @Nari-Ab).
+
+- `soup deploy ollama` now shows the model name, GGUF path, system prompt, parameters and Ollama messages as typed: a system prompt with `[/INST]` no longer breaks the deploy plan, brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2404 by @Nari-Ab).
+
+- **`soup data lint` no longer reports a check that never ran as `OK` (#2408 by @harryc295 in #2411).** When `datasketch` is not installed, the near-duplicate check now reports `SKIPPED` (yellow) and the summary line says how many checks were skipped. A skipped check does not change the overall verdict or the exit code.
+
+- `soup ship --progress jsonl` now prints an unexpected exception's sanitized type and message on stdout while keeping stderr exclusively JSONL, and Ctrl+C now exits 130 instead of 1, after the same `error` progress events (#2297 by @vaputa in #2417).
+
+- **`soup loop status` shows the spend and run count the next iteration will
+  see.** After a UTC month or day change it showed the stored values until the
+  loop next ran; it now applies the same resets as `soup loop watch` from the
+  saved `last_run_date`, without writing `loop.yaml`. A hand-edited state with an
+  `Infinity` or `NaN` spend is reported as invalid (exit 2). (#2390 by
+  @abdulwaarith0 in #2424)
+
+- `soup deploy ollama --list` and the "Ollama v... detected" line now show what `ollama list` and `ollama --version` printed as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2425 by @Nari-Ab).
+
+- `soup push --card` now shows an unknown or ambiguous registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2426 by @Nari-Ab).
+
+- `soup migrate` now shows an unknown `--from` value, a failed migration, a schema-validation failure and the migration warnings as typed: `:name:` text is kept instead of becoming an emoji, a warning in the panel no longer turns into an emoji, and terminal control characters are stripped from the display only (#2427 by @Nari-Ab).
+
+- `soup runs show`, `soup runs replay` and `soup runs curriculum-curve` now name a missing run as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2428 by @Nari-Ab).
+
+- `soup runs` now shows run ids, names, base models and tasks in the table, and a curriculum-history file name in `runs curriculum-curve` errors, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2429 by @Nari-Ab).
+
+- `soup bom emit` now shows the `--format` value, energy-file and output paths, energy-file errors and the registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2430 by @Nari-Ab).
+
+- `soup fetch` now shows an unknown namespace or entry name and the output path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2431 by @Nari-Ab).
+
+- `soup data topics` now shows the dataset path, the embedding model, an embedding error and the report path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2432 by @Nari-Ab).
+
+- **`soup ship --adapter` refuses an adapter whose `lora_B` tensors are all zero.** Ship now reads a local adapter's weights before loading either model; an adapter that adds nothing to the base (an untrained one, or a DPO run's `ref/` folder) is DON'T SHIP with its own failed rule, `adapter_noop`, instead of failing later as "task did not improve". Adapters with no `lora_B` keys are left alone, and unreadable weights print a warning (#2410 by @ShryukGrandhi in #2434).
+
+- `soup runs show` now prints a run's stored name, model, task, device, GPU memory, output directory, error, config and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, `[...]` in the config JSON is no longer read as markup, and terminal control characters are stripped from the display only (#2436 by @Nari-Ab).
+
+- `soup runs compare` now prints the run ids, names, models, tasks, devices and config values it compares as typed: a model name with `[/]` no longer crashes the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2437 by @Nari-Ab).
+
+- `soup plugins install` now names the typed plugin as typed, and `soup plugins` lists a plugin's description, its version (for an installed plugin that is not enabled yet, it comes from package metadata) and its template and model-group names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2438 by @Nari-Ab).
+
+- The output-over-input refusal shared by `soup data` and `soup ingest` commands now keeps `:name:` text in the refused file name instead of turning it into an emoji (#2439 by @Nari-Ab).
+
+- `soup deploy hf-space` now shows the unknown template, a refused `--space` or `--model` id, the `--template-dir` path (in the error and in the plan panel) and the Hub's error text as typed: `[...]` in a value no longer breaks or hides the message, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2440 by @Nari-Ab).
+
+- `soup data mix` now shows the dataset paths in the echoed recipe, the recipe and output paths it names, the dataset list of `--apply` and its error messages as typed: `[...]` in a path no longer hides part of the recipe, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2441 by @Nari-Ab).
+
+- `soup runs delete`, `soup runs replay` and the fallback note of `soup runs clean` now show a run id and a stored status as typed: `[...]` in an id no longer hides part of the line or stops the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only, delete's confirmation prompt included (#2442 by @Nari-Ab).
+
+- `soup lock write`, `soup lock show` and `soup lock check` now show the typed paths and base model, the text read from a lock file (soup version, base model, date) and their error messages as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2446 by @Nari-Ab).
+
+- `soup expect` now shows the dataset path in its table title and the text of its loader, suite, `--judge` and judge errors (a YAML error quoting a line of the suite, the judge's own reply) as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2447 by @Nari-Ab).
+
+- `soup card` now shows the registry reference it could not find, the output path it names in its panel and its write errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2448 by @Nari-Ab).
+
+- `soup airgap-bundle` now shows the output and model paths of its summary panel, the `--repro-receipt` path and the build and receipt errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2449 by @Nari-Ab).
+
+- `soup ab` now shows an unknown `--metric` and the `--input` path it cannot read as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2450 by @Nari-Ab).
+
+- `soup registry` now shows a reference, run id, name, tag, `--data` path and search query that you typed, and the messages that quote them, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2451 by @Nari-Ab).
+
+- `soup history` now shows a name that it refuses and the file name of an attached branch as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2452 by @Nari-Ab).
+
+- `soup reward synth` and `soup reward stress` now show the typed `--kind`, attack names, paths and verifier target, the text induced from the references (schema keys, rejected references) and the errors of the reward file as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2454 by @Nari-Ab).
+
+- `soup license-advisor` now shows an unknown `--target`, and the `--license` you typed in the title and the reason of its risk check, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2455 by @Nari-Ab).
+
+- `soup registry list`, `show`, `search` and `diff` now show the stored base model, task, run id, notes, artifact paths, config keys and values and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2456 by @Nari-Ab).
+
+- `soup audit-log tail` now shows the timestamp, command, exit code, operator and host of each record, and `soup audit-log rotate` the path it rotated, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2457 by @Nari-Ab).
+
+- `soup apple-adapter` now shows a direction it refuses, the source and output paths of its plan and summary panels, and the errors of the conversion as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2458 by @Nari-Ab).
+
+- `soup compile` now shows an optimizer it refuses, the program, eval-suite and output paths of its plan and result panels, and the errors of the compile and the write as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2459 by @Nari-Ab).
+
+- `soup spectrum scan` now shows the model in its table title, the layer groups of the table, the layer names of the YAML block, the `--output` path and the errors of the scan as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2461 by @Nari-Ab).
+
+- Keep evaluation task counts and scalar retry order intact when a custom batch callable mutates or consumes its input list, including chunked batches (#2009 by @taljeon in #2463).
+
+- The `run_gate` SDK refuses NaN, infinite and out-of-float-range integer `regression_threshold` values before generation, preserving baseline/suite validation priority, finite tolerance semantics, and CLI/config bounds (#1844 by @taljeon in #2464).
+
+- `soup cost` shows missing config paths and unmatched GPU filters literally, keeps emoji aliases as typed, and strips terminal control characters from these diagnostics while preserving exit codes and JSON-mode stderr routing (#2468 by @Nari-Ab).
+
+- `soup why` keeps emoji aliases literal and strips terminal controls when reporting a refused run reference, preserving the lookup and exit code (#2469 by @Nari-Ab).
+
+- `soup init` strips terminal controls only from the overwrite confirmation, keeping literal brackets and the original file target (#2472 by @Nari-Ab).
+
+- `soup shrink` keeps emoji aliases literal and strips terminal controls from friendly validation errors without changing exit codes (#2473 by @Nari-Ab).
+
+- `soup draft` keeps emoji aliases literal and strips terminal controls from early refusals while preserving exit codes and avoiding model work (#2474 by @Nari-Ab).
+
+- `soup drift-alarm` keeps emoji aliases literal and strips terminal controls in external diagnostics and displayed drift tokens, preserving drift results, exit codes and original webhook payloads (#2475 by @Nari-Ab).
+
+- Refuse selected non-finite stored scores before eval comparison or leaderboard output, with a named diagnostic and CLI exit 1 instead of a NaN delta or invalid JSON (#2466 by @taljeon in #2477).
+
+- `soup init` preserves typed emoji aliases in link refusals, unknown-template errors, and saved-config paths (#2478 by @Nari-Ab).
+
+- `soup shrink` keeps typed emoji aliases and strips terminal controls in registry attachment warnings (#2479 by @Nari-Ab).
+
+- `soup draft distill --plan-only` strips terminal controls from distillation preview headers and preserves emoji aliases and backslashes in preview YAML (#2480 by @Nari-Ab).
+
+- `soup doctor --config` shows missing config paths literally while stripping terminal control characters from the diagnostic (#2481 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in missing explicit `--llama-cpp` paths while stripping terminal controls (#2482 by @Nari-Ab).
+
+- `soup prune-prompt` shows emoji aliases and a backslash before an unmatched `[` literally in the detected prefix preview, and strips terminal controls from it (#2483 by @Nari-Ab).
+
+- MLX Adafactor now applies the configured learning rate, warmup and schedule instead of its default relative steps and parameter scaling (#1811 by @vaputa in #2484).
+
+- Both `soup merge` paths now load a matching base at the Hub commit recorded in the adapter's training provenance, while preserving legacy, local and differing-base override behavior (#1902 by @vaputa in #2485).
+
+- Refuse non-finite judge calibration SDK recheck limits, including integers beyond float range, while preserving report-error priority, finite custom limits and equality boundaries (#2467 by @taljeon in #2493).
+
+- Refuse non-object judge JSONL rows and non-string prompt fields before that row is generated, with task, file and physical-line diagnostics while preserving existing fail-closed CLI behavior (#1949 by @taljeon in #2494).
+
+- `soup data from-traces --signal thumbs_up` now pairs distinct responses and skips prompts with no distinct pair. (#2495 by @kok-o)
+
+- `soup env lock` keeps emoji aliases literal in the lock receipt (#2497 by @Nari-Ab).
+
+- `soup lock check` preserves a backslash before an unmatched `[` in the displayed lock path (#2498 by @Nari-Ab).
+
+- `soup draft list` keeps emoji aliases and backslashes before unmatched opening brackets in the registry table (#2499 by @Nari-Ab).
+
+- `soup ingest --logs` keeps emoji aliases and backslashes before unmatched opening brackets and strips terminal controls when reporting refused or unreadable offline paths (#2500 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in the missing `--model` diagnostic while stripping terminal controls (#2501 by @Nari-Ab).
+
+- `soup data mix --apply` quotes list-form `data.train` paths so pasted YAML preserves punctuation, Unicode and long paths (#2502 by @Nari-Ab).
+
+## [0.77.1] - 2026-10-28
+
+### Upgrade notes
+
+A valid `soup.yaml` that loads on 0.77.0 needs no change. Coming from 0.76.x or older, read the
+0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the first run of
+an existing config.
+
+- **A `soup data` command that wrote its result over its own input now fails** before it reads
+  anything. Eighteen commands refuse an output that names one of their inputs, under any spelling
+  and through a default output name; the entries under Fixed list them (#2245, #2261). For an
+  in-place edit, write to a new file and rename it. `soup data clean` already refused this.
+- **`soup plan` and `soup apply` refuse what `soup train` refuses** (exit 1, no plan written), so a
+  pipeline that planned a config with a staged field, a refused deprecated value or any other
+  schema error now stops at `soup plan` (#2242).
+- **External programs run by an absolute path found on `PATH`.** The current directory and empty
+  or relative `PATH` entries are not searched, and on Windows `soup` leaves the current directory
+  out of the program search for itself and the programs it starts. A tool found only there needs
+  its directory on `PATH` as an absolute path, or its own path (#2205, #2213).
+- **The VRAM pre-flight prices runs with the shared estimate.** Inside the range the estimate
+  was fitted on (dense models of 3B and below on one 6 GB card) it refuses some long-sequence,
+  large-vocabulary runs and some runs without gradient checkpointing that it let through, and
+  `--allow-oom-attempt` still launches them. Outside that range (a larger model, a
+  mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`,
+  `backend: unsloth`) a run that does not fit gets the estimate as a warning and starts, unless
+  its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the
+  parameters it trains alone are more than the card holds: that run is refused there too. The
+  optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and
+  `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers
+  replace the optimizer. Reading a Hub model's shape can reach the Hub unless
+  `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set (#2146 by @abdulwaarith0).
+- **`/v1/tools/python` answers `timed_out: false` for a failure that is not a timeout**, with the
+  process output (#2204 by @Nari-Ab).
+
+### Added
+
+- **Native MLX inference** — `soup infer` accepts `--backend mlx` for local native text LoRA adapters and MLX base models. A shared loader resolves native base metadata, strictly validates adapter tensors and refuses unsupported controls/variants. Dense and genuine 4-bit update/save/fresh-process generation are covered without Torch or PEFT. (#2121 by @Amix29)
+
+- Add alias table and ranking for foreign parameter names (e.g. `learning_rate` -> `lr`, `num_train_epochs` -> `epochs`) in unknown config key reporting, and set the declared-field suggestion cutoff to 0.65 in every section (#2099 by @Nari-Ab in #2138).
+
+- **Two reads of a streamed routed expert per step instead of three (experimental, off by
+  default).** `build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint
+  but no longer fetches routed experts during its replay: the forward and the expert's own
+  backward each read it once, and the router reuses the forward's top-k choice while its
+  scores stay differentiable. It needs the `per_expert` layout and reaches DeepSeek-V3-family
+  bases; there is no config field or default change. A forward hook on a two-read decoder
+  layer, its MoE block or its routed experts is refused with an error instead of receiving
+  the replay's different output. On CPU the losses and gradients equal the resident model's
+  bit for bit with two reads per expert visit. (#2158 by @Batyrkhantzy111)
+
+- Add opt-in `soup ship --progress jsonl` with versioned completion events, explicit noise-floor repeat groups, content-free abort diagnostics and an exclusive JSONL stderr channel; ordinary output stays unchanged. (#2171 by @kok-o)
+
+- **GRPO runs natively on Apple Silicon: `task: grpo` with `backend: mlx` (#1976 by @dryn85-max in
+  #2182).** It was refused at config load. Soup's own MLX loop now generates `num_generations`
+  completions per prompt from the current policy, scores them with the built-in `accuracy` or
+  `format` reward and takes one policy-gradient step per update. The objective is the one Soup's
+  transformers path trains on TRL 0.29.1 (`loss_type: dapo`, group-scaled rewards, `epsilon`
+  0.2, one iteration, token-level importance sampling, k3 KL against the base model with
+  `training.grpo_beta`), and every setting is recorded in `adapter_config.json`. Held-out prompts
+  are scored once after training as `val_reward`. A nonfinite loss or gradient skips the update.
+  Settings the native loop does not apply, `quantization: 8bit`, `lora.r: 0`, custom or ensemble
+  rewards and non-text modalities are refused at load; `--resume` is refused because only the
+  adapter is saved. Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx` and
+  `reward_fn: accuracy`.
+
+### Changed
+
+- Clarify that training.curriculum_dynamic and its tuning fields track online uncertainty telemetry for curve inspection without modifying batch sample composition (Refs #808 by @Nari-Ab in #2142).
+
+- **One peak-VRAM estimate for `soup train`'s pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` (#2049 by @abdulwaarith0 in #2146).** The pre-flight and `soup profile` priced the same run with two formulas in two units, and neither charged the logits and loss chain, which decides long, large-vocabulary runs. All four now use `utils/vram_estimate.py`, which reads the model's `config.json` and safetensors headers (never the weights) and prices weights, adapters, gradients, optimizer state, activations, logits, the 4-bit dequantization copy and overhead, calibrated on 39 measured runs (`benchmarks/gate-2049-resident-vram.md`). Inside the range the estimate was fitted on (dense models of 3B and below on one 6 GB card), the pre-flight now refuses some long-sequence, large-vocabulary runs and some runs without gradient checkpointing that it let through, and `--allow-oom-attempt` still launches them; outside it (a larger model, a mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`, `backend: unsloth`) a run that does not fit gets the estimate as a warning, with a footnote saying the estimate may overstate the peak, and starts, unless its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the parameters it trains alone are more than the card holds, which is refused there too (`--allow-oom-attempt` launches it); the optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers replace the optimizer. Tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`) are charged no logits; with `use_liger` or `use_cut_ce` the logits are still charged and the output says the fused loss may not build them. `gradient_checkpointing` is priced as the trainer applies it: `auto` resolves on the card as the `sft` trainer does, `selective` is priced as no checkpointing (an upper bound), and tasks other than `sft` and `tts` checkpoint fully. `soup profile`'s numbers change, and its JSON gains the exact bytes per term, the fit verdict and where the model's shape came from. `gradient_checkpointing` in that JSON (and in the MCP `profile` result) stays the config's own value (`true`, `false`, `"auto"` or a tier name), and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced. Reading a Hub model's shape can now reach the Hub from the pre-flight, `soup profile` and `soup plan` (which prints a dim line before it does; `soup apply` compares hashes only and does not read the model), and writes its `config.json` into the Hugging Face cache, unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set; the MCP `profile` tool reads only a local directory or the local cache. A Hub model with no readable `config.json` is priced from a shape guessed from its name. `soup plan` records `peak_vram_gb: null` with a `peak_vram_reason` when it cannot price the run, instead of a fixed 8.0 GB; a state file written before this still loads.
+
+- External programs that Soup starts (`nvidia-smi`, `sysctl`, the disk-probe tools, `git`, `ollama`,
+  the llama.cpp binaries, `trtllm-build`, `docker`, the Modal CLI, `gh`, `ssh` / `scp` in the RunPod
+  and Lambda controllers, the code-sandbox tools, `accelerate` for `soup train --gpus`, and the
+  `soup adapters bisect --eval-command` program) now run by the absolute path found in an absolute
+  `PATH` directory. Empty and relative `PATH` entries (`.`, `bin`, and on Windows `\bin` or `C:bin`)
+  are not searched, and neither is the current directory, so a program found only through such an
+  entry is no longer found: put its directory on `PATH` as an absolute path, or give the program's
+  path. On Windows a set but empty `PATHEXT` falls back to `.COM;.EXE;.BAT;.CMD`. `soup adapters
+  bisect` refuses with exit 2, before the first probe, an `--eval-command` program that is not on
+  `PATH`; when the checkpoint id fills in the program name, each probe resolves it the same way and
+  a name not on `PATH` counts as a failed probe. The macOS code sandbox runs `sandbox-exec` from
+  `/usr/bin/sandbox-exec` only. A llama.cpp checkout given as `--llama-cpp .` runs its binaries by
+  absolute path. `soup train --cloud lambda` now refuses an `output` with a part that starts with
+  `-`, as `--cloud runpod` already did, and its checkpoint copy passes `--` before the source; both
+  controllers stop before launching with "OpenSSH ssh and scp must be installed and on PATH".
+  (#2205)
+
+- On Windows a program that is only in the current directory is no longer started by bare name,
+  by `soup` or by the programs it starts (eval and reward scripts included), so that the program
+  that runs is the one on `PATH`: `soup` sets `NoDefaultCurrentDirectoryInExePath=1` for itself
+  when it is not set. A value already set is kept, and any non-empty value, `0` included, already
+  leaves the current directory out, so no setting brings the old search back: to run a program
+  from the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put
+  the directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` is split with
+  POSIX shell rules, so a Windows path there takes forward slashes or quotes: `.\tool.exe` reaches
+  the program as `.tool.exe`. (#2213)
+
+- The VRAM pre-flight refuses a run that does not fit inside the range its estimate was fitted on (dense models of 3B and below on one 6 GB card), and outside it a run whose weights, CUDA context and trained-parameter state (gradients and optimizer) alone are more than the card holds (Llama-3.1-70B in 4-bit on a 24 GB card, or a 7B full fine-tune on 80 GB). Any other run outside it, such as the shipped `longcontext` template (an 8B model) on a 24 GB card, gets the estimate as a warning and starts; a refusal names `--allow-oom-attempt`. The `longcontext` template's header says what the pre-flight does and how to turn on `use_liger` (release fix)
+
+- `soup apply` no longer reads the model, since it compares hashes only, so it makes no request to the Hub; `soup plan` prints a dim line before the first request it sends (release fix)
+
+### Fixed
+
+- **Langfuse ingestion retains zero-valued negative feedback for `soup ingest --source langfuse --logs`.** Scores of `0`, `0.0` and `false` now reach the thumbs-down signal and preference-pair construction. Only a missing or null score falls back to `rating`; explicit scores retain precedence. (#1856 by @akkupratap323 in #1871)
+
+- In `soup eval gate`, normalize malformed YAML and non-mapping roots (including `[]`, `false`, `0`, and `""`) in suite loading to ValueError so the command exits with usage error 3 and a `Cannot load suite:` message that names the file, where malformed YAML and a list or scalar root exited 1 with a bare `Error: TypeError` / `ParserError` line (an empty root such as `[]` already exited 3 with a generic validation message), while `soup train --gate` exits with code 1 and training callbacks preserve their fatal failure policy for malformed suites (#1878 reported by @taljeon, fixed by @Nari-Ab in #1895).
+
+- Report missing dependencies accurately for adapter commands instead of reporting corrupt weights: read-only operations require numpy, while merge and arithmetic require numpy and safetensors (#2056 by @Nari-Ab in #2141).
+
+- **`soup profile --gpu` and the MCP `profile` tool know the RTX 30-series laptop GPUs (#2049 by @abdulwaarith0 in #2144).** `--gpu "rtx3060 laptop"` was "Unknown GPU", and the laptop 3060 has 6 GB, not the desktop card's 12. Each 30-series laptop part now has its own entry with the memory from NVIDIA's specification, and the names the NVIDIA driver reports resolve to it, including the size-named "RTX 3050 6GB Laptop GPU" and "RTX 3050 4GB Laptop GPU". A size written as a word ("A100 40GB") now reaches the matching `_<N>gb` entry, and a size the plain entry already holds reaches that entry ("A100 80GB", "rtx 3080 laptop 16gb").
+
+- **Building a streamed fused-expert MoE no longer asks the CPU for each full expert tensor
+  (#2154 by @ybai08 in #2157).** The layer-streaming skeleton is built on `meta`, but each MoE
+  layer first created its fused expert tensor on the CPU, `num_experts x 2 x
+  moe_intermediate_size x hidden_size` (15 GB for DeepSeek-V3, 22.5 GB for Kimi K2 in bf16),
+  before moving it to `meta`. The pages were never touched, but the commit was charged, and on
+  Linux with strict overcommit, on a small machine, or on Windows with too little page file,
+  the request was refused with `DefaultCPUAllocator: can't allocate memory` (Linux,
+  macOS) or `DefaultCPUAllocator: not enough memory` (Windows). Every CPU request of
+  1 MiB or more is now made on `meta` while the skeleton is built. If a model registers a
+  buffer that large, its skeleton is built the old way and the buffer is named in a warning.
+  A refused CPU allocation now gets a short message and a fix hint.
+
+- Streamed LoRA targets on an untied input embedding or output head now save with PEFT's
+  defaults and resume through Trainer or `load_adapter`, preserving every adapter tensor.
+  Adapter reloads keep the runtime's device and device map instead of automatically
+  redistributing a CPU runtime onto another accelerator.
+  Only boundaries with a LoRA target export independent CPU shard snapshots; untargeted
+  boundaries are not read and base parameters stay on meta. DPO's reference adapter can
+  attach through the streaming wrappers. Embedding adapter initialization and reference
+  copies follow PEFT's embedding parameter layout.
+  (#1048 item 1 by @kok-o in #2159, following the build-time guard in #2082 by @ybai08)
+
+- `soup export` now removes the temporary `.soup_merge_tmp_<adapter>/` directory when a later
+  step fails (llama.cpp not found, a failed clone or dependency install, or a merge that dies
+  while saving the model or tokenizer), for the gguf, onnx, tensorrt, bitnet and gguf-ud
+  paths, instead of leaving a multi-gigabyte directory next to the adapter (#1464 by @ShivanshShukla in #2164).
+
+- Spike recovery hints now refuse symbolic-link targets and use atomic replacement, preserving other hard links and the previous hint on write failure without consuming an attempt (Refs #808 by @Nari-Ab in #2169).
+
+- In `soup serve`, `/v1/tools/python` now returns `timed_out: true` and `exit_code: 124` with no output for a timeout, and `timed_out: false` with the process stdout and stderr for other process failures (with `exit_code: 1` for output overflow). Tool authentication failures carry `WWW-Authenticate: Bearer` on every HTTP 401 response (#2194 by @Nari-Ab in #2204).
+
+- **`soup plan` and `soup apply` refuse the configs `soup train` refuses.** They checked only for unknown keys, so a config with a staged field set (`training.early_stop_patience: 5`), a refused deprecated value (`data.remove_unused_columns: true`) or any other schema error got a plan (exit 0), and `soup apply` / `apply --dry-run` accepted it. Both commands now exit 1 with the `Config validation error:` lines `soup train` prints, write no plan and leave an existing state file unchanged. (#2242)
+
+- The README's Docker example passes `--yes`, which `soup train` needs since v0.77.0 when stdin is not a terminal; the four translations follow (#2229, #2244).
+
+- `soup data decontaminate`, `toxicity`, `langdetect`, `pii` and `educational` now refuse, before
+  reading or writing anything, an `--output` that is the same file as `--input` (or as
+  `--benchmark-file` for `decontaminate`), under any spelling: `./`, absolute, `sub/..`, a case
+  variant, a trailing space or dot or `::$DATA` on Windows, a junction or a hard link. They exit 1
+  with `--output '<path>' is the same file as --input '<path>'; choose a different --output`.
+  Before, their default output names (`clean.jsonl`, `toxicity.jsonl`, `langdetect.jsonl`,
+  `pii.jsonl`, `educational.jsonl`) replaced an input of the same name and the run exited 0. The
+  default names are unchanged. (#2225, #2245)
+
+- `soup data lint`, `doctor`, `topics`, `from-traces`, `canary insert`, `sample`, `dedup`, `filter`, `convert`, `merge`, `active-sample`, `augment` and `evolve` refuse an output that names one of their inputs, before anything is read, instead of writing over it and exiting 0. The input can be named by `-o` under any spelling (`./x`, `sub/../x`, the absolute path, a case variant on Windows, a hard link or a symlink) or by a default output name the input already has (`merged.jsonl`, `prefs.jsonl`, `active_samples.jsonl`, `augmented.jsonl`). The message names both paths, for example `--output './d.jsonl' is the same file as the input 'd.jsonl'; choose a different --output`. `canary insert` also refuses a `--manifest` that is the dataset or the `--output` (#2226, #2261).
+
+- An unknown config key says `use X` only for a known foreign name and one-edit typos of it. `per_device_eval_batch_size`, `per_gpu_eval_batch_size`, `eval_batch_size`, `warmup_steps`, `warmup_step` and `learning_rate_decay` are no longer sent to a different setting: the first five get a sentence saying Soup has no such setting, and the top level and `training:` answer alike (release fix)
+
+- `gradient_checkpointing` in `soup profile --json` and in the MCP `profile` result is the config's own value again, and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced (release fix)
+
+- A malformed model `config.json`, or a figure no model has, is treated as an unreadable `config.json` by the VRAM pre-flight, `soup plan`, `soup profile` and the MCP `profile` tool (`soup profile` prices a guessed shape and says so; `soup plan` records that it could not price the run); a malformed `.safetensors` header is skipped and the parameter count comes from `config.json` (approximate); and a malformed native adapter `adapter_config.json` is refused by `soup infer --backend mlx` with a message naming the file (release fix)
+
+- A mixture-of-experts model known only by its cached `config.json` is priced with all its experts instead of as a dense model of a few billion parameters; the estimate's note says the count is approximate (release fix)
+
+- `soup export` removes the temporary `.soup_merge_tmp_<adapter>/` directory only when that export created it, and says it left one that was already there (release fix)
+
+- `soup profile` prints the LoRA target modules, and `soup adapters bisect` the checkpoint ids, with control characters and bidi marks removed (release fix)
+
+- `soup infer --backend mlx` names the option it refuses (`--task`, `--batch-size` or `--cuda-graphs`) instead of listing all three (release fix)
+
+- The test suite passes under pytest 9.2.0: a test of the Windows branch of `open_no_follow` faked `os.fstat` and `os.name` for the whole process, and pytest 9.2 reads its capture file through `os.fstat` before the fake is undone. The test now fakes Windows inside `soup_cli.utils.paths` only (#2286, reported by @abdulwaarith0; the test change comes from #2284 by @Nari-Ab)
+
 ## [0.77.0] - 2026-10-26
 
 ### Upgrade notes
@@ -32,10 +1301,13 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   `training.relora_steps` where the loss has a frozen reference (#1891);
   `quantization: 8bit` with `backend: unsloth` (#1946); vision or audio distillation (#2014) and
   Unsloth vision or audio SFT (#2015); `training.stream_layers` with `use_cut_ce` (#2023);
-  vision row formats (`llava`, `sharegpt4v`) on preference tasks (#2064);
+  vision row formats (`llava`, `sharegpt4v`) on preference tasks (#2064); and
   `training.lora.rank_pattern` / `alpha_pattern` with `backend: mlx` (#1996) or `backend: unsloth`
-  (#2153); and KTO rows whose label is not a boolean, `true`/`false`-style string or -1, 0, 1
-  (#2126).
+  (#2153).
+- **A malformed KTO label drops its row.** A row whose label is not a boolean, a
+  `true`/`false`-style string or -1, 0, 1 is dropped with a warning instead of trained (v0.76
+  trained `null` as undesirable and `0.5` or `2` as desirable); a file with no row left is
+  refused, and `soup data validate --min-valid-fraction 1.0` exits 2 on any such row (#2126).
 - **A LoRA target on a streamed embedding or head is refused when the model is built.** Under
   `training.stream_layers`, v0.76 checked only the literal names `lm_head` and `embed_tokens` at
   load, so a regex or dotted spelling loaded (a regex then failed at its first save, or in peft
@@ -90,7 +1362,8 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   log-probs from the trainer's own forward pass and the reference log-probs from the trainer's
   `compute_ref_log_probs`; the `ipo` term divides each log-ratio by its response length, as trl's
   IPO loss does, so it is the loss `task: ipo` trains. The reference is run twice per step. A `dpo`
-  or `ipo` term under a `simpo` / `orpo` primary still stops at the first step, and the message now
+  or `ipo` term under a `simpo` / `orpo` primary trains too (see #1828 below); with full
+  fine-tuning (no LoRA adapter to switch off) it still stops at the first step, and the message
   says why (those trainers run no reference) and what to do (give `dpo` or `ipo` the largest
   weight). Try: `soup train --config soup.yaml` with `task: preference` and
   `training.preference_loss_weights: {dpo: 0.7, simpo: 0.3}`.
@@ -377,13 +1650,16 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   v0.76 gave one release of notice; v0.77.0 flips both switches (`STAGED_FIELD_SEVERITY` and
   `DEPRECATED_VALUE_SEVERITY`) to `"error"` in the release commit. A config that sets one of the
   items below no longer loads: `soup train` exits `1` with `Config validation error:` and one
-  indented line per refused setting, `soup doctor --config` exits `2` with the same lines, and
+  indented line per refused setting, `soup doctor --config` exits `2` with the same lines,
+  `soup recipes verify --config` and `soup ship --config` exit `3`, and
   `load_config_from_string` (API / UI) raises `ValueError` with the same refusals (a value refusal
-  keeps Pydantic's `Value error, ` prefix there). A config that sets both kinds gets both in one
-  report, the staged-field lines first. When a staged field's own check fails as well (for example
-  `grace_codebook: true` without a size and a dimension, `long_context_grpo: true` on `sft`, or
-  `video_fps` with a non-video format), only the staged line is shown, so no message asks for a
-  line that the next load refuses.
+  keeps Pydantic's `Value error, ` prefix there). `soup plan` and `soup apply` read the YAML
+  without building the config, so they write and accept a plan for a config that `soup train`
+  refuses; check it with `soup train --dry-run` or `soup doctor --config`. A config that sets
+  both kinds gets both in one report, the staged-field lines first. When a staged field's own
+  check fails as well (for example `grace_codebook: true` without a size and a dimension,
+  `long_context_grpo: true` on `sft`, or `video_fps` with a non-video format), only the staged
+  line is shown, so no message asks for a line that the next load refuses.
   Nothing else changes, and a config that leaves these items unset, or writes them at their
   defaults, loads as before.
 
@@ -862,7 +2138,9 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   sharded from such a source is not reused. A `quantization_config` that is not a mapping is
   refused as malformed, and one under `text_config` is read too. (#2103)
 
-- Run config check before environment summary in `soup doctor` so a refused or invalid config does not falsely print "All checks passed!" before terminating with exit 2 (#2100 by @Nari-Ab in #2106).
+- `soup doctor --config` checks the config before the `All checks passed!` line, so a refused,
+  missing or unreadable config no longer gets that line before doctor exits 2; the System, GPU,
+  Resources and Dependencies tables still print first (#2100 by @Nari-Ab in #2106).
 
 - `soup ui --public`, `--host 0.0.0.0` and `--host ::` now print and open a loopback URL
   (`http://127.0.0.1:<port>` or `http://[::1]:<port>`) instead of the bind address, which
@@ -888,10 +2166,11 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   the whole row would fit; a row whose prompt is at most `data.max_length // 2` tokens and which
   fits is unchanged.
 
-- Refuse malformed KTO labels instead of silently training nulls, floats or containers
-as desirable or undesirable rows. Accept booleans, the documented normalized
+- Drop KTO rows with a malformed label, with a warning, instead of silently training nulls,
+floats or containers as desirable or undesirable rows. Accept booleans, the documented normalized
 true/1/yes and false/0/no strings, and exactly the integers -1, 0 and 1. Validation
-and training report the offending label through the shared converter (#2119 by @kok-o in #2126).
+and training report the offending label through the shared converter; `soup train` warns with
+the first such row and its count and refuses only an empty result (#2119 by @kok-o in #2126).
 
 - **Resident Kimi K2 configs are refused at config load instead of failing after the
   model's remote code and weights start loading (#2104 by @kok-o in #2130).** The four
@@ -7658,7 +8937,8 @@ what a fine-tune forgets and leaks.
   `SECURITY.md` (~220 KB). `SECURITY.md` is now a concise security policy; the
   detailed hardening notes remain in git history and the GitHub Releases notes.
 
-[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.0...HEAD
+[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.1...HEAD
+[0.77.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.0...v0.77.1
 [0.77.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.77.0
 [0.76.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.76.1
 [0.76.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.2...v0.76.0

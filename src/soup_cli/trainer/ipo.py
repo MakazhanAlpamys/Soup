@@ -8,7 +8,9 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -28,7 +30,7 @@ from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 console = Console()
 
 
-class IPOTrainerWrapper:
+class IPOTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper for IPO training from SoupConfig.
 
     IPO is a theoretically grounded variant of DPO that uses a squared
@@ -40,6 +42,10 @@ class IPOTrainerWrapper:
     - chosen: the preferred response
     - rejected: the less preferred response
     """
+
+    # TRL batches both completions and runs the reference before backward.
+    _STREAM_ROWS_PER_EXAMPLE = 2
+    _STREAM_REFILL_BEFORE_BACKWARD = True
 
     def __init__(
         self,
@@ -78,7 +84,11 @@ class IPOTrainerWrapper:
         from datasets import Dataset
         from trl import DPOConfig, DPOTrainer
 
-        from soup_cli.trainer._trl_compat import prompt_length_kwargs
+        from soup_cli.trainer._trl_compat import (
+            config_accepts,
+            enforce_preference_sequence_limit,
+            prompt_length_kwargs,
+        )
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
         _enable_hf_transfer_progress()
@@ -91,7 +101,9 @@ class IPOTrainerWrapper:
 
         use_unsloth = cfg.backend == "unsloth"
 
-        if use_unsloth:
+        if tcfg.stream_layers:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
@@ -101,7 +113,8 @@ class IPOTrainerWrapper:
         )
 
         trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        total = getattr(self._stream_runtime, "total_params", 0) or total
+        pct = 100 * trainable / total if total else 0.0
         console.print(
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -188,6 +201,24 @@ class IPOTrainerWrapper:
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if tcfg.stream_layers:
+            from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
+
+            materialize_meta_adapter_copy(self.model)
+        if not config_accepts(DPOConfig, "max_prompt_length"):
+            cap_kwargs = {
+                "max_length": cfg.data.max_length,
+                "max_prompt_length": cfg.data.max_length // 2,
+                "truncation_mode": dpo_config.truncation_mode,
+                "only_when_overflow": True,
+            }
+            self.trainer.train_dataset = enforce_preference_sequence_limit(
+                self.trainer.train_dataset, **cap_kwargs
+            )
+            if self.trainer.eval_dataset is not None:
+                self.trainer.eval_dataset = enforce_preference_sequence_limit(
+                    self.trainer.eval_dataset, **cap_kwargs
+                )
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -220,7 +251,7 @@ class IPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -242,7 +273,7 @@ class IPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -259,13 +290,15 @@ class IPOTrainerWrapper:
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         from soup_cli.utils.peft_wiring import (
@@ -386,8 +419,9 @@ class IPOTrainerWrapper:
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        with activation_offloading_context(
-            self.config.training, self._output_dir,
+        self._attach_streamed_save_guard()
+        with self._training_context(
+            activation_offloading_context(self.config.training, self._output_dir)
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,
@@ -397,11 +431,13 @@ class IPOTrainerWrapper:
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:
             self.trainer.save_model(self._output_dir)
+            self._assert_streamed_adapter_saved(self._output_dir)
         else:
             from soup_cli.utils.peft_wiring import save_model_with_relora
 

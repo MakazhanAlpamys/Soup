@@ -40,7 +40,7 @@ from dataclasses import dataclass
 
 import pydantic
 
-from soup_cli.config.aliases import CONFIG_ALIASES
+from soup_cli.config.aliases import CONFIG_ALIASES, CONFIG_NOTES
 from soup_cli.config.schema import (
     ROOT_LEVEL_MISPLACED_KEYS,
     SoupConfig,
@@ -93,6 +93,20 @@ _MAX_REPORTED_UNKNOWN_KEYS = 100
 _MAX_KEY_LEN = 256
 _MAX_SUGGESTIONS = 2
 
+#: Next step for an unknown key with no close field name to suggest.
+NO_SUGGESTION_REMEDY = (
+    "Check the spelling against the docs or a `soup init` template; a key from a newer "
+    "Soup needs an upgrade (`pip install -U soup-cli`)."
+)
+
+
+#: A key says "use X" for an alias only when it is a typo of that alias: one edit away
+#: as a whole string and word by word. Anything fuzzier is left to the "did you mean"
+#: ranking over the declared fields, because a near-looking name is often another
+#: setting (``per_device_eval_batch_size`` is not the training batch size).
+_ALIAS_TYPO_RATIO = 0.9
+_ALIAS_WORD_RATIO = 0.8
+
 
 @dataclass(frozen=True)
 class UnknownKey:
@@ -102,6 +116,20 @@ class UnknownKey:
     key: str
     suggestions: tuple[str, ...]
     alias: str | None = None
+    #: A sentence for a name that looks like a Soup setting and is not one (CONFIG_NOTES).
+    note: str | None = None
+
+
+def _is_typo_of(key: str, alias: str) -> bool:
+    """Whether ``key`` is a one-edit misspelling of ``alias``: same words, spelled alike."""
+    if difflib.SequenceMatcher(None, key, alias).ratio() < _ALIAS_TYPO_RATIO:
+        return False
+    words, alias_words = key.split("_"), alias.split("_")
+    return len(words) == len(alias_words) and all(
+        word == other
+        or difflib.SequenceMatcher(None, word, other).ratio() >= _ALIAS_WORD_RATIO
+        for word, other in zip(words, alias_words)
+    )
 
 
 def _nested_models(model: type[pydantic.BaseModel], field: str) -> list[type]:
@@ -151,22 +179,32 @@ def _walk(
             shown += "..."
         path = f"{prefix}{shown}"
         if key not in declared:
-            # 1. Alias lookup (#2099): check exact alias table match or typo of an alias
-            # ahead of declared field difflib suggestions. Exact aliases take priority;
-            # fuzzy aliases must not hide a closer match to a declared field.
+            # 0. A name from another tool that Soup has no setting for: say so, and
+            # name no replacement (CONFIG_NOTES).
+            if path in CONFIG_NOTES:
+                found.append(
+                    UnknownKey(path=path, key=shown, suggestions=(), note=CONFIG_NOTES[path])
+                )
+                continue
+            # 1. Alias lookup (#2099): the alias table's exact path, or a one-edit typo
+            # of an alias key under the same prefix, ahead of declared field difflib
+            # suggestions. A typo must not hide a closer match to a declared field.
             alias_target = None
             if path in CONFIG_ALIASES:
                 alias_target = CONFIG_ALIASES[path]
             else:
-                # Check fuzzy match against alias keys under the same prefix
                 prefix_aliases = [
                     k[len(prefix):]
                     for k in CONFIG_ALIASES
                     if k.startswith(prefix) and "." not in k[len(prefix):]
                 ]
-                close_aliases = difflib.get_close_matches(
-                    key, prefix_aliases, n=1, cutoff=0.7
-                )
+                close_aliases = [
+                    candidate
+                    for candidate in difflib.get_close_matches(
+                        key, prefix_aliases, n=3, cutoff=_ALIAS_TYPO_RATIO
+                    )
+                    if _is_typo_of(key, candidate)
+                ]
                 if close_aliases:
                     closest_alias = close_aliases[0]
                     closest_declared = difflib.get_close_matches(
@@ -269,9 +307,12 @@ def format_unknown_keys(
     # the trailing sentence and the per-key verdict word.
     suffix = "Not applied." if include_deadline else "Refused."
     overflow = len(unknown) > _MAX_REPORTED_UNKNOWN_KEYS
+    reported = unknown[:_MAX_REPORTED_UNKNOWN_KEYS]
     lines = []
-    for item in unknown[:_MAX_REPORTED_UNKNOWN_KEYS]:
-        if item.alias:
+    for item in reported:
+        if item.note:
+            lines.append(f"unknown config key '{item.path}' - {item.note} {suffix}")
+        elif item.alias:
             lines.append(f"unknown config key '{item.path}' - use {item.alias}. {suffix}")
         elif item.suggestions:
             # After the question mark the suffix starts a new sentence.
@@ -285,6 +326,10 @@ def format_unknown_keys(
             f"(report capped at {_MAX_REPORTED_UNKNOWN_KEYS} unknown keys; "
             "fix these and load again)"
         )
+    # A key with a note, an alias or a suggestion already says what to do; one
+    # without has only a verdict, so name the next step once for all of them.
+    if any(not (item.note or item.alias or item.suggestions) for item in reported):
+        lines.append(NO_SUGGESTION_REMEDY)
     if include_deadline and lines:
         lines.append(deadline_notice())
     return "\n".join(lines)

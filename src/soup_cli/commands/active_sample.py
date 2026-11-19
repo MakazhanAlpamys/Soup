@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.active_sampler import sample_uncertain_rows, validate_budget
 
@@ -37,6 +38,9 @@ def active_sample(
     ),
 ) -> None:
     """Surface the most uncertain prod traces for human review."""
+    # The default --output (active_samples.jsonl) can be the --input too (#2226).
+    refuse_output_over_input([("--input", input_path)], [("--output", output)], console=console)
+
     try:
         validate_budget(budget)
     except (TypeError, ValueError) as exc:

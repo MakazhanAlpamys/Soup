@@ -9,7 +9,10 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from typer.core import TyperGroup
+
+from soup_cli.utils.terminal import terminal_text
 
 console = Console()
 
@@ -47,6 +50,7 @@ def bench(
     max_tokens: int = typer.Option(
         128,
         "--max-tokens",
+        min=1,
         help="Maximum tokens to generate per prompt",
     ),
     num_prompts: int = typer.Option(
@@ -85,6 +89,16 @@ def bench(
     ),
 ) -> None:
     """Run an inference benchmark (speed and memory) on a loaded model."""
+    # #2757: a count below 1 cuts the prompt list to nothing, and the warm-up
+    # then reads prompts[0] and dies with an IndexError after the model has
+    # loaded. With --prompts-file the count is ignored, so that call works
+    # today and must keep working. The rest of the command reads the option
+    # by truthiness, so an empty value counts as no file here too.
+    if not prompts_file and num_prompts < 1:
+        raise typer.BadParameter(
+            "--num-prompts must be at least 1 when --prompts-file is not set"
+        )
+
     from soup_cli.commands.infer import _generate, _load_model, _resolve_model_source
     from soup_cli.utils.gpu import detect_device
 
@@ -93,14 +107,16 @@ def bench(
         model_kind, model_ref = _resolve_model_source(model)
     except FileNotFoundError as exc:
         console.print(
-            f"[red]{exc}[/]\n"
-            "[dim]If you meant a HuggingFace repo, use the form "
-            "'owner/repo-name' (no leading './').[/]"
+            Text.assemble(
+                terminal_text(exc, "red"), "\n",
+                ("If you meant a HuggingFace repo, use the form "
+                 "'owner/repo-name' (no leading './').", "dim"),
+            )
         )
         raise typer.Exit(1) from exc
     if model_kind == "hf":
         console.print(
-            f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
+            terminal_text(f"Local path not found; treating {model_ref!r} as a HF repo id.", "dim")
         )
     model_target = model_ref
 
@@ -131,7 +147,6 @@ def bench(
     if cuda_graphs is True:
         from soup_cli.commands.infer import _with_omit_hint
         from soup_cli.utils.cuda_graphs import check_cuda_graphs_preflight
-        from soup_cli.utils.terminal import for_terminal
 
         try:
             check_cuda_graphs_preflight(
@@ -140,7 +155,7 @@ def bench(
                 base=base,
             )
         except RuntimeError as exc:
-            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            console.print(terminal_text(_with_omit_hint(str(exc)), "red"))
             raise typer.Exit(1) from exc
 
     device, _ = detect_device()
@@ -170,7 +185,8 @@ def bench(
         try:
             _st = _os.lstat(prompts_file)
         except OSError:
-            console.print(f"[red]Prompts file not found:[/] {prompts_file}")
+            console.print(Text.assemble(("Prompts file not found:", "red"), " ",
+                                        terminal_text(prompts_file)))
             raise typer.Exit(1)
         if _stat.S_ISLNK(_st.st_mode):
             console.print(
@@ -180,7 +196,8 @@ def bench(
         p_path = Path(_os.path.realpath(prompts_file))
 
         if not p_path.is_file():
-            console.print(f"[red]Prompts file not found:[/] {p_path}")
+            console.print(Text.assemble(("Prompts file not found:", "red"), " ",
+                                        terminal_text(p_path)))
             raise typer.Exit(1)
 
         prompts = []
@@ -200,7 +217,8 @@ def bench(
                         if line:
                             prompts.append(line)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            console.print(f"[red]Failed to read prompts file:[/] {exc}")
+            console.print(Text.assemble(("Failed to read prompts file:", "red"), " ",
+                                        terminal_text(exc)))
             raise typer.Exit(1) from exc
 
         if not prompts:
@@ -221,10 +239,12 @@ def bench(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_target}[/]\n"
-            f"Device:   [bold]{device}[/]\n"
-            f"Prompts:  [bold]{actual_num_prompts}[/]\n"
-            f"Tokens/P: [bold]{max_tokens}[/]",
+            Text.assemble(
+                "Model:    ", terminal_text(model_target, "bold"), "\n",
+                "Device:   ", terminal_text(device, "bold"), "\n",
+                "Prompts:  ", (str(actual_num_prompts), "bold"), "\n",
+                "Tokens/P: ", (str(max_tokens), "bold"),
+            ),
             title="Benchmarking Configuration",
         )
     )
@@ -249,7 +269,7 @@ def bench(
         # model: 1". Let it propagate unchanged.
         raise
     except (OSError, ImportError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]Failed to load model:[/] {exc}")
+        console.print(Text.assemble(("Failed to load model:", "red"), " ", terminal_text(exc)))
         raise typer.Exit(1) from exc
 
     if cuda_graphs is True:
@@ -259,9 +279,8 @@ def bench(
             cuda_graph_generation_kwargs(model_obj)
         except RuntimeError as exc:
             from soup_cli.commands.infer import _with_omit_hint
-            from soup_cli.utils.terminal import for_terminal
 
-            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            console.print(terminal_text(_with_omit_hint(str(exc)), "red"))
             raise typer.Exit(1) from exc
 
     load_time = time.time() - start_load
@@ -373,10 +392,7 @@ def train(
     """Train for a fixed number of steps and report timing, memory and tokens --
     failing when the model was not actually training."""
     # The contract and why each check exists: #836.
-    from rich.markup import escape
-
     from soup_cli.utils.paths import atomic_write_text, check_report_output_path
-    from soup_cli.utils.terminal import for_terminal
 
     # The destination is validated first, before the config is read and before any
     # model is built: a path that will be refused must fail in milliseconds, not after
@@ -384,14 +400,14 @@ def train(
     try:
         check_report_output_path(output, "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
+        console.print(Text.assemble(("Invalid output:", "red"), " ", terminal_text(exc)))
         raise typer.Exit(2) from exc
 
     from soup_cli.bench.train_run import check_steps_warmup
 
     err = check_steps_warmup(steps, warmup)
     if err is not None:
-        console.print(f"[red]{err}[/]")
+        console.print(terminal_text(err, "red"))
         raise typer.Exit(1)
 
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train
@@ -400,16 +416,17 @@ def train(
     from soup_cli.utils.gpu import detect_device
 
     if not Path(config).is_file():
-        console.print(f"[red]Config not found:[/] {escape(config)}")
+        console.print(Text.assemble(("Config not found:", "red"), " ", terminal_text(config)))
         raise typer.Exit(1)
     try:
         cfg = load_config(Path(config))
     except Exception as exc:  # noqa: BLE001 -- surfaced to the user as-is
-        console.print(f"[red]Config invalid:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("Config invalid:", "red"), " ", terminal_text(exc)))
         raise typer.Exit(1) from exc
     refused = bench_scope_error(cfg)
     if refused:
-        console.print(f"[red]Cannot bench this config:[/] {escape(refused)}")
+        console.print(Text.assemble(("Cannot bench this config:", "red"), " ",
+                                    terminal_text(refused)))
         raise typer.Exit(1)
 
     device, _ = detect_device(backend=cfg.backend)
@@ -419,7 +436,7 @@ def train(
             load_dataset=lambda c: load_dataset(c.data),
         )
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from exc
 
     try:
@@ -431,7 +448,7 @@ def train(
             field="--output",
         )
     except (OSError, ValueError) as exc:
-        console.print(f"[red]Cannot write the report:[/] {for_terminal(exc)}")
+        console.print(Text.assemble(("Cannot write the report:", "red"), " ", terminal_text(exc)))
         raise typer.Exit(1) from exc
     timing, tokens = report["timing"], report["tokens"]
     tok_s = report["throughput"]["useful_tokens_per_second"]
@@ -442,10 +459,13 @@ def train(
         f"{tokens['useful']} supervised of {tokens['total']} tokens"
         + (f", {tok_s:.1f} supervised tok/s" if tok_s else "")
     )
-    console.print(f"[dim]Report:[/] {escape(output)}")
+    console.print(Text.assemble(("Report:", "dim"), " ", terminal_text(output)))
     if not report["valid"]:
         for failure in report["failures"]:
-            console.print(f"[red]FAILED {failure['check']}:[/] {escape(failure['message'])}")
+            console.print(Text.assemble(
+                terminal_text(f"FAILED {failure['check']}:", "red"), " ",
+                terminal_text(failure["message"]),
+            ))
         console.print("[red]The report is written but NOT valid: this run was not training.[/]")
         raise typer.Exit(1)
     console.print("[green]Valid:[/] the model trained while it was measured.")

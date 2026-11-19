@@ -13,9 +13,9 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
@@ -28,7 +28,7 @@ from soup_cli.utils.env_lock import (
     write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
@@ -41,6 +41,16 @@ env_app = typer.Typer(
     help="Hermetic env lockfile + ABI drift detection (v0.64.0).",
     no_args_is_help=True,
 )
+
+
+# Paths, lock-file fields, declared bounds and error text come from outside the
+# program, so every line that carries them is printed as ``Text``: shown as
+# typed, never read as markup or ``:name:`` emoji, control characters removed
+# (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
 
 
 @env_app.command("lock")
@@ -57,23 +67,24 @@ def env_lock_cmd(
         console.print("[red]output path must not contain null bytes[/]")
         raise typer.Exit(2)
     if not is_under_cwd(output):
-        console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
+        _refuse(f"output {output!r} is outside cwd")
         raise typer.Exit(2)
 
     try:
         lock = snapshot_env()
         write_lock(lock, output)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"[green]Locked {len(lock.entries)} packages to "
-            f"{escape(output)}[/]\n"
-            f"Python: {escape(lock.python_version)} | "
-            f"Platform: {escape(lock.platform)} | "
-            f"CUDA: {escape(lock.cuda_version or 'none')}",
+            Text.assemble(
+                (f"Locked {len(lock.entries)} packages to {strip_control(output)}", "green"),
+                f"\nPython: {strip_control(lock.python_version)} | "
+                f"Platform: {strip_control(lock.platform)} | "
+                f"CUDA: {strip_control(lock.cuda_version or 'none')}",
+            ),
             title="env lock",
             border_style="green",
         )
@@ -93,22 +104,26 @@ def env_status_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[yellow]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="yellow",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     header = Table(title="env status (locked)")
     header.add_column("Field")
     header.add_column("Value")
-    header.add_row("soup_version", escape(lock.soup_version))
-    header.add_row("python_version", escape(lock.python_version))
-    header.add_row("platform", escape(lock.platform))
-    header.add_row("cuda_version", escape(lock.cuda_version or "none"))
-    header.add_row("created_at", escape(lock.created_at))
+    header.add_row("soup_version", terminal_text(lock.soup_version))
+    header.add_row("python_version", terminal_text(lock.python_version))
+    header.add_row("platform", terminal_text(lock.platform))
+    header.add_row("cuda_version", terminal_text(lock.cuda_version or "none"))
+    header.add_row("created_at", terminal_text(lock.created_at))
     header.add_row("entries", str(len(lock.entries)))
     console.print(header)
 
@@ -118,7 +133,7 @@ def env_status_cmd(
         body.add_column("Version")
         body.add_column("Source")
         for e in lock.entries:
-            body.add_row(escape(e.name), escape(e.version), escape(e.source))
+            body.add_row(terminal_text(e.name), terminal_text(e.version), terminal_text(e.source))
         console.print(body)
 
 
@@ -146,12 +161,16 @@ def env_check_cmd(
         locked = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         lock_exit = 1
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         lock_exit = 2
     else:
         current = snapshot_env()
@@ -165,10 +184,13 @@ def env_check_cmd(
                 )
             )
         else:
-            body = "\n".join(f"- {escape(c)}" for c in report.changes)
+            body = Text.assemble(
+                (f"{report.drift_count} ABI-sensitive drift(s):", "red"),
+                *(f"\n- {strip_control(c)}" for c in report.changes),
+            )
             console.print(
                 Panel(
-                    f"[red]{report.drift_count} ABI-sensitive drift(s):[/]\n{body}",
+                    body,
                     title="env check",
                     border_style="red",
                 )
@@ -176,18 +198,28 @@ def env_check_cmd(
             lock_exit = DRIFT_EXIT_CODE
 
     if not bounds.ok:
-        rows = "\n".join(
-            f"- {escape(v.name)} {escape(v.installed)} violates declared bound "
-            f"{escape(v.specifier)}"
-            for v in bounds.violations
+        report_text = Text.assemble(
+            (
+                f"{bounds.violation_count} package(s) violate this "
+                "distribution's own declared bounds:",
+                "red",
+            ),
+            *(
+                f"\n- {strip_control(v.name)} {strip_control(v.installed)} "
+                f"violates declared bound {strip_control(v.specifier)}"
+                for v in bounds.violations
+            ),
+            "\n\n",
+            (
+                "A later install (e.g. `pip install vllm`) likely moved "
+                "these packages outside the range soup-cli declares. Reinstall "
+                "soup-cli, or pin the listed package(s) back into range.",
+                "yellow",
+            ),
         )
         console.print(
             Panel(
-                f"[red]{bounds.violation_count} package(s) violate this "
-                f"distribution's own declared bounds:[/]\n{rows}\n\n"
-                "[yellow]A later install (e.g. `pip install vllm`) likely moved "
-                "these packages outside the range soup-cli declares. Reinstall "
-                "soup-cli, or pin the listed package(s) back into range.[/]",
+                report_text,
                 title="env check",
                 border_style="red",
             )
@@ -227,24 +259,28 @@ def env_fix_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
+            Text.assemble(
+                "No lock file at ",
+                terminal_text(lock_path),
+                "; run `soup env lock` first.",
+                style="red",
+            )
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     try:
         plan = render_install_plan(lock, fmt=fmt)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            escape(plan.rstrip("\n")),
-            title=f"env fix — install plan ({escape(fmt)})",
+            terminal_text(plan.rstrip("\n")),
+            title=terminal_text(f"env fix — install plan ({fmt})"),
             border_style="green",
         )
     )
@@ -254,14 +290,14 @@ def env_fix_cmd(
             console.print("[red]output path must not contain null bytes[/]")
             raise typer.Exit(2)
         if not is_under_cwd(output):
-            console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
+            _refuse(f"output {output!r} is outside cwd")
             raise typer.Exit(2)
         try:
             write_requirements_txt(lock, output)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote requirements to {escape(output)}[/]")
+        console.print(Text.assemble("Wrote requirements to ", terminal_text(output), style="green"))
 
 
 __all__ = ["env_app"]

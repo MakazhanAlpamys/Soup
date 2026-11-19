@@ -1,0 +1,115 @@
+[13:15:09] RUN B/80GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape B --workdir /workspace/out/results/B/80/SB/rep1.work --out /workspace/out/results/B/80/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/B/80/SB/rep1.overrides.json
+[13:17:19] DONE B/80GB/SB/rep1: ok tok/s 751.6613486687419 peak 6693.0 MiB wall 130 s
+[13:17:19] RUN B/80GB/S1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape B --workdir /workspace/out/results/B/80/S1/rep1.work --out /workspace/out/results/B/80/S1/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1
+[13:18:50] DONE B/80GB/S1/rep1: ok tok/s 979.1503253326161 peak 3861.0 MiB wall 90 s
+[13:18:50] D-best (fastest DeepSpeed arm, Shape A, 80 GB): D3
+[13:18:50] RUN B/80GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29502 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D3 --shape B --rep 1 --out /workspace/out/results/B/80/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[13:19:21] DONE B/80GB/D3/rep1: ok tok/s 4503.759088472587 peak 20807.0 MiB wall 32 s
+[13:19:21] RUN B/80GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29503 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 1 --out /workspace/out/results/B/80/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[13:22:00] DONE B/80GB/D1/rep1: ok tok/s 614.7467555918261 peak 9333.0 MiB wall 159 s
+[13:22:00] RUN B/80GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm R1 --shape B --rep 1 --out /workspace/out/results/B/80/R1/rep1.raw.json --deepspeed none
+[13:22:20] DONE B/80GB/R1/rep1: ok tok/s 6334.489991204245 peak 19885.0 MiB wall 20 s
+[13:22:20] RUN C/80GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape C --workdir /workspace/out/results/C/80/SB/rep1.work --out /workspace/out/results/C/80/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/C/80/SB/rep1.overrides.json
+[13:23:17] DONE C/80GB/SB/rep1: ok tok/s 3916.232681683593 peak 17083.0 MiB wall 57 s
+[13:23:17] RUN C/80GB/S1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape C --workdir /workspace/out/results/C/80/S1/rep1.work --out /workspace/out/results/C/80/S1/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1
+[13:24:18] DONE C/80GB/S1/rep1: ok tok/s 3740.3724049368625 peak 6921.0 MiB wall 61 s
+[13:24:18] RUN C/80GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29507 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D3 --shape C --rep 1 --out /workspace/out/results/C/80/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[13:24:49] DONE C/80GB/D3/rep1: ok tok/s 9606.355767609919 peak 30969.0 MiB wall 31 s
+[13:24:49] RUN C/80GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29508 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D1 --shape C --rep 1 --out /workspace/out/results/C/80/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[13:26:13] DONE C/80GB/D1/rep1: ok tok/s 2477.2211396895536 peak 22577.0 MiB wall 84 s
+[13:26:13] RUN C/80GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm R1 --shape C --rep 1 --out /workspace/out/results/C/80/R1/rep1.raw.json --deepspeed none
+[13:26:35] DONE C/80GB/R1/rep1: ok tok/s 10728.568972996865 peak 30061.0 MiB wall 22 s
+[13:26:35] RUN B/80GB/R1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm R1 --shape B --rep 2 --out /workspace/out/results/B/80/R1/rep2.raw.json --deepspeed none
+[13:26:55] DONE B/80GB/R1/rep2: ok tok/s 6334.1226501715555 peak 19885.0 MiB wall 20 s
+[13:26:55] RUN B/80GB/D1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29511 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 2 --out /workspace/out/results/B/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[13:29:11] DONE B/80GB/D1/rep2: ok tok/s 634.6500980019988 peak 9333.0 MiB wall 135 s
+[13:29:11] RUN B/80GB/D3/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29512 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D3 --shape B --rep 2 --out /workspace/out/results/B/80/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[13:29:42] DONE B/80GB/D3/rep2: ok tok/s 4555.54010843876 peak 20807.0 MiB wall 31 s
+[13:29:42] RUN B/80GB/S1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape B --workdir /workspace/out/results/B/80/S1/rep2.work --out /workspace/out/results/B/80/S1/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2
+[13:31:12] DONE B/80GB/S1/rep2: ok tok/s 976.9113466666864 peak 3861.0 MiB wall 90 s
+[13:31:12] RUN B/80GB/SB/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape B --workdir /workspace/out/results/B/80/SB/rep2.work --out /workspace/out/results/B/80/SB/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2 --overrides-json /workspace/out/results/B/80/SB/rep2.overrides.json
+[13:32:41] DONE B/80GB/SB/rep2: ok tok/s 1022.7758651364148 peak 6693.0 MiB wall 89 s
+[13:32:41] RUN C/80GB/R1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm R1 --shape C --rep 2 --out /workspace/out/results/C/80/R1/rep2.raw.json --deepspeed none
+[13:33:03] DONE C/80GB/R1/rep2: ok tok/s 10731.907019396887 peak 30061.0 MiB wall 22 s
+[13:33:03] RUN C/80GB/D1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29516 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D1 --shape C --rep 2 --out /workspace/out/results/C/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[13:34:28] DONE C/80GB/D1/rep2: ok tok/s 2524.2998915725066 peak 22577.0 MiB wall 85 s
+[13:34:28] RUN C/80GB/D3/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29517 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D3 --shape C --rep 2 --out /workspace/out/results/C/80/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[13:34:59] DONE C/80GB/D3/rep2: ok tok/s 9636.655050215419 peak 30969.0 MiB wall 31 s
+[13:34:59] RUN C/80GB/S1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape C --workdir /workspace/out/results/C/80/S1/rep2.work --out /workspace/out/results/C/80/S1/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2
+[13:35:58] DONE C/80GB/S1/rep2: ok tok/s 3724.1442014820204 peak 6921.0 MiB wall 59 s
+[13:35:58] RUN C/80GB/SB/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape C --workdir /workspace/out/results/C/80/SB/rep2.work --out /workspace/out/results/C/80/SB/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2 --overrides-json /workspace/out/results/C/80/SB/rep2.overrides.json
+[13:36:55] DONE C/80GB/SB/rep2: ok tok/s 3900.348755549736 peak 17083.0 MiB wall 58 s
+[13:36:55] computing gates
+[13:36:55]
+G1  S1/D1 = 1.56  threshold 2.64  LOWER   S0/D1 = n/a
+    S1 61.99 tok/s  D1 39.79 tok/s
+G2  80 GB  SB/DS-best = 0.23  (SB 64.36 tok/s, best DeepSpeed D3 280.72 tok/s, peak VRAM MiB 3487 / 17515; with prefetch variants 0.23)
+G2  24 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G2  16 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G3  R1/SB = 6.32  (peak VRAM MiB 16529 / 3487)
+G3  R2/SB = 3.45  (peak VRAM MiB 16383 / 3487)
+G4  shape B  SB/D-best(D3) = 0.20  SB/D1 = 1.42  R1/SB = 7.14  REVERSED
+    peak VRAM MiB: {'SB': '6693', 'D_best': '20807', 'D1': '9333', 'R1': '19885'}
+G4  shape C  SB/D-best(D3) = 0.41  SB/D1 = 1.56  R1/SB = 2.75  REVERSED
+    peak VRAM MiB: {'SB': '17083', 'D_best': '30969', 'D1': '22577', 'R1': '30061'}
+Ablation vs S1 (61.99 tok/s, spread 0.7%)
+    S2: 0.8%  faster
+    S3: 0.8%  faster
+    S4: -65.6%  slower
+    S5: -1.2%  slower
+    S6: 2.5%  faster
+    S7: -0.0%  no measurable effect
+    S8: -0.0%  no measurable effect [informational]
+SM clock session median 1980 MHz; valid runs more than 5% below it: 0
+[13:38:02] RUN A/24GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape A --workdir /workspace/out/results/A/24/SB/rep1.work --out /workspace/out/results/A/24/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/A/24/SB/rep1.overrides.json --cap-gb 24
+[13:40:35] DONE A/24GB/SB/rep1: ok tok/s 63.82990328117804 peak 3487.0 MiB wall 153 s
+[13:40:35] RUN A/24GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29501 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D1 --shape A --rep 1 --out /workspace/out/results/A/24/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json --cap-gb 24
+[13:44:40] DONE A/24GB/D1/rep1: ok tok/s 38.284452736085896 peak 4979.0 MiB wall 245 s
+[13:44:40] RUN A/24GB/D2/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29502 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D2 --shape A --rep 1 --out /workspace/out/results/A/24/D2/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d2_z3_param_opt_offload.json --cap-gb 24
+[13:48:54] DONE A/24GB/D2/rep1: ok tok/s 37.37724185886076 peak 4921.0 MiB wall 254 s
+[13:48:54] RUN A/24GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29503 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D3 --shape A --rep 1 --out /workspace/out/results/A/24/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json --cap-gb 24
+[13:49:40] DONE A/24GB/D3/rep1: ok tok/s 282.0383051536028 peak 17515.0 MiB wall 46 s
+[13:49:40] RUN A/24GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm R1 --shape A --rep 1 --out /workspace/out/results/A/24/R1/rep1.raw.json --deepspeed none --cap-gb 24
+[13:50:09] DONE A/24GB/R1/rep1: ok tok/s 407.07005957971205 peak 16529.0 MiB wall 29 s
+[13:50:09] RUN A/24GB/R1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm R1 --shape A --rep 2 --out /workspace/out/results/A/24/R1/rep2.raw.json --deepspeed none --cap-gb 24
+[13:50:39] DONE A/24GB/R1/rep2: ok tok/s 407.10242661273094 peak 16529.0 MiB wall 30 s
+[13:50:39] RUN A/24GB/D3/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29506 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D3 --shape A --rep 2 --out /workspace/out/results/A/24/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json --cap-gb 24
+[13:51:25] DONE A/24GB/D3/rep2: ok tok/s 280.7758351812944 peak 17515.0 MiB wall 46 s
+[13:51:25] RUN A/24GB/D2/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29507 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D2 --shape A --rep 2 --out /workspace/out/results/A/24/D2/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d2_z3_param_opt_offload.json --cap-gb 24
+[13:55:38] DONE A/24GB/D2/rep2: ok tok/s 37.445359805935034 peak 4889.0 MiB wall 253 s
+[13:55:38] RUN A/24GB/D1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29508 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D1 --shape A --rep 2 --out /workspace/out/results/A/24/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json --cap-gb 24
+[13:59:46] DONE A/24GB/D1/rep2: ok tok/s 37.832238590638276 peak 4979.0 MiB wall 247 s
+[13:59:46] RUN A/24GB/SB/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape A --workdir /workspace/out/results/A/24/SB/rep2.work --out /workspace/out/results/A/24/SB/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2 --overrides-json /workspace/out/results/A/24/SB/rep2.overrides.json --cap-gb 24
+[14:02:17] DONE A/24GB/SB/rep2: ok tok/s 63.937860391931586 peak 3531.0 MiB wall 152 s
+[14:02:18] RUN A/16GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape A --workdir /workspace/out/results/A/16/SB/rep1.work --out /workspace/out/results/A/16/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/A/16/SB/rep1.overrides.json --cap-gb 16
+[14:04:51] DONE A/16GB/SB/rep1: ok tok/s 64.02045653650268 peak 3727.0 MiB wall 153 s
+[14:04:51] RUN A/16GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29511 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D1 --shape A --rep 1 --out /workspace/out/results/A/16/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json --cap-gb 16
+[14:09:00] DONE A/16GB/D1/rep1: ok tok/s 37.777073761673336 peak 4979.0 MiB wall 249 s
+[14:09:00] RUN A/16GB/D2/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29512 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D2 --shape A --rep 1 --out /workspace/out/results/A/16/D2/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d2_z3_param_opt_offload.json --cap-gb 16
+[14:13:11] DONE A/16GB/D2/rep1: ok tok/s 37.48080664259452 peak 4889.0 MiB wall 252 s
+[14:13:11] RUN A/16GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29513 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm D3 --shape A --rep 1 --out /workspace/out/results/A/16/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json --cap-gb 16
+[14:13:57] DONE A/16GB/D3/rep1: ok tok/s 282.71575539841456 peak 17515.0 MiB wall 46 s
+[14:13:57] RUN A/16GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_a.jsonl --max-length 256 --epochs 4 --arm R1 --shape A --rep 1 --out /workspace/out/results/A/16/R1/rep1.raw.json --deepspeed none --cap-gb 16
+[14:14:27] DONE A/16GB/R1/rep1: ok tok/s 409.7844029813416 peak 16529.0 MiB wall 30 s
+[14:14:27] computing gates
+[14:14:27]
+G1  S1/D1 = 1.56  threshold 2.64  LOWER   S0/D1 = n/a
+    S1 61.99 tok/s  D1 39.79 tok/s
+G2  80 GB  SB/DS-best = 0.23  (SB 64.36 tok/s, best DeepSpeed D3 280.72 tok/s, peak VRAM MiB 3487 / 17515; with prefetch variants 0.23)
+G2  24 GB  SB/DS-best = 0.23  (SB 63.88 tok/s, best DeepSpeed D3 281.41 tok/s, peak VRAM MiB 3509 / 17515; with prefetch variants 0.23)
+G2  16 GB  SB/DS-best = 0.23  (SB 64.02 tok/s, best DeepSpeed D3 282.72 tok/s, peak VRAM MiB 3727 / 17515; with prefetch variants 0.23)
+G3  R1/SB = 6.32  (peak VRAM MiB 16529 / 3487)
+G3  R2/SB = 3.45  (peak VRAM MiB 16383 / 3487)
+G4  shape B  SB/D-best(D3) = 0.20  SB/D1 = 1.42  R1/SB = 7.14  REVERSED
+    peak VRAM MiB: {'SB': '6693', 'D_best': '20807', 'D1': '9333', 'R1': '19885'}
+G4  shape C  SB/D-best(D3) = 0.41  SB/D1 = 1.56  R1/SB = 2.75  REVERSED
+    peak VRAM MiB: {'SB': '17083', 'D_best': '30969', 'D1': '22577', 'R1': '30061'}
+Ablation vs S1 (61.99 tok/s, spread 0.7%)
+    S2: 0.8%  faster
+    S3: 0.8%  faster
+    S4: -65.6%  slower
+    S5: -1.2%  slower
+    S6: 2.5%  faster
+    S7: -0.0%  no measurable effect
+    S8: -0.0%  no measurable effect [informational]
+SM clock session median 1980 MHz; valid runs more than 5% below it: 0

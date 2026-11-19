@@ -31,3 +31,39 @@ CONFIG_ALIASES: dict[str, str] = {
     "gradient_accumulation_steps": "training.gradient_accumulation_steps",
     "warmup_ratio": "training.warmup_ratio",
 }
+
+
+def _at_both_levels(notes: dict[str, str]) -> dict[str, str]:
+    """``notes`` for the key under ``training:`` and for the same key at the top level."""
+    return {**{f"training.{key}": text for key, text in notes.items()}, **notes}
+
+
+#: Names from Hugging Face ``TrainingArguments`` that look like an alias above but mean
+#: something Soup has no setting for. They get this sentence instead of a "use X"
+#: pointing at the nearest-looking field, which would run the job with a different
+#: setting than the one the user asked for. Keyed by the path as written, so the
+#: top level and ``training:`` give the same answer.
+CONFIG_NOTES: dict[str, str] = _at_both_levels(
+    {
+        "per_device_eval_batch_size": (
+            "Soup has no separate evaluation batch size; evaluation runs at the "
+            "training batch size."
+        ),
+        "per_gpu_eval_batch_size": (
+            "Soup has no separate evaluation batch size; evaluation runs at the "
+            "training batch size."
+        ),
+        "eval_batch_size": (
+            "Soup has no separate evaluation batch size; evaluation runs at the "
+            "training batch size."
+        ),
+        "warmup_steps": (
+            "Soup has no step-count warmup setting; warmup is a fraction of the "
+            "training steps, set with training.warmup_ratio (0 to 0.5)."
+        ),
+        "warmup_step": (
+            "Soup has no step-count warmup setting; warmup is a fraction of the "
+            "training steps, set with training.warmup_ratio (0 to 0.5)."
+        ),
+    }
+)

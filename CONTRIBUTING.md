@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (171 recipes)
+  recipes/            - Ready-made configs for popular models (181 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -426,7 +426,7 @@ take it back.
 | @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
 | @taljeon | Eval gate | `area:eval` |
 | @akkupratap323 | Ingest and feedback sources | `area:ingest` |
-| @dryn85-max | The MLX backend (maintainer's exception: named ahead of the threshold, held from the first merge) | `area:mlx` |
+| @vaputa | MLX backend | `area:mlx` |
 
 ## Making Changes
 
@@ -584,7 +584,13 @@ If adding a new training algorithm:
 
 1. Add a `RecipeMeta` entry in `recipes/catalog.py`
 2. Add tests in `tests/test_recipes.py`
-3. Update `README.md` recipes section
+3. Set `EXPECTED_RECIPE_COUNT` in `tests/recipe_count.py` to the new count, then run
+   `python scripts/sync_recipe_count.py` to rewrite every documentation site that
+   states it (`DOC_SITES` in `tests/test_recipe_count_is_synced.py` lists them).
+   `python scripts/sync_recipe_count.py --check` reports what is out of sync and
+   writes nothing. The pin is edited by hand on purpose: deriving it from
+   `len(RECIPES)` would reduce the milestone assertions to `len(RECIPES) ==
+   len(RECIPES)`, which can never fail (#1016)
 4. Regenerate `tests/fixtures/recipe_config_snapshots.json` with
    `python scripts/generate_recipe_snapshot.py` and review the diff — the new
    recipe's resolved config must be in the committed snapshot, or
@@ -692,9 +698,58 @@ other test cells and the three smoke jobs still report, as success, without
 running a step. If the file list cannot be read, or is not the whole list, the
 full set runs. A push, the nightly run and a release branch are never docs-only.
 
+**A maintainer can run the approval matrix by hand.** `gh workflow run ci.yml
+--ref <branch> -f matrix=approval` starts the four required test cells and the
+smoke jobs on the pinned stack, as a pull request labelled `ci:full` runs them,
+plus the jobs only a run that is not a pull request has (`type-check`,
+`torchao-contract`, `typer-vendored`); coverage is measured in `test
+(ubuntu-latest, 3.11)` as in every such run. The default is still the nightly
+matrix (seven cells, newest upstream stack), which the schedule and a dispatch
+without the input run. Measured on 2026-11-12..15: nine full-matrix dispatches on
+one integration branch cost 3,404 job-minutes, and the approval matrix leaves out
+about 95 of the 215 minutes of such a run. On a pull request's branch the dispatch
+tests the branch tip, not its merge with `main`, and does not replace the label
+run: the pull request's required checks come from its own pull-request run alone.
+
+**A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
+the approval run of a pull request check out the same merge commit:
+`github.sha` of a pull-request run is the merge commit GitHub built when the run
+was created, and adding `ci:full` does not rebuild it (14 of 14 sampled pairs, up
+to six hours apart, logged the same `HEAD is now at ... Merge <head> into
+<main>`). So the approval run's cell would test exactly what the quick run
+tested, and when that run ended green the approval run reuses its result instead
+of repeating it. The quick run's cell leaves a few bytes in the Actions cache
+under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
+the runner and the Python version, with no prefix match), and the approval run's
+cell looks for that key before it does anything else. On a hit it runs no other
+step and still reports `test (ubuntu-latest, 3.12)` as success under the same
+name; the log says which run the result came from. Misses, where the suite runs
+as before: a new push, or anything that makes GitHub rebuild the merge commit (a
+close and reopen, say), because the key names another commit; a first run that
+was red or cancelled; a cache lookup that failed (it is optional and bounded to
+five minutes); and every other cell, which always runs at approval. A moved
+`main` alone is not a miss: the label run tests the same merge commit the quick
+run did, which is what it would have tested without the cache. To force a fresh
+suite on that commit, delete the marker and re-run the job: find it with
+`gh cache list --key suite-green-v1- --ref refs/pull/<number>/merge`, delete it
+with `gh cache delete suite-green-v1-<merge sha>-ubuntu-latest-3.12 --ref
+refs/pull/<number>/merge`, then re-run the job (`gh run rerun <run id> --job
+<job id>`).
+
+**The macOS cell of a pull request leaves out a few heavy test files.**
+`.github/ci/macos-pr-skip.txt` lists test files that take a minute or more on
+the macOS runner and have no platform branch. The macOS cell of a pull request
+run skips them (`--ignore`); the Linux and Windows cells of the same run run
+them, and so does every cell of the nightly, release and manual runs, macOS
+included. A new test file is added to the list only after a maintainer has
+timed it, and a file that gains a `sys.platform`, `darwin`, `mlx` or `mps`
+branch (or starts a subprocess) has to come off it:
+`tests/test_ci_macos_pr_skip_list.py` fails while it stays.
+
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 45-minute step limit and a 60-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit (120 and 135
+minutes on the macOS cells, whose runners are the slowest). A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
@@ -769,6 +824,12 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 6. Tag: `git tag v0.X.0 && git push --tags`
 7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
    on the `v*` tag (Trusted Publisher / OIDC)
+
+Docker version tags are published for every release, while `latest` follows the highest
+stable `vX.Y.Z` tag. Before tagging a maintenance-line Docker release, backport
+`.github/workflows/docker.yml` and `scripts/docker_release_tags.py` so it keeps the newer
+line's `latest` image. A manual dispatch uses the workflow at its selected ref;
+updating `main` does not change workflows on existing historical tags.
 
 ## Recognition
 
