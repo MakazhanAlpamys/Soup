@@ -101,6 +101,38 @@ class TestEvalSuiteLoading:
         with pytest.raises(ValueError):
             load_suite(str(suite_path))
 
+    def test_load_rejects_empty_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            yaml.safe_dump({
+                "suite": "bad",
+                "tasks": [{"type": "custom", "name": "",
+                            "tasks": "evals/math.jsonl", "threshold": 0.8}],
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
+    def test_load_rejects_null_byte_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            "suite: bad\ntasks:\n"
+            "  - type: custom\n"
+            '    name: "draft\\0task"\n'
+            "    tasks: evals/math.jsonl\n"
+            "    threshold: 0.8\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
     def test_load_rejects_path_traversal(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.eval.gate import load_suite
