@@ -70,6 +70,8 @@ from soup_cli.utils.loop_log import (
 )
 from soup_cli.utils.loop_retry import (
     describe as describe_failed_train,
+)
+from soup_cli.utils.loop_retry import (
     describe_deploy_failure,
     is_stage_error,
 )
