@@ -91,6 +91,12 @@ def _assert_probe_refusal(args: tuple[str, ...], field: str, path: Path, reason:
     assert reason in output
 
 
+def test_probe_refuses_empty_evidence_path(workdir: Path) -> None:
+    result = runner.invoke(app, ["probe", "truth", BASE, "--evidence", ""])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "--evidence must be non-empty" in _plain(result.output)
+
+
 @pytest.mark.parametrize(
     ("contents", "expected"),
     [
