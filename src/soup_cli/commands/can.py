@@ -146,10 +146,13 @@ def verify_cmd(
 def _target_parts(targets) -> list:
     """The panel lines for the can's ``output`` and ``data.train`` (text from the can).
 
-    ``output`` outside the working directory is flagged as refused; a local
-    ``data.train`` path outside it is flagged as a warning only.
+    ``output`` (with the experiment name, when the can sets one) that leaves the working
+    directory is flagged as refused; a local ``data.train`` path outside it is flagged as a
+    warning only.
     """
     parts: list = [f"\nOutput: {strip_control(targets.output)}"]
+    if targets.experiment:
+        parts.append(f"\nExperiment name: {strip_control(targets.experiment)}")
     if targets.output_problem is not None:
         parts.append(
             (

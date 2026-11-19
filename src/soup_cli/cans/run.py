@@ -20,13 +20,28 @@ from typing import Any, Callable, Optional
 
 from soup_cli.cans.schema import DeployTarget, Manifest
 from soup_cli.cans.unpack import extract_can, inspect_can, read_config
-from soup_cli.utils.paths import is_under_cwd, quote_path
+from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd, quote_path
 from soup_cli.utils.redaction import find_redacted_paths
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 _RUN_TIMEOUT_SECONDS = 60 * 60 * 24  # 24h max — generous; user kills with ^C
 #: Most ``data.train`` entries the confirmation panel lists before it says "+N more".
 _MAX_SHOWN_DATA_ENTRIES = 20
+#: Longest text taken from a can's config that a message or the panel repeats.
+_MAX_SHOWN_CHARS = 200
+#: What to do about a can that is refused for its output.
+_OUTPUT_ADVICE = (
+    "Run it from a directory that contains both the can and the output path, or take "
+    "config.yaml out of the can (a .tar.gz), set output to a path under your working "
+    "directory and run soup train on it"
+)
+
+
+def _clip(text: str) -> str:
+    """``text`` cut to :data:`_MAX_SHOWN_CHARS` characters, with an ellipsis if it was longer."""
+    if len(text) <= _MAX_SHOWN_CHARS:
+        return text
+    return text[:_MAX_SHOWN_CHARS] + "..."
 
 
 @dataclass(frozen=True)
@@ -41,17 +56,19 @@ class CanRunResult:
 class CanTargets:
     """Where a can's config says ``soup train`` will write and read, for the panel.
 
-    ``output`` is the text to show; ``output_problem`` is the refusal message
-    :func:`check_can_output` raises for it (``None`` when ``soup can run`` accepts it).
-    ``data_train`` holds each ``data.train`` entry with whether it is a local path outside
-    the working directory (``soup can run`` shows those with a warning and does not
-    refuse them: reading local data is the user's choice).
+    ``output`` (and ``experiment``, when the config names one) is the text to show;
+    ``output_problem`` is the refusal message :func:`check_can_output` raises for them
+    (``None`` when ``soup can run`` accepts them). ``data_train`` holds each ``data.train``
+    entry with whether it is a local path outside the working directory (``soup can run``
+    shows those with a warning and does not refuse them: reading local data is the user's
+    choice). Texts from the can are clipped; the judgement is made on the full text.
     """
 
     output: str
     output_problem: Optional[str]
     data_train: tuple[tuple[str, bool], ...]
     data_train_more: int = 0
+    experiment: Optional[str] = None
 
 
 def _output_of(config: Mapping[str, Any]) -> object:
@@ -63,18 +80,25 @@ def _output_of(config: Mapping[str, Any]) -> object:
     return config["output"]
 
 
-def _output_problem(output: object) -> Optional[str]:
+def _experiment_of(config: Mapping[str, Any]) -> object:
+    """The ``experiment_name`` of a can's config mapping (``None`` when it sets none)."""
+    return config.get("experiment_name")
+
+
+def _output_problem(output: object, experiment: object = None) -> Optional[str]:
     """Why ``soup can run`` refuses this ``output``, or ``None`` when it accepts it.
 
-    ``soup train`` creates the checkpoints, logs and final model under ``output``, resolved
-    against the directory ``soup can run`` was started in. The can's config is written by
-    whoever packed the can, so a path that resolves outside the working directory (an
-    absolute path, ``..``, a symlink or a Windows drive-relative or UNC spelling) would
-    put those files, and the rotation of ``checkpoint-*`` directories already there, in
-    any directory the user can write to. ``is_under_cwd`` resolves symlinks and compares
-    with ``os.path.commonpath``, which also treats a different drive or UNC share as
-    outside. A value that is not text is refused too: the loader would turn a YAML
-    ``!!binary`` value into text, so it cannot be left for the loader to judge.
+    ``soup train`` writes the checkpoints, logs and final model to ``output`` joined with
+    ``experiment_name`` (when the config sets one), resolved against the directory
+    ``soup can run`` was started in. The can's config is written by whoever packed the
+    can, so a directory that resolves outside the working directory (an absolute path,
+    ``..`` in either value, a symlink, a Windows drive-relative spelling, a network share
+    or a device) would put the run's files in any directory the user can write to.
+    A network share or device path is refused as text, without being resolved: resolving
+    it would already reach the host it names. Otherwise ``is_under_cwd`` resolves symlinks
+    and compares with ``os.path.commonpath``. A value that is not text is refused too: the
+    loader would turn a YAML ``!!binary`` value into text, so it cannot be left for the
+    loader to judge.
     """
     if not isinstance(output, str):
         return (
@@ -82,21 +106,33 @@ def _output_problem(output: object) -> Optional[str]:
             f"({type(output).__name__}); soup can run needs a plain path under the "
             "working directory"
         )
-    if "\x00" in output:
+    if experiment is not None and not isinstance(experiment, str):
+        return (
+            "this can's config sets experiment_name to a value that is not a text name "
+            f"({type(experiment).__name__}); soup can run needs a plain name"
+        )
+    named = f"output to {quote_path(_clip(output))}"
+    if experiment:
+        named += f" with experiment_name {quote_path(_clip(experiment))}"
+    if "\x00" in output or (experiment and "\x00" in experiment):
         # POSIX path resolution raises on it, Windows resolution keeps it: say so here
         # rather than leave the answer to the platform.
         return (
-            f"this can's config sets output to {quote_path(output)}, which contains a NUL "
-            "byte; soup can run needs a plain path under the working directory"
+            f"this can's config sets {named}, which contains a NUL byte; soup can run "
+            "needs a plain path under the working directory"
         )
-    if is_under_cwd(output):
+    directory = os.path.join(output, experiment) if experiment else output
+    if is_network_or_device_path(output) or is_network_or_device_path(directory):
+        return (
+            f"this can's config sets {named}, which names a network share or a device, "
+            f"and soup can run does not write training output there. {_OUTPUT_ADVICE}"
+        )
+    if is_under_cwd(directory):
         return None
     return (
-        f"this can's config sets output to {quote_path(output)}, which resolves outside "
-        f"the working directory ({quote_path(os.getcwd())}), and soup can run does not "
-        "write training output there. Run it from the directory the output should go "
-        "to, or take config.yaml out of the can (a .tar.gz), set output to a path under "
-        "your working directory and run soup train on it"
+        f"this can's config sets {named}, which resolves outside the working directory "
+        f"({quote_path(os.getcwd())}), and soup can run does not write training output "
+        f"there. {_OUTPUT_ADVICE}"
     )
 
 
@@ -117,7 +153,7 @@ def check_can_output(config: Mapping[str, Any]) -> None:
 
     Raises ``ValueError`` naming the value; see :func:`_output_problem`.
     """
-    problem = _output_problem(_output_of(config))
+    problem = _output_problem(_output_of(config), _experiment_of(config))
     if problem is not None:
         raise ValueError(problem)
 
@@ -125,6 +161,7 @@ def check_can_output(config: Mapping[str, Any]) -> None:
 def describe_can_targets(config: Mapping[str, Any]) -> CanTargets:
     """What the confirmation panel shows: ``output`` and every ``data.train`` entry."""
     output = _output_of(config)
+    experiment = _experiment_of(config)
     data = config.get("data")
     raw_train = data.get("train") if isinstance(data, Mapping) else None
     if isinstance(raw_train, str):
@@ -138,14 +175,22 @@ def describe_can_targets(config: Mapping[str, Any]) -> CanTargets:
         text = entry if isinstance(entry, str) else str(entry)
         # An entry with "://" names a remote source and anything else without a data
         # file suffix may be a Hub dataset id; neither is a path the warning is about,
-        # and a relative id resolves inside the working directory anyway.
-        outside = "://" not in text and not is_under_cwd(text)
-        shown.append((text, outside))
+        # and a relative id resolves inside the working directory anyway. A network
+        # share or device is flagged as text, without being resolved.
+        outside = "://" not in text and (
+            "\x00" in text or is_network_or_device_path(text) or not is_under_cwd(text)
+        )
+        shown.append((_clip(text), outside))
     return CanTargets(
-        output=output if isinstance(output, str) else repr(output),
-        output_problem=_output_problem(output),
+        output=_clip(output if isinstance(output, str) else repr(output)),
+        output_problem=_output_problem(output, experiment),
         data_train=tuple(shown),
         data_train_more=max(0, len(entries) - _MAX_SHOWN_DATA_ENTRIES),
+        experiment=(
+            _clip(experiment if isinstance(experiment, str) else repr(experiment))
+            if experiment not in (None, "")
+            else None
+        ),
     )
 
 

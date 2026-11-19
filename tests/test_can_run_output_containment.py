@@ -1,15 +1,13 @@
 """``soup can run`` keeps a can's training output under the working directory.
 
-A can's ``config.yaml`` is written by whoever packed the can. ``soup can run`` hands it to
-``soup train`` unchanged, and ``soup train`` resolves ``output`` against the directory the
-command was started in, so an ``output`` that resolves elsewhere made the run write its
-checkpoints, logs and final model (and rotate ``checkpoint-*`` directories already there)
-anywhere the user can write.
+``soup can run`` hands a can's ``config.yaml`` to ``soup train``, which writes its
+checkpoints, logs and final model to ``output`` (joined with ``experiment_name``), resolved
+against the directory the command was started in.
 
-The decision (``.claude/plan.md``): a can whose ``output`` resolves outside the working
-directory is refused with a named message; the confirmation panel shows ``output`` and
-``data.train``; ``data.train`` is NOT refused, and a local path outside the working
-directory is shown with a warning line.
+The contract: a can whose run directory resolves outside the working directory is refused
+with a named message; the confirmation panel shows ``output`` and ``data.train``;
+``data.train`` is NOT refused, and a local path outside the working directory is shown with
+a warning line.
 """
 
 from __future__ import annotations
@@ -171,23 +169,6 @@ class TestOutputOutsideTheWorkingDirectoryIsRefused:
 
         for output in (f"{free}:out", f"{free}:\\out", f"{free}:/out", f"\\\\?\\{free}:\\out"):
             _refused(env, output)
-
-    @pytest.mark.parametrize("output", ["//server/share/out", "\\\\server\\share\\out"])
-    def test_unc_share_is_outside(self, env, monkeypatch, output):
-        # A real UNC lookup would touch the network, so the resolver is replaced for this
-        # spelling only; what is under test is that a path on another mount (the
-        # os.path.commonpath ValueError) counts as outside.
-        real_realpath = os.path.realpath
-
-        def fake_realpath(path, *args, **kwargs):
-            if str(path) == output:
-                return "\\\\server\\share\\out"
-            return real_realpath(path, *args, **kwargs)
-
-        monkeypatch.setattr(os.path, "realpath", fake_realpath)
-
-        with pytest.raises(ValueError, match=_REFUSAL):
-            check_can_output({"output": output})
 
     @pytest.mark.parametrize("output", ["out\x00x", "\x00", "../elsewhere\x00"])
     def test_nul_byte_is_refused_on_every_platform(self, env, output):
@@ -541,3 +522,174 @@ class TestCommand:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert len(env.calls) == 1
         assert re.search(r"Can run complete", strip_ansi(result.output))
+
+
+class TestTheDirectoryTheRunWritesTo:
+    """``soup train`` writes to ``output`` joined with ``experiment_name`` (every trainer
+    does ``Path(output) / experiment_name``), so that is the directory that has to stay
+    under the working directory."""
+
+    @pytest.mark.parametrize(
+        ("output", "experiment"),
+        [
+            (".", ".."),
+            ("./", ".."),
+            ("a/..", ".."),
+            ("out", "../.."),
+            ("out/sub", "../../.."),
+        ],
+    )
+    def test_a_join_that_leaves_the_working_directory_is_refused(self, env, output, experiment):
+        can = env.can(_config(output=output, experiment_name=experiment))
+
+        with pytest.raises(ValueError, match=_REFUSAL):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+        assert env.leftovers() == []
+
+    def test_the_refusal_names_both_values(self, env):
+        can = env.can(_config(output=".", experiment_name=".."))
+
+        with pytest.raises(ValueError) as raised:
+            run_can(can, yes=True)
+
+        message = str(raised.value)
+        assert "output to '.'" in message
+        assert "experiment_name '..'" in message
+
+    @pytest.mark.parametrize(
+        ("output", "experiment"),
+        [
+            ("out", "run1"),
+            (".", "run1"),
+            ("out/sub", "run-2.v3"),
+            ("out", None),
+            ("out", ""),
+        ],
+    )
+    def test_a_join_that_stays_inside_runs(self, env, output, experiment):
+        can = env.can(_config(output=output, experiment_name=experiment))
+
+        run_can(can, yes=True)
+
+        assert len(env.calls) == 1
+
+    def test_a_missing_experiment_name_runs(self, env):
+        run_can(env.can(_config(output="out")), yes=True)
+
+        assert len(env.calls) == 1
+
+    @pytest.mark.parametrize("value", ["5", "[a]", "{a: b}", "true", "!!binary Li4=", "1.5"])
+    def test_a_non_text_experiment_name_is_refused(self, env, value):
+        can = env.can(f"base: test\ntask: sft\noutput: out\nexperiment_name: {value}\n")
+
+        with pytest.raises(ValueError, match="experiment_name to a value that is not a text"):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+
+    def test_a_nul_in_the_experiment_name_is_refused(self, env):
+        with pytest.raises(ValueError, match="contains a NUL byte"):
+            check_can_output({"output": "out", "experiment_name": "run\x00x"})
+
+    def test_the_panel_data_marks_the_join(self, env):
+        targets = describe_can_targets({"output": ".", "experiment_name": ".."})
+
+        assert targets.experiment == ".."
+        assert _REFUSAL in targets.output_problem
+
+    def test_the_extracted_file_is_judged_by_the_join_too(self, env, monkeypatch):
+        can = env.can(_config(output="out"))
+        _swap_extracted_config(monkeypatch, _config(output=".", experiment_name=".."))
+
+        with pytest.raises(ValueError, match=_REFUSAL):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+        assert env.leftovers() == []
+
+
+class TestNetworkAndDevicePathsAreNotResolved:
+    """A path a can names is judged as text first: resolving a network share or a device
+    would already be an access to the host the can names."""
+
+    @pytest.fixture()
+    def resolved(self, monkeypatch):
+        calls: list = []
+        real = os.path.realpath
+
+        def recording(path, *args, **kwargs):
+            calls.append(str(path))
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(os.path, "realpath", recording)
+        return calls
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "//host/share/out",
+            "\\\\host\\share\\out",
+            "\\\\?\\C:\\out",
+            "\\\\.\\pipe\\name",
+            "//./name",
+            "//?/name",
+            "\\??\\C:\\out",
+        ],
+    )
+    def test_an_output_on_a_share_or_device_is_refused_without_resolving(
+        self, env, resolved, value
+    ):
+        with pytest.raises(ValueError, match="network share or a device"):
+            check_can_output({"output": value})
+
+        assert resolved == []
+
+    @pytest.mark.parametrize("value", ["//host/share/d.jsonl", "\\\\host\\share\\d.jsonl"])
+    def test_a_data_path_on_a_share_is_flagged_without_resolving(self, env, resolved, value):
+        targets = describe_can_targets({"data": {"train": value}})
+
+        assert targets.data_train == ((value, True),)
+        assert not any("host" in path for path in resolved), resolved
+
+    def test_a_remote_data_uri_is_neither_resolved_nor_flagged(self, env, resolved):
+        targets = describe_can_targets({"data": {"train": "https://example.com/d.jsonl"}})
+
+        assert targets.data_train == (("https://example.com/d.jsonl", False),)
+        assert not any("example.com" in path for path in resolved), resolved
+
+    def test_the_join_of_a_share_and_a_name_is_not_resolved_either(self, env, resolved):
+        with pytest.raises(ValueError, match="network share or a device"):
+            check_can_output({"output": "//host/share", "experiment_name": "run1"})
+
+        assert not any("host" in path for path in resolved), resolved
+
+    def test_a_local_output_is_still_resolved(self, env, resolved):
+        check_can_output({"output": "out/run"})
+
+        assert resolved
+
+
+class TestWhatTheCanSaysIsClipped:
+    def test_a_huge_output_is_clipped_in_the_refusal(self, env):
+        message = _refused(env, "../" + "x" * 5000)
+
+        assert len(message) < 1000
+
+    def test_a_huge_output_and_data_entry_are_clipped_in_the_panel_data(self, env):
+        targets = describe_can_targets(
+            {"output": "o" * 5000, "data": {"train": "d" * 5000}}
+        )
+
+        assert len(targets.output) <= 210
+        assert len(targets.data_train[0][0]) <= 210
+        assert targets.data_train[0][1] is False  # judged on the full text, still inside
+
+
+class TestTheAdviceInTheRefusal:
+    def test_it_asks_for_the_can_and_the_output_under_one_directory(self, env):
+        message = _refused(env, "../elsewhere")
+
+        assert "contains both the can and the output path" in message
+        assert "set output to a path under your working directory" in message
