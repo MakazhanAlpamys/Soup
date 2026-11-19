@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -16,6 +18,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape as markup_escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import (
@@ -50,6 +53,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
 
 logger = logging.getLogger(__name__)
 console = Console()
+_WINDOWS = os.name == "nt"
 
 # The quantizations the pre-flight prices but trains in bf16 (dequantized on
 # load), and how the gate's panel names them. The quantization and optimizer
@@ -204,6 +208,28 @@ def _format_duration_display(result: dict) -> str:
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
+def _quote_completion_path(path: str, *, windows: bool) -> tuple[str, bool]:
+    """Return a shell argument and whether it must be pasted into PowerShell."""
+    if not windows:
+        return shlex.quote(path), False
+
+    # Double quotes don't suppress cmd expansion (% and delayed !), or
+    # PowerShell interpolation, backtick escapes, and curly double quotes.
+    if any(char in path for char in "$`%!\u201c\u201d\u201e"):
+        escaped = re.sub(r"['\u2018-\u201b]", r"\g<0>\g<0>", path)
+        return f"'{escaped}'", True
+
+    argument = subprocess.list2cmdline([path])
+    if not argument.startswith('"') and any(
+        char.isspace() or char in "\"'[]&^()<>|,;{}@#\u2018\u2019\u201a\u201b" for char in path
+    ):
+        # list2cmdline doesn't wrap unspaced shell punctuation. Use its rule
+        # for trailing backslashes when adding the closing quote ourselves.
+        trailing = "\\" * (len(path) - len(path.rstrip("\\")))
+        argument = f'"{argument}{trailing}"'
+    return argument, False
 
 
 def _run_auto_eval_after_training(
@@ -2752,6 +2778,10 @@ def train(
         raise
 
     # Report
+    output_dir = result["output_dir"]
+    output_arg, powershell_only = _quote_completion_path(output_dir, windows=_WINDOWS)
+    output_arg = for_terminal(output_arg)
+    shell_hint = "[dim]Use PowerShell for the commands below.[/]\n" if powershell_only else ""
     backend_hint = " --backend mlx" if cfg.backend == "mlx" else ""
     dequantize_hint = (
         " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
@@ -2763,22 +2793,26 @@ def train(
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
         else (
-            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {output_arg}"
             f"{dequantize_hint}"
         )
     )
 
     console.print(
         Panel(
-            f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n"
-            f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat{backend_hint} --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
-            f"Run details: [bold]soup runs show {run_id}[/]",
+            Text.from_markup(
+                f"{_format_training_complete_loss(result)}\n"
+                f"Duration: [bold]{_format_duration_display(result)}[/]\n"
+                f"Output: [bold]{for_terminal(output_dir)}[/]\n"
+                f"Run ID: [bold]{run_id}[/]\n\n"
+                f"{shell_hint}"
+                f"Quick test:  [bold]soup chat{backend_hint} --model {output_arg}[/]\n"
+                f"Push to HF:  [bold]soup push --model {output_arg}[/]\n"
+                f"{merge_hint}\n"
+                f"Export GGUF: [bold]soup export --model {output_arg}[/]\n"
+                f"Run details: [bold]soup runs show {run_id}[/]",
+                emoji=False,
+            ),
             title=("[bold yellow]Training Stopped — Loss watchdog[/]"
                    if result.get("stop_reason") == "loss_watchdog"
                    else "[bold green]Training Complete![/]"),
