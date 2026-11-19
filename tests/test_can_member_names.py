@@ -425,14 +425,14 @@ class TestTheRedactedValueCheckReadsTheFileThatIsUsed:
         )
         real_extract = can_run.extract_can
 
-        def extract_then_swap(path, dest):
+        def extract_with_other_config(path, dest):
             result = real_extract(path, dest)
             (Path(dest) / "config.yaml").write_text(
                 "base: test\ntask: sft\ntraining:\n  grpo_judge: <redacted>\n", encoding="utf-8"
             )
             return result
 
-        monkeypatch.setattr(can_run, "extract_can", extract_then_swap)
+        monkeypatch.setattr(can_run, "extract_can", extract_with_other_config)
 
         with pytest.raises(ValueError, match="redacted value"):
             run_can(str(can), yes=True)
