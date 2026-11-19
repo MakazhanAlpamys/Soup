@@ -278,6 +278,7 @@ def fork_can(
     safe_tags = [
         _redact_field(tag, f"tags[{index}]", report) for index, tag in enumerate(manifest.tags)
     ]
+    _announce_redactions(report, console)
 
     # Validated before anything is written, as pack_entry does: a raw dict let a
     # control character or an over-long author or name through, and every reader
@@ -297,7 +298,6 @@ def fork_can(
         raise ValueError(
             _fork_refusal(exc, author=safe_author, fork_name=fork_name)
         ) from None
-    _announce_redactions(report, console)
 
     with tarfile.open(out, mode="w:gz") as tar:
         _add_text(tar, "manifest.yaml", yaml.safe_dump(

@@ -99,3 +99,24 @@ def test_a_valid_fork_passes_verify(tmp_path, monkeypatch):
     manifest = inspect_can(str(out))
     assert manifest.name == "recipe-fork"
     assert manifest.author == "alice"
+
+
+@pytest.mark.parametrize("prefix", ["alice ", "a" * 100 + " "])
+def test_a_fork_whose_author_was_redacted_still_verifies(tmp_path, monkeypatch, prefix):
+    """The redacted author is the one validated and written (#2883 redacts it first).
+
+    With the 100-character prefix the author as typed is over 128 characters, and the
+    redacted one is not, so the fork is accepted: what is checked is what is written.
+    """
+    from soup_cli.cans.pack import fork_can
+    from soup_cli.cans.unpack import inspect_can
+    from soup_cli.cans.verify import verify_can
+    from soup_cli.utils.redaction import REDACTED
+    from tests.test_crash_bundle_redaction import HF
+
+    src = _pack(tmp_path, monkeypatch)
+    out = tmp_path / "fork.can"
+    fork_can(source=str(src), out_path=str(out), modifications=[], author=f"{prefix}{HF}")
+    report = verify_can(str(out))
+    assert report.manifest_ok and report.config_ok, report
+    assert inspect_can(str(out)).author == f"{prefix}{REDACTED}"
