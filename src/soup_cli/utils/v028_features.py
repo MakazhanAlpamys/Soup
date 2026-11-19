@@ -98,7 +98,7 @@ def apply_v028_speed_memory(
         applied["fp8_attention"] = True
         _say(f"FP8 attention enabled ({converted} projections)")
 
-    # --- NVFP4 (v0.71.21 #141 — Blackwell-only) ------------------------------
+    # --- NVFP4 (v0.71.21 #141 — SM 10.0 / 10.3 only, #2867) ------------------------------
     if getattr(tcfg, "nvfp4", False):
         try:
             from soup_cli.utils.advanced_precision import apply_nvfp4
