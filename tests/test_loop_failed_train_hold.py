@@ -14,6 +14,7 @@ import json
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -122,8 +123,89 @@ class TestFingerprint:
 
         assert sft != kto
 
-    def test_an_unreadable_dataset_has_none(self, tmp_path):
-        assert retry.train_inputs_fingerprint(_state(), str(tmp_path / "missing"), "sft") is None
+    def test_an_unreadable_dataset_is_still_fingerprinted(self, tmp_path):
+        # #3043: an unreadable dataset now has a path-keyed fingerprint, so its
+        # failure is held instead of retried on every poll.  It is not None.
+        missing = str(tmp_path / "missing")
+        first = retry.train_inputs_fingerprint(_state(), missing, "sft")
+        again = retry.train_inputs_fingerprint(_state(), missing, "sft")
+        assert first is not None and first == again
+        assert first != retry.train_inputs_fingerprint(_state(), str(tmp_path / "other"), "sft")
+
+    def test_a_large_dataset_is_fingerprinted_from_its_size_and_ends(self, tmp_path, monkeypatch):
+        # A 256 MiB file is not needed: lower the cap and the head/tail chunk.
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        monkeypatch.setattr(retry, "_READ_CHUNK", 16)
+        one = tmp_path / "big.jsonl"
+        one.write_bytes(b"A" * 64 + b"middle" * 20 + b"Z" * 64)
+        copy = tmp_path / "copy.jsonl"
+        copy.write_bytes(one.read_bytes())
+
+        left = retry.train_inputs_fingerprint(_state(), str(one), "sft")
+        right = retry.train_inputs_fingerprint(_state(), str(copy), "sft")
+        assert left is not None and left == right
+
+        changed_tail = tmp_path / "tail.jsonl"
+        changed_tail.write_bytes(one.read_bytes()[:-1] + b"Q")
+        assert retry.train_inputs_fingerprint(_state(), str(changed_tail), "sft") != left
+
+        changed_middle = tmp_path / "middle.jsonl"
+        changed_middle.write_bytes(b"A" * 64 + b"other!" * 20 + b"Z" * 64)
+        assert retry.train_inputs_fingerprint(_state(), str(changed_middle), "sft") == left
+
+    def test_a_large_dataset_failure_is_held_not_retried_forever(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        big = tmp_path / "big.jsonl"
+        big.write_bytes(b"A" * 200)
+        fingerprint = retry.train_inputs_fingerprint(_state(), str(big), "sft")
+        record = retry.after_failure(None, fingerprint, NOW, "train failed")
+        assert retry.hold_reason(record, fingerprint, NOW + timedelta(seconds=1)) is not None
+
+    def test_a_size_only_change_is_a_new_fingerprint(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        monkeypatch.setattr(retry, "_READ_CHUNK", 16)
+        one = tmp_path / "one.jsonl"
+        one.write_bytes(b"A" * 64 + b"m" * 20 + b"Z" * 64)
+        longer = tmp_path / "longer.jsonl"
+        longer.write_bytes(b"A" * 64 + b"m" * 21 + b"Z" * 64)
+        before = retry.train_inputs_fingerprint(_state(), str(one), "sft")
+        after = retry.train_inputs_fingerprint(_state(), str(longer), "sft")
+        assert after != before
+
+    def test_the_cap_boundary_switches_from_whole_file_to_ends(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        monkeypatch.setattr(retry, "_READ_CHUNK", 16)
+        at_cap = tmp_path / "at.jsonl"
+        at_cap.write_bytes(b"A" * 63 + b"Z")  # exactly 64 bytes, hashed whole
+        at_changed = tmp_path / "at_changed.jsonl"
+        at_changed.write_bytes(b"A" * 31 + b"Q" + b"A" * 31 + b"Z")  # same size, middle changed
+        over_cap = tmp_path / "over.jsonl"
+        over_cap.write_bytes(b"A" * 64 + b"m" * 200 + b"Z" * 64)
+        over_changed = tmp_path / "over_changed.jsonl"
+        over_changed.write_bytes(b"A" * 64 + b"q" * 200 + b"Z" * 64)
+        at_fp = retry.train_inputs_fingerprint(_state(), str(at_cap), "sft")
+        over_fp = retry.train_inputs_fingerprint(_state(), str(over_cap), "sft")
+        assert over_fp != at_fp
+        # Exactly the cap: the whole file is hashed, so a middle edit is seen.
+        assert retry.train_inputs_fingerprint(_state(), str(at_changed), "sft") != at_fp
+        # One byte over: head + tail only, so the same middle edit is invisible.
+        assert retry.train_inputs_fingerprint(_state(), str(over_changed), "sft") == over_fp
+
+    def test_a_held_path_that_becomes_readable_trains_again(self, tmp_path, monkeypatch):
+        unreadable = tmp_path / "pairs.jsonl"
+        unreadable.write_bytes(b"{}")
+
+        def cannot_read(path):
+            raise OSError("cannot read")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(retry.os.path, "getsize", cannot_read)
+            held_fp = retry.train_inputs_fingerprint(_state(), str(unreadable), "sft")
+        assert held_fp is not None
+        record = retry.after_failure(None, held_fp, NOW, "train failed")
+        readable_fp = retry.train_inputs_fingerprint(_state(), str(unreadable), "sft")
+        assert readable_fp != held_fp
+        assert retry.hold_reason(record, readable_fp, NOW) is None
 
 
 class TestAfterFailure:
@@ -206,6 +288,40 @@ class TestTheStage:
 
     def _fp(self, state):
         return retry.train_inputs_fingerprint(state, "sft.jsonl", "sft")
+
+    def test_a_large_dataset_failure_is_held_by_the_train_stage(self, cwd, monkeypatch):
+        # #3043: the defect was at this stage, not in after_failure/hold_reason.
+        monkeypatch.setattr(retry, "_MAX_DATASET_BYTES", 64)
+        big = Path("sft.jsonl")
+        big.write_bytes(b"A" * 200)
+        child = _Child(returncode=1)
+        monkeypatch.setattr(ls, "_TRAIN_RUNNER", child)
+        state = _state()
+        now = datetime.now(timezone.utc)
+
+        first = ls.train_dpo_from_pairs(state, self._ctx())
+        assert first["failed"] is True and child.calls == 1
+        state = replace(
+            state,
+            failed_train=retry.after_failure(
+                None, first["train_inputs"], now, str(first["failure"])
+            ),
+        )
+        second = ls.train_dpo_from_pairs(state, self._ctx())
+        assert child.calls == 1 and second["skipped"] is True
+        assert second["notes"].startswith("train_backoff:")
+
+        # Two more failures on that fingerprint hold the stage.
+        for _ in range(2):
+            state = replace(
+                state,
+                failed_train=retry.after_failure(
+                    state.failed_train, first["train_inputs"], now, "train failed"
+                ),
+            )
+        held = ls.train_dpo_from_pairs(state, self._ctx())
+        assert child.calls == 1 and held["skipped"] is True
+        assert held["notes"].startswith("train_held:")
 
     def test_a_failed_run_reports_its_fingerprint_and_reason(self, cwd, monkeypatch):
         child = _Child(returncode=1)

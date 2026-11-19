@@ -13,12 +13,30 @@ from soup_cli.migrate.common import unmapped_keys_warning
 
 # The ``TrainingArguments`` / TRL ``*Config`` keywords the migrator maps or warns
 # about by name; any other keyword on the final stage's config is listed in one
-# "not migrated" warning so a dropped setting is never silent (#1807).
+# "not migrated" warning so a dropped setting is never silent (#1807). ``beta`` and
+# ``loss_type`` are not here: they count as handled only on the tasks that read them.
 _HANDLED_CONFIG_KWARGS = frozenset({
     "per_device_train_batch_size", "num_train_epochs", "learning_rate", "optim",
-    "lr_scheduler_type", "output_dir", "beta", "max_steps", "gradient_accumulation_steps",
-    "weight_decay", "seed", "warmup_ratio", "warmup_steps", "loss_type",
+    "lr_scheduler_type", "output_dir", "max_steps", "gradient_accumulation_steps",
+    "weight_decay", "seed", "warmup_ratio", "warmup_steps",
 })
+
+# The Soup field each task's trainer hands to TRL as ``beta`` (trainer/*.py; online
+# DPO reuses dpo_beta, and IPO's beta is its tau). SimPO has no such field, so a
+# ``beta`` on a ``CPOConfig`` is listed as not migrated.
+_BETA_FIELDS = {
+    "dpo": "dpo_beta",
+    "ipo": "ipo_tau",
+    "kto": "kto_beta",
+    "orpo": "orpo_beta",
+    "bco": "bco_beta",
+    "grpo": "grpo_beta",
+    "online_dpo": "dpo_beta",
+}
+
+# ``DPOConfig(loss_type=...)`` → Soup task. Any other DPO loss has no Soup task and
+# is refused by name, as LLaMA-Factory's ``pref_loss`` is (#1214).
+_DPO_LOSS_TASKS = {"sigmoid": "dpo", "ipo": "ipo"}
 
 # The ``get_peft_model`` keywords the migrator maps; the rest are listed the same way.
 _HANDLED_PEFT_KWARGS = frozenset({
@@ -59,6 +77,7 @@ _CONFIG_MAP = {
 _TASK_FORMAT_MAP = {
     "sft": "auto",
     "dpo": "dpo",
+    "ipo": "dpo",
     "grpo": "auto",
     "kto": "kto",
     "orpo": "dpo",
@@ -203,6 +222,8 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     training_params: Dict[str, Any] = {}
     task = "sft"
     cpo_loss_type: Optional[str] = None
+    dpo_loss_type: Any = None
+    stage_beta: Any = _SENTINEL
     output_dir = "./output"
 
     # Collect variable assignments from notebook code (module-level only, in source order)
@@ -371,11 +392,15 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 training_params["scheduler"] = kwargs["lr_scheduler_type"]
             if "output_dir" in kwargs:
                 output_dir = kwargs["output_dir"]
-            if "beta" in kwargs:
-                if task == "dpo":
-                    training_params["dpo_beta"] = kwargs["beta"]
-                elif task == "kto":
-                    training_params["kto_beta"] = kwargs["beta"]
+            # The DPO loss can still turn the task into ipo, so beta is placed
+            # in its field once the task is final, after this loop.
+            dpo_loss_type = kwargs.get("loss_type") if task == "dpo" else None
+            stage_beta = kwargs.get("beta", _SENTINEL) if task in _BETA_FIELDS else _SENTINEL
+            handled = set(_HANDLED_CONFIG_KWARGS)
+            if dpo_loss_type is not None or task == "cpo":  # cpo: read by _cpo_loss_type
+                handled.add("loss_type")
+            if stage_beta is not _SENTINEL:
+                handled.add("beta")
             # #1807: these four were never read, so GA 16 trained as Soup's 4,
             # weight decay 0.1 as 0.01, and the seed was lost.
             if "gradient_accumulation_steps" in kwargs:
@@ -397,7 +422,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                     "you change it). Pick the ratio that matches your dataset size."
                 )
             dropped = unmapped_keys_warning(
-                _keyword_names(node), _HANDLED_CONFIG_KWARGS, f"{func_name} argument"
+                _keyword_names(node), handled, f"{func_name} argument"
             )
             if dropped is not None:
                 warnings.append(dropped)
@@ -420,6 +445,10 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 "(TRL's default is 'sigmoid'); only loss_type='simpo' migrates, to task: simpo."
             )
         task = "simpo"
+    if task == "dpo" and dpo_loss_type is not None:
+        task = _dpo_loss_task(dpo_loss_type)
+    if stage_beta is not _SENTINEL:
+        training_params[_BETA_FIELDS[task]] = stage_beta
     if task == "online_dpo":
         # The schema requires a judge or a reward model, and TRL's judge is a Python
         # object with no string form, so a placeholder is written the way data.train is.
@@ -541,6 +570,20 @@ def _cpo_loss_type(
     if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
         return _UNREAD
     return _extract_kwargs(config, scope=scope).get("loss_type")
+
+
+def _dpo_loss_task(loss_type: Any) -> str:
+    """The Soup task for the final ``DPOConfig``'s ``loss_type``. TRL also takes it as a
+    list of losses to combine; a list of one is that loss, anything longer is refused."""
+    loss = loss_type
+    if isinstance(loss, list) and len(loss) == 1:
+        loss = loss[0]
+    if isinstance(loss, str) and loss in _DPO_LOSS_TASKS:
+        return _DPO_LOSS_TASKS[loss]
+    raise ValueError(
+        f"No Soup task matches DPOTrainer with loss_type={loss_type!r}; only "
+        "loss_type='sigmoid' (task: dpo) and 'ipo' (task: ipo) migrate."
+    )
 
 
 def _keyword_names(node: ast.Call) -> Dict[str, Any]:
