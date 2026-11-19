@@ -301,7 +301,11 @@ Scope: task `sft` on the transformers and MLX backends, single process, on the p
 text path. The recorder turns itself off, with one warning naming the reason, for
 resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
 dataset, and anything else it cannot attribute row by row. Previews are shown only when
-the dataset on disk still matches the one the run trained on.
+the dataset on disk still matches the one the run trained on. A run with
+`training.curriculum: true` numbers its rows in the order it trained on, shortest first,
+not in file order (the MLX backend does not sort, so there the numbers follow the file),
+and `soup rewind` shows the text of each row, so the number need not be looked up in the
+file.
 
 **What it costs.** Writing one line per micro-batch measured under 0.1 ms per
 micro-batch, which is negligible against any real step, and a run's peak memory was
@@ -471,14 +475,23 @@ master weights (see [Process Reward Model](#process-reward-model-prm)):
 | task | quantization | notes |
 |---|---|---|
 | `distill` | `none` only | student and frozen teacher both load unquantised |
-| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune on fp32 master weights unless `classifier_lora: true` |
 | `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
 | `moe_lora_routing` | `none` only | base frozen, only the router trains |
 | `unlearn` | `none` only | policy and reference copy both load unquantised |
-| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+| `asr` | `none` only | full fine-tune on fp32 master weights unless `asr_lora: true` |
 
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
 pre-flight describe the run that actually happens (#795).
+
+The classifier family and `asr` load an fp32 base for their default full fine-tune, whatever
+dtype the checkpoint was saved in (#2941): a bf16 decoder base, or the fp16 `whisper-large-v3`
+and `-large-v3-turbo`, used to train in that dtype with no fp32 master copy, and an AdamW step
+of about `lr` left most weights unchanged. With `classifier_lora: true` / `asr_lora: true` the
+frozen base keeps its checkpoint dtype, except on a CUDA card without bf16 hardware, where it
+loads in fp16 (v0.77.2 loaded the checkpoint's own dtype there); under bf16/fp16 mixed
+precision the classification head that the adapter trains (`modules_to_save`) is upcast to
+fp32 like the LoRA weights.
 
 An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
 v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,

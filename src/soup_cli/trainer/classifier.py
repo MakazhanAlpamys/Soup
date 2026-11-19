@@ -46,8 +46,11 @@ from soup_cli.utils.classifier import (
     validate_query_id,
 )
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    upcast_trainable_half_to_fp32,
+)
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -451,12 +454,28 @@ class ClassifierTrainerWrapper:
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
+        # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
+        # behaviour; opting in wraps the SeqCls head with a SEQ_CLS LoRA so
+        # only the adapter (+ classification head) trains. ``lora.r`` defaults
+        # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
+        # positive rank (a rank of 0 would be a no-op LoRA). Decided before the
+        # load, because it decides whether the base trains (#2941).
+        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
+            tcfg.lora.r > 0
+        )
+
         console.print(f"[dim]Loading classifier model: {cfg.base}[/]")
+        # #2941: a full fine-tune steps every base weight, so it loads fp32 master
+        # weights, as sft, pretrain, embedding and prm do (#339, #1235). With no
+        # ``dtype`` transformers 5 loads the checkpoint's own (``"auto"``): bf16 for
+        # most decoder bases, where AdamW steps of about ``lr`` round away.
         self.model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base,
             num_labels=num_labels,
             problem_type=problem_type,
             trust_remote_code=self._trust_remote_code,
+            dtype=resolve_base_load_dtype(self.device, full_finetune=not self._lora_active),
             **base_revision_kwargs(cfg.base),
         )
         label_names = (
@@ -466,15 +485,6 @@ class ClassifierTrainerWrapper:
             self.model.config.id2label = {i: name for i, name in enumerate(label_names)}
             self.model.config.label2id = {name: i for i, name in enumerate(label_names)}
 
-        # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
-        # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
-        # behaviour; opting in wraps the SeqCls head with a SEQ_CLS LoRA so
-        # only the adapter (+ classification head) trains. ``lora.r`` defaults
-        # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
-        # positive rank (a rank of 0 would be a no-op LoRA).
-        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
-            tcfg.lora.r > 0
-        )
         if self._lora_active:
             from peft import TaskType, get_peft_model
 
@@ -645,6 +655,14 @@ class ClassifierTrainerWrapper:
                 )
             )
         align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
+        # #2941: on the LoRA path peft trains a copy of the classification head
+        # (``modules_to_save``) in the frozen base's dtype; give it an fp32 master
+        # weight wherever autocast runs the step.
+        upcast_trainable_half_to_fp32(
             self.trainer.model,
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),

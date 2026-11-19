@@ -827,6 +827,10 @@ def test_the_docs_say_the_disk_is_shared_and_ephemeral_and_where_a_list_404_goes
 
 
 def test_the_fragment_does_not_promise_a_clean_exit_for_a_list_404():
-    text = (_ROOT / "changelog.d" / "0.77.2" / "2877.fixed.md").read_text(encoding="utf-8")
+    # The entry is the fragment changelog.d/<newest>/2877.fixed.md until a release assembles
+    # it into CHANGELOG.md, so it is discovered, not hardcoded (as test_issue1017 does).
+    fragments = list((_ROOT / "changelog.d").glob("*/2877.fixed.md"))
+    source = fragments[0] if fragments else _ROOT / "CHANGELOG.md"
+    text = source.read_text(encoding="utf-8")
     assert "Pod list or create" not in text
     assert "no Pod created or cleaned up" in text

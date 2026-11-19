@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import builtins
 import json
+import sys
 import types
 from pathlib import Path
 
@@ -70,9 +71,11 @@ def _narrow(monkeypatch, module_path: str) -> None:
     monkeypatch.setattr(module_path, Console(width=80))
 
 
-def _fake_import(real_import):
+def _fake_import(real_import, *, noisy_libraries=()):
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
         if name in _FAKE_LIBS and not fromlist:
+            if name in noisy_libraries:
+                sys.stdout.write(f"{name} import diagnostic\n")
             mod = types.ModuleType(name)
             mod.__version__ = _FAKE_LIBS[name]
             return mod
@@ -94,6 +97,20 @@ def test_version_json_full_is_one_line_at_any_width(monkeypatch):
     info = json.loads(lines[0])
     assert info["torch"] == _FAKE_LIBS["torch"]
     assert info["wandb"] == _FAKE_LIBS["wandb"]
+
+
+def test_version_json_full_sends_import_diagnostics_to_stderr(monkeypatch):
+    noisy_import = _fake_import(builtins.__import__, noisy_libraries=("torch", "deepspeed"))
+    monkeypatch.setattr(builtins, "__import__", noisy_import)
+
+    result = runner.invoke(app, ["version", "--json", "--full"])
+
+    assert result.exit_code == 0, result.output
+    info = json.loads(result.stdout)
+    assert info["torch"] == _FAKE_LIBS["torch"]
+    assert info["deepspeed"] == _FAKE_LIBS["deepspeed"]
+    assert "torch import diagnostic" in result.stderr
+    assert "deepspeed import diagnostic" in result.stderr
 
 
 @pytest.mark.parametrize("markup", [_MARKUP, _SILENT_MARKUP])
