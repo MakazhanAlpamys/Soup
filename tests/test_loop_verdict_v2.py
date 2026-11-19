@@ -1099,6 +1099,7 @@ class TestKeepAsideThenGraduation:
         world.state = replace(
             world.state,
             failed_train={**world.state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+            failed_stage={**world.state.failed_stage, "retry_after": "2026-01-01T00:00:00+00:00"},
         )
         retry = world.cycle()
         assert retry.run_id
@@ -1373,11 +1374,12 @@ class TestLineageCursor:
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
     # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16: failed_train,
-    # canary_override) and review 5b (2026-11-17: last_idle): at the very end, so a reader of an
+    # canary_override), review 5b (2026-11-17: last_idle), and the stage retry record: at the very
+    # end, so a reader of an
     # older loop.yaml is unaffected; they come last in this order
     LATER = [
         "pending_deploy", "last_failure", "canary_on_timeout_explicit", "failed_train",
-        "canary_override", "last_idle",
+        "canary_override", "last_idle", "failed_stage",
     ]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):

@@ -13,6 +13,8 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Callable, Iterable
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -648,13 +650,21 @@ class ExperimentTracker:
             run["exit_code"] = None
         return run
 
-    def list_runs(self, limit: int = 50) -> list[dict]:
-        """Return list of runs ordered by created_at desc."""
+    def list_runs(
+        self,
+        limit: int = 50,
+        *,
+        select_runs: Callable[[Iterable[dict]], list[dict]] | None = None,
+    ) -> list[dict]:
+        """List newest runs, letting a selector apply the limit after filtering."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+        sql_limit = limit if select_runs is None or limit == 0 else -1
+        with closing(conn.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (sql_limit,)
+        )) as cursor:
+            rows = map(dict, cursor)
+            selected = list(rows) if select_runs is None else select_runs(rows)
+        return [self._reconcile_orphaned_run(run) for run in selected]
 
     def list_active_execution_runs(self) -> list[dict]:
         """Return every 'launching' or 'running' run, newest first, with no limit.
@@ -677,7 +687,9 @@ class ExperimentTracker:
             "SELECT * FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
 
-        if row is None:
+        # An empty id is not a prefix: its pattern is "%", which names every run,
+        # so with a single run `soup runs delete ""` would delete it.
+        if row is None and run_id:
             rows = conn.execute(
                 "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC",
@@ -703,6 +715,8 @@ class ExperimentTracker:
         ).fetchone()
         if exact is not None:
             return 1
+        if not run_id:
+            return 0  # an empty id names no run (see get_run)
         (count,) = conn.execute(
             "SELECT COUNT(*) FROM runs WHERE run_id LIKE ? ESCAPE '\\'",
             (_run_id_prefix_pattern(run_id),),

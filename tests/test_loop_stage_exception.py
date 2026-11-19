@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import replace
 from datetime import datetime
 
@@ -25,6 +26,11 @@ from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
 PAST = "2000-01-01T00:00:00+00:00"
 LOCKED = "thumbs database could not be read (OperationalError: database is locked)"
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
 
 
 @pytest.fixture
@@ -41,9 +47,19 @@ def _state(**kwargs) -> LoopState:
 class Pipeline:
     """Counting stages; ``raising`` names the stage that raises ``error``."""
 
-    def __init__(self, raising: "str | None" = None, error: "BaseException | None" = None):
+    def __init__(
+        self,
+        raising: "str | None" = None,
+        error: "BaseException | None" = None,
+        train_result: "dict | None" = None,
+        gate_verdict: str = "OK",
+        deploy_result: "dict | None" = None,
+    ):
         self.raising = raising
         self.error = error or ValueError(LOCKED)
+        self.train_result = train_result
+        self.gate_verdict = gate_verdict
+        self.deploy_result = deploy_result
         self.calls: "list[str]" = []
 
     def _step(self, name: str):
@@ -57,15 +73,17 @@ class Pipeline:
 
     def train(self, state, harvested):
         self._step("train")
+        if self.train_result is not None:
+            return self.train_result
         return {"run_id": "run-1", "skipped": False, "adapter_path": "adapters/a"}
 
     def gate(self, state, trained):
         self._step("gate")
-        return {"gate_verdict": "OK"}
+        return {"gate_verdict": self.gate_verdict}
 
     def deploy(self, state, trained):
         self._step("deploy")
-        return {"deployed": True}
+        return self.deploy_result or {"deployed": True}
 
     def cost(self, state):
         self._step("cost")
@@ -93,7 +111,7 @@ def _lines(root, name="iterations.jsonl"):
 
 
 STAGES = ("cost", "harvest", "train", "gate", "deploy")
-HELD_STAGES = ("cost", "harvest", "train", "gate")  # a deploy has its own retry (3 attempts)
+HELD_STAGES = ("cost", "harvest", "train", "gate")
 
 
 @pytest.mark.parametrize("stage", STAGES)
@@ -155,7 +173,8 @@ def test_the_failure_is_remembered_for_the_wait_then_hold_rule(cwd, stage):
 
     new_state, _, _ = run_once(_state(), pipeline.config())
 
-    remembered = new_state.failed_train
+    remembered = new_state.failed_stage
+    assert new_state.failed_train is None
     assert remembered["attempts"] == 1 and remembered["held"] is False
     assert remembered["retry_after"] is not None
     assert remembered["reason"].startswith(f"stage error: the {stage} stage raised ValueError")
@@ -177,19 +196,55 @@ def test_the_same_stage_failing_again_waits_then_holds(cwd, stage):
     assert f"the {stage} stage raised ValueError" in state.last_failure  # still in view
 
     for expected_attempts in (2, 3):
-        state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
         before = len(pipeline.calls)
         state, _, _ = run_once(state, config)
         assert len(pipeline.calls) > before  # the wait was over: it tried again
-        assert state.failed_train["attempts"] == expected_attempts
+        assert state.failed_stage["attempts"] == expected_attempts
 
-    assert state.failed_train["held"] is True and state.failed_train["retry_after"] is None
+    assert state.failed_stage["held"] is True and state.failed_stage["retry_after"] is None
+
+
+def test_three_raised_train_errors_hold_the_loop(cwd):
+    pipeline = Pipeline(raising="train")
+    state = _state()
+    config = pipeline.config()
+
+    for expected_attempts in (1, 2, 3):
+        state, _, _ = run_once(state, config)
+        assert state.failed_stage["attempts"] == expected_attempts
+        assert state.failed_stage["has_non_train_failure"] is True
+        assert state.failed_stage["held"] is (expected_attempts == 3)
+        if expected_attempts < 3:
+            state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+    assert state.failed_stage["retry_after"] is None
     before = len(pipeline.calls)
     state, _, held = run_once(state, config)
     assert len(pipeline.calls) == before
     assert held.proceed is False
     assert "stage_held" in state.last_idle["reason"]
-    assert "soup loop resume" in state.last_idle["reason"]
+
+
+def test_two_failed_train_runs_then_raised_harvest_reaches_hold(cwd):
+    failed = {
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state = _state()
+    for _ in range(2):
+        state, _, _ = run_once(state, Pipeline(train_result=failed).config())
+        assert state.failed_stage["has_non_train_failure"] is False
+        state = replace(
+            state,
+            failed_stage={**state.failed_stage, "retry_after": PAST},
+            failed_train={**state.failed_train, "retry_after": PAST},
+        )
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+
+    assert state.failed_stage["attempts"] == 3
+    assert state.failed_stage["has_non_train_failure"] is True
+    assert state.failed_stage["held"] is True
 
 
 def test_the_first_wait_is_five_minutes_and_the_second_thirty(cwd):
@@ -198,10 +253,10 @@ def test_the_first_wait_is_five_minutes_and_the_second_thirty(cwd):
     config = pipeline.config()
 
     state, _, _ = run_once(state, config)
-    first = state.failed_train
-    state = replace(state, failed_train={**first, "retry_after": PAST})
+    first = state.failed_stage
+    state = replace(state, failed_stage={**first, "retry_after": PAST})
     state, _, _ = run_once(state, config)
-    second = state.failed_train
+    second = state.failed_stage
 
     def wait_seconds(record):
         last = datetime.fromisoformat(record["last_at"])
@@ -210,26 +265,379 @@ def test_the_first_wait_is_five_minutes_and_the_second_thirty(cwd):
     assert wait_seconds(first) == 300.0 and wait_seconds(second) == 1800.0
 
 
-def test_a_different_stage_failing_starts_the_count_again(cwd):
+def test_a_different_stage_failure_continues_the_loop_wide_count(cwd):
     state = _state()
     state, _, _ = run_once(state, Pipeline(raising="harvest").config())
-    state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
     state, _, _ = run_once(state, Pipeline(raising="gate").config())
 
-    assert state.failed_train["attempts"] == 1
-    assert "the gate stage raised" in state.failed_train["reason"]
+    assert state.failed_stage["attempts"] == 2
+    assert "the gate stage raised" in state.failed_stage["reason"]
+
+
+def test_alternating_stage_errors_reach_the_loop_hold(cwd):
+    state = _state()
+    for stage in ("harvest", "train", "harvest"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        if state.failed_stage is not None and not state.failed_stage["held"]:
+            state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3
+    assert state.failed_stage["held"] is True
+    assert state.failed_stage["retry_after"] is None
+    assert "the harvest stage raised" in state.failed_stage["reason"]
+
+
+def test_stage_error_does_not_replace_pending_train_failure(cwd):
+    train_failure = {
+        "inputs": "a" * 64, "attempts": 2, "last_at": PAST, "retry_after": PAST,
+        "held": False, "reason": "train failed (exit code 1)",
+    }
+
+    state, _, _ = run_once(_state(failed_train=train_failure), Pipeline(raising="harvest").config())
+
+    assert state.failed_train == train_failure
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 1
+
+
+def test_training_retry_after_stage_error_keeps_its_own_attempts_and_hold(cwd):
+    train_failure = {
+        "inputs": "a" * 64, "attempts": 2, "last_at": PAST, "retry_after": PAST,
+        "held": False, "reason": "train failed (exit code 1)",
+    }
+    state, _, _ = run_once(_state(failed_train=train_failure), Pipeline(raising="harvest").config())
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    failed_training = Pipeline(train_result={
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed (exit code 1)", "notes": "train failed",
+    })
+    state, _, _ = run_once(state, failed_training.config())
+
+    assert state.failed_train["attempts"] == 3 and state.failed_train["held"] is True
+    assert state.failed_stage is not None and state.failed_stage["attempts"] == 2
+
+
+def test_train_failure_harvest_error_and_failed_train_retry_reach_loop_hold(cwd):
+    failed_train = {
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state, _, _ = run_once(_state(), Pipeline(train_result=failed_train).config())
+    assert state.failed_stage is not None and state.failed_stage["attempts"] == 1
+
+    state = replace(
+        state,
+        failed_stage={**state.failed_stage, "retry_after": PAST},
+        failed_train={**state.failed_train, "retry_after": PAST},
+    )
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage is not None and state.failed_stage["attempts"] == 2
+
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+    state, _, _ = run_once(state, Pipeline(train_result=failed_train).config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3 and state.failed_stage["held"] is True
+    assert state.failed_train["attempts"] == 2
+
+
+def test_three_training_failures_then_changed_inputs_retry_without_resume(cwd):
+    failed = {
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state = _state()
+    for _ in range(3):
+        state, _, _ = run_once(state, Pipeline(train_result=failed).config())
+        assert state.failed_stage is not None
+        assert state.failed_stage["has_non_train_failure"] is False
+        assert state.failed_stage["held"] is False
+        assert state.failed_train is not None
+        if not state.failed_train["held"]:
+            state = replace(
+                state,
+                failed_stage={**state.failed_stage, "retry_after": PAST},
+                failed_train={**state.failed_train, "retry_after": PAST},
+            )
+
+    assert state.failed_train["held"] is True
+    changed_inputs = {**failed, "train_inputs": "b" * 64}
+    changed_inputs["failed"] = False
+    changed_inputs["run_id"] = "run-after-new-data"
+    pipeline = Pipeline(train_result=changed_inputs)
+
+    state, record, _ = run_once(state, pipeline.config())
+
+    assert "train" in pipeline.calls
+    assert record.run_id == "run-after-new-data"
+    assert state.failed_train is None
+    assert state.failed_stage is None
+
+
+def test_status_names_a_failed_training_without_claiming_it_raised(cwd):
+    from typer.testing import CliRunner
+
+    from soup_cli.commands.loop import app as loop_app
+
+    failed = {
+        "run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state, _, _ = run_once(_state(), Pipeline(train_result=failed).config(cwd))
+    path = cwd / ".soup" / "loop.yaml"
+    write_state(state, str(path))
+
+    result = CliRunner().invoke(loop_app, ["status"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "stage_retry" in result.output
+    assert "the train stage failed" in result.output
+    assert "the train stage raised TrainingFailed" not in result.output
+    from soup_cli.utils.loop_retry import describe
+
+    row = describe(state.failed_stage)
+    assert "training retry is shown in train_retry" in row
+    assert not row.startswith("waiting:")
+
+
+def test_idle_polls_between_raised_errors_clear_the_streak(cwd):
+    idle_train = {"run_id": None, "skipped": True, "notes": "not enough new data"}
+    for stage in ("harvest", "train", "gate"):
+        state, _, _ = run_once(_state(), Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        assert state.failed_stage["attempts"] == 1 and state.failed_stage["held"] is False
+
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+        state, _, _ = run_once(state, Pipeline(train_result=idle_train).config())
+        assert state.failed_stage is None
+
+    state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
+    assert state.failed_stage["attempts"] == 1 and state.failed_stage["held"] is False
+
+
+def test_three_raised_errors_separated_by_clean_idle_polls_never_hold(cwd):
+    idle_train = {"run_id": None, "skipped": True, "notes": "not enough new data"}
+    state = _state()
+
+    for stage in ("harvest", "train", "gate"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        assert state.failed_stage["attempts"] == 1
+        assert state.failed_stage["held"] is False
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+        state, _, _ = run_once(state, Pipeline(train_result=idle_train).config())
+        assert state.failed_stage is None
+
+    assert state.failed_stage is None
+
+
+@pytest.mark.parametrize(("train_result", "expected_attempts"), [
+    ({"run_id": None, "skipped": False, "failed": True, "train_inputs": "a" * 64,
+      "failure": "train failed", "notes": "train failed"}, 2),
+    ({"run_id": None, "skipped": True, "train_held": True, "notes": "training held"}, 1),
+])
+def test_training_failure_counts_but_training_hold_preserves_stage_streak(
+    cwd, train_result, expected_attempts
+):
+    state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    state, _, _ = run_once(state, Pipeline(train_result=train_result).config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == expected_attempts
+
+
+def test_v078_stage_failure_state_is_migrated_without_losing_attempts(cwd):
+    import hashlib
+
+    old_record = {
+        "inputs": hashlib.sha256(b"loop stage error:harvest").hexdigest(), "attempts": 2,
+        "last_at": PAST,
+        "retry_after": PAST, "held": False,
+        "reason": "stage error: the harvest stage raised ValueError",
+    }
+
+    state, _, _ = run_once(_state(failed_train=old_record), Pipeline(raising="train").config())
+
+    assert state.failed_train is None
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 3
+    assert state.failed_stage["held"] is True
+    assert "the train stage raised" in state.failed_stage["reason"]
+
+
+def test_v078_state_without_failed_stage_field_loads_with_default(cwd):
+    path = cwd / ".soup" / "loop.yaml"
+    write_state(_state(), str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("failed_stage")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert read_state(str(path)).failed_stage is None
+
+
+def test_v078_held_stage_error_file_roundtrips_runs_no_stage_and_shows_status(cwd):
+    import hashlib
+
+    from typer.testing import CliRunner
+
+    from soup_cli.commands.loop import app as loop_app
+
+    path = cwd / ".soup" / "loop.yaml"
+    old_record = {
+        "inputs": hashlib.sha256(b"loop stage error:harvest").hexdigest(),
+        "attempts": 3,
+        "last_at": PAST,
+        "retry_after": None,
+        "held": True,
+        "reason": "stage error: the harvest stage raised ValueError",
+    }
+    write_state(_state(failed_train=old_record), str(path))
+    original = json.loads(path.read_text(encoding="utf-8"))
+    original.pop("failed_stage", None)
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    state = read_state(str(path))
+    assert state.failed_stage is None and state.failed_train == old_record
+    write_state(state, str(path))
+    assert read_state(str(path)).failed_train == old_record
+
+    pipeline = Pipeline()
+    held_state, _, decision = run_once(state, pipeline.config())
+    assert decision.proceed is False
+    assert pipeline.calls == []
+    assert "stage_held" in held_state.last_idle["reason"]
+
+    result = CliRunner().invoke(loop_app, ["status"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "stage_retry" in result.output
+    assert "the harvest stage raised ValueError" in result.output
+    assert "no new attempt until soup loop resume clears it" in _plain(result.output)
+    assert "train_retry" not in result.output
 
 
 def test_a_cycle_that_gets_through_every_stage_clears_the_record(cwd):
     pipeline = Pipeline(raising="harvest")
     state = _state()
     state, _, _ = run_once(state, pipeline.config())
-    state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
     state, _, _ = run_once(state, Pipeline().config())
 
-    assert state.failed_train is None
+    assert state.failed_stage is None
+
+
+def test_clean_cycle_resets_streak_before_a_new_stage_failure(cwd):
+    state = _state()
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+    state, _, _ = run_once(state, Pipeline().config())
+    assert state.failed_stage is None
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage["attempts"] == 1
+    assert state.failed_stage["held"] is False
+
+
+def test_two_failures_clean_cycle_then_failure_starts_a_new_streak(cwd):
+    state = _state()
+    for stage in ("harvest", "gate"):
+        state, _, _ = run_once(state, Pipeline(raising=stage).config())
+        assert state.failed_stage is not None
+        state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    state, _, _ = run_once(state, Pipeline().config())
+    assert state.failed_stage is None
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 1
+    assert state.failed_stage["held"] is False
+
+
+def test_non_ok_gate_clears_stage_streak_without_counting_as_failure(cwd):
+    state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
+    state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
+
+    state, _, _ = run_once(state, Pipeline(gate_verdict="DON'T SHIP").config())
+
+    assert state.failed_stage is None
+
+
+def test_pending_deploy_retry_clears_stage_streak_and_keeps_deploy_retry(cwd):
+    refused = {"deployed": False, "failed": True, "notes": "serve refused candidate"}
+    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config())
+    assert state.pending_deploy is not None
+    state = replace(
+        state,
+        failed_stage={
+            "inputs": "a" * 64,
+            "attempts": 1,
+            "last_at": PAST,
+            "retry_after": PAST,
+            "held": False,
+            "reason": "stage error: the harvest stage raised ValueError",
+        },
+    )
+
+    state, _, _ = run_once(state, Pipeline(deploy_result=refused).config())
+
+    assert state.pending_deploy is not None
+    assert state.pending_deploy["attempts"] == 2
+    assert state.failed_stage is None
+
+
+def test_pending_deploy_retry_counts_a_cost_stage_exception(cwd):
+    from soup_cli.utils.loop_retry import stage_error_fingerprint
+
+    refused = {"deployed": False, "failed": True, "notes": "serve refused candidate"}
+    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config())
+    assert state.pending_deploy is not None
+    prior = {
+        "inputs": stage_error_fingerprint("harvest"),
+        "attempts": 1,
+        "last_at": PAST,
+        "retry_after": PAST,
+        "held": False,
+        "reason": "stage error: the harvest stage raised ValueError",
+        "has_non_train_failure": True,
+    }
+    state = replace(state, failed_stage=prior)
+
+    state, record, _ = run_once(
+        state, Pipeline(raising="cost", deploy_result=refused).config()
+    )
+
+    assert state.pending_deploy is not None and state.pending_deploy["attempts"] == 2
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 2 and state.failed_stage["held"] is False
+    assert "the cost stage raised ValueError" in state.failed_stage["reason"]
+    assert "the cost stage raised ValueError" in record.notes
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"reason": "harvest failed"}, "reason must start with 'stage error: '"),
+        ({"extra": "unexpected"}, "must hold exactly"),
+        ({"has_non_train_failure": "yes"}, "has_non_train_failure must be bool"),
+    ],
+)
+def test_failed_stage_validation_rejects_invalid_reason_and_keys(changes, message):
+    record = {
+        "inputs": "a" * 64, "attempts": 1, "last_at": PAST,
+        "retry_after": PAST, "held": False,
+        "reason": "stage error: the harvest stage raised ValueError",
+    }
+    record.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        _state(failed_stage=record)
 
 
 def test_a_train_failure_record_is_not_taken_for_a_stage_error(cwd):
@@ -265,10 +673,10 @@ def test_a_raising_harvest_does_not_stop_a_watching_daemon(cwd):
     saved = read_state(str(cwd / ".soup" / "loop.yaml"))
     assert saved.status == "stopped"  # the natural end (max_iterations), not a crash
     assert "the harvest stage raised ValueError" in saved.last_failure
-    assert saved.failed_train["attempts"] == 1
+    assert saved.failed_stage["attempts"] == 1
     assert [line["outcome"] for line in _lines(cwd)] == ["promoted", "failed"]
     assert len([name for name in os.listdir(cwd / ".soup-loops") if name.startswith("iter-")]) == 1
-    assert final_state.failed_train["attempts"] == 1
+    assert final_state.failed_stage["attempts"] == 1
 
 
 def test_the_traceback_goes_to_the_daemon_log(cwd, caplog):
@@ -287,20 +695,20 @@ def test_the_message_is_one_clean_short_line(cwd):
 
     new_state, _, _ = run_once(_state(), pipeline.config())
 
-    reason = new_state.failed_train["reason"]
+    reason = new_state.failed_stage["reason"]
     assert "\n" not in reason and "\x1b" not in reason and len(reason) <= 300
     assert len(new_state.last_failure) <= 500 and "\x1b" not in new_state.last_failure
 
 
 class TestWhatStatusSays:
-    """``soup loop status`` shows the same record in its ``train_retry`` row."""
+    """``soup loop status`` shows training and raised-stage retries independently."""
 
     def test_a_waiting_stage_error_is_described_by_stage(self, cwd):
         from soup_cli.utils.loop_retry import describe
 
         state, _, _ = run_once(_state(), Pipeline(raising="harvest").config())
 
-        row = describe(state.failed_train)
+        row = describe(state.failed_stage)
 
         assert row.startswith("waiting: the harvest stage raised ValueError")
         assert "(1 time in a row)" in row and "next attempt after" in row
@@ -313,9 +721,9 @@ class TestWhatStatusSays:
         config = Pipeline(raising="gate").config()
         for _ in range(3):
             state, _, _ = run_once(state, config)
-            state = replace(state, failed_train={**state.failed_train, "retry_after": PAST})
+            state = replace(state, failed_stage={**state.failed_stage, "retry_after": PAST})
 
-        row = describe(state.failed_train)
+        row = describe(state.failed_stage)
 
         assert row.startswith("held: the gate stage raised ValueError")
         assert "soup loop resume clears it" in row
