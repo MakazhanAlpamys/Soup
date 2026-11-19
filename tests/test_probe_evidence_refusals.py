@@ -9,6 +9,18 @@ from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
 BASE = "meta-llama/Llama-3-8B"
+PROBE_INPUTS = [
+    pytest.param(("sleeper", BASE, "--evidence", "{path}"), "--evidence", id="sleeper"),
+    pytest.param(("truth", BASE, "--evidence", "{path}"), "--evidence", id="truth"),
+    pytest.param(("harm", BASE, "--evidence", "{path}"), "--evidence", id="harm"),
+    pytest.param(("interference", "{path}"), "--losses", id="interference"),
+    pytest.param(
+        ("sae-diff", "sae.safetensors", "{path}", "valid.json"), "pre_acts", id="sae-diff-pre"
+    ),
+    pytest.param(
+        ("sae-diff", "sae.safetensors", "valid.json", "{path}"), "post_acts", id="sae-diff-post"
+    ),
+]
 
 
 def _plain(output: str) -> str:
@@ -23,30 +35,15 @@ def workdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return work
 
 
-@pytest.mark.parametrize(
-    ("args", "field"),
-    [
-        pytest.param(("sleeper", BASE, "--evidence", "{path}"), "--evidence", id="sleeper"),
-        pytest.param(("truth", BASE, "--evidence", "{path}"), "--evidence", id="truth"),
-        pytest.param(("harm", BASE, "--evidence", "{path}"), "--evidence", id="harm"),
-        pytest.param(("interference", "{path}"), "--losses", id="interference"),
-        pytest.param(
-            ("sae-diff", "sae.safetensors", "{path}", "valid.json"), "pre_acts", id="sae-diff-pre"
-        ),
-        pytest.param(
-            ("sae-diff", "sae.safetensors", "valid.json", "{path}"), "post_acts", id="sae-diff-post"
-        ),
-    ],
-)
+@pytest.mark.parametrize(("args", "field"), PROBE_INPUTS)
 @pytest.mark.parametrize(
     ("failure", "reason"),
     [
         ("outside", "must stay under cwd"),
-        pytest.param("symlink", "must not be a symlink", marks=pytest.mark.requires_symlink),
         ("directory", "cannot read"),
         ("non_utf8", "UTF-8"),
     ],
-    ids=["outside", "symlink", "directory", "non-utf8"],
+    ids=["outside", "directory", "non-utf8"],
 )
 def test_probe_refuses_evidence_with_literal_path(
     workdir: Path, args: tuple[str, ...], field: str, failure: str, reason: str
@@ -57,15 +54,28 @@ def test_probe_refuses_evidence_with_literal_path(
         (workdir / path).write_text("{}", encoding="utf-8")
     else:
         path.parent.mkdir()
-        if failure == "symlink":
-            target = path.with_name("real.json")
-            target.write_text("{}", encoding="utf-8")
-            path.symlink_to(target.name)
-        elif failure == "directory":
+        if failure == "directory":
             path.mkdir()
         else:
             path.write_bytes(b"\xff")
 
+    _assert_probe_refusal(args, field, path, reason)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize(("args", "field"), PROBE_INPUTS)
+def test_probe_refuses_evidence_symlink_with_literal_path(
+    workdir: Path, args: tuple[str, ...], field: str
+) -> None:
+    path = Path("evidence") / "input[red].json"
+    path.parent.mkdir()
+    target = path.with_name("real.json")
+    target.write_text("{}", encoding="utf-8")
+    path.symlink_to(target.name)
+    _assert_probe_refusal(args, field, path, "must not be a symlink")
+
+
+def _assert_probe_refusal(args: tuple[str, ...], field: str, path: Path, reason: str) -> None:
     if args[0] == "sae-diff":
         import numpy as np
         from safetensors.numpy import save_file
