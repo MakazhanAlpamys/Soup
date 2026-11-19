@@ -22,7 +22,6 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
-import sys
 import time
 import uuid
 from dataclasses import replace
@@ -43,11 +42,13 @@ from soup_cli.utils.loop_budget import (
 from soup_cli.utils.loop_daemon import CANARY_MIN_SAMPLES, WatchAbortedError, WatchConfig, watch
 from soup_cli.utils.loop_detach import (
     DETACHED_ENV,
+    RUNNING,
     PidFileHeldError,
     claim_pid_file,
     describe_daemon,
     detached_popen_kwargs,
     display_path,
+    inspect_pid_file,
     log_file_path,
     open_log,
     pid_file_path,
@@ -67,7 +68,14 @@ from soup_cli.utils.loop_log import (
     version_line,
     withdrawn_line,
 )
-from soup_cli.utils.loop_retry import describe as describe_failed_train
+from soup_cli.utils.loop_retry import (
+    describe as describe_failed_train,
+)
+from soup_cli.utils.loop_retry import (
+    describe_deploy_failure,
+    is_stage_error,
+)
+from soup_cli.utils.loop_spawn import python_child_argv
 from soup_cli.utils.loop_state import (
     ALL_LINEAR,
     CANARY_ON_TIMEOUT,
@@ -105,6 +113,9 @@ def _safe_read() -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]loop state invalid:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
+    except OSError as exc:
+        console.print(f"[red]cannot read loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1)
 
 
 def _update(mutate) -> LoopState:
@@ -125,6 +136,9 @@ def _update(mutate) -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]invalid loop setting:[/] {for_terminal(exc)}; loop.yaml unchanged")
         raise typer.Exit(code=2)
+    except OSError as exc:
+        console.print(f"[red]cannot update loop.yaml:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1)
 
 
 #: What an sft loop trains on, said at init (the default method, so it is spelled out).
@@ -297,6 +311,34 @@ def _log_withdrawal(log: LoopLog, state: LoopState) -> None:
     log.progress(progress_line(
         iteration_id, "rollback", "end", message=f"canary {state.canary_active} withdrawn"
     ))
+
+
+def _refuse_when_a_daemon_runs() -> None:
+    """Refuse a foreground ``watch`` while a live daemon holds ``.soup/loop.pid``.
+
+    One daemon per ``loop.yaml``: ``--detach`` claims the PID file, and a foreground watch
+    next to it would train, canary and promote twice. A stale file is not a daemon and an
+    unusable one is noticed and ignored (this check never writes the file). The ``--detach``
+    child skips the check: its own pid is in the file.
+    """
+    pid_path = pid_file_path()
+    try:
+        info = inspect_pid_file(pid_path)
+    except ValueError as exc:
+        console.print(
+            f"[yellow]notice:[/] {for_terminal(exc)}; not treating it as a running daemon"
+        )
+        return
+    if info.state != RUNNING:
+        return
+    console.print(
+        f"[red]a loop daemon is already running:[/] pid {info.pid}, "
+        f"PID file {for_terminal(display_path(pid_path))}. A second watch on the same "
+        "loop.yaml would train and canary twice. Run `soup loop pause`, then end process "
+        f"{info.pid} once its current cycle is over (there is no `soup loop stop` yet), or "
+        "delete the file if that pid is not a loop daemon"
+    )
+    raise typer.Exit(code=2)
 
 
 @app.command("init")
@@ -746,20 +788,36 @@ def status_cmd() -> None:
         # The exit code and stderr tail of a failed training run, or why a deploy was refused.
         table.add_row("last_failure", for_terminal(state.last_failure))
     if state.pending_deploy:
+        deploy_retry_text = describe_deploy_failure(state.failed_deploy)
         table.add_row(
             "pending_deploy",
-            f"attempt {state.pending_deploy.get('attempts', 0)} refused; retried next cycle",
+            for_terminal(
+                deploy_retry_text
+                or f"attempt {state.pending_deploy.get('attempts', 0)} refused; retry is due"
+            ),
         )
     if state.last_idle:
         # The last poll that found nothing to do: it writes no iteration line, no manifest.
         table.add_row(
             "last_idle_poll", for_terminal(f"{state.last_idle['at']}: {state.last_idle['reason']}")
         )
-    retry_text = describe_failed_train(state.failed_train)
+    retry_text = describe_failed_train(
+        None if state.failed_train is not None and is_stage_error(state.failed_train)
+        else state.failed_train
+    )
     if retry_text:
         # A training run that failed is not repeated on the same inputs (review 5, F3): it waits,
         # then holds until the data, the recipe or the base model changes, or `resume` clears it.
         table.add_row("train_retry", for_terminal(retry_text))
+    stage_retry = describe_failed_train(state.failed_stage)
+    if (
+        stage_retry is None
+        and state.failed_train is not None
+        and is_stage_error(state.failed_train)
+    ):
+        stage_retry = describe_failed_train(state.failed_train)  # v0.78.0 state compatibility
+    if stage_retry:
+        table.add_row("stage_retry", for_terminal(stage_retry))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("min_new_edits", str(state.min_new_edits))
     table.add_row("min_new_rated", str(state.min_new_rated))
@@ -803,27 +861,52 @@ def pause_cmd() -> None:
 def resume_cmd() -> None:
     """Resume a paused loop (next watch iteration picks up automatically).
 
-    Also clears a failed-train hold (``soup loop status`` shows it as ``train_retry``): the next
-    cycle trains again on the same inputs, whether the loop was paused or running.
+    Clears remembered train, raised-stage, and deploy retries (``train_retry`` / ``stage_retry`` /
+    ``pending_deploy``). A deploy hold keeps its saved candidate; the next cycle retries that
+    candidate instead of harvesting or training again, whether the loop was paused or running.
     """
     state = _safe_read()
-    held = state.failed_train is not None
+    held = state.failed_train is not None or state.failed_stage is not None
+    deploy_held = state.failed_deploy is not None
     if state.status == "paused":
         _update(
             lambda fresh: replace(
                 fresh.with_status("running") if fresh.status == "paused" else fresh,
                 failed_train=None,
+                failed_stage=None,
+                failed_deploy=None,
+                pending_deploy=(
+                    {**fresh.pending_deploy, "attempts": 0}
+                    if fresh.pending_deploy is not None and fresh.failed_deploy is not None
+                    else fresh.pending_deploy
+                ),
             )
         )
         console.print("[green]loop resumed[/]")
-    elif held:
-        _update(lambda fresh: replace(fresh, failed_train=None))
+    elif held or deploy_held:
+        _update(
+            lambda fresh: replace(
+                fresh,
+                failed_train=None,
+                failed_stage=None,
+                failed_deploy=None,
+                pending_deploy=(
+                    {**fresh.pending_deploy, "attempts": 0}
+                    if fresh.pending_deploy is not None and fresh.failed_deploy is not None
+                    else fresh.pending_deploy
+                ),
+            )
+        )
     else:
         console.print(f"[yellow]loop is {state.status}, not paused[/]")
         raise typer.Exit(code=0)
     if held:
         console.print(
-            "[green]failed-train hold cleared:[/] the next cycle trains again on the same inputs"
+            "[green]retry hold cleared:[/] the next loop cycle tries again"
+        )
+    if deploy_held:
+        console.print(
+            "[green]deploy hold cleared:[/] the next cycle retries the saved candidate"
         )
 
 
@@ -948,6 +1031,8 @@ def watch_cmd(
         # here, so it never touches the file.
         atexit.register(remove_pid_file_if_own, os.getpid(), pid_file_path())
     state = _safe_read()  # ensure state exists before forking
+    if not detach and not detached_child:
+        _refuse_when_a_daemon_runs()
     if tool_auth_token:
         # The deploy stage reads the token from the environment, as it reads
         # SOUP_LOOP_SERVE_ENDPOINT; a --detach child inherits it from there
@@ -1012,8 +1097,7 @@ def watch_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]invalid watch config:[/] {for_terminal(str(exc))}")
             raise typer.Exit(code=2)
-        argv = [
-            sys.executable,
+        argv = python_child_argv(
             "-m",
             "soup_cli.cli",
             "loop",
@@ -1021,7 +1105,7 @@ def watch_cmd(
             "--foreground",
             "--poll-interval",
             str(poll_interval),
-        ]
+        )
         if max_iterations is not None:
             argv.extend(["--max-iterations", str(max_iterations)])
         if pre_wired:

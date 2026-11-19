@@ -1099,6 +1099,7 @@ class TestKeepAsideThenGraduation:
         world.state = replace(
             world.state,
             failed_train={**world.state.failed_train, "retry_after": "2026-01-01T00:00:00+00:00"},
+            failed_stage={**world.state.failed_stage, "retry_after": "2026-01-01T00:00:00+00:00"},
         )
         retry = world.cycle()
         assert retry.run_id
@@ -1372,12 +1373,11 @@ class TestLineageCursor:
 
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
-    # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16: failed_train,
-    # canary_override) and review 5b (2026-11-17: last_idle): at the very end, so a reader of an
-    # older loop.yaml is unaffected; they come last in this order
+    # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16), review 5b
+    # (2026-11-17), raised-stage retry and deploy back-off; old loop.yaml readers keep defaults.
     LATER = [
         "pending_deploy", "last_failure", "canary_on_timeout_explicit", "failed_train",
-        "canary_override", "last_idle",
+        "canary_override", "last_idle", "failed_stage", "failed_deploy",
     ]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):
@@ -1595,7 +1595,7 @@ class TestGateFiles:
         run_id = world.records[-1].run_id
         directory = ".soup-loops/verdicts"
         assert [part.replace("\\", "/") for part in world.ship.argv] == [
-            sys.executable.replace("\\", "/"), "-m", "soup_cli.cli", "ship",
+            sys.executable.replace("\\", "/"), "-P", "-m", "soup_cli.cli", "ship",
             "--base", "org/base",
             "--adapter", f".soup-loops/adapters/{run_id}",
             "--task-eval", "tasks.jsonl",
@@ -1995,7 +1995,9 @@ class TestGateModule:
         check = (
             loop_gate.check_corrections if path[0] == "corrections" else loop_gate.check_held_out
         )
-        with pytest.raises(ValueError, match=path[-1]):
+        dotted = ".".join(("verdict", *path))
+        message = f"{dotted} must be a number in [0, 1] or null"
+        with pytest.raises(ValueError, match=rf"^{re.escape(message)}$"):
             check(data[path[0]])
         found = loop_gate.read_gate_result(data, "DON'T SHIP")
         assert found.canary_decides is True
@@ -2054,7 +2056,7 @@ class TestGateModule:
         found = loop_gate.clean_held_out(data["held_out"])
 
         assert "style" not in found and found["better"] == 3
-        with pytest.raises(ValueError, match="style"):
+        with pytest.raises(ValueError, match=r"^verdict\.held_out\.style lacks "):
             loop_gate.check_held_out(data["held_out"])
 
 
