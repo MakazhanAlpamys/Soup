@@ -50,7 +50,7 @@ def test_score_task_keeps_the_half_credit_match_threshold():
         call("not-json"),
     )
     assert result.score == 0.5
-    assert result.matched is True  # The existing >= 0.5 threshold is a separate contract.
+    assert result.matched is False  # Matched only at full credit since #2811.
 
 
 def test_invalid_arguments_cannot_add_credit_to_a_wrong_name():

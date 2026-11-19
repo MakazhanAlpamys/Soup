@@ -232,7 +232,7 @@ def _load_prompts(path: str) -> list[str]:
     real = enforce_under_cwd_and_no_symlink(path, "prompts_path")
     out: list[str] = []
     seen = 0
-    with open(real, encoding="utf-8") as fh:
+    with open(real, encoding="utf-8-sig") as fh:
         for line in fh:
             seen += 1
             if seen > _MAX_PROMPT_ROWS:
@@ -467,6 +467,8 @@ def run_iterative_dpo(
 
     for rnd in plan.rounds:
         prompts = _load_prompts(rnd.prompts_path)
+        if not prompts:
+            raise ValueError(f"prompts file {rnd.prompts_path!r} has no usable prompts")
         sampled = sample_fn(
             base_model=plan.base_model,
             adapter_path=sample_adapter,

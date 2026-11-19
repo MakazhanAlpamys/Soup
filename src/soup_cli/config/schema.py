@@ -819,16 +819,18 @@ class DataConfig(BaseModel):
     add_new_tokens: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Add these tokens to the tokenizer vocab + resize embeddings. "
+            "Add these tokens to the tokenizer vocab + resize embeddings on "
+            "transformers backend and MLX text SFT (`quantization: none`). "
             "Cap 10_000 entries; per-token <= 256 chars; no duplicates. "
-            "(v0.42.0 Part E)"
+            "(v0.42.0, #1994)"
         ),
     )
     new_special_tokens: Optional[List[str]] = Field(
         default=None,
         description=(
             "Like add_new_tokens but registered as additional_special_tokens "
-            "so they are not split by the tokenizer. (v0.42.0 Part E)"
+            "so they are not split by the tokenizer. Supported on transformers "
+            "backend and MLX text SFT (`quantization: none`). (v0.42.0, #1994)"
         ),
     )
     resize_vocab: bool = Field(
@@ -1585,8 +1587,8 @@ class TrainingConfig(BaseModel):
         ),
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
-    save_steps: int = Field(default=100, description="Save checkpoint every N steps")
-    logging_steps: int = Field(default=10, description="Log metrics every N steps")
+    save_steps: int = Field(default=100, ge=0, description="Save checkpoint every N steps")
+    logging_steps: int = Field(default=10, ge=1, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
     # "evaluate each epoch" and "evaluate every N steps" stay distinguishable,
@@ -2400,7 +2402,7 @@ class TrainingConfig(BaseModel):
     nvfp4: bool = Field(
         default=False,
         description=(
-            "Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, "
+            "NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). DPO-family, "
             "GRPO/PPO, pre-training, reward-model, and embedding wrappers "
             "route it through torchao conversion; the default SFT path does "
             "not consume it."
