@@ -182,7 +182,15 @@ class _RowBuilder:
             self.labels.append(int(label))
             self.positions.append(0 if parent == -1 else self.positions[parent] + 1)
             self.parents.append(parent)
-            # Rule 1: the shareable part of a path ends at its first trained token.
+            # Rule 1, on the side of the example being added: a node it trains on,
+            # and everything after it, is never registered for sharing. ``_shared``
+            # holds rule 1 on the side of a later example (it stops at that
+            # example's own first trained token); this line is what keeps a later
+            # example that does NOT train on the same token from reusing the node.
+            # Reusing it would still be exact (the label is the first example's,
+            # scored once), but rule 1 is kept as stated: a node one example trains
+            # on belongs to that example alone. Pinned by
+            # test_a_token_trained_in_one_example_is_not_shared_by_another.
             shareable = shareable and label == ignore
             if shareable:
                 self._children.setdefault(parent, {})[int(token)] = index

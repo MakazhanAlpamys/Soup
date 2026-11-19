@@ -126,6 +126,33 @@ class TestPacking:
         assert [label for label in row.labels if label != X] == [10, 11, 10, 11]
         _assert_layout_is_faithful(examples, [row])
 
+    def test_a_token_trained_in_one_example_is_not_shared_by_another(self):
+        """The same token, trained in the first example and not in the second:
+        the second gets its own node for it. ``_shared`` would not stop here
+        (the second example does not train on token 3), so this is the case in
+        which only ``_RowBuilder.add`` holds rule 1."""
+        first = _example([1, 2], [3])
+        second = _example([1, 2, 3], [4])
+        (row,) = pack_prefix_tree([first, second], max_tokens=64)
+        assert row.input_ids == (1, 2, 3, 3, 4)
+        assert row.parents == (-1, 0, 1, 1, 3)
+        assert row.labels == (X, X, 3, X, 4)
+        assert row.paths == ((0, 1, 2), (0, 1, 3, 4))
+        _assert_layout_is_faithful([first, second], [row])
+
+    def test_a_token_trained_in_a_later_example_is_not_shared_with_an_earlier_one(self):
+        """The mirror case: token 3 untrained in the first example (so its node
+        is registered) and trained in the second. ``_shared`` must stop at the
+        second example's trained token, or that token would be scored once for
+        two examples. Here the parent is repeated in front of it (rule 2)."""
+        first = _example([1, 2, 3], [4])
+        second = _example([1, 2], [3])
+        (row,) = pack_prefix_tree([first, second], max_tokens=64)
+        assert row.input_ids == (1, 2, 3, 4, 2, 3)
+        assert row.labels == (X, X, X, 4, X, 3)
+        assert row.paths == ((0, 1, 2, 3), (0, 4, 5))
+        _assert_layout_is_faithful([first, second], [row])
+
     def test_sharing_stops_at_the_first_trained_token(self):
         """A later untrained stretch (the next user turn) is past a trained token."""
         ids = [1, 2, 10, 5, 6, 30]
