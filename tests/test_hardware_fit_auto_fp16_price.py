@@ -107,6 +107,24 @@ class TestThePreflightPick:
         )
         assert captured["kbit_fp32"] is True
 
+    def test_a_card_without_bf16_keeps_its_flag_when_the_pick_does_not_add_one(self, monkeypatch):
+        """Pin the `or`: neither source alone may drop the other's flag."""
+        from soup_cli.utils import gpu
+
+        captured = {}
+
+        def spy(cfg, **kwargs):
+            captured.update(kwargs)
+            return hardware_fit.FitUnavailable(None, "stop before the estimate")
+
+        monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda device: (False, True))
+        monkeypatch.setattr(train_mod, "_auto_fp16_pick_keeps_fp32", lambda cfg: False)
+        monkeypatch.setattr(train_mod, "_hardware_fit_input_or_reason", spy)
+        train_mod._hardware_fit_preflight(
+            _cfg(), {"memory_total_bytes": int(24e9)}, allow_oom_attempt=False
+        )
+        assert captured["kbit_fp32"] is True
+
 
 class TestTheEstimate:
     def test_the_weights_term_grows_by_two_bytes_per_embedding_and_head(
