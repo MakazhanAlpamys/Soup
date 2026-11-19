@@ -693,3 +693,23 @@ class TestTheAdviceInTheRefusal:
 
         assert "contains both the can and the output path" in message
         assert "set output to a path under your working directory" in message
+
+
+class TestThePanelShowsTheExperimentName:
+    def test_the_panel_lists_it_and_marks_a_join_that_leaves(self, env):
+        can = env.can(_config(output=".", experiment_name=".."))
+
+        result = _run_cli(can)
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        text = _plain(result.output)
+        assert "Output: ." in text
+        assert "Experiment name: .." in text
+        assert "outside the working directory - soup can run will refuse" in text
+
+    def test_the_panel_has_no_experiment_line_when_the_can_sets_none(self, env):
+        can = env.can(_config(output="models/run-1"))
+
+        result = _run_cli(can)
+
+        assert "Experiment name:" not in _plain(result.output)
