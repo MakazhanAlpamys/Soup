@@ -1208,7 +1208,13 @@ def _stratified_split(
     data: list, val_count: int, test_count: int,
     stratify_keys: str | list[str], seed: int | None = None,
 ) -> tuple:
-    """Stratified split preserving category distribution."""
+    """Stratified split preserving category distribution.
+
+    A separate ``random.Random(seed)`` supplies the tie ranks for both passes.
+    With an explicit seed it shares the start of the stream used to shuffle
+    the first group, but does not advance the row RNG, so the shuffle within
+    each group matches v0.78.0. With ``seed=None``, both RNGs stay unseeded.
+    """
     # Group by stratify keys
     groups: dict[str, list[int]] = {}
     for idx, row in enumerate(data):
@@ -1221,10 +1227,12 @@ def _stratified_split(
     rng = random.Random(seed)
     group_keys = list(groups)
     group_capacities = [len(groups[key]) for key in group_keys]
+    tie_rank = list(range(len(group_keys)))
+    random.Random(seed).shuffle(tie_rank)
     holdout_counts = _largest_remainder_allocation(
-        val_count + test_count, group_capacities
+        val_count + test_count, group_capacities, tie_rank
     )
-    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts)
+    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts, tie_rank)
 
     train_indices = []
     val_indices = []
@@ -1247,8 +1255,10 @@ def _stratified_split(
     return train_data, val_data, test_data
 
 
-def _largest_remainder_allocation(count: int, capacities: list[int]) -> list[int]:
-    """Allocate ``count`` proportionally to capacities with stable tie-breaking."""
+def _largest_remainder_allocation(
+    count: int, capacities: list[int], tie_rank: list[int]
+) -> list[int]:
+    """Allocate ``count`` proportionally, using ``tie_rank`` only for equal remainders."""
     allocation = [0] * len(capacities)
     total_capacity = sum(capacities)
     target = min(max(count, 0), total_capacity)
@@ -1264,7 +1274,7 @@ def _largest_remainder_allocation(count: int, capacities: list[int]) -> list[int
     remainders = [numerator % total_capacity for numerator in numerators]
     remainder_order = sorted(
         range(len(capacities)),
-        key=lambda index: (-remainders[index], index),
+        key=lambda index: (-remainders[index], tie_rank[index]),
     )
     while remaining:
         progressed = False

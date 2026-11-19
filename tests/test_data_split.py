@@ -348,19 +348,55 @@ class TestStratifiedSplitExactCounts:
 
         assert first == second
 
-    def test_largest_remainder_ties_use_stable_group_order(self):
+    def test_no_remainder_ties_preserve_v0780_split(self) -> None:
         from soup_cli.commands.data import _stratified_split
 
         rows = [
-            {"id": index, "category": "first" if index < 2 else "second"}
-            for index in range(4)
+            *({"id": index, "category": "large"} for index in range(7)),
+            *({"id": index, "category": "medium"} for index in range(7, 9)),
+            {"id": 9, "category": "small"},
         ]
+        train, val, test = _stratified_split(rows, 2, 1, "category", seed=42)
 
-        _, val, test = _stratified_split(rows, 1, 0, "category", seed=3)
+        # Neither pass has tied remainders. These ordered IDs come from v0.78.0.
+        assert [row["id"] for row in train] == [4, 2, 6, 0, 5, 7, 9]
+        assert [row["id"] for row in val] == [3, 8]
+        assert [row["id"] for row in test] == [1]
 
-        assert len(val) == 1
-        assert val[0]["category"] == "first"
-        assert test == []
+    @pytest.mark.parametrize(
+        ("rows_per_group", "val_count", "test_count"),
+        [
+            pytest.param(1, 3, 0, id="combined-holdout"),
+            pytest.param(2, 5, 3, id="test-allocation"),
+        ],
+    )
+    def test_remainder_ties_follow_seed(
+        self, rows_per_group: int, val_count: int, test_count: int
+    ) -> None:
+        from soup_cli.commands.data import _stratified_split
+
+        # Singletons compete for validation; pairs each get one holdout,
+        # so only the allocation of test rows breaks ties in the second case.
+        rows = [
+            {"id": index, "category": f"cat_{index // rows_per_group}"}
+            for index in range(8 * rows_per_group)
+        ]
+        expected_counts = (len(rows) - val_count - test_count, val_count, test_count)
+        expected_ids = list(range(len(rows)))
+        remainder_groups = []
+
+        for seed in range(10):
+            split = _stratified_split(rows, val_count, test_count, "category", seed=seed)
+            train, val, test = split
+            assert (len(train), len(val), len(test)) == expected_counts
+            assert sorted(row["id"] for part in split for row in part) == expected_ids
+            assert split == _stratified_split(rows, val_count, test_count, "category", seed=seed)
+
+            partition = test if test_count else val
+            remainder_groups.append(frozenset(row["category"] for row in partition))
+
+        assert len(set(remainder_groups)) > 1
+        assert remainder_groups[1] != remainder_groups[2]
 
     def test_semantic_stratification_uses_exact_shared_allocation(
         self, tmp_path, monkeypatch
