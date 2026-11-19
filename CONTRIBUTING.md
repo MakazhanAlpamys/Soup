@@ -736,9 +736,20 @@ with `gh cache delete suite-green-v1-<merge sha>-ubuntu-latest-3.12 --ref
 refs/pull/<number>/merge`, then re-run the job (`gh run rerun <run id> --job
 <job id>`).
 
+**The macOS cell of a pull request leaves out a few heavy test files.**
+`.github/ci/macos-pr-skip.txt` lists test files that take a minute or more on
+the macOS runner and have no platform branch. The macOS cell of a pull request
+run skips them (`--ignore`); the Linux and Windows cells of the same run run
+them, and so does every cell of the nightly, release and manual runs, macOS
+included. A new test file is added to the list only after a maintainer has
+timed it, and a file that gains a `sys.platform`, `darwin`, `mlx` or `mps`
+branch (or starts a subprocess) has to come off it:
+`tests/test_ci_macos_pr_skip_list.py` fails while it stays.
+
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit (120 and 135
+minutes on the macOS cells, whose runners are the slowest). A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
