@@ -216,14 +216,34 @@ def score_regex(output: str, expected: str) -> bool:
         return False
 
 
-def score_semantic(output: str, expected: str) -> float:
-    """Compute similarity via Jaccard token overlap (bag-of-words).
+_EDGE_NON_WORD = re.compile(r"^\W+|\W+$")
 
-    This is a lexical metric, not embedding-based semantic similarity.
-    Returns a float 0-1. Considered a match if similarity >= 0.5.
+
+def _semantic_words(text: str) -> set[str]:
+    """The lowercased words of ``text`` with leading and trailing non-word characters removed.
+
+    ``h2o.``, ``(h2o)`` and ``"h2o",`` are the word ``h2o``; a word that is only
+    punctuation (``—``, ``...``) is dropped. Punctuation inside a word stays, so
+    ``3.14``, ``don't`` and ``e-mail`` are one word each and do not match ``14``,
+    ``don`` or ``mail``.
     """
-    out_tokens = set(output.strip().lower().split())
-    exp_tokens = set(expected.strip().lower().split())
+    words = (_EDGE_NON_WORD.sub("", word) for word in text.lower().split())
+    return {word for word in words if word}
+
+
+def score_semantic(output: str, expected: str) -> float:
+    """Compute similarity via Jaccard overlap of the two sides' words (bag-of-words).
+
+    This is a lexical metric, not embedding-based semantic similarity. A word is
+    a whitespace-separated piece, lowercased, with its leading and trailing
+    non-word characters removed (see ``_semantic_words``). Returns a float 0-1;
+    a row is a match if the similarity is >= 0.5. Every word of the output
+    counts in the union, so a short expected answer inside a long sentence
+    scores low: ``H2O`` against ``The chemical symbol for water is H2O.`` is
+    1/7. For such answers use the ``contains`` or ``answer`` scorer.
+    """
+    out_tokens = _semantic_words(output)
+    exp_tokens = _semantic_words(expected)
     if not out_tokens or not exp_tokens:
         return 0.0
     intersection = out_tokens & exp_tokens
