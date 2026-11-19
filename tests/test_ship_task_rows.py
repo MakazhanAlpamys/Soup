@@ -152,6 +152,19 @@ def test_an_anchor_that_cannot_carry_the_rows_file_is_refused_with_a_named_reaso
         task_rows_path(anchor)
 
 
+@pytest.mark.parametrize(("control", "escaped"), [("\x7f", "\\x7f"), ("\x85", "\\x85")])
+def test_del_and_c1_in_the_derived_file_name_are_named_safely(control, escaped):
+    with pytest.raises(ValueError) as exc_info:
+        task_rows_path(f"verdict{control}.json")
+
+    message = _plain(str(exc_info.value))
+    assert message == (
+        f"the task-rows file name for 'verdict{escaped}.json' has a control character; "
+        "use a plain --output name"
+    )
+    assert control not in message
+
+
 @pytest.mark.skipif(os.name == "nt", reason="a backslash is a path separator on Windows")
 def test_on_posix_a_backslash_in_the_file_name_cannot_be_named_by_the_pointer():
     with pytest.raises(ValueError, match="path separator.*use a plain --output name"):

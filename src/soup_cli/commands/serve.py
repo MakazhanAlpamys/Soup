@@ -113,7 +113,7 @@ def serve(
     max_tokens_default: int = typer.Option(
         512,
         "--max-tokens",
-        help="Default max tokens for generation",
+        help="Default max tokens for generation (1 to 16384)",
     ),
     backend: str = typer.Option(
         "transformers",
