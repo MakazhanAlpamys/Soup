@@ -275,8 +275,10 @@ def test_sse_chunk_shape_is_unchanged():
 
     chunk_ids = {frame["id"] for frame in frames[:-1]}
     assert len(chunk_ids) == 1 and chunk_ids.pop().startswith("chatcmpl-")
+    # Every chunk also carries the answer's response_id (#2532), the same in all of them.
+    assert len({frame["response_id"] for frame in frames[:-1]}) == 1
     for frame in frames[:-1]:
-        assert set(frame) == {"id", "object", "created", "model", "choices"}
+        assert set(frame) == {"id", "object", "created", "model", "choices", "response_id"}
         assert frame["object"] == "chat.completion.chunk"
         assert frame["model"] == "m"
         assert len(frame["choices"]) == 1 and frame["choices"][0]["index"] == 0
@@ -349,11 +351,12 @@ def test_streamed_deltas_equal_the_non_streamed_reply(name):
     assert _content(frames) == expected
     assert frames[-2]["choices"][0]["finish_reason"] == plain["choices"][0]["finish_reason"]
     assert frames[-1] == "[DONE]"
-    # The request log of the streamed call carries the same text and token count.
-    record = writer.record.call_args.kwargs
+    # The conversation record of the streamed call carries the same text and token
+    # count, under the response_id its chunks carried (#2532).
+    record = writer.record_conversation.call_args.kwargs
     assert record["response"] == expected
-    assert record["tokens"] == plain["usage"]["completion_tokens"] == len(ids)
-    assert record["extra"] == {"stream": True}
+    assert record["completion_tokens"] == plain["usage"]["completion_tokens"] == len(ids)
+    assert record["response_id"] == frames[0]["response_id"]
 
 
 def test_finish_reason_length_when_the_budget_is_used():
@@ -546,6 +549,27 @@ def test_a_failed_generation_is_freed_without_a_garbage_collection(monkeypatch):
     finally:
         if was_enabled:
             gc.enable()
+
+
+def test_a_client_that_leaves_mid_stream_still_leaves_its_conversation_record():
+    tokenizer, ids = _script("w", " w", " w", eos=False)
+    model = _ScriptedModel(ids, wait_for_stop=True)
+    writer = MagicMock()
+    stream = _stream(
+        model, tokenizer, max_tokens=1000, trace_log_writer=writer,
+        started=time.perf_counter(), response_id="11111111-2222-4333-8444-555555555555",
+    )
+
+    first = json.loads(next(stream)[len("data: "):])
+    assert writer.record_conversation.call_count == 0  # nothing is logged mid-stream
+    stream.close()
+
+    assert model.generate_returned.wait(timeout=5.0)
+    record = writer.record_conversation.call_args.kwargs
+    assert record["response_id"] == "11111111-2222-4333-8444-555555555555"
+    assert record["finish_reason"] == "client_disconnected"
+    assert record["response"] == first["choices"][0]["delta"]["content"]
+    assert not _wait_for_workers_to_exit()
 
 
 def test_closing_the_stream_stops_generation_after_the_current_token():
