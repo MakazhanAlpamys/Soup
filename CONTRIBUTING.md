@@ -387,6 +387,9 @@ released as a penalty.
   newly triaged issue (see [Maintained areas](#maintained-areas)). Work you start before the
   confirmation is at your own risk, because the maintainer may still decline the plan or ask
   for changes to it. If a plan has had no answer for 3 days, you can ask once in the thread.
+  A plan names what will change for that issue and which tests fail without it, and
+  answers the questions the issue puts before a plan; a comment that could stand under any
+  issue, or one posted automatically when an issue opens, is not a plan and holds no place.
   A plan whose author stays silent for 7 days after a maintainer's question is released with
   a comment, as a quiet claim is, and the next plan in line is considered.
 - **Regression tests.** A bug-fix pull request carries a test that fails on `main` without
