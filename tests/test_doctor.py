@@ -321,7 +321,9 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
     assert "Precision features" in out
     assert "BF16: hardware=yes" in out
     assert "FP8: hardware=yes, software=yes" in out
-    assert "NVFP4: hardware=yes, software=yes" in out
+    # #2867: SM 12.0 is Blackwell, but torchao's NVFP4 training backward does not
+    # compile there (ptxas refuses its stochastic rounding on sm_120a).
+    assert "NVFP4: hardware=no, software=yes" in out
 
 
 def test_get_precision_capabilities_reports_negative_nvfp4_software(
@@ -347,6 +349,11 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
     monkeypatch.setattr(
         "soup_cli.utils.advanced_precision.is_blackwell_gpu",
         lambda: True,
+    )
+    # #2867: the card's own capability decides too; pin one that trains NVFP4.
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._cuda_capability",
+        lambda: (10, 0),
     )
     # Every module the resolver can reach, so a real torchao cached by an
     # earlier test cannot answer past the fakes (#2664).

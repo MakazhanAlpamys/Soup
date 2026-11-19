@@ -1,5 +1,6 @@
 """Recipe catalog — ready-made configs for popular models."""
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -7,6 +8,8 @@ from soup_cli.utils.kimi import (
     KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
     resident_kimi_k2_quantization_refusal,
 )
+
+_SIZE_TOKEN_PATTERN = re.compile(r"^\d+(?:\.\d+)?[bmtk]$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -37,13 +40,25 @@ def search_recipes(
     task: Optional[str] = None,
     size: Optional[str] = None,
 ) -> List[RecipeMeta]:
-    """Search recipes by keyword, task, or model."""
+    """Search recipes by keyword, task, size, or model."""
     results = []
+    size_token = size.strip() if size else None
+    is_size_token = bool(size_token and _SIZE_TOKEN_PATTERN.match(size_token))
     for name, recipe in RECIPES.items():
         if task and recipe.task != task:
             continue
-        if size and size.lower() not in name.lower() and size.lower() not in recipe.model.lower():
-            continue
+        if size_token:
+            if is_size_token:
+                if recipe.size.strip().lower() != size_token.lower():
+                    continue
+            else:
+                s_lower = size_token.lower()
+                if (
+                    s_lower not in name.lower()
+                    and s_lower not in recipe.model.lower()
+                    and s_lower not in recipe.description.lower()
+                ):
+                    continue
         if query:
             searchable = f"{name} {recipe.model} {recipe.task} {recipe.description} "
             searchable += " ".join(recipe.tags)
@@ -54,7 +69,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (181 recipes)
+# Recipe catalog (182 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4293,6 +4308,40 @@ training:
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-35b-a3b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B-Base",
+        task="pretrain",
+        size="35B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain", "moe", "mixture-of-experts"),
+        description=(
+            "Qwen 3.5 35B-A3B Base MoE continued pre-training (Apache-2.0, 3B active)"
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
 
 output: ./output
 """,

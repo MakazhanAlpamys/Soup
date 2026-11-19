@@ -671,6 +671,7 @@ def build_cmaes_eval_fn(
     from soup_cli.utils.adapter_diff import load_adapter_weights
     from soup_cli.utils.adapter_merge import (
         check_mergeable,
+        fold_lora_scaling,
         merge_linear,
         write_merged_adapter,
     )
@@ -679,6 +680,9 @@ def build_cmaes_eval_fn(
     # Refuse unmergeable inputs before the search starts (#2907): every
     # candidate would otherwise be an adapter with no weights.
     check_mergeable(weights_list)
+    # Score candidates exactly as merge_adapters will write the winner: every
+    # input rescaled to the template's (first adapter's) LoRA scaling.
+    weights_list = fold_lora_scaling(weights_list, plan.adapters)
     template_source = plan.adapters[0]
 
     def _eval_fn(weights: Tuple[float, ...]) -> float:

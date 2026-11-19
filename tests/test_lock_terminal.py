@@ -383,3 +383,17 @@ def test_lock_directory_is_usage_error(command):
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
     assert "lock path is a directory: 'run.lock'" in _plain(result)
+
+
+def test_write_reports_directory_destination():
+    output = Path("run[archive].lock")
+    output.mkdir()
+    marker = output / "keep.txt"
+    marker.write_text("existing", encoding="utf-8")
+
+    result = _write(*_write_args(), "--output", str(output))
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"Could not write lock file {output}" in _plain(result)
+    assert marker.read_text(encoding="utf-8") == "existing"
+    assert set(Path.cwd().iterdir()) == {Path.cwd() / output}
