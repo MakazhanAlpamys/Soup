@@ -1,4 +1,4 @@
-"""v0.43.0 Part A — Tracker integrations + PostHog telemetry opt-out.
+"""v0.43.0 Part A — Tracker integrations + PostHog telemetry opt-in.
 
 Closed allowlist of HF Trainer `report_to` backends Soup recognises.
 Adds mlflow / swanlab / trackio to the legacy `wandb` / `tensorboard` / `none`
@@ -7,11 +7,8 @@ swanlab) plus the third-party `trackio` callback when installed; Soup only
 validates the name and surfaces a friendly error when the backing package
 is missing.
 
-Telemetry: opt-out via `SOUP_TELEMETRY=0` env var. Default is OFF until a
-public privacy policy ships — `is_telemetry_enabled` returns False unless
-the user explicitly enables it. Hardware-info-only payload schema lives in
-`build_telemetry_payload` for documentation/testing; no network calls in
-v0.43.0 (PostHog wire-up deferred to v0.43.1).
+Telemetry is off by default. Set `SOUP_TELEMETRY=1` to opt in.
+`build_telemetry_payload` defines the hardware-focused payload.
 """
 from __future__ import annotations
 
@@ -87,12 +84,7 @@ _TELEMETRY_ENV_VAR = "SOUP_TELEMETRY"
 
 
 def is_telemetry_enabled(env: Mapping[str, str] | None = None) -> bool:
-    """Telemetry is opt-IN until v0.43.1 ships the network code.
-
-    The roadmap entry calls this opt-out, but until the privacy policy
-    + PostHog wire-up land we keep it default-OFF so no payload is built
-    or sent. Users may enable explicitly with `SOUP_TELEMETRY=1`.
-    """
+    """Return whether the user opted in via `SOUP_TELEMETRY`."""
     source = env if env is not None else os.environ
     raw = source.get(_TELEMETRY_ENV_VAR)
     if raw is None:
@@ -208,12 +200,9 @@ def build_telemetry_payload(
 
 _POSTHOG_HOST = "https://us.i.posthog.com"
 _POSTHOG_ENDPOINT = f"{_POSTHOG_HOST}/i/v0/e/"
-# v0.53.10 #154 — bundled public write-only project key for Soup CLI
-# telemetry. The key is INTENTIONALLY hard-coded: PostHog "phc_*" keys are
-# write-only (cannot read events back); rotating it requires a release.
-# Operators wanting to point telemetry at their own PostHog project should
-# set ``SOUP_POSTHOG_KEY`` AND ``SOUP_POSTHOG_ENDPOINT`` together; both env
-# vars are validated by :func:`_resolve_posthog_target`.
+# The bundled key is a placeholder. Set ``SOUP_POSTHOG_KEY`` to your project's
+# write-only key to send events. Set ``SOUP_POSTHOG_ENDPOINT`` for a custom
+# capture URL. :func:`_resolve_posthog_target` validates each override independently.
 _POSTHOG_DEFAULT_KEY = "phc_soup_public_write_only"
 _TELEMETRY_TIMEOUT_S = 1.0
 

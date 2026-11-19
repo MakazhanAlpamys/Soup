@@ -1,7 +1,7 @@
 """v0.44.0 Part B — `.checkpoint_now` trigger-file watcher.
 
-Touch `<output_dir>/.checkpoint_now` to force the next eval-step to save.
-Pure-Python; the trainer callback polls `should_save_now()` between steps.
+Touch `<output_dir>/.checkpoint_now` to request a save after the next optimizer step.
+The trainer callback checks the trigger in `on_step_end`.
 """
 
 from __future__ import annotations
