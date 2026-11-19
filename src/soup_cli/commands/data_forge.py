@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from soup_cli.commands._common import refuse_nan
 from soup_cli.utils.terminal import strip_control
 
 console = Console()
@@ -52,7 +53,7 @@ def forge(
     ),
     uncertainty_threshold: float = typer.Option(
         0.0, "--uncertainty-threshold",
-        min=0.0, max=1.0,
+        min=0.0, max=1.0, callback=refuse_nan,
         help="Minimum Jaccard-distance score required to keep a synthesised row.",
     ),
     max_chunk_chars: int = typer.Option(

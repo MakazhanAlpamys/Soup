@@ -248,9 +248,9 @@ def _gated_pythons() -> list[str]:
 
 # --- A small evaluator for the GitHub expressions these tests need -----------
 #
-# It covers exactly what ci.yml's concurrency key and the plan decision use:
-# string literals, true/false/null, property paths (with one `*` object
-# filter), parentheses, ! == != && || and the functions format(), contains()
+# It covers exactly what ci.yml's concurrency key, the plan decision and the time limits of
+# the `test` job use: string and number literals, true/false/null, property paths (with one
+# `*` object filter), parentheses, ! == != && || and the functions format(), contains()
 # and startsWith(). The semantics are GitHub's: && and || return an OPERAND,
 # not a boolean; ! binds tighter than == and !=, which bind tighter than &&,
 # then ||; strings compare case-insensitively; a missing property is null.
@@ -258,6 +258,7 @@ def _gated_pythons() -> list[str]:
 
 _TOKEN = re.compile(
     r"(?P<string>'(?:[^']|'')*')"
+    r"|(?P<number>\d+(?:\.\d+)?)"
     r"|(?P<op>==|!=|&&|\|\||!|\(|\)|,)"
     r"|(?P<name>[A-Za-z_][\w-]*(?:\.(?:\*|[A-Za-z_][\w-]*))*)"
 )
@@ -392,6 +393,8 @@ class _Expression:
         self._position += 1
         if kind == "string":
             return text[1:-1].replace("''", "'")
+        if kind == "number":
+            return float(text) if "." in text else int(text)
         if (kind, text) == ("op", "("):
             result = self._either()
             assert self._take(")"), "unbalanced parenthesis"

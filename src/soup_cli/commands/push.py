@@ -116,8 +116,14 @@ def push(
         )
         raise typer.Exit(1)
 
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    # --token also reads HF_TOKEN via envvar; only a value typed on the
+    # command line counts as using the flag (#2792).
+    token_typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
+
     # Deprecated --token flag (HF hub): warn once if explicitly provided.
-    if hub_canonical == "hf" and token is not None:
+    if hub_canonical == "hf" and token_typed:
         console.print(
             "[yellow]Warning: --token is deprecated. Use HF_TOKEN env var or "
             "run 'huggingface-cli login'.[/]"
@@ -151,12 +157,9 @@ def push(
     hf_endpoint: Optional[str] = None
     if hub_canonical != "hf":
         from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
-        from soup_cli.utils.typer_compat import ParameterSource
 
-        # --token also reads HF_TOKEN via envvar; only a value typed on the
-        # command line is meant for this hub.
-        typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
-        hub_token = resolve_hub_token(hub_canonical, token if typed else None)
+        # Only a value typed on the command line is meant for this hub.
+        hub_token = resolve_hub_token(hub_canonical, token if token_typed else None)
         if not hub_token:
             env_var = hub_token_env_var(hub_canonical)
             console.print(
@@ -172,7 +175,6 @@ def push(
             console.print(
                 "[red]No HuggingFace token found.[/]\n"
                 "Provide one via:\n"
-                "  --token YOUR_TOKEN\n"
                 "  HF_TOKEN=... env variable\n"
                 "  huggingface-cli login"
             )

@@ -549,6 +549,10 @@ class _FitDecision:
     sharding: str | None
     num_processes: int
     allow_oom_attempt: bool
+    # #2909: the reasons that decided the refusal (``outside`` without the distillation
+    # step when the student alone does not fit), and that student's own estimate.
+    deciding: tuple[str, ...] = ()
+    student_required_gb: float | None = None
 
 
 def _hardware_fit_preflight(
@@ -603,15 +607,29 @@ def _hardware_fit_preflight(
     if total_bytes <= 0:
         return None  # no CUDA VRAM to predict against
     from soup_cli.utils.gpu import bf16_fp16_flags
-    from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT, FitUnavailable
+    from soup_cli.utils.hardware_fit import (
+        CONFIG_QUANT_TO_FIT,
+        FitUnavailable,
+        hardware_fit_input_or_reason,
+    )
 
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
     # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
+    kbit_fp32 = bf16_fp16_flags("cuda")[1]
     inp = _hardware_fit_input_or_reason(
-        cfg,
-        gpu_memory_gb=total_bytes / 1024**3,
-        kbit_fp32=bf16_fp16_flags("cuda")[1],
+        cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32
     )
+    if isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model":
+        # #2909: a teacher the estimate cannot price; the student still can be, and a run
+        # whose student alone does not fit the card is refused, as before the teacher was
+        # priced. The first read already announced any Hub request.
+        console.print(
+            "[yellow]Pre-flight: the student is checked alone:[/] "
+            f"{markup_escape(inp.reason)}."
+        )
+        inp = hardware_fit_input_or_reason(
+            cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32, price_teacher=False
+        )
     if isinstance(inp, FitUnavailable):
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
@@ -629,6 +647,7 @@ def _hardware_fit_preflight(
             console.print(f"[yellow]Pre-flight skipped:[/] {markup_escape(inp.reason)}.")
         return None
     from soup_cli.utils.hardware_fit import (
+        DISTILLATION_STEP,
         decide_hardware_fit,
         outside_calibrated_range,
         unextrapolated_floor,
@@ -654,7 +673,24 @@ def _hardware_fit_preflight(
         cfg, inp, report.breakdown, sharding=sharding, num_processes=num_processes
     )
     floor_exceeds_card = floor_gb > report.available_vram_gb
-    refuse = not allow_oom_attempt and (not outside or floor_exceeds_card)
+    # #2909: a distillation step is outside the range, but the student's own estimate is
+    # not, and the teacher only adds to it: a run whose student alone does not fit the card
+    # is refused as it was before the teacher was priced.
+    student = (
+        decide_hardware_fit(
+            dataclasses.replace(inp, teacher_shape=None),
+            available_vram_gb=report.available_vram_gb,
+        )
+        if inp.teacher_shape is not None
+        else None
+    )
+    student_over_card = student is not None and not student.ok
+    deciding = (
+        tuple(r for r in outside if r != DISTILLATION_STEP)
+        if student_over_card
+        else tuple(outside)
+    )
+    refuse = not allow_oom_attempt and (not deciding or floor_exceeds_card)
     decision = _FitDecision(
         inp=inp,
         report=report,
@@ -666,6 +702,8 @@ def _hardware_fit_preflight(
         sharding=sharding,
         num_processes=num_processes,
         allow_oom_attempt=allow_oom_attempt,
+        deciding=deciding,
+        student_required_gb=student.required_with_margin_gb if student_over_card else None,
     )
     if refuse and defer_refusal_to_data and _row_length_could_lift(cfg, decision):
         return decision
@@ -735,6 +773,9 @@ def _print_fit_panel(
             ("logits", b.logits_gb),
             ("dequant", b.dequant_gb),
             ("optimizer step", b.optimizer_step_gb),
+            ("teacher", b.teacher_gb),
+            ("distillation", b.distill_gb),
+            ("teacher generation", b.teacher_generation_gb),
         )
         if value >= 0.05
     )
@@ -764,10 +805,17 @@ def _print_fit_panel(
             f"{', '.join(outside)}. Its {floor_names} alone take {floor_gb:.1f} GB, "
             "more than the card has; that part is not an extrapolation.[/]"
         )
-    elif outside:
+    elif decision.deciding:
         footnote += (
             f"\n[dim]This run is outside the calibrated range ({CALIBRATED_RANGE}): "
             f"{', '.join(outside)}; the estimate may overstate the peak.[/]"
+        )
+    elif refuse and decision.student_required_gb is not None:
+        footnote += (
+            f"\n[dim]Its student alone needs {decision.student_required_gb:.1f} GB with "
+            "the margin, more than the card has. That estimate is inside the calibrated "
+            f"range ({CALIBRATED_RANGE}), and the teacher only adds to it; "
+            "--allow-oom-attempt launches it anyway.[/]"
         )
     elif refuse:
         footnote += (

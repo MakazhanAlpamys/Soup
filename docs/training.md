@@ -471,14 +471,23 @@ master weights (see [Process Reward Model](#process-reward-model-prm)):
 | task | quantization | notes |
 |---|---|---|
 | `distill` | `none` only | student and frozen teacher both load unquantised |
-| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune on fp32 master weights unless `classifier_lora: true` |
 | `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
 | `moe_lora_routing` | `none` only | base frozen, only the router trains |
 | `unlearn` | `none` only | policy and reference copy both load unquantised |
-| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+| `asr` | `none` only | full fine-tune on fp32 master weights unless `asr_lora: true` |
 
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
 pre-flight describe the run that actually happens (#795).
+
+The classifier family and `asr` load an fp32 base for their default full fine-tune, whatever
+dtype the checkpoint was saved in (#2941): a bf16 decoder base, or the fp16 `whisper-large-v3`
+and `-large-v3-turbo`, used to train in that dtype with no fp32 master copy, and an AdamW step
+of about `lr` left most weights unchanged. With `classifier_lora: true` / `asr_lora: true` the
+frozen base keeps its checkpoint dtype, except on a CUDA card without bf16 hardware, where it
+loads in fp16 (v0.77.2 loaded the checkpoint's own dtype there); under bf16/fp16 mixed
+precision the classification head that the adapter trains (`modules_to_save`) is upcast to
+fp32 like the LoRA weights.
 
 An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
 v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,
