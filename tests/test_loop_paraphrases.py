@@ -24,7 +24,7 @@ import os
 import re
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1564,6 +1564,7 @@ def served(cwd, monkeypatch):
     local_rl.init_local_rl_db("thumbs.db")
     model = _AdapterModel()
     observed: list = []
+    apps: list = []
 
     def generate(current_model, tokenizer, messages, **kwargs):
         observed.append(current_model.current)
@@ -1582,6 +1583,7 @@ def served(cwd, monkeypatch):
             record_thumbs_db="thumbs.db", auth_token=auth_token,
             canary_state_path=state_path, canary_stats_path=stats_path,
         )
+        apps.append(app)
         return TestClient(app, base_url=ENDPOINT), app
 
     client, app = build()
@@ -1621,10 +1623,19 @@ def served(cwd, monkeypatch):
         with sqlite3.connect("thumbs.db") as conn:
             return conn.execute("SELECT COUNT(*) FROM thumbs").fetchone()[0]
 
-    return SimpleNamespace(
+    yield SimpleNamespace(
         client=client, app=app, observed=observed, route_http=route_http, trace_lines=trace_lines,
         stats=stats, thumbs=thumbs, build=build, serve=serve, model=model,
     )
+
+    # ``TestClient(app)`` outside a ``with`` never runs the app's lifespan, which is where serve
+    # closes its canary buffer. An answer that was recorded and not flushed left a timer behind
+    # that outlived the test: once the working directory moved on its flush failed ("must stay
+    # under cwd") and it retried every two seconds for the rest of the worker's life, building
+    # a ``threading.Timer`` each time, in the middle of whatever test was running then.
+    for built in apps:
+        with suppress(OSError, TypeError, ValueError):  # the timer is stopped anyway
+            built.state.canary_outcomes.close()
 
 
 INTERNAL = {"X-Soup-Internal": "loop-check", "Authorization": f"Bearer {TOKEN}"}

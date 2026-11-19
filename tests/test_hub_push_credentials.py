@@ -133,3 +133,62 @@ class TestHfPushUnchanged:
         result = _push()
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "No HuggingFace token found" in _clean(result.output)
+
+
+@pytest.fixture
+def hf_api_tokens(monkeypatch):
+    """Record the token handed to the HF client and stop before any network call."""
+    seen: list = []
+
+    def _fake_get_hf_api(token=None, endpoint=None):
+        seen.append(token)
+        raise ImportError("stop before upload")
+
+    monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", _fake_get_hf_api)
+    return seen
+
+
+class TestHfTokenDeprecation:
+    """--token also reads HF_TOKEN via envvar; only a typed flag is deprecated (#2792)."""
+
+    _DEPRECATION = "--token is deprecated"
+
+    def test_hf_token_from_env_prints_no_deprecation(self, model_dir, hf_api_tokens,
+                                                     monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_FROM_ENV")
+        result = _push()
+        assert self._DEPRECATION not in _clean(result.output)
+        # The env token is still the one used: resolution is unchanged.
+        assert hf_api_tokens == ["hf_FROM_ENV"]
+
+    def test_hf_token_typed_on_command_line_still_warns(self, model_dir, hf_api_tokens):
+        result = _push("--token", "hf_TYPED")
+        assert self._DEPRECATION in _clean(result.output)
+        assert hf_api_tokens == ["hf_TYPED"]
+
+    def test_hf_token_typed_with_env_set_still_warns(self, model_dir, hf_api_tokens,
+                                                     monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_FROM_ENV")
+        result = _push("--token", "hf_TYPED")
+        assert self._DEPRECATION in _clean(result.output)
+        assert hf_api_tokens == ["hf_TYPED"]
+
+    def test_hf_missing_token_hint_does_not_suggest_deprecated_flag(self, model_dir,
+                                                                    hf_api_tokens):
+        result = _push()
+        out = _clean(result.output)
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "No HuggingFace token found" in out
+        assert "HF_TOKEN" in out
+        assert "huggingface-cli login" in out
+        assert "--token" not in out
+        assert hf_api_tokens == []
+
+    def test_non_hf_missing_token_hint_keeps_token_flag(self, model_dir, recorded):
+        # On other hubs --token is the supported way, not a deprecated one.
+        result = _push("--hub", "modelscope")
+        out = _clean(result.output)
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "--token YOUR_TOKEN" in out
+        assert "MODELSCOPE_API_TOKEN" in out
+        assert recorded == []

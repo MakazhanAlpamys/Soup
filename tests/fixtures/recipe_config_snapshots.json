@@ -1897,6 +1897,20 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-35b-a3b-pretrain": {
+      "base": "Qwen/Qwen3.5-35B-A3B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 0.0001,
+      "training.moe_lora": true
+    },
     "qwen3.5-35b-a3b-sft": {
       "base": "Qwen/Qwen3.5-35B-A3B",
       "data.format": "auto",
