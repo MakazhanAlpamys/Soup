@@ -1,4 +1,4 @@
-"""#2984 — ``soup adapters merge --strategy svd --rank k`` truncates the delta.
+"""``soup adapters merge --strategy svd --rank k`` truncates each module's delta (#2984).
 
 ``merge_svd`` replaced every 2-D tensor of the linear merge by its own rank-k
 SVD reconstruction: ``lora_A`` and ``lora_B`` each kept their own top
@@ -192,6 +192,22 @@ def test_a_pair_that_is_not_2d_keeps_the_linear_merge() -> None:
         assert merged[key].tobytes() == linear[key].tobytes()
 
 
+def _svd_does_not_converge(_delta_matrix, _rank):
+    raise np.linalg.LinAlgError("SVD did not converge")
+
+
+def test_a_pair_whose_svd_raises_keeps_the_linear_merge(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "soup_cli.utils.adapter_arithmetic._truncated_factors", _svd_does_not_converge
+    )
+    inputs = [_random_pair(8), _random_pair(9)]
+    linear, _ = merge_linear(inputs, [0.5, 0.5])
+    merged, _ = merge_svd(inputs, [0.5, 0.5], rank=1)
+    assert sorted(merged) == sorted(linear)
+    for key in (A_KEY, B_KEY):
+        assert merged[key].tobytes() == linear[key].tobytes(), key
+
+
 # ---------------------------------------------------------------------------
 # Degenerate deltas
 # ---------------------------------------------------------------------------
@@ -334,3 +350,35 @@ def test_the_command_keeps_shapes_and_config(with_head) -> None:
     assert np.abs(_delta(out)).max() == pytest.approx(2.0, abs=1e-5)
     config = json.loads(Path("out", "adapter_config.json").read_text(encoding="utf-8"))
     assert (config["r"], config["lora_alpha"]) == (2, 4)
+
+
+def test_the_command_exits_0_and_writes_the_linear_merge_when_the_svd_raises(
+    with_head, monkeypatch
+) -> None:
+    from soup_cli.cli import app
+
+    monkeypatch.setattr(
+        "soup_cli.utils.adapter_arithmetic._truncated_factors", _svd_does_not_converge
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "adapters",
+            "merge",
+            "c1",
+            "c2",
+            "--strategy",
+            "svd",
+            "--rank",
+            "1",
+            "-o",
+            "out",
+            "--allow-unscanned",
+        ],
+    )
+    assert result.exit_code == 0, _plain(result.output)
+    out = _load("out")
+    linear, _ = merge_linear([_load("c1"), _load("c2")], [0.5, 0.5])
+    assert sorted(out) == sorted(linear)
+    for key in linear:
+        assert out[key].tobytes() == linear[key].tobytes(), key
