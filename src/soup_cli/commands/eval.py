@@ -19,6 +19,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
@@ -143,6 +144,7 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+    warn_stopped_inputs(model_path)
 
     if trust_remote_code:
         # Appended only from the resolved --trust-remote-code flag, never
@@ -457,6 +459,7 @@ def custom(
     results_list = []
     from soup_cli.eval.custom import _create_default_generator, score_task
 
+    warn_stopped_inputs(model_path)
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
         str(model_path), trust_remote_code=trust_remote_code,
@@ -1034,6 +1037,8 @@ def human(
             console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
             raise typer.Exit(1)
 
+    warn_stopped_inputs(model_a, model_b)
+
     console.print(Panel(
         f"[bold]Human Evaluation[/]\n"
         f"Prompts: {len(prompts)}\n"
@@ -1412,6 +1417,7 @@ def gate_cmd(
     else:
         from soup_cli.eval.quant_check import make_model_generator
 
+        warn_stopped_inputs(model)
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
@@ -1587,6 +1593,8 @@ def quant_check_cmd(
             f"[red]Cannot load --tasks: {for_terminal(str(exc))}[/]"
         )
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    warn_stopped_inputs(before_path, after_path)
 
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
