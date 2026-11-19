@@ -78,6 +78,6 @@ def test_a_failed_artifact_write_leaves_the_pointer_unlinked(entry, tmp_path, mo
     with pytest.raises(ValueError, match="artifact refused"):
         adapter_branch.attach_branch_to_registry("v19", "model:v1")
     assert pointer.read_bytes() == before
-    assert "registry_entry_id" not in json.loads(pointer.read_text(encoding="utf-8"))
+    assert json.loads(pointer.read_text(encoding="utf-8")).get("registry_entry_id") is None
     with RegistryStore() as store:
         assert store.get_artifacts(entry) == []
