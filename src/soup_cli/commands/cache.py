@@ -32,6 +32,24 @@ def prune_layer_cache(
     yes: bool = typer.Option(False, "--yes", help="Actually remove. Without it: dry run."),
 ) -> None:
     """Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes."""
+    from soup_cli.commands.infer import _resolve_model_source
+    from soup_cli.utils.hf import validate_repo_id
+
+    # #3088 B-2(a): a value that can be neither a Hub id nor a path used to exit 0
+    # with "Nothing to prune."; resolve it the way `soup bench`/`soup infer` do,
+    # then validate the Hub-id shape like `soup push`/`soup deploy`.
+    try:
+        kind, model_ref = _resolve_model_source(model)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]", emoji=False)
+        raise typer.Exit(1) from exc
+    if kind == "hf":
+        try:
+            validate_repo_id(model_ref)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --model:[/] {for_terminal(str(exc))}", emoji=False)
+            raise typer.Exit(1) from exc
+
     from soup_cli.utils.layer_cache_slots import prune_slots
 
     results = prune_slots(model, cache_dir, _current(model, cache_dir), confirm=yes)
