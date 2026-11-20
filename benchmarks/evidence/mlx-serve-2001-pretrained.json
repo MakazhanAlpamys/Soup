@@ -61,14 +61,14 @@
     ]
   ],
   "public_cli": [
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/.venv-mlx-2001/bin/python",
+    "<python>",
     "-m",
     "soup_cli",
     "serve",
     "--backend",
     "mlx",
     "--model",
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/pretrained/SmolLM2-135M-Instruct",
+    "<model-dir>",
     "--port",
     "55308"
   ],

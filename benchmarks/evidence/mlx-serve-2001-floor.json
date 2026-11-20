@@ -58,14 +58,14 @@
     ]
   ],
   "public_cli": [
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/.venv-mlx-2001-floor/bin/python",
+    "<python>",
     "-m",
     "soup_cli",
     "serve",
     "--backend",
     "mlx",
     "--model",
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-sync-v078-20261120/fixture-floor/fixture/adapter",
+    "<fixture-dir>/adapter",
     "--port",
     "55139"
   ],
@@ -217,8 +217,8 @@
     }
   ],
   "fixture": {
-    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-sync-v078-20261120/fixture-floor/fixture/base",
-    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-sync-v078-20261120/fixture-floor/fixture/adapter",
+    "base": "<fixture-dir>/base",
+    "adapter": "<fixture-dir>/adapter",
     "losses": [
       4.773211479187012,
       1.4672683477401733,
