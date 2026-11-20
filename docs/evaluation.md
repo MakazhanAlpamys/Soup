@@ -1860,7 +1860,7 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
-| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing non-word characters removed (`h2o.` and `(h2o)` are `h2o`); a word that is only punctuation is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
+| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing punctuation and symbols removed (`h2o.` and `(h2o)` are `h2o`; a combining mark such as a vowel sign or an accent written as its own character is part of the word and stays); a word that is only punctuation is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
 
 Every word of the output counts toward `semantic`'s union, so a short expected answer
 inside a sentence scores low (`H2O` against `The chemical symbol for water is H2O.` is
