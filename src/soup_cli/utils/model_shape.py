@@ -47,6 +47,13 @@ HUB_TIMEOUT_S = 5.0
 #: Seconds allowed for the whole safetensors-metadata lookup, which makes one request
 #: per shard; past this the count comes from config.json instead.
 HUB_METADATA_DEADLINE_S = 20.0
+#: What ``soup plan`` and ``soup profile`` print from their
+#: ``on_hub_request``, before the wait those timeouts allow (#2306).
+HUB_REQUEST_LINE = (
+    "Reading the model's details from the Hub to size the run (HF_HUB_OFFLINE=1 skips this)..."
+)
+#: No offline hint in the train pre-flight: the model download comes next.
+HUB_REQUEST_LINE_BEFORE_DOWNLOAD = "Reading the model's details from the Hub to size the run..."
 
 # The sizes ``get_model_arch`` used to guess from a parameter count, kept as the
 # fallback when no config.json can be read: params (B) -> (hidden, layers, intermediate).
@@ -92,6 +99,10 @@ class ModelShape:
     #: The config.json names an ``auto_map``: the model's code ships with its weights
     #: (``trust_remote_code``), so its forward's parameters are unknown here (#2368).
     remote_code: bool = False
+    #: Bytes per parameter of the dtype config.json stores the weights in (``dtype`` /
+    #: ``torch_dtype``): 4 for float32, 2 for bfloat16 and float16; ``None`` when it names
+    #: none. What a ``dtype="auto"`` load holds, as a distillation teacher's does (#2909).
+    stored_bytes_per_param: Optional[float] = None
 
     @property
     def guessed(self) -> bool:
@@ -310,6 +321,27 @@ def guessed_arch(params_b: float) -> tuple[int, int, int]:
     return hidden, layers, hidden * 3
 
 
+_STORED_DTYPE_BYTES = {
+    "float32": 4.0,
+    "float": 4.0,
+    "bfloat16": 2.0,
+    "float16": 2.0,
+    "half": 2.0,
+}
+
+
+def stored_bytes_per_param(*configs: dict) -> Optional[float]:
+    """Bytes per parameter of the first ``dtype`` / ``torch_dtype`` the configs name."""
+    for config in configs:
+        for key in ("dtype", "torch_dtype"):
+            value = config.get(key)
+            if isinstance(value, str):
+                found = _STORED_DTYPE_BYTES.get(value.lower().removeprefix("torch."))
+                if found is not None:
+                    return found
+    return None
+
+
 def shape_from_config(
     config: dict, *, params: Optional[int], params_source: str
 ) -> Optional[ModelShape]:
@@ -338,6 +370,7 @@ def shape_from_config(
         moe=_is_moe(text) or _is_moe(config),
         config_model_type=str(config.get("model_type") or ""),
         remote_code="auto_map" in config,
+        stored_bytes_per_param=stored_bytes_per_param(text, config),
     )
 
 

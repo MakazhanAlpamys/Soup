@@ -41,8 +41,32 @@ def _proc(fast, plain, **extra):
     return harness.ProcessResult(cell="x", fast_ms=fast, plain_ms=plain, **extra)
 
 
-def test_the_self_test_passes(capsys):
+#: Starts a harness child as ``python <script> <args>`` would, with oneDNN off first: the
+#: child is a fresh interpreter, so ``aten_half_matmuls`` in this process does not reach it.
+_CHILD_WITHOUT_ONEDNN = (
+    "import runpy, sys, torch; torch.backends.mkldnn.enabled = False; "
+    "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+)
+
+
+def test_the_self_test_passes(capsys, monkeypatch, aten_half_matmuls):
+    # The self-test runs its bf16 cells here and one of them again in a child process. On
+    # part of the windows-latest fleet the first CPU bf16 matmul that reaches oneDNN ends
+    # the interpreter with 0xc000001d (#2562); here that took the pytest-xdist worker down.
+    run = subprocess.run
+    children = []
+
+    def run_without_onednn(argv, **kwargs):
+        if "--cell" not in argv:
+            return run(argv, **kwargs)
+        children.append(argv)
+        return run([argv[0], "-c", _CHILD_WITHOUT_ONEDNN, *argv[1:]], **kwargs)
+
+    monkeypatch.setattr(harness.subprocess, "run", run_without_onednn)
+
     assert harness.run_self_test() == harness.EXIT_OK
+    # The healthy child cell and the crashing one both started through the shim.
+    assert [argv[argv.index("--cell") + 1] for argv in children] == ["2:bf16:qv", "2:bf16:none"]
 
     out = capsys.readouterr().out
     assert "0 failed" in out  # ansi-ok: print() output, no Rich console
@@ -57,7 +81,7 @@ def test_the_arms_alternate_and_run_equally_often():
 
 
 @pytest.mark.parametrize("targets", ["qkv", "qv"])
-def test_a_cell_takes_the_fast_path_on_every_iteration(targets):
+def test_a_cell_takes_the_fast_path_on_every_iteration(targets, aten_half_matmuls):
     result = harness.measure(
         harness.Cell(2, "bf16", targets), TINY, "cpu", warmup=1, iters=3, tolerance=2e-2
     )
@@ -84,7 +108,7 @@ def test_every_lora_b_is_non_zero_so_every_gradient_is():
     assert len(lora_b) == 3 and all(p.abs().sum() > 0 for p in lora_b)
 
 
-def test_a_patch_that_applies_nothing_voids_the_process():
+def test_a_patch_that_applies_nothing_voids_the_process(aten_half_matmuls):
     result = harness.measure(
         harness.Cell(2, "bf16", "qkv"),
         TINY,
@@ -99,7 +123,7 @@ def test_a_patch_that_applies_nothing_voids_the_process():
     assert result.fast_ms is None
 
 
-def test_a_patch_count_that_lies_voids_the_process():
+def test_a_patch_count_that_lies_voids_the_process(aten_half_matmuls):
     """Patches nothing but reports 1: the arms agree, so only the path proof catches it."""
     result = harness.measure(
         harness.Cell(2, "bf16", "qkv"),
@@ -116,7 +140,7 @@ def test_a_patch_count_that_lies_voids_the_process():
     assert result.fast_path_ok == 0 and result.plain_path_ok == 2
 
 
-def test_a_patched_module_in_the_plain_arm_voids_the_process(monkeypatch):
+def test_a_patched_module_in_the_plain_arm_voids_the_process(monkeypatch, aten_half_matmuls):
     """The plain arm must run unpatched: an unpatch that does nothing is caught."""
     monkeypatch.setattr("soup_cli.utils.fast_lora_qkv.unpatch_fast_lora_qkv", lambda model: None)
     result = harness.measure(
@@ -127,7 +151,7 @@ def test_a_patched_module_in_the_plain_arm_voids_the_process(monkeypatch):
     assert result.plain_path_ok == 0
 
 
-def test_arms_that_disagree_before_timing_void_the_process(monkeypatch):
+def test_arms_that_disagree_before_timing_void_the_process(monkeypatch, aten_half_matmuls):
     monkeypatch.setattr(harness, "relative_error", lambda actual, expected: 0.5)
 
     result = harness.measure(
@@ -226,7 +250,7 @@ def test_an_unpatched_run_needs_no_marker_and_no_fused_backward(patched, grad_fn
     assert harness.ran_unpatched(_attn(patched=patched), _outputs(grad_fn)) is wanted
 
 
-def test_one_fast_iteration_off_the_path_voids_the_process(monkeypatch):
+def test_one_fast_iteration_off_the_path_voids_the_process(monkeypatch, aten_half_matmuls):
     real = harness.took_fast_path
     calls = []
 
@@ -245,7 +269,9 @@ def test_one_fast_iteration_off_the_path_voids_the_process(monkeypatch):
     assert "2/3 fast iterations took the fast path" in result.void
 
 
-def test_arms_that_disagree_only_on_a_lora_gradient_void_the_process(monkeypatch):
+def test_arms_that_disagree_only_on_a_lora_gradient_void_the_process(
+    monkeypatch, aten_half_matmuls
+):
     """Outputs and dX agree; the LoRA gradients (their shapes carry the rank, 2) do not."""
     monkeypatch.setattr(
         harness,

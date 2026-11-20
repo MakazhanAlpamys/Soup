@@ -1,0 +1,14 @@
+{
+  "recorded_at": "2026-11-03T21:14:55.521515+05:00",
+  "status": "guard_stopped",
+  "failure": "system_commit_floor",
+  "failed_operation": "train-010-020",
+  "last_verified_checkpoint_steps": 10,
+  "new_complete_updates_in_failed_operation": 0,
+  "guard_summary_sha256": "4259d3fe8f50904f8a165b68eed8ee95aa0b8243c3ba29b89a64399b1bd0cec3",
+  "guard_cleanup_clean": true,
+  "old_wrapper_controller_worker_conhost_absent": true,
+  "STOP_was_not_created": true,
+  "auto_retry": false,
+  "next_work": "Stage38 bounded reuse gate; preserve original failed campaign and diagnose global commit before full-model recovery"
+}

@@ -39,6 +39,18 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 PROJECT_JOBS = ("test", "mlx-smoke", "torchao-contract", "pytorch-smoke", "transformers-floor")
 #: The only `if:` a project install may have: none, or the docs-only guard of its job.
 DOCS_ONLY_GUARDS = ("", "env.RUN_SUITE == 'true'", "needs.plan.outputs.docs_only != 'true'")
+#: The one more condition the install of the `test` job may have (2026-11-15,
+#: tests/test_ci_suite_result_reuse.py): the docs-only guard plus the one that skips the whole
+#: ubuntu / 3.12 cell of a pull request when this exact merge commit already passed the suite.
+#: It is the result of an earlier RUN, never of pip's download cache, and no other job has it.
+REUSE_GUARDED_INSTALL = "env.RUN_SUITE == 'true' && steps.reuse.outputs.cache-hit != 'true'"
+
+
+def _allowed_install_conditions(job_name: str) -> tuple[str, ...]:
+    """What a project install of *job_name* may carry as its `if:`."""
+    if job_name == "test":
+        return (*DOCS_ONLY_GUARDS, REUSE_GUARDED_INSTALL)
+    return DOCS_ONLY_GUARDS
 RUN_KINDS = (
     pytest.param((_push(), _pull_request("opened")), "QUICK", id="quick-main-and-pr"),
     pytest.param(
@@ -157,13 +169,23 @@ class TestNoPipDownloadCache:
                 f"{job_name}: {step.get('name', 'project install')} must follow setup-python"
             )
 
+    @pytest.mark.parametrize("job_name", [name for name in PROJECT_JOBS if name != "test"])
+    def test_only_the_test_job_may_skip_its_install_for_a_reused_result(
+        self, job_name: str
+    ) -> None:
+        """The reuse guard belongs to one cell of one job; a smoke job or a floor job that
+        carried it would skip its install on a result nobody recorded for it."""
+        assert REUSE_GUARDED_INSTALL not in _allowed_install_conditions(job_name)
+        for _, step in _project_installs(job_name):
+            assert "steps.reuse" not in str(step.get("if", "")), job_name
+
     @pytest.mark.parametrize("job_name", PROJECT_JOBS)
     def test_cache_hit_cannot_bypass_project_install(self, job_name: str) -> None:
         for _, step in _project_installs(job_name):
             # 2026-10-20: the one condition a project install may carry is the docs-only
             # guard (tests/test_ci_docs_only_fast_path.py): it skips every step of a cell or
             # smoke job that does nothing in a docs-only pull request. Never a cache result.
-            assert str(step.get("if", "")) in DOCS_ONLY_GUARDS, (
+            assert str(step.get("if", "")) in _allowed_install_conditions(job_name), (
                 f"{job_name}: project installation must be unconditional"
             )
             assert "cache-hit" not in str(step["run"]), (

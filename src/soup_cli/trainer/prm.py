@@ -25,6 +25,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -428,7 +429,8 @@ class PRMTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM
         # checkpoint is loadable standalone (soup shrink / PRMScorer /

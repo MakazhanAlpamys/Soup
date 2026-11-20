@@ -7,7 +7,10 @@ the trained ``default`` one, so every checkpoint holds ``default`` at its root
 and ``ref`` in ``checkpoint-N/ref/``. ``Trainer._load_from_checkpoint`` loads
 the subfolder adapters and, when there is one, nothing else: the resumed run
 restored the step counter and the optimizer and trained a fresh adapter.
-``reload_root_adapter_on_resume`` loads the root right after that load.
+``reload_root_adapter_on_resume`` loads the root right after that load. From
+transformers 5.23.0 the Trainer reads the root itself, before the subfolder
+ones; the helper then must not read it a second time, and these tests pin both
+orders by what the installed Trainer does, not by its version.
 
 The first half runs the real wrappers on the tiny local Llama, on CPU: one
 short run writes the checkpoint, a second one resumes from it and is stopped
@@ -179,6 +182,23 @@ def _largest_b(adapter: dict) -> float:
     return max(float(value.abs().max()) for key, value in adapter.items() if "lora_B" in key)
 
 
+_probe: list[bool] = []
+
+
+def _trainer_reads_the_root_itself(tmp_path_factory) -> bool:
+    """Whether the installed ``Trainer`` reads the root adapter beside a subfolder one.
+
+    Asked once of the real ``Trainer`` on a real two-adapter PEFT checkpoint with no
+    helper in the way: transformers up to 5.22 does not, 5.23.0 and later do.
+    """
+    if not _probe:
+        model, saved = TestOnARealPeftModel()._resume(
+            tmp_path_factory.mktemp("probe"), with_the_helper=False
+        )
+        _probe.append(_largest_b(_adapter(model, "default")) == _largest_b(saved))
+    return _probe[0]
+
+
 class TestTheRealWrappers:
     @pytest.mark.parametrize("name", list(_RUNS))
     def test_the_checkpoint_is_the_one_this_file_is_about(self, name, tmp_path_factory):
@@ -214,10 +234,20 @@ class TestTheRealWrappers:
         assert [name for name in run.seen.trainable if ".default." in name]
 
     @pytest.mark.parametrize("name", _WITH_REF)
-    def test_the_root_is_read_once_after_the_subfolder(self, name, tmp_path_factory):
+    def test_the_root_is_read_once_in_the_order_the_trainer_leaves_it(
+        self, name, tmp_path_factory
+    ):
+        """One read of each adapter, ``default`` trainable and ``ref`` frozen. Where the
+        Trainer leaves the root unread (transformers up to 5.22) the helper reads it
+        after the subfolder; where the Trainer reads it first (5.23.0 on) nothing reads
+        it again. Two reads of the root is what the helper must not do."""
         run = _resumed(name, tmp_path_factory)
+        root, ref = (".", "default", True), ("ref", "ref", False)
 
-        assert run.loads == [("ref", "ref", False), (".", "default", True)]
+        if _trainer_reads_the_root_itself(tmp_path_factory):
+            assert run.loads == [root, ref]
+        else:
+            assert run.loads == [ref, root]
 
     @pytest.mark.parametrize("name", _WITHOUT_REF)
     def test_a_checkpoint_with_no_subfolder_is_read_once_by_the_trainer(
@@ -332,6 +362,63 @@ class TestTheHelper:
 
         assert order == ["trainer", "root"]
 
+    def test_a_root_the_trainer_read_is_not_read_again(self, tmp_path):
+        """transformers 5.23.0 on: the Trainer loads the root, then the subfolders."""
+        checkpoint = _checkpoint(tmp_path, _ROOT, _REF)
+        model = _PeftLike()
+
+        def load(resume_from_checkpoint, model_=None):
+            model.load_adapter(resume_from_checkpoint, "default", is_trainable=True)
+            model.load_adapter(os.path.join(resume_from_checkpoint, "ref"), "ref")
+
+        trainer = SimpleNamespace(model=model, _load_from_checkpoint=load)
+        reload_root_adapter_on_resume(trainer)
+        trainer._load_from_checkpoint(checkpoint)
+
+        assert model.loaded == [
+            (checkpoint, "default", True),
+            (os.path.join(checkpoint, "ref"), "ref", False),
+        ]
+
+    def test_a_default_read_from_another_folder_is_not_the_checkpoints_root(self, tmp_path):
+        checkpoint = _checkpoint(tmp_path, _ROOT, _REF)
+        elsewhere = str(tmp_path / "elsewhere")
+        model = _PeftLike()
+
+        def load(resume_from_checkpoint, model_=None):
+            model.load_adapter(elsewhere, "default", is_trainable=True)
+
+        trainer = SimpleNamespace(model=model, _load_from_checkpoint=load)
+        reload_root_adapter_on_resume(trainer)
+        trainer._load_from_checkpoint(checkpoint)
+
+        assert model.loaded == [(elsewhere, "default", True), (checkpoint, "default", True)]
+
+    @pytest.mark.parametrize("fails", [False, True])
+    @pytest.mark.parametrize("own_attribute", [False, True])
+    def test_the_models_load_adapter_is_put_back_as_it_was(self, tmp_path, own_attribute, fails):
+        checkpoint = _checkpoint(tmp_path, _ROOT, _REF)
+        model = _PeftLike()
+        if own_attribute:  # an instance attribute, as a spy is
+            model.load_adapter = own = model.load_adapter
+
+        def load(resume_from_checkpoint, model_=None):
+            if fails:
+                raise ValueError("Can't find a valid checkpoint")
+
+        trainer = SimpleNamespace(model=model, _load_from_checkpoint=load)
+        reload_root_adapter_on_resume(trainer)
+        if fails:
+            with pytest.raises(ValueError, match="valid checkpoint"):
+                trainer._load_from_checkpoint(checkpoint)
+        else:
+            trainer._load_from_checkpoint(checkpoint)
+
+        if own_attribute:
+            assert vars(model)["load_adapter"] == own
+        else:  # no wrapper is left behind on the instance
+            assert "load_adapter" not in vars(model)
+
     def test_a_trainers_load_that_fails_is_not_followed_by_a_reload(self, tmp_path):
         checkpoint = _checkpoint(tmp_path, _ROOT, _REF)
         model = _PeftLike()
@@ -416,16 +503,62 @@ class TestOnARealPeftModel:
         trainer._load_from_checkpoint(str(checkpoint))
         return fresh, load_file(checkpoint / "adapter_model.safetensors")
 
-    def test_the_trainer_alone_leaves_the_trained_adapter_new(self, tmp_path):
-        """The premise. When this fails, transformers reads the root itself and
-        ``reload_root_adapter_on_resume`` can go."""
+    def test_the_trainer_alone_leaves_the_trained_adapter_new(self, tmp_path, tmp_path_factory):
+        """The premise, up to transformers 5.22: the Trainer leaves the root adapter
+        new, so the helper is needed. From 5.23.0 it reads the root itself and the
+        next two tests take over."""
+        if _trainer_reads_the_root_itself(tmp_path_factory):
+            pytest.skip("this transformers reads the root adapter itself (5.23.0 on)")
         model, saved = self._resume(tmp_path, with_the_helper=False)
 
         assert _largest_b(saved) == 0.25
-        assert _largest_b(_adapter(model, "default")) == 0.0, (
-            "Trainer._load_from_checkpoint now reads the root adapter beside a "
-            "subfolder one, so reload_root_adapter_on_resume (#1768) reads it a "
-            "second time: remove the helper and its calls in dpo.py, ipo.py and grpo.py."
+        assert _largest_b(_adapter(model, "default")) == 0.0
+
+    def test_a_trainer_that_reads_the_root_itself_is_not_read_twice(
+        self, tmp_path, tmp_path_factory
+    ):
+        """With transformers 5.23.0 on, the Trainer loads the root before the subfolder
+        adapters; the helper on top of it must add no read of the root."""
+        if not _trainer_reads_the_root_itself(tmp_path_factory):
+            pytest.skip("this transformers leaves the root adapter to the helper")
+        reads = []
+        fresh = self._model()
+        load_adapter = fresh.load_adapter
+
+        def spy(model_id, adapter_name, *args, **kwargs):
+            reads.append((Path(model_id).name, adapter_name))
+            return load_adapter(model_id, adapter_name, *args, **kwargs)
+
+        fresh.load_adapter = spy
+        checkpoint = tmp_path / "checkpoint-2"
+        self._model(fill=0.25).save_pretrained(checkpoint)
+        from transformers import Trainer, TrainingArguments
+
+        trainer = Trainer(
+            model=fresh,
+            args=TrainingArguments(output_dir=str(tmp_path / "out"), report_to=[], use_cpu=True),
+        )
+        reload_root_adapter_on_resume(trainer)
+        trainer._load_from_checkpoint(str(checkpoint))
+
+        assert reads == [("checkpoint-2", "default"), ("ref", "ref")]
+        assert _largest_b(_adapter(fresh, "default")) == 0.25
+        assert "load_adapter" in vars(fresh) and fresh.load_adapter is spy
+
+    def test_the_floor_still_needs_the_helper(self):
+        """The helper can go only when the lowest transformers the project supports
+        reads the root itself: it does from 5.23.0. The floor is still below it."""
+        import re
+
+        from packaging.version import Version
+
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        floors = re.findall(r'"transformers>=([0-9][0-9.]*)', pyproject.read_text("utf-8"))
+        assert floors, "no transformers floor found in pyproject.toml"
+        assert all(Version(floor) < Version("5.23.0") for floor in floors), (
+            "the transformers floor reads the root adapter itself, so "
+            "reload_root_adapter_on_resume (#1768) is dead weight: remove the helper and "
+            "its calls in dpo.py, ipo.py and grpo.py."
         )
 
     def test_with_the_helper_it_is_the_checkpoints(self, tmp_path):

@@ -19,9 +19,11 @@ The second half is the hang cap. In the nightly run of 2026-10-20 ``test (window
 3.10)`` stayed in one test until the job's 90-minute limit, and a macOS cell of a pull request
 held its runner for 46 minutes on 2026-10-13. The test steps now carry ``--timeout=600
 --timeout-method=thread --max-worker-restart=2`` (pytest-timeout, in the dev extra) and
-``timeout-minutes: 45``. The caps sit far above a healthy run: the slowest single test of
-four recent full cells took under 51 s and the longest test step of the last 7 days 27.7
-minutes. Under ``--dist loadfile`` xdist hands a crashed test to the replacement worker again
+``timeout-minutes: 90`` (45 until 2026-11-07, 60 until 2026-11-13). The caps sit far above a
+healthy run: the slowest single test of four recent full cells took under 51 s, and the
+longest test step that finished in 2026-11-09..12 took 56.5 minutes (a macOS runner with three
+xdist workers; four steps were cut off at the old 60-minute limit, each at 99% of the run).
+Under ``--dist loadfile`` xdist hands a crashed test to the replacement worker again
 (measured with xdist 3.8.0), which is why the restarts are limited.
 
 Nothing here talks to GitHub: the workflow is read as YAML, the ``docs`` step's own shell runs
@@ -59,6 +61,7 @@ from tests.test_ci_full_matrix_on_approval import (
     _triggers,
     _truthy,
 )
+from tests.test_ci_macos_test_step_limit import minutes_in
 
 SMOKE_JOBS = ("mlx-smoke", "pytorch-smoke", "transformers-floor")
 #: The jobs that read `docs_only`, and no other job may.
@@ -74,14 +77,23 @@ JQ_FILTER = ".[] | [.filename, .previous_filename] | @tsv"
 RUN_STEPS = ("Run unit tests with coverage", "Run unit tests without coverage")
 PYPROJECT = ROOT / "pyproject.toml"
 
-#: Measured 2026-10-20 (see the module docstring); the caps must not be able to fire on them.
+#: Measured (see the module docstring); the caps must not be able to fire on them.
 SLOWEST_TEST_SECONDS = 51
-LONGEST_TEST_STEP_MINUTES = 27.7
-SLOWEST_TEST_JOB_MINUTES = 37.5
+#: 2026-11-09..12: four steps were stopped by the 60-minute limit at 99% of the run (three on
+#: macOS, one on Windows), so 60 is a floor for the longest step, not a completed measurement.
+#: The longest step that did finish took 56.5 minutes.
+LONGEST_TEST_STEP_MINUTES = 60
+#: The macOS job of one of those four: 62.6 minutes from start to end.
+SLOWEST_TEST_JOB_MINUTES = 62.6
 
 
 def _steps(job: str) -> list[dict[str, Any]]:
     return list(_jobs()[job]["steps"])
+
+
+def _test_cells() -> list[dict[str, str]]:
+    """Every cell of every matrix `plan` can hand the `test` job."""
+    return [cell for name in ALL_MATRICES for cell in _cell_dicts(_matrix(name))]
 
 
 def _label(step: dict[str, Any]) -> str:
@@ -560,8 +572,14 @@ class TestTheSmokeJobsSkipOnlyInADocsOnlyRun:
 class TestAHungTestIsCapped:
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_the_test_step_has_a_time_limit_of_its_own(self, step_name: str) -> None:
+        """90 minutes, and a longer one on the macOS cells (120 since 2026-11-18, pinned in
+        tests/test_ci_macos_test_step_limit.py)."""
         step = next(step for step in _steps("test") if step.get("name") == step_name)
-        assert step["timeout-minutes"] == 45
+        for cell in _test_cells():
+            if cell["os"] == "macos-latest":
+                assert minutes_in(step["timeout-minutes"], cell) > 90, cell
+            else:
+                assert minutes_in(step["timeout-minutes"], cell) == 90, cell
 
     @pytest.mark.parametrize("step_name", RUN_STEPS)
     def test_each_test_gets_a_per_test_cap_that_works_on_windows_and_in_a_worker(
@@ -598,20 +616,27 @@ class TestAHungTestIsCapped:
         for step in _steps("test"):
             if step.get("name") in RUN_STEPS:
                 assert _per_test_cap(step) >= 10 * SLOWEST_TEST_SECONDS
-                assert step["timeout-minutes"] >= 1.5 * LONGEST_TEST_STEP_MINUTES
-                assert step["timeout-minutes"] < _jobs()["test"]["timeout-minutes"]
+                for cell in _test_cells():
+                    limit = minutes_in(step["timeout-minutes"], cell)
+                    assert limit >= 1.5 * LONGEST_TEST_STEP_MINUTES, cell
+                    assert limit < minutes_in(_jobs()["test"]["timeout-minutes"], cell), cell
 
     def test_the_job_limit_is_above_every_job_measured_and_above_the_step_limit(self) -> None:
-        """60 minutes: 1.6 times the slowest successful `test` job of 2026-10-12..19 (37.5
-        minutes, 1145 jobs), with room above the 45-minute step for checkout, install and the
-        cache warm-up. It was 90."""
-        limit = _jobs()["test"]["timeout-minutes"]
-        assert limit == 60
-        assert limit >= 1.5 * SLOWEST_TEST_JOB_MINUTES
-        step_limits = [
-            step["timeout-minutes"] for step in _steps("test") if "timeout-minutes" in step
-        ]
-        assert step_limits and limit >= max(step_limits) + 10
+        """105 minutes (135 on the macOS cells since 2026-11-18): 1.7 times the slowest `test`
+        job of 2026-11-09..12 (62.6 minutes, a macOS cell whose step the old 60-minute limit
+        cut off), with 15 minutes above the 90-minute step for checkout, install and the cache
+        warm-up. It was 90, then 60 (with a 45-minute step) until 2026-11-07, then 75 (with a
+        60-minute step)."""
+        for cell in _test_cells():
+            limit = minutes_in(_jobs()["test"]["timeout-minutes"], cell)
+            assert limit == (135 if cell["os"] == "macos-latest" else 105), cell
+            assert limit >= 1.5 * SLOWEST_TEST_JOB_MINUTES, cell
+            step_limits = [
+                minutes_in(step["timeout-minutes"], cell)
+                for step in _steps("test")
+                if "timeout-minutes" in step
+            ]
+            assert step_limits and limit >= max(step_limits) + 10, cell
 
     def test_no_other_job_passes_the_flag_to_a_pytest_that_may_not_have_the_plugin(self) -> None:
         """mlx-smoke and core-floor install `pytest` alone: `--timeout` there is an error."""
@@ -665,4 +690,4 @@ def test_contributing_says_what_caps_a_slow_test() -> None:
     assert "`@pytest.mark.timeout(" in text
     assert "`--timeout=600 --timeout-method=thread --max-worker-restart=2`" in text
     assert "`-o faulthandler_timeout=300`" in text
-    assert "a 60-minute job limit" in text
+    assert "a 90-minute step limit and a 105-minute job limit" in text

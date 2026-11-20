@@ -1,7 +1,6 @@
 """soup deploy ollama prints model names, paths and prompts as typed, not as Rich markup."""
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -25,7 +25,7 @@ _OLLAMA = "soup_cli.utils.ollama"
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
     "m:warning:",
-    marks=pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name"),
+    marks=skip_colon_on_windows,
 )
 
 

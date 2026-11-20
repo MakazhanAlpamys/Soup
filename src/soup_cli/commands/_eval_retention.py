@@ -215,7 +215,8 @@ def _resolve_numerics(device: Optional[str], quantization: Optional[str], templa
     from soup_cli.utils import retention_ledger as rl
 
     # One helper decides the precision for ship's console line, its verdict and this stamp:
-    # "4bit" / "8bit" when quantized, else bf16 on CUDA (including cuda:0) and fp32 elsewhere.
+    # "4bit" / "8bit" when quantized; otherwise native bf16 on capable CUDA cards,
+    # fp16 on older CUDA cards, and fp32 elsewhere.
     precision = ship._live_eval_numerics(quantization, device)
     family = live_eval.resolve_device(device).split(":")[0].strip().lower()
     return rl.make_numerics(

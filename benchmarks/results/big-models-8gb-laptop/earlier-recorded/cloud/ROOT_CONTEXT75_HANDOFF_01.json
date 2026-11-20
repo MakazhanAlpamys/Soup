@@ -1,0 +1,101 @@
+{
+  "schema": "root-context75-handoff-v1",
+  "status": "passed",
+  "recorded_at": "2026-11-06T14:09:47.984764+05:00",
+  "parent": {
+    "path": "ROOT_CONTEXT74_HANDOFF_01.json",
+    "sha256": "ce265198b055e843ee56bd87880ded0e306686bb09f87032d723ba622377f233"
+  },
+  "launch": {
+    "path": "ROOT_CONTEXT75_LAUNCH_01.json",
+    "sha256": "adfb0ab04071dcb6ce69f71d7516fca4acea08b34753dbcd7568d28e4f327a87"
+  },
+  "verification": {
+    "path": "results/modal-l40s-strict-full88-step2-parity-01/verification.json",
+    "sha256": "812df1ec076a36f51a4d4aac75a27f229bfadc71bdfe164de35a6e602ce3ab7e"
+  },
+  "sources": [
+    {
+      "path": "decoder_resume75.py",
+      "sha256": "61b50bce43af8e7c3cf81e559f286b9c3bcc53e45df1093755e81844e7be5964"
+    },
+    {
+      "path": "modal_decoder75.py",
+      "sha256": "8bf19a20d204450529116d5af911f9a88aa99bc8511f617fabaaa8e2b209665c"
+    },
+    {
+      "path": "verify_context75.py",
+      "sha256": "15722152a33ae991fc14c83c823587e3811d8b9df02edaf1a8b763d7eafa3b8d"
+    }
+  ],
+  "result": {
+    "schema": "root-context75-independent-verification-v1",
+    "status": "passed",
+    "verified_at": "2026-11-06T14:09:24.631027+05:00",
+    "run_id": "l40s-strict-full88-step2-parity-20261106-01",
+    "app": {
+      "app_id": "ap-<redacted>",
+      "description": "soup-stage75-full88-second-step-parity",
+      "state": "stopped",
+      "tasks": "0",
+      "created_at": "2026-11-06 12:14:26+05:00",
+      "stopped_at": "2026-11-06 14:06:13+05:00"
+    },
+    "pids": {
+      "control": 575,
+      "fresh_resume": 617
+    },
+    "sequence": 8192,
+    "supervised_tokens": 124,
+    "forward_layers_per_step": 88,
+    "reverse_layers_per_step": 88,
+    "step1_exact_to_stage74": true,
+    "step2_loss": 0.6499557495117188,
+    "step2_gradient_hashes_exact": 352,
+    "step2_checkpoint": {
+      "adapters_exact": 352,
+      "moments_exact": 704,
+      "step_counters_exact": 352,
+      "completed_steps": 2,
+      "rng_exact": {
+        "cpu": true,
+        "cuda": true
+      },
+      "control_state_sha256": "7959c32d235dfb5459ff319d15f1ff82ae480f8b9c373d6fea816099dc26e220",
+      "resume_state_sha256": "7959c32d235dfb5459ff319d15f1ff82ae480f8b9c373d6fea816099dc26e220",
+      "payload_sha256_equal": true
+    },
+    "allocator": {
+      "cap_bytes": 6710886400,
+      "control": {
+        "peak_allocated": 3809829888,
+        "peak_reserved": 4223664128
+      },
+      "fresh_resume": {
+        "peak_allocated": 3809829888,
+        "peak_reserved": 4223664128
+      }
+    },
+    "sha256": {
+      "summary.json": "047f32e2aa50c5a4a62046650f5c67544bdc28631ea1f18a593e88859f5061f3",
+      "source.log": "d248ceab45c8435cd126a0b39b2a778987a9fa3ce58b304d9032fdfbc9d151e7",
+      "control/step-001/result.json": "3bf241bbacb900abf1f3ebc5b6b66ed5bc6f979bd584c7bebd05eafd81fcae51",
+      "control/step-001/checkpoint-001/manifest.json": "595b327d529b725ad9e45d404f0e568a403a7a0466a2dc676c4eac235b2eefd0",
+      "control/step-001/checkpoint-001/state.pt": "c54e6408892f6b2f3067f86a36260e531c36f9f8893e69dfe1687916c4600512",
+      "control/worker.log": "c720ab49b61668a264f90b5681ba14c36331b37151e2d9de7b5419a4a8ea8d8d",
+      "control/progress.jsonl": "c815530cdbf92ba7e5214212a491704a12417a83229f1c9d2f2bed452bce7e0c",
+      "control/result.json": "5feacf1a331ba85ec5bd17219298c45411e687cedd894c08fb898d61c4e4bffb",
+      "control/step-002/result.json": "fff5b444d1578d63014eee00bd8d7238c0622265185d65d6ec7d3d0949826e5e",
+      "control/step-002/checkpoint-002/manifest.json": "7cd09eb2b5f6fe0df8d1fb3c737fffc247518e71b353ab5a4ca04ac1e03df899",
+      "control/step-002/checkpoint-002/state.pt": "7959c32d235dfb5459ff319d15f1ff82ae480f8b9c373d6fea816099dc26e220",
+      "fresh/worker.log": "eca82fe87af06b1b48090ab9ff26ed1f4fbc269facafe53c470614b1730b366b",
+      "fresh/progress.jsonl": "403ace6f902b73897eed31803cfeee80bdb4169eb624e28db975c92f17575d05",
+      "fresh/result.json": "3cb90f45384da8b8a04db88903ad5aa9bf8efe8586a1a5032848d76a137cef2f",
+      "fresh/step-002/result.json": "1b58e6439d2d29ddb16c33c52a6301d370b49f065e1411ea6238c84497bd8092",
+      "fresh/step-002/checkpoint-002/manifest.json": "0ae8a31e829d229c8faadce79cb3fd1d0c43a91cb7ffd8a9cdc360b17a4f7bb6",
+      "fresh/step-002/checkpoint-002/state.pt": "7959c32d235dfb5459ff319d15f1ff82ae480f8b9c373d6fea816099dc26e220",
+      "parity.json": "fe88c3574ed2889cb5e3e68441ecd7b8427d5786e7deb1d96895f7a306c30fda"
+    }
+  },
+  "follow_up": "Stage76 frozen synthetic heldout quality pilot on four distinct full-depth updates."
+}

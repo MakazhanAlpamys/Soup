@@ -1,0 +1,73 @@
+from pathlib import Path
+import hashlib
+import itertools
+import json
+import os
+import subprocess
+import sys
+
+COMMIT = '2c57034a35cdd6af43673b7e5f6480bb10ea8655'
+checkout = Path('/tmp/soup-2766-bco')
+evidence = Path('/kaggle/working/evidence')
+evidence.mkdir(exist_ok=True)
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+def run(command, *, workdir=None, output=None, env=None):
+    if output is None:
+        subprocess.run(command, cwd=workdir, env=env, timeout=600, check=True)
+    else:
+        with output.open('w') as log:
+            subprocess.run(command, cwd=workdir, env=env, timeout=600, check=True,
+                           stdout=log, stderr=subprocess.STDOUT)
+
+info = subprocess.check_output(['nvidia-smi', '--query-gpu=name,driver_version,compute_cap',
+                                '--format=csv,noheader'], text=True).splitlines()
+print(info, flush=True)
+assert info and 'Tesla T4' in info[0] and info[0].strip().endswith('7.5'), info
+stack = {'devices': info, 'visible_devices': '0', 'python': sys.version,
+         'commit': COMMIT, 'source': 'https://github.com/here-2007/Soup.git'}
+(evidence / 'environment.json').write_text(json.dumps(stack, indent=2))
+run(['git', 'clone', '--quiet', stack['source'], str(checkout)])
+run(['git', 'checkout', '--quiet', COMMIT], workdir=checkout)
+assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip() == COMMIT
+assert not subprocess.check_output(['git', 'status', '--porcelain'], cwd=checkout, text=True)
+stack['source_file_hashes'] = {
+    name: hashlib.sha256((checkout / name).read_bytes()).hexdigest()
+    for name in ('src/soup_cli/trainer/bco.py', 'src/soup_cli/config/schema.py',
+                 'src/soup_cli/utils/config_bounds.py', 'tests/test_bco_streaming.py',
+                 'tests/test_v07204.py')
+}
+python = [sys.executable, '-m']
+run(python + ['pip', 'install', '--disable-pip-version-check', '--index-url',
+              'https://download.pytorch.org/whl/cu130', 'torch==2.11.0+cu130'],
+    output=evidence / 'install-torch.log')
+run(python + ['pip', 'uninstall', '-y', 'torchao', 'torchvision', 'torchaudio'])
+run(python + ['pip', 'install', '--disable-pip-version-check', '-e', str(checkout) + '[train]',
+              'transformers==5.20.2', 'trl==0.29.1', 'peft==0.21.2',
+              'bitsandbytes==0.50.2', 'accelerate==1.15.0', 'datasets==4.8.5',
+              'pytest', 'pytest-cov'], output=evidence / 'install.log')
+run(python + ['pip', 'freeze'], output=evidence / 'pip-freeze.txt')
+stack['torch_cuda'] = subprocess.check_output([sys.executable, '-c',
+    'import torch; assert torch.cuda.device_count() == 1; print(torch.__version__, torch.version.cuda)'],
+    text=True).strip()
+(evidence / 'environment.json').write_text(json.dumps(stack, indent=2))
+env = {**os.environ, 'PYTHONPATH': 'src', 'HF_HUB_OFFLINE': '1', 'HF_DATASETS_OFFLINE': '1',
+       'TOKENIZERS_PARALLELISM': 'false', 'SOUP_TEST_2766_EVIDENCE_DIR': str(evidence)}
+results = []
+for task, quant in itertools.product(('legacy', 'preference'), ('none', '4bit')):
+    node = f'test_one_cuda_update_and_adapter_round_trip[{quant}-{task}]'
+    print(f'Starting {node}', flush=True)
+    label = f'bco-{task}-{quant}'
+    try:
+        run(python + ['pytest', f'tests/test_bco_streaming.py::{node}', '-m', 'gpu',
+                      '--no-cov', '-q', '-s'], workdir=checkout,
+            env=env, output=evidence / f'{label}.log')
+        row = evidence / f'bco-{"bco" if task == "legacy" else task}-{quant}.json'
+        assert row.is_file(), 'CUDA test did not produce an evidence row'
+        results.append({'cell': label, 'status': 'pass'})
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, AssertionError) as exc:
+        results.append({'cell': label, 'status': 'fail', 'reason': str(exc)})
+    (evidence / 'status.json').write_text(json.dumps(results, indent=2))
+    print(results[-1], flush=True)
+assert all(row['status'] == 'pass' for row in results), results

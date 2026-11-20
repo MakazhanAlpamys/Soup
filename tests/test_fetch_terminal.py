@@ -2,14 +2,15 @@
 
 import os
 import re
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -17,15 +18,11 @@ runner = CliRunner()
 _ENTRY = "llama-3.1-8b-lora"
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 _FILE_NAMES = [
     "x[red]o.yaml",
     "x[bold]o.yaml",
-    pytest.param("o:warning:.yaml", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("o:warning:.yaml", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 
@@ -128,6 +125,38 @@ def test_existing_output_strips_controls_from_the_display():
     text = _plain(result)
     assert "x[bold]o.yaml already exists. Use --force to overwrite." in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize("flags", [[], ["--force"]], ids=["default", "force"])
+def test_output_directory_is_refused_with_a_diagnostic(flags):
+    directory = Path("output[draft]")
+    directory.mkdir()
+    child = directory / "keep.yaml"
+    child.write_text("keep", encoding="utf-8")
+
+    result = _fetch("examples", _ENTRY, "--output", str(directory), *flags)
+
+    assert result.exit_code == 1
+    assert "Cannot write --output output[draft]: destination is a directory." in _plain(result)
+    assert "--force to overwrite" not in _plain(result)
+    assert list(directory.iterdir()) == [child]
+    assert child.read_text(encoding="utf-8") == "keep"
+
+
+def test_copy_failure_names_the_destination(monkeypatch):
+    def fail(source, destination):
+        assert Path(destination).name == "new[draft].yaml"
+        raise PermissionError(r"write refused:warning:\[draft" + _CONTROLS)
+
+    monkeypatch.setattr("soup_cli.commands.fetch.shutil", SimpleNamespace(copyfile=fail))
+
+    result = _fetch("examples", _ENTRY, "--output", "new[draft].yaml")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert r"Cannot write --output new[draft].yaml: write refused:warning:\[draft" in text
+    assert _not_shown(text)
+    assert "Wrote" not in text
 
 
 @pytest.mark.requires_symlink

@@ -186,7 +186,7 @@ class TestBuildPreferenceExample:
     def test_prompt_capped_keep_start(self):
         ex = self._build(
             {"prompt": "abcdefgh", "chosen": "x", "rejected": "y"},
-            max_length=100,
+            max_length=10,
             max_prompt_length=4,
         )
         assert ex.prompt_ids == [BOS, ord("a"), ord("b"), ord("c")]
@@ -194,7 +194,7 @@ class TestBuildPreferenceExample:
     def test_prompt_capped_keep_end(self):
         ex = self._build(
             {"prompt": "abcdefgh", "chosen": "x", "rejected": "y"},
-            max_length=100,
+            max_length=10,
             max_prompt_length=3,
             mode="keep_end",
         )

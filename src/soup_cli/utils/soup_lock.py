@@ -174,6 +174,8 @@ def read_lock(path: str) -> SoupLock:
     st = os.lstat(real)
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("lock path must not be a symlink (TOCTOU defence)")
+    if stat.S_ISDIR(st.st_mode):
+        raise ValueError(f"lock path is a directory: {path!r}")
     if st.st_size > _MAX_FILE_BYTES:
         raise ValueError(
             f"lock file size {st.st_size} > {_MAX_FILE_BYTES}"

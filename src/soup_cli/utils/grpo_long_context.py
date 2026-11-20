@@ -4,9 +4,11 @@ Schema helpers for two unsloth/axolotl features:
 
 1. ``long_context_grpo`` — compatibility gate for long-context GRPO rollouts.
    Accepted by the schema but not consumed by any trainer in this build (#808).
-2. ``vllm_sleep_mode`` — between-rollouts vLLM standby (memory savings during
-   the optimisation step). Requires vLLM ≥ 0.7 and is delegated to the vLLM
-   AsyncEngineArgs ``enable_sleep_mode`` flag.
+2. ``vllm_sleep_mode`` — between-rollouts vLLM standby. Refused at load on
+   ``task: grpo`` as of v0.78.0: GRPO never starts a vLLM server (``use_vllm``
+   is not set), so there is no engine to put to sleep (#2765). The engine
+   helpers below (``apply_vllm_sleep_mode``, ``vllm_sleep_cycle``) serve
+   ``create_vllm_engine`` only.
 
 Security:
 - Both flags are strict bools (project bool-as-int policy enforced at the
@@ -20,8 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Collection, Iterator
-from typing import Any
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -194,37 +195,3 @@ def vllm_sleep_cycle(engine: object, *, level: int = 1) -> Iterator[object]:
         yield engine
     finally:
         wake_fn()
-
-
-def maybe_enable_trl_sleep_mode(
-    grpo_kwargs: "dict[str, Any]",
-    grpo_param_names: "Collection[str]",
-    console: object = None,
-) -> bool:
-    """Thread ``vllm_sleep_mode`` into TRL's GRPOConfig when it has the hook.
-
-    Live since v0.71.21 (#124). TRL manages its own vLLM engine inside
-    ``GRPOTrainer`` (server / colocate modes), so Soup cannot reach the
-    engine to call ``sleep()``/``wake_up()`` directly. When the installed
-    TRL exposes a ``vllm_enable_sleep_mode`` GRPOConfig parameter it is
-    set here; otherwise a yellow advisory explains that Soup's own vLLM
-    engine factory (``create_vllm_engine(sleep_mode=True)``) honors the
-    flag for serve / custom rollout loops.
-
-    Returns True when the TRL kwarg was set.
-    """
-    if "vllm_enable_sleep_mode" in grpo_param_names:
-        grpo_kwargs["vllm_enable_sleep_mode"] = True
-        if console is not None:
-            console.print(
-                "[green]vLLM sleep mode enabled via TRL GRPOConfig[/]"
-            )
-        return True
-    if console is not None:
-        console.print(
-            "[yellow]vllm_sleep_mode: the installed TRL GRPOConfig does not "
-            "expose a sleep-mode option; Soup's vLLM engine factory honors "
-            "sleep_mode=True for serve / custom rollout loops. Upgrade trl "
-            "when it ships the hook.[/]"
-        )
-    return False
