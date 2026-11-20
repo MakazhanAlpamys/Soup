@@ -11,11 +11,15 @@ from tests.conftest import strip_ansi
 
 
 def _fake_factories(monkeypatch, *, after_wrong=0, variable=False, fail=False):
+    import types
+
     from soup_cli.eval import quant_performance
 
     clock = [0.0]
     events = []
-    monkeypatch.setattr(quant_performance.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(
+        quant_performance, "time", types.SimpleNamespace(perf_counter=lambda: clock[0])
+    )
 
     class Generator:
         device = "cpu"
