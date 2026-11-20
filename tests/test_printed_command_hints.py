@@ -13,8 +13,11 @@ quoting rule itself in ``test_paste_arg.py``.
 
 from __future__ import annotations
 
+import ast
+import os
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -260,3 +263,128 @@ class TestCloudPlanPanel:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "\x1b[2J" not in result.output
         assert "out" in result.output
+
+
+_BASE_PLACEHOLDER = "<base model>"
+
+
+def _stream_preflight_text(monkeypatch, tmp_path, base: str) -> str:
+    """The layer-streaming disk pre-flight panel for a base with one stale cache slot."""
+    from soup_cli.trainer import stream_setup
+
+    buffer = StringIO()
+    monkeypatch.setattr(
+        stream_setup, "console", Console(file=buffer, width=300, color_system=None)
+    )
+    monkeypatch.setattr(stream_setup, "_disk_volume", lambda path: (1, 10**15))
+    slot = SimpleNamespace(
+        name="old-slot", path=str(tmp_path / "old"), bytes=10, referenced=False,
+        reason="", stripes=(),
+    )
+    stream_setup._render_stream_disk_preflight(
+        source_bytes=0, materialized_copy_bytes=0, materialize_bytes=0,
+        materialized_path=str(tmp_path), shard_bytes=1000, shard_write_bytes=0,
+        shard_path=str(tmp_path / "cache"), other_slots=[slot], base=base,
+    )
+    return buffer.getvalue()
+
+
+def _prune_command_line(text: str) -> str:
+    (line,) = [
+        line for line in text.splitlines()
+        if "Remove unreferenced slots (opt-in): " in line
+    ]
+    return line.strip(" |\u2502").split("(opt-in): ", 1)[1]
+
+
+class TestPruneCommandInTheStreamingPreflight:
+    """The pre-flight lists stale cache slots and prints ``soup prune-layer-cache --model
+    <base>`` with the configured base model: the base is spelled for every shell, or left
+    out with a note."""
+
+    @pytest.mark.parametrize(
+        ("base", "spelled"),
+        [
+            ("org/model-1.5", "org/model-1.5"),
+            ("my models/base", '"my models/base"'),
+            ("org/a;b", '"org/a;b"'),
+            ("org/a&b", '"org/a&b"'),
+            ("-base", "./-base"),
+            ("org/a$(x)", _BASE_PLACEHOLDER),
+            ("org/a`x`", _BASE_PLACEHOLDER),
+            ('org/a"b', _BASE_PLACEHOLDER),
+            ("org/a%x%", _BASE_PLACEHOLDER),
+            ("org/a!b", _BASE_PLACEHOLDER),
+            ("org/a\x1b[2Jb", _BASE_PLACEHOLDER),
+            ("", _BASE_PLACEHOLDER),
+        ],
+    )
+    def test_the_base_is_one_argument_or_left_out(self, monkeypatch, tmp_path, base, spelled):
+        text = _stream_preflight_text(monkeypatch, tmp_path, base)
+
+        assert _prune_command_line(text) == f"soup prune-layer-cache --model {spelled} --yes"
+        assert "\x1b" not in text
+
+    def test_a_left_out_base_is_explained(self, monkeypatch, tmp_path):
+        text = " ".join(_stream_preflight_text(monkeypatch, tmp_path, "org/a$(x)").split())
+
+        assert f"Replace {_BASE_PLACEHOLDER} with the base model name" in text
+        assert "is not repeated in the command" in text
+
+    def test_a_plain_base_has_no_note(self, monkeypatch, tmp_path):
+        text = _stream_preflight_text(monkeypatch, tmp_path, "org/model")
+
+        assert "is not repeated in the command" not in text
+        assert _BASE_PLACEHOLDER not in text
+
+    def test_rich_markup_in_the_base_is_shown_literally(self, monkeypatch, tmp_path):
+        text = _stream_preflight_text(monkeypatch, tmp_path, "org/[bold]model")
+
+        assert _prune_command_line(text) == 'soup prune-layer-cache --model "org/[bold]model" --yes'
+
+    def test_a_windows_style_path_follows_the_host_separator(self, monkeypatch, tmp_path):
+        text = _stream_preflight_text(monkeypatch, tmp_path, "C:\\models\\base")
+
+        expected = "C:/models/base" if os.sep == "\\" else _BASE_PLACEHOLDER
+        assert _prune_command_line(text) == f"soup prune-layer-cache --model {expected} --yes"
+
+
+def _stub_string(stub: str, name: str) -> str:
+    """The string literal a rendered Modal stub assigns to ``name``."""
+    for node in ast.parse(stub).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"the stub assigns no {name}")
+
+
+class TestTheHostSeparatorDefault:
+    """No test above passes ``windows_separators``; these call without it, as production
+    does: a nested path written with backslashes is repeated with forward slashes on a
+    Windows host and is a reason for the placeholder elsewhere."""
+
+    def test_the_training_report_resolves_it_from_the_host(self):
+        from soup_cli.commands.train import _completion_commands
+
+        shown = _completion_commands("out\\dir")
+
+        if os.sep == "\\":
+            assert "soup chat --model out/dir[/]" in shown
+            assert "<output directory>" not in shown
+        else:
+            assert "soup chat --model <output directory>[/]" in shown
+            assert "out\\dir" not in shown
+
+    def test_the_modal_retry_command_resolves_it_from_the_host(self):
+        from soup_cli.cloud.modal import render_modal_stub
+
+        stub = render_modal_stub(
+            _SOUP_YAML, gpu="a100", output_dir="out\\dir", soup_version="0.75.0",
+            run_name="run-abc",
+        )
+
+        destination = "out/dir" if os.sep == "\\" else "<local output directory>"
+        assert _stub_string(stub, "_RETRY_COMMAND") == (
+            f"modal volume get soup-outputs /run-abc {destination} --force"
+        )

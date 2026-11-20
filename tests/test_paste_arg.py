@@ -149,10 +149,10 @@ class TestShellSyntaxIsNeverRepeatedAsSyntax:
     def test_every_single_character_value(self, windows_separators):
         # Every code point of ASCII, Latin-1 and the typographic/format blocks, alone and
         # embedded between plain text.
-        points = [*range(0x00, 0x180), *range(0x2000, 0x2070), 0xFEFF, 0x3000]
+        code_points = [*range(0x00, 0x180), *range(0x2000, 0x2070), 0xFEFF, 0x3000]
         exposed = []
-        for point in points:
-            char = chr(point)
+        for code_point in code_points:
+            char = chr(code_point)
             for value in (char, f"out{char}x", f"{char}out"):
                 result = paste_arg(value, windows_separators=windows_separators)
                 if result is not None and _exposes_a_shell_character(result):
