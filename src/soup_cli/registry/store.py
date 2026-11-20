@@ -824,9 +824,13 @@ class RegistryStore:
             raise ValueError(f"run not found: {run_id}")
         status = run.get("status")
         if status != "completed":
-            raise ValueError(
-                f"run {run_id} has status {status!r}; only a completed run can be registered"
-            )
+            message = f"run {run_id} has status {status!r}; only a completed run can be registered"
+            if status == "stopped":
+                message += (
+                    ". Resume with soup train --resume <checkpoint> where supported "
+                    "(otherwise start a new run), then push the completed run ID."
+                )
+            raise ValueError(message)
 
         import json as _json
 
