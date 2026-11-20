@@ -56,6 +56,61 @@ console = Console()
 # tables live with the shared estimate in utils/hardware_fit.py (#2049).
 _HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
 
+# #1884: the signature test requires an explicit decision for every option.
+REFUSED_CLOUD_FLAGS = frozenset({
+    "dry_run",
+    "resume",
+    "wandb",
+    "tensorboard",
+    "tracker",
+    "deepspeed",
+    "fsdp",
+    "gpus",
+    "no_reexec",  # Refused with its owning --gpus option.
+    "gate",
+    "push_as",
+    "hf_resume",
+    "find_lr",
+    "trust_remote_code",
+    "profile_run",
+    "allow_oom_attempt",
+    "diagnose_gate",
+    "diagnose_gate_require_all_modes",
+    "annex_xi",
+    "repro_receipt",
+    "capture_activations",
+    "capture_prompts",  # Refused with its owning --capture-activations option.
+    "track_energy",
+    "energy_country",  # Refused with its owning --track-energy option.
+    "energy_out",
+})
+
+FORWARDED_OR_EARLIER_CLOUD_FLAGS = frozenset({
+    "config",
+    "name",
+    "cloud",
+    "gpu",
+    "cloud_submit",
+    "yes",
+    "nodes",
+    "node_rank",
+    "master_addr",
+    "master_port",
+    "push_public",  # Requires --push-as, which the cloud branch refuses.
+    "find_lr_start",
+    "find_lr_end",
+    "find_lr_steps",
+    "find_lr_output",
+    "echo_trap_tokenizer_aware",
+    "reward_hack_detector",
+    "reward_hack_halt",
+    "reward_hack_mitigation",
+    "minillm_on_policy",
+    "replay",
+    "replay_ratio",
+    "replay_seed",
+})
+
 _UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
@@ -71,6 +126,26 @@ _UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
 def _stdin_isatty() -> bool:
     """True when standard input is an interactive terminal."""
     return sys.stdin.isatty()
+
+
+def _refuse_cloud_flags(flags: list[str]) -> None:
+    one = len(flags) == 1
+    if set(flags) <= {"--push-as", "--gate"}:
+        detail = (
+            f"{'it runs' if one else 'they run'} locally, against local files and a local HF repo, "
+            f"and a cloud run would silently ignore {'it' if one else 'them'}."
+        )
+    else:
+        detail = (
+            "--cloud runs 'soup train --config <yaml> --yes' remotely "
+            "and forwards nothing else."
+        )
+    console.print(
+        f"[red]{markup_escape(', '.join(flags))} {'is' if one else 'are'} "
+        f"not supported with --cloud:[/] {detail} "
+        f"Run without --cloud, or drop {'the flag' if one else 'the flags'}."
+    )
+    raise typer.Exit(2)
 
 
 def _confirm_start_training() -> None:
@@ -555,6 +630,29 @@ class _FitDecision:
     student_required_gb: float | None = None
 
 
+def _auto_fp16_pick_keeps_fp32(cfg) -> bool:
+    """Whether this run's auto fp16 pick keeps peft's fp32 non-quantised weights.
+
+    ``trainer/sft.py``'s ``_kbit_compute_dtype`` passes ``prefer_fp16=not bf16`` to
+    ``kbit_compute_dtype``. On a bf16 card whose pick is fp16 (a quirk family such
+    as Qwen2.5) the trainer therefore loads fp32 embeddings, norms and head, so the
+    pre-flight must price them (#3044). This is called only from the train pre-flight,
+    which already knows its card; callers that know no card keep their old answer.
+    """
+    if not getattr(getattr(cfg, "training", None), "auto_mixed_precision", False):
+        return False
+    try:
+        import torch
+
+        major, minor = torch.cuda.get_device_capability()
+        cc = float(f"{major}.{minor}")
+        from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+        return pick_mixed_precision(str(getattr(cfg, "base", "") or ""), cc) != "bf16"
+    except (RuntimeError, AssertionError, OSError, TypeError, ValueError):
+        return False
+
+
 def _hardware_fit_preflight(
     cfg,
     gpu_info,
@@ -615,7 +713,10 @@ def _hardware_fit_preflight(
 
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing. A CUDA
     # card without bf16 hardware keeps peft's fp32 embeddings, norms and head (#2609).
-    kbit_fp32 = bf16_fp16_flags("cuda")[1]
+    # So does an auto_mixed_precision pick of fp16 on a bf16 card (#3044): resolve the
+    # pick here, where the card is known, rather than in the shared builder that
+    # `soup profile --config` calls without a card.
+    kbit_fp32 = bf16_fp16_flags("cuda")[1] or _auto_fp16_pick_keeps_fp32(cfg)
     inp = _hardware_fit_input_or_reason(
         cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32
     )
@@ -1452,6 +1553,9 @@ def train(
 
     # --- LR range finder fast path ---
     if find_lr:
+        if cloud:
+            _refuse_cloud_flags(["--find-lr"])
+
         from soup_cli.utils.lr_finder import (
             LrSweepUnavailableError,
             SweepTooShortError,
@@ -1636,19 +1740,42 @@ def train(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
-        # #1430: --push-as and --gate are handled after this branch, so they
-        # would be dropped with no message. Refuse rather than run without them.
-        dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
-        if dropped:
-            one = len(dropped) == 1
+        if cloud_submit and dry_run:
             console.print(
-                f"[red]{markup_escape(', '.join(dropped))} {'is' if one else 'are'} "
-                f"not supported with --cloud:[/] {'it runs' if one else 'they run'} "
-                "locally, against local files and a local HF repo, and a cloud run "
-                f"would silently ignore {'it' if one else 'them'}. Run without "
-                f"--cloud, or drop {'the flag' if one else 'the flags'}."
+                "[red]--dry-run cannot be combined with --cloud-submit:[/] "
+                "drop --cloud-submit to preview the plan."
             )
             raise typer.Exit(2)
+
+        # #1430 and #1884: these CLI options cannot act on the remote command.
+        dropped = [
+            flag
+            for flag, on in (
+                ("--push-as", push_as),
+                ("--gate", gate),
+                ("--resume", resume is not None),
+                ("--hf-resume", hf_resume),
+                ("--wandb", wandb),
+                ("--tensorboard", tensorboard),
+                ("--tracker", tracker is not None),
+                ("--deepspeed", deepspeed is not None),
+                ("--fsdp", fsdp is not None),
+                ("--gpus", gpus is not None),
+                ("--trust-remote-code", trust_remote_code),
+                ("--profile", profile_run),
+                ("--allow-oom-attempt", allow_oom_attempt),
+                ("--diagnose-gate", diagnose_gate is not None),
+                ("--diagnose-gate-require-all-modes", diagnose_gate_require_all_modes),
+                ("--annex-xi", annex_xi is not None),
+                ("--repro-receipt", repro_receipt is not None),
+                ("--capture-activations", capture_activations is not None),
+                ("--track-energy", track_energy),
+                ("--energy-out", energy_out is not None),
+            )
+            if on
+        ]
+        if dropped:
+            _refuse_cloud_flags(dropped)
         try:
             # #1430: the stub carries the *effective* config — the loaded object
             # with every override above already applied — because embedding the
@@ -1659,6 +1786,8 @@ def train(
             from soup_cli.cloud._shipped import refuse_unshipped_inputs
             from soup_cli.config.loader import load_config_from_string
 
+            if name and not cfg.experiment_name:
+                cfg.experiment_name = name
             refuse_unshipped_inputs(cfg)
             effective_yaml = yaml.safe_dump(
                 cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,

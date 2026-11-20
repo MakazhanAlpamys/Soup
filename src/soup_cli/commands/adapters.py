@@ -773,7 +773,7 @@ def arithmetic(
         read_adapter_lora_scaling,
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
-    from soup_cli.utils.adapter_merge import write_merged_adapter
+    from soup_cli.utils.adapter_merge import fold_lora_scaling, write_merged_adapter
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
@@ -954,8 +954,12 @@ def arithmetic(
             "alpha_pattern": {},
         }
     else:
+        # The output keeps the first referenced adapter's config, so each other
+        # input's lora_B is rescaled to decode at that adapter's LoRA scaling.
         try:
-            merged, skipped = merge_task_arithmetic(weights_list, coeffs)
+            merged, skipped = merge_task_arithmetic(
+                fold_lora_scaling(weights_list, ref_paths), coeffs
+            )
         except ValueError as exc:
             console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
