@@ -659,6 +659,23 @@ def test_load_recipe_missing_data_block(tmp_path, monkeypatch):
         load_mix_recipe("missing.yaml")
 
 
+def test_mix_cli_apply_yaml_syntax_error_shows_filename(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    recipe = tmp_path / "bad.yaml"
+    recipe.write_text("data: [unclosed\n")
+
+    from typer.testing import CliRunner
+    from soup_cli.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["data", "mix", "--apply", "bad.yaml"])
+
+    assert result.exit_code == 2
+    assert "bad.yaml" in result.output
+    assert "<unicode string>" not in result.output
+    assert "Loaded recipe:" not in result.output
+
+
 # ---------- CLI smoke ----------------------------------------------------
 
 
