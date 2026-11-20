@@ -225,8 +225,8 @@ class TestNothingHappensBeforeTheRefusal:
 
 
 def _extract_with_config(monkeypatch, payload):
-    """Model a ``config.yaml`` on disk that is not the member that was read: extraction
-    writes the real files, then the config file is replaced."""
+    """Make the extracted ``config.yaml`` hold ``payload``: extraction runs, then the file
+    is rewritten."""
     real_extract = can_run.extract_can
     data = payload.encode("utf-8") if isinstance(payload, str) else payload
 

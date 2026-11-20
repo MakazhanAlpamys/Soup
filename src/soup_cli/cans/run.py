@@ -408,9 +408,8 @@ def run_can(
     try:
         extract_can(str(src), str(owned_dir))
 
-        # The file ``soup train`` is about to read is the one extraction left at
-        # ``config.yaml``, not the archive member read for the checks above, so the
-        # extracted file is checked too, with the loader ``soup train`` itself uses.
+        # ``soup train`` reads the file extraction left at ``config.yaml``: check that
+        # file as well, with the loader ``soup train`` itself uses.
         extracted_config = load_yaml_file_limited(
             owned_dir / "config.yaml", "config.yaml", max_bytes=MAX_CONFIG_BYTES
         ) or {}
