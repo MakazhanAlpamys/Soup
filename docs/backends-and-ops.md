@@ -201,7 +201,7 @@ embedding matrix in-place:
 - **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
   of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
   Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
-  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#3089](https://github.com/MakazhanAlpamys/Soup/issues/3089)).
 
 #### DPO on MLX
 
