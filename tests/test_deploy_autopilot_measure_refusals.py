@@ -74,10 +74,18 @@ class TestDeployAutopilotMeasureRefusals:
         assert recipe.read_bytes() == sentinel_recipe
         assert script.read_bytes() == sentinel_script
 
-    def test_bad_script_out_leaves_existing_recipe_untouched(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize(
+        ("path_args", "expected_msg"),
+        [
+            (["--script-out", "../outside.sh"], "script_path must stay under cwd"),
+            (["--recipe-out", "../outside.yaml"], "recipe_path must stay under cwd"),
+            (["--script-out", ""], "script_path must be non-empty NUL-free string"),
+        ],
+    )
+    def test_bad_output_path_leaves_existing_outputs_untouched(
+        self, tmp_path, monkeypatch, path_args, expected_msg
     ):
-        """Invalid --script-out fails before write_recipe overwrites default YAML."""
+        """Invalid --recipe-out or --script-out fails before writing either file."""
         monkeypatch.chdir(tmp_path)
         recipe = tmp_path / "deploy_autopilot.yaml"
         script = tmp_path / "deploy_autopilot.sh"
@@ -95,12 +103,47 @@ class TestDeployAutopilotMeasureRefusals:
                 "rtx-4090-24gb",
                 "--base",
                 "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                "--script-out",
-                "../outside.sh",
+                *path_args,
             ],
         )
         assert result.exit_code == 1, result.output
-        assert "script_path must stay under cwd" in strip_ansi(result.output)
+        assert expected_msg in strip_ansi(result.output)
+        assert recipe.read_bytes() == sentinel_recipe
+        assert script.read_bytes() == sentinel_script
+
+    @pytest.mark.requires_symlink
+    def test_symlink_script_out_leaves_existing_outputs_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """Symlink --script-out under cwd fails before writing either default file."""
+        monkeypatch.chdir(tmp_path)
+        recipe = tmp_path / "deploy_autopilot.yaml"
+        script = tmp_path / "deploy_autopilot.sh"
+        sentinel_recipe = b"# my hand-tuned recipe\nbase: my-org/my-model\n"
+        sentinel_script = b"#!/bin/sh\n# my edited script\n"
+        recipe.write_bytes(sentinel_recipe)
+        script.write_bytes(sentinel_script)
+
+        target = tmp_path / "real_target.sh"
+        target.write_bytes(b"#!/bin/sh\n# target\n")
+        link = tmp_path / "link_script.sh"
+        link.symlink_to(target)
+
+        app = typer.Typer()
+        app.command()(autopilot)
+        result = CliRunner().invoke(
+            app,
+            [
+                "--target",
+                "rtx-4090-24gb",
+                "--base",
+                "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                "--script-out",
+                "link_script.sh",
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        assert "script_path must not be a symlink" in strip_ansi(result.output)
         assert recipe.read_bytes() == sentinel_recipe
         assert script.read_bytes() == sentinel_script
 
