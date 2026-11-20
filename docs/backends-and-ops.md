@@ -1084,8 +1084,9 @@ soup push --model ./output --repo your-username/my-model \
 ## HuggingFace Hub Deep Integration
 
 Soup treats HF Hub as a first-class artifact backend. One env var, one flag,
-no token flags to plumb — all operations respect `huggingface-cli login`
-credentials by default.
+no token flags to plumb — all operations respect cached login credentials by
+default. Run `hf auth login` with `huggingface-hub` 0.34 or newer, or
+`huggingface-cli login` with older versions.
 
 ```bash
 # Self-hosted Hub: set once, every command routes there.
@@ -1148,7 +1149,7 @@ paste of checkpoint paths. Cwd containment and `local_dir_use_symlinks=False`
 prevent filesystem escape from a crafted repo.
 
 **Auth** follows standard HF conventions: `HF_TOKEN` env var > `HUGGINGFACE_HUB_TOKEN`
-> `~/.cache/huggingface/token` (set by `huggingface-cli login`) > `~/.huggingface/token`.
+> `~/.cache/huggingface/token` (set by the Hub login command) > `~/.huggingface/token`.
 No custom token flags. The deprecated `--token` on `soup push` still works but emits
 a warning.
 
@@ -1347,6 +1348,10 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 
 
 ## Model Comparison
+
+`soup diff` displays paths, prompts and generated replies literally, preserving emoji
+aliases and backslashes while removing terminal controls and bidi marks from the display.
+Model loading, generation inputs, metrics and saved JSONL retain their original values.
 
 Compare outputs of two models side-by-side:
 

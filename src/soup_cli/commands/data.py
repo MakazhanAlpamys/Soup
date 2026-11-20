@@ -2494,6 +2494,7 @@ def push_dataset_cmd(
     """Upload a local JSONL dataset to a model hub as a dataset repo."""
     from soup_cli.utils.hf import (
         get_hf_api,
+        hf_login_command,
         resolve_endpoint,
         resolve_token,
         validate_repo_id,
@@ -2542,7 +2543,7 @@ def push_dataset_cmd(
     if token is None:
         console.print(
             "[red]No HuggingFace token found.[/]\n"
-            "Set HF_TOKEN env var or run: [bold]huggingface-cli login[/]"
+            f"Set HF_TOKEN env var or run: [bold]{hf_login_command()}[/]"
         )
         raise typer.Exit(1)
 
