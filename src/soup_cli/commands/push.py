@@ -116,6 +116,7 @@ def push(
         )
         raise typer.Exit(1)
 
+    from soup_cli.utils.hf import hf_login_command
     from soup_cli.utils.typer_compat import ParameterSource
 
     # --token also reads HF_TOKEN via envvar; only a value typed on the
@@ -126,7 +127,7 @@ def push(
     if hub_canonical == "hf" and token_typed:
         console.print(
             "[yellow]Warning: --token is deprecated. Use HF_TOKEN env var or "
-            "run 'huggingface-cli login'.[/]"
+            f"run '{hf_login_command()}'.[/]"
         )
 
     # Sanitise commit message: strip to first line, cap length so a crafted
@@ -190,7 +191,7 @@ def push(
                 "[red]No HuggingFace token found.[/]\n"
                 "Provide one via:\n"
                 "  HF_TOKEN=... env variable\n"
-                "  huggingface-cli login"
+                f"  {hf_login_command()}"
             )
             raise typer.Exit(1)
 
