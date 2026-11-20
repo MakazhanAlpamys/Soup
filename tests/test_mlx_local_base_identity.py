@@ -20,8 +20,7 @@ from tests.conftest import make_cli_runner, strip_ansi
 from tests.test_issue634_mlx_resume import _FakeMlxModel, _install_fake_mlx, _mlx_wrapper
 
 
-@pytest.mark.parametrize("base_kind", ["relative", "absolute", "symlink", "hub"])
-def test_sft_local_base_survives_a_different_cwd(tmp_path, monkeypatch, base_kind):
+def _check_sft_local_base(tmp_path, monkeypatch, base_kind):
     work = tmp_path / "work"
     work.mkdir()
     base = work / "base"
@@ -43,10 +42,7 @@ def test_sft_local_base_survives_a_different_cwd(tmp_path, monkeypatch, base_kin
     elif base_kind == "hub":
         model = "org/name"
     elif base_kind == "symlink":
-        try:
-            (work / "link").symlink_to(base, target_is_directory=True)
-        except OSError:
-            pytest.skip("directory symlinks are unavailable")
+        (work / "link").symlink_to(base, target_is_directory=True)
         model = "./link"
     wrapper.config.base = model
     wrapper.model = _FakeMlxModel()
@@ -60,6 +56,16 @@ def test_sft_local_base_survives_a_different_cwd(tmp_path, monkeypatch, base_kin
     assert read_native_adapter(adapter)["model"] == expected
     assert json.loads((adapter / "adapter_config.json").read_text())["model"] == expected
     assert wrapper.config.base == model
+
+
+@pytest.mark.parametrize("base_kind", ["relative", "absolute", "hub"])
+def test_sft_local_base_survives_a_different_cwd(tmp_path, monkeypatch, base_kind):
+    _check_sft_local_base(tmp_path, monkeypatch, base_kind)
+
+
+@pytest.mark.requires_symlink
+def test_sft_symlink_base_survives_a_different_cwd(tmp_path, monkeypatch):
+    _check_sft_local_base(tmp_path, monkeypatch, "symlink")
 
 
 def _adapter(path, model):
@@ -114,9 +120,7 @@ def test_builder_classifies_local_directories_and_preserves_hub_ids(
     assert config["model"] == (expected if local else model)
 
 
-@pytest.mark.parametrize("task", ["dpo", "orpo", "simpo", "kto", "grpo"])
-@pytest.mark.parametrize("base_kind", ["relative", "symlink", "absolute", "hub"])
-def test_preference_and_grpo_writers_feed_the_cross_cwd_reader(
+def _check_preference_and_grpo_writer(
     tmp_path, monkeypatch, task, base_kind,
 ):
     from soup_cli.trainer.mlx_grpo import resolve_units
@@ -135,10 +139,7 @@ def test_preference_and_grpo_writers_feed_the_cross_cwd_reader(
     elif base_kind == "hub":
         model = "org/name"
     elif base_kind == "symlink":
-        try:
-            (work / "link").symlink_to(base, target_is_directory=True)
-        except OSError:
-            pytest.skip("directory symlinks are unavailable")
+        (work / "link").symlink_to(base, target_is_directory=True)
         model = "./link"
     cfg = SoupConfig.model_validate({
         "base": model, "backend": "mlx", "task": task, "output": "adapter",
@@ -169,6 +170,22 @@ def test_preference_and_grpo_writers_feed_the_cross_cwd_reader(
     assert read_native_adapter(adapter)["model"] == expected
     assert json.loads((adapter / "adapter_config.json").read_text())["model"] == expected
     assert cfg.base == model
+
+
+@pytest.mark.parametrize("task", ["dpo", "orpo", "simpo", "kto", "grpo"])
+@pytest.mark.parametrize("base_kind", ["relative", "absolute", "hub"])
+def test_preference_and_grpo_writers_feed_the_cross_cwd_reader(
+    tmp_path, monkeypatch, task, base_kind,
+):
+    _check_preference_and_grpo_writer(tmp_path, monkeypatch, task, base_kind)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("task", ["dpo", "orpo", "simpo", "kto", "grpo"])
+def test_preference_and_grpo_symlink_bases_feed_the_cross_cwd_reader(
+    tmp_path, monkeypatch, task,
+):
+    _check_preference_and_grpo_writer(tmp_path, monkeypatch, task, "symlink")
 
 
 @pytest.mark.parametrize("stored,present,local", [
@@ -251,7 +268,7 @@ def test_qualified_or_hub_identity_cannot_be_overridden(tmp_path, monkeypatch, s
     assert read_native_adapter(adapter)["model"] == stored
 
 
-def test_relative_override_is_still_compared_and_symlinks_are_qualified(tmp_path, monkeypatch):
+def test_relative_override_is_still_compared(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "base").mkdir()
     (tmp_path / "other").mkdir()
@@ -259,10 +276,14 @@ def test_relative_override_is_still_compared_and_symlinks_are_qualified(tmp_path
     assert read_native_adapter(adapter, "base")["model"] == str(tmp_path / "base")
     with pytest.raises(ValueError, match="does not match"):
         read_native_adapter(adapter, "./other")
-    try:
-        (tmp_path / "alias").symlink_to(tmp_path / "base", target_is_directory=True)
-    except OSError:
-        pytest.skip("directory symlinks are unavailable")
+
+
+@pytest.mark.requires_symlink
+def test_absolute_symlink_override_resolves_to_the_real_base(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "base").mkdir()
+    adapter = _adapter(tmp_path / "adapter", "./base")
+    (tmp_path / "alias").symlink_to(tmp_path / "base", target_is_directory=True)
     assert read_native_adapter(adapter, str(tmp_path / "alias"))["model"] == str(tmp_path / "base")
 
 
