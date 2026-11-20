@@ -107,7 +107,7 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 - **Apple Silicon 上支持更多。** 原生 MLX 对话、合并、选择性损失掩码、预处理缓存、词表扩展、
   RoPE 扩展和稠密 Llama SFT。
 - **分层流式能做更多。** 仅前向的推理模式、预量化 NF4 的导入，以及在流式基座上的 BCO、IPO 和
-  `task: preference` 训练。
+  单一损失的 `task: preference` 训练。
 - **更贴合短行的 VRAM 估算。** 带填充的 SFT 运行按其最长一行估算，计入 8 位的检查点、cuBLAS 工作区和
   蒸馏教师模型，预检还会说明为什么没有检查是否放得下。
 - **8 个新配方**（共 181 个），以及用于 Qwen2 QLoRA SFT 的 Triton 内核库（没有配置键）。
@@ -116,7 +116,8 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 **需要了解的行为变化。** `training` 的数值字段中的布尔值会被拒绝。`--push-as` 创建的仓库默认为私有
 （用 `--push-public` 改变）。在 MLX、`prm`、`unlearn` 或 `moe_lora_routing` 上启用 eval gate 会被拒绝。
 `soup serve --max-tokens` 上限为 16384。`soup adapters merge` 的权重和 `tool_call_args_subset` 的得分
-发生了变化，因此合并和 ship 的结论可能不同。`soup ship` 写出的证据文件为第 2 版，v0.77.x 会拒绝它。
+发生了变化，因此合并和 ship 的结论可能不同。`soup ship` 写出的证据文件在包含新的逐行、函数打分或 judge 细节时为第 2 版，v0.77.x 会拒绝这类
+文件。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 
