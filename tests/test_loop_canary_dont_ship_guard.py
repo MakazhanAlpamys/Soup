@@ -472,6 +472,31 @@ def test_case_folding_lookup_on_case_sensitive_ci(cwd, mixed_case_dont_ship, kin
     _assert_case_variant_uses_verdict(cwd, spelling, why)
 
 
+@pytest.mark.parametrize("kind", CASE_SPELLINGS)
+def test_case_folding_requires_the_same_directory_entry(cwd, mixed_case_dont_ship, kind,
+                                                       monkeypatch):
+    name, _ = mixed_case_dont_ship
+    spelling = _spell(kind, cwd, name)
+    adapters = cwd / ".soup-loops" / "adapters"
+    if (adapters / spelling).is_dir():
+        pytest.skip("requires a distinct spelling that does not exist on disk")
+
+    # Fold only the directory probe. The real samefile cannot confirm the typed path.
+    isdir = os.path.isdir
+    typed = os.path.join(ls._ADAPTERS_DIR, spelling)
+    actual = os.path.join(ls._ADAPTERS_DIR, name)
+    monkeypatch.setattr(os.path, "isdir", lambda path: isdir(actual if path == typed else path))
+    _seed_state(cwd)
+
+    assert ls.known_dont_ship(spelling) is None
+    result, text = _canary(spelling, "--traffic", "5%")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "canary set:" in text
+    state = read_state()
+    assert state.canary_active == spelling and state.canary_override is None
+
+
 class TestSpellingsThatAreNotTheAdapter:
     """What the path mapping must leave alone: another adapter, another directory, no verdict."""
 
