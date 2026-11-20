@@ -183,7 +183,7 @@ data:
 tokens before it. Each row gets a 4D attention mask (a token attends to itself and its
 ancestors in the tree) and `position_ids` equal to the depth in the tree, so every token sees
 exactly the context it had in its own example. The loss and its gradient are those of the
-ordinary batch holding the same examples: logits equal to float64 rounding on CPU for Llama,
+ordinary batch holding the same examples, to rounding: logits equal to float64 rounding on CPU for Llama,
 Mistral, Qwen2 and GPT-2 (exact with one thread; 1.7e-16 with 24, which is also what the
 ordinary batch differs by from the same examples run one at a time), 1e-5 of the logit range
 in fp32 on a GPU. In bf16 the two layouts agree as closely as

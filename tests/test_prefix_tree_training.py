@@ -114,6 +114,18 @@ class TestConfig:
         assert "Remove one of the two" in str(exc.value)
         assert _config("  neftune_alpha: null\n").training.prefix_tree is True
 
+    @pytest.mark.parametrize("value", ["1", "0", "2", "'yes'", "'true'"])
+    def test_a_value_that_is_not_a_bool_is_refused(self, value):
+        """YAML ``1`` and a quoted ``'yes'`` would be coerced to ``true`` by a
+        plain ``bool`` field; this switch takes a bool only."""
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="prefix_tree must be true or false"):
+            load_config_from_string(
+                "base: some/model\ntask: sft\ndata:\n  train: d.jsonl\n"
+                f"training:\n  prefix_tree: {value}\n"
+            )
+
     def test_refused_with_curriculum(self):
         """The sampler decides the order of the examples; a curriculum order
         would be dropped without a word."""
@@ -479,7 +491,9 @@ def _rows(turns=_TURNS):
     ]
 
 
-def _wrapper(root, monkeypatch, *, stream, prefix_tree=True, batch_size=1, turns=_TURNS):
+def _wrapper(
+    root, monkeypatch, *, stream, prefix_tree=True, batch_size=1, turns=_TURNS, max_length=64
+):
     import yaml
 
     from soup_cli.config.loader import load_config_from_string
@@ -497,7 +511,11 @@ def _wrapper(root, monkeypatch, *, stream, prefix_tree=True, batch_size=1, turns
                 "task": "sft",
                 "backend": "transformers",
                 "modality": "text",
-                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "data": {
+                    "train": "train.jsonl",
+                    "max_length": max_length,
+                    "chat_template": "chatml",
+                },
                 "training": {
                     "batch_size": batch_size,
                     "gradient_accumulation_steps": 1,
@@ -532,6 +550,55 @@ def _entropy(logits, weights):
 
     per_token = torch.distributions.Categorical(logits=logits.float()).entropy()
     return float((per_token * weights).sum() / weights.sum())
+
+
+def test_no_row_is_wider_than_data_max_length(tmp_path):
+    """Every VRAM pre-flight sizes a step as ``batch_size`` rows of
+    ``data.max_length`` tokens. A prefix-tree row is planned within that width,
+    so the pre-flights hold with the option on: here the examples together are
+    several times ``data.max_length`` and every batch is still within it."""
+    pytest.importorskip("torch")
+    from soup_cli.utils.prefix_tree_trainer import TREE_MASK_KEY, prefix_tree_state
+    from tests.test_stream_resume_exact import _cpu_only
+
+    max_length = 64
+    with _cpu_only() as monkeypatch:
+        wrapper = _wrapper(
+            tmp_path, monkeypatch, stream=False, batch_size=2, turns=_MORE_TURNS,
+            max_length=max_length,
+        )
+        state = prefix_tree_state(wrapper.trainer)
+        batches = list(wrapper.trainer.get_train_dataloader())
+    assert state.max_tokens == max_length
+    assert state.sampler.stats.tree_tokens > 3 * max_length, "vacuous: one row holds it all"
+    widths = [int(batch["input_ids"].shape[1]) for batch in batches]
+    assert max(widths) <= max_length, widths
+    assert max(widths) > max_length // 2, "vacuous: rows far below the bound"
+    for batch in batches:
+        rows, width = batch["input_ids"].shape
+        assert rows <= 2
+        assert batch[TREE_MASK_KEY].shape[-1] == width <= max_length
+
+
+def test_setup_refuses_a_model_that_cannot_before_any_step(tmp_path):
+    """The check is wired into the wrapper's setup: a model that drops
+    ``position_ids`` (so a prefix-tree row would see the wrong positions) is
+    refused there, before a trainer step exists."""
+    pytest.importorskip("torch")
+    import transformers
+
+    from tests.test_stream_resume_exact import _cpu_only
+
+    real = transformers.LlamaForCausalLM.forward
+
+    def forward(self, *args, position_ids=None, **kwargs):
+        return real(self, *args, **kwargs)
+
+    with _cpu_only() as monkeypatch:
+        monkeypatch.setattr(transformers.LlamaForCausalLM, "forward", forward)
+        with pytest.raises(ValueError, match="does not compute a prefix-tree row") as exc:
+            _wrapper(tmp_path, monkeypatch, stream=False)
+    assert "prefix_tree: false" in str(exc.value)
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["resident", "streamed"])

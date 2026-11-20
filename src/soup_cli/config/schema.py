@@ -4226,13 +4226,14 @@ class TrainingConfig(BaseModel):
             "document) and that are not trained on are held once, with a 4D "
             "ancestor attention mask and tree-depth position ids. The loss and "
             "its gradient are those of the ordinary batch holding the same "
-            "examples; the step runs the trees' tokens instead of the sum of "
+            "examples, to rounding; the step runs the trees' tokens instead of the sum of "
             "the examples' lengths. A step is still at most batch_size rows of "
             "data.max_length tokens. Needs untrained prompt tokens (e.g. "
             "data.train_on_responses_only) to have anything to share. "
             "task='sft' on the transformers backend; works with "
             "stream_layers. Mutually exclusive with packing, multipack, "
-            "neftune_alpha and curriculum."
+            "stream_loss_chunk, neftune_alpha and curriculum. A bool only: "
+            "1 or 'yes' is refused."
         ),
     )
     # NEFTune — noisy embeddings for better fine-tuning
@@ -4497,6 +4498,20 @@ class TrainingConfig(BaseModel):
                 "is the better choice."
             )
         return self
+
+    @field_validator("prefix_tree", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_prefix_tree_is_bool(cls, v, info: ValidationInfo):
+        """``prefix_tree: 1`` or ``yes`` (a quoted one) is refused instead of
+        being coerced to ``true``: the switch changes how every step is laid
+        out, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
 
     @model_validator(mode="after")
     def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
@@ -6626,12 +6641,14 @@ class SoupConfig(BaseModel):
         if self.data.replay is not None:
             raise ValueError(
                 "training.prefix_tree is incompatible with data.replay (grouping "
-                "examples by their shared beginning breaks the replay ratio)"
+                "examples by their shared beginning breaks the replay ratio). "
+                "Remove one of the two."
             )
         if self.data.interleave is not None:
             raise ValueError(
                 "training.prefix_tree is incompatible with data.interleave (grouping "
-                "examples by their shared beginning breaks the per-source mixture ratio)"
+                "examples by their shared beginning breaks the per-source mixture ratio). "
+                "Remove one of the two."
             )
         return self
 
