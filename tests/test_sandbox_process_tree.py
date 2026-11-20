@@ -1,6 +1,6 @@
 """The sandbox ends every process the checked code started, not only the direct child.
 
-``_run_sandboxed_subprocess`` backs the RLVR ``code_exec`` reward, ``soup serve``'s
+``_run_sandboxed_subprocess`` backs the RLVR ``code_exec`` scorer, ``soup serve``'s
 python and bash tools, the agent-eval sandbox and the recipe runner. It used to call
 ``Popen.kill()`` on the direct child only, so a process the code started (a subprocess,
 a shell's ``&``, a double fork) kept running with no time limit, kept the sandbox's output
