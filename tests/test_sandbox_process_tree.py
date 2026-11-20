@@ -248,6 +248,35 @@ class TestTimeout:
         assert result.timed_out is True
         _assert_all_gone(helpers)
 
+    @_posix_only
+    def test_the_preexec_function_the_real_callers_pass_keeps_the_tree_endable(
+        self, helpers, sandbox_tmp, monkeypatch
+    ):
+        """``_apply_rlimit`` (resource limits, then a best-effort ``unshare`` into private
+        namespaces) runs in the child before it starts. The child must still lead its own
+        group afterwards, so that a process it started is ended with it."""
+        import resource
+
+        real_setrlimit = resource.setrlimit
+
+        def setrlimit_without_process_cap(which, limits):
+            # The process cap counts every process of the user, so on a busy runner it
+            # would keep the helper from starting for a reason unrelated to this test.
+            if which == getattr(resource, "RLIMIT_NPROC", None):
+                return None
+            return real_setrlimit(which, limits)
+
+        monkeypatch.setattr(resource, "setrlimit", setrlimit_without_process_cap)
+        pidfile = helpers.pidfile("grandchild")
+        code = _spawn_grandchild_code(pidfile, tail="time.sleep(60)")
+
+        result = _run_sandboxed_subprocess(
+            [sys.executable, "-c", code], rewards._apply_rlimit, timeout_seconds=3
+        )
+
+        assert result.timed_out is True
+        _assert_all_gone(helpers)
+
     def test_a_timeout_result_is_unchanged(self, sandbox_tmp):
         result = _run("import time; time.sleep(60)")
 
