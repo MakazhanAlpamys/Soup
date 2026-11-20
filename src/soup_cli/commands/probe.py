@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink, quote_path
 from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
@@ -86,7 +86,16 @@ def _read_json_evidence(path: str, *, field: str) -> Mapping[str, Any]:
     Mapping (not dict) to signal callers must not mutate the payload —
     review fix M4 (v0.66.0).
     """
-    enforce_under_cwd_and_no_symlink(path, field)
+    try:
+        enforce_under_cwd_and_no_symlink(path, field)
+    except (TypeError, ValueError) as exc:
+        message = str(exc)
+        # The outside-cwd refusal already includes the path as typed.
+        if isinstance(path, str):
+            quoted_path = quote_path(path)
+            if quoted_path not in message:
+                message = f"{message} — {quoted_path}"
+        raise typer.BadParameter(message) from exc
     real = os.path.realpath(path)
     try:
         size = os.path.getsize(real)
@@ -103,6 +112,12 @@ def _read_json_evidence(path: str, *, field: str) -> Mapping[str, Any]:
             data = json.load(fh)
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(f"{field}: invalid JSON — {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise typer.BadParameter(f"{field}: {quote_path(path)} is not UTF-8") from exc
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"{field}: cannot read {quote_path(path)} — {type(exc).__name__}"
+        ) from exc
     if not isinstance(data, dict):
         raise typer.BadParameter(f"{field}: must be a JSON object (dict)")
     return data

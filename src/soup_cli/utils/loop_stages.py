@@ -1198,19 +1198,49 @@ def _iteration_lines_of(name: str) -> "list[dict]":
     return list(latest.values())
 
 
+def _adapter_dir_entry_name(argument: str) -> Optional[str]:
+    """The adapter name of ``argument`` when it is a path to an entry of ``.soup-loops/adapters``.
+
+    The path is resolved first (``realpath``: ``..``, ``.``, a trailing separator, a symlink or a
+    junction, the case Windows keeps on disk). It must then be inside the loop's adapter
+    directory (``commonpath`` compares whole components, so ``adapters-old/<name>`` is not) and
+    directly in it (``adapters/x/<name>`` is not). Anything else, or a name that is not an
+    adapter name, is ``None``: that path names some other adapter, which the loop knows nothing
+    about.
+    """
+    try:
+        entry = os.path.realpath(argument)
+        adapters = os.path.normcase(os.path.realpath(_ADAPTERS_DIR))
+        inside = os.path.commonpath([os.path.normcase(entry), adapters])
+    except (OSError, ValueError):  # a NUL byte, or another drive (commonpath refuses to compare)
+        return None
+    if inside != adapters or os.path.normcase(os.path.dirname(entry)) != adapters:
+        return None
+    name = os.path.basename(entry)
+    return name if _ADAPTER_NAME_RE.fullmatch(name) is not None else None
+
+
 def known_dont_ship(name: str) -> Optional[str]:
     """Why the loop knows adapter ``name`` must not be canaried, or ``None``.
 
-    The newest iteration that trained ``name`` decides: a verdict of DON'T SHIP on an iteration
-    that ended ``skipped`` (the loop did not deploy it) is a "no". An iteration that went on to a
-    canary (the check found nothing to verify and the canary's ratings decide), was promoted or
-    withdrawn, or held a SHIP, is not. With no such iteration, a verdict file
+    ``name`` is an adapter name or a path to the adapter's directory directly inside
+    ``.soup-loops/adapters`` (any spelling of it: relative, absolute, with ``..``, through a
+    link); a path anywhere else is some other adapter and reads nothing.
+
+    The newest iteration that trained the adapter decides: a verdict of DON'T SHIP on an
+    iteration that ended ``skipped`` (the loop did not deploy it) is a "no". An iteration that
+    went on to a canary (the check found nothing to verify and the canary's ratings decide), was
+    promoted or withdrawn, or held a SHIP, is not. With no such iteration, a verdict file
     ``.soup-loops/verdicts/<name>.json`` (the name the loop gives its own; a hand-run
     ``soup ship --output`` can use it too) that says DON'T SHIP is a "no". The text names where
     the verdict is recorded.
     """
-    if not isinstance(name, str) or _ADAPTER_NAME_RE.fullmatch(name) is None:
+    if not isinstance(name, str):
         return None
+    if _ADAPTER_NAME_RE.fullmatch(name) is None:
+        name = _adapter_dir_entry_name(name)
+        if name is None:
+            return None
     lines = _iteration_lines_of(name)
     if lines:
         newest = lines[-1]
