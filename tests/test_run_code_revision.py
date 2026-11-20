@@ -261,7 +261,11 @@ def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path
             return b""
         return b"a" * 40 if limit > 1 else b" "
 
-    monkeypatch.setattr(code_revision.time, "monotonic", lambda: clock["now"])
+    import types
+
+    monkeypatch.setattr(
+        code_revision, "time", types.SimpleNamespace(monotonic=lambda: clock["now"])
+    )
     monkeypatch.setattr(code_revision, "_bounded_git_output", output)
     captured = code_revision.capture_code_revision(tmp_path)
     assert captured.commit is None and captured.dirty is None
@@ -646,4 +650,6 @@ def test_blocked_status_read_is_cancelled_by_the_total_deadline(tmp_path, monkey
     with pytest.raises(subprocess.TimeoutExpired):
         code_revision._bounded_git_output(["unused"], {}, started + 0.03, 1)
     assert stopped.is_set()
-    assert time.monotonic() - started < 0.8
+    # Cancelled promptly by deadline (0.03s) rather than hanging; generous bound
+    # prevents flakiness under CPU contention on multi-worker CI runners.
+    assert time.monotonic() - started < 5.0

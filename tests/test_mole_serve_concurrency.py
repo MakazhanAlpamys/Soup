@@ -352,8 +352,8 @@ def test_mole_positive_control_greedy_pinned_tokens(max_tokens: int, expected_to
 )
 def test_mole_positive_control_sampled_pinned_tokens(max_tokens: int, expected_tokens: list[int]):
     """Sampled generation under fixed seed matches exact pinned token sequences (#2866)."""
-    torch.manual_seed(42)
     mole = _build_loaded_mole(n_adapters=2)
+    torch.manual_seed(42)
     ids = torch.tensor([[3, 4]])
     attn = torch.ones_like(ids)
     out = mole.generate(ids, attn, max_new_tokens=max_tokens, temperature=0.7)

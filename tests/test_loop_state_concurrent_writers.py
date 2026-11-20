@@ -548,11 +548,7 @@ class TestStaleLockTakeover:
                 second_in.wait(0.6)  # stay inside while the other waiter would come in
                 inside.pop()
 
-        threads = [threading.Thread(target=worker) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(30)
+        assert _run_together(worker, count=2, timeout=30.0) == []
 
         assert overlaps == []
         assert len(entered) == 2  # the second waiter did get the lock, after the first left
