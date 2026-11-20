@@ -1,10 +1,9 @@
 """Start a child so that it and everything it starts can be ended as one unit.
 
 ``Popen.kill()`` ends the direct child only. A process that code run in a sandbox starts
-(``subprocess.Popen``, a shell's ``&``, a double fork) is a grandchild: it outlives the
-child, keeps running without any time limit, holds the sandbox's output pipes open and, on
-Windows, keeps the sandbox directory as its working directory so the directory cannot be
-removed.
+is a grandchild: it outlives the child, keeps running without any time limit, holds the
+sandbox's output pipes open and, on Windows, keeps the sandbox directory as its working
+directory so the directory cannot be removed.
 
 * POSIX: the child is started as the leader of a new session (``start_new_session=True``),
   so its process group is its own pid and ``os.killpg`` ends the child and every process
