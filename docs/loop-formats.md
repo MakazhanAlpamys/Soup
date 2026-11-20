@@ -55,7 +55,9 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
   `conversation_id` is whatever key the client chose (up to 512 characters), and
   `iteration_id` is any string that is safe as a directory name (letters, digits, `.`,
   `_`, `-`, no `..`); `soup loop` writes `iter-<UTC YYYYMMDDTHHMMSS>-<8 hex>`, which sorts
-  in time order.
+  in time order. A reader skips (and counts) a conversation line whose `id`, or a feedback
+  line whose `response_id`, is anything else, uppercase or in braces included: it does not
+  read it.
 - **Unknown fields are ignored** by readers. New optional fields can appear without a
   new `schema_version`.
 - **Extensions:** a field named `x_<app>` (for example `x_zero`) belongs to the
