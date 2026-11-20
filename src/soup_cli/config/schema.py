@@ -3915,7 +3915,7 @@ class TrainingConfig(BaseModel):
             raise ValueError("LISA integer fields must be int, not bool")
         return v
 
-   # v0.72.0 BETA - Layer Streaming. The frozen base lives in CPU RAM or NVMe
+    # v0.72.0 BETA - Layer Streaming. The frozen base lives in CPU RAM or NVMe
     # disk tier and is streamed into a small pool of pre-allocated VRAM buffers
     # one decoder layer at a time, so peak VRAM is bounded by ONE layer instead
     # of the whole model. Only the LoRA adapters, their grads and optimizer state

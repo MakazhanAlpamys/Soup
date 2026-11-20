@@ -1044,8 +1044,6 @@ What accumulation buys is effective batch at **constant VRAM** (0.842 → 0.846 
 accum 1→4, where raising batch cost 0.842 → 2.28 GB). So the rule is: **raise
 `batch_size` until the VRAM pre-flight refuses, then accumulate for the rest.** Soup
 prints this advice when it sees you accumulating.
-
-
 **Refused at config load:**
 - `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes are required
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
@@ -1095,7 +1093,7 @@ uses a model-scoped injection bridge that restores streaming wrappers even if PE
 Loading weights into an arbitrary new named adapter remains unsupported. These checks
 establish CPU correctness, not CUDA performance or memory measurements.
 
-**Rejected at config load (each names the release that lifts it):**
+**Refused at config load:**
 - `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes allowed (v0.72.3)
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
