@@ -515,7 +515,7 @@ Usage: `soup airgap-bundle [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--output`, `-o` | text |  | yes | Output tarball path (cwd-contained) |
+| `--output`, `-o` | text |  | yes | Output path for the uncompressed tar archive (cwd-contained) |
 | `--model` | text |  | yes | Path to model directory |
 | `--dataset` | text, repeatable |  |  | Dataset directory (repeatable) |
 | `--wheel` | text, repeatable |  |  | Wheel directory (repeatable) |
