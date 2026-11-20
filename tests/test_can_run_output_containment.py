@@ -665,6 +665,14 @@ class TestNetworkAndDevicePathsAreNotResolved:
 
         assert not any("host" in path for path in resolved), resolved
 
+    def test_a_join_that_is_a_share_only_through_the_name_is_refused_without_resolving(
+        self, env, resolved
+    ):
+        with pytest.raises(ValueError, match="network share or a device"):
+            check_can_output({"output": "out", "experiment_name": "//host/share"})
+
+        assert not any("host" in path for path in resolved), resolved
+
     def test_a_local_output_is_still_resolved(self, env, resolved):
         check_can_output({"output": "out/run"})
 

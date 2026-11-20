@@ -451,3 +451,40 @@ class TestTheRedactedValueCheckReadsTheFileThatIsUsed:
         run_can(str(can), yes=True)
 
         assert len(calls) == 1
+
+
+class TestLoopReplayExtract:
+    """``soup loop replay --extract`` reads an iteration's can with the same refusal; its
+    exit status is 2, the one the docs and the changelog name, not the 1 of ``soup can``."""
+
+    def test_an_archive_with_one_name_twice_is_refused_with_exit_2(self, workdir):
+        from soup_cli.commands.loop import app as loop_app
+        from soup_cli.utils.loop_iteration import IterationRecord, write_iteration
+
+        write_iteration(
+            IterationRecord(
+                iteration_id="iter-dup",
+                started_at="2026-06-01T00:00:00+00:00",
+                finished_at="2026-06-01T00:01:00+00:00",
+                pairs_harvested=3,
+                run_id="run-x",
+                gate_verdict="OK",
+                canary_verdict=None,
+                shipped=True,
+                rolled_back=False,
+                estimated_cost_usd=0.0,
+                notes="",
+            )
+        )
+        _write_can(
+            workdir / ".soup-loops" / "iter-dup" / "iteration.can",
+            [("manifest.yaml", _MANIFEST), ("config.yaml", _CONFIG), ("./config.yaml", _OTHER)],
+        )
+
+        result = make_cli_runner().invoke(
+            loop_app, ["replay", "iter-dup", "--extract", "extracted"]
+        )
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert _SAME_NAME in _plain(result.output)
+        assert not (workdir / "extracted").exists()
