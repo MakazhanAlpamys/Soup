@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 import pytest
@@ -756,7 +755,7 @@ class TestIterativeDPO:
         text = " ".join(strip_ansi(result.output).split())
         assert "Iterative-DPO plan" not in text
 
-    @pytest.mark.skipif(os.name == "nt", reason="symlink permissions vary on Windows")
+    @pytest.mark.requires_symlink
     def test_cli_refuses_symlink_prompts_before_printing_plan(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
