@@ -44,7 +44,7 @@ class TestCloudRunCommandQuotesTheStubPath:
             ("my stub.py", "'my stub.py'"),
             ("stub$(cmd).py", "'stub$(cmd).py'"),
             ("stub;cmd.py", "'stub;cmd.py'"),
-            ("stub&calc.py", "'stub&calc.py'"),
+            ("stub&next.py", "'stub&next.py'"),
         ],
     )
     def test_modal_plan(self, project, stub_path, quoted):
@@ -67,7 +67,7 @@ class TestCloudRunCommandQuotesTheStubPath:
             ("my stub.py", "'my stub.py'"),
             ("stub$(cmd).py", "'stub$(cmd).py'"),
             ("stub;cmd.py", "'stub;cmd.py'"),
-            ("stub&calc.py", "'stub&calc.py'"),
+            ("stub&next.py", "'stub&next.py'"),
         ],
     )
     def test_lambda_plan(self, project, stub_path, quoted):

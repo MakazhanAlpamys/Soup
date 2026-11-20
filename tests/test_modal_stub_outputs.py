@@ -363,8 +363,8 @@ def _retry_command_lines(out: str) -> list[str]:
         ("results/run 1", '"results/run 1"'),
         ("out (v2)", '"out (v2)"'),
         ("out;cmd", '"out;cmd"'),
-        ("out&calc", '"out&calc"'),
-        ("out|calc", '"out|calc"'),
+        ("out&next", '"out&next"'),
+        ("out|next", '"out|next"'),
         ("out>X", '"out>X"'),
         ("~/out", '"~/out"'),
         ("-rf", "./-rf"),
@@ -457,10 +457,10 @@ def test_download_still_writes_into_an_output_name_with_a_space(
 @pytest.mark.parametrize(
     "output_dir",
     [
-        "x'); import os; os.system('cmd'); ('",
-        'x"); import os; os.system("cmd"); ("',
-        "x' + __import__('os').getcwd() + '",
-        "x\\' ; y = 1 ; '",
+        "x'); marker_one(); ('",
+        'x"); marker_one(); ("',
+        "x' + marker_two() + '",
+        "x\\' ; marker_three = 1 ; '",
     ],
 )
 def test_the_output_name_stays_data_in_the_rendered_source(output_dir):
@@ -471,15 +471,18 @@ def test_the_output_name_stays_data_in_the_rendered_source(output_dir):
     )
     tree = ast.parse(stub)
 
-    calls = [
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    ]
-    assert "system" not in calls
-    assert "getcwd" not in calls
+    # Whatever the name holds, it is one string literal in the source: no name taken
+    # from it is looked up, called or assigned.
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-    assert "y" not in names
+    assert not {name for name in names if name.startswith("marker_")}
+    (local_output,) = [
+        ast.literal_eval(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_LOCAL_OUTPUT"
+                for target in node.targets)
+    ]
+    assert local_output == output_dir
 
 
 @pytest.mark.parametrize(

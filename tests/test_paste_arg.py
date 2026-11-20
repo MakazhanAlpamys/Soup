@@ -181,7 +181,7 @@ class TestShellSyntaxIsNeverRepeatedAsSyntax:
             "out|cmd",
             "out>X",
             "out<X",
-            "out&calc",
+            "out&next",
             "out%COMSPEC%",
             "out\"; cmd; echo \"",
             "out'; cmd; echo '",
@@ -190,7 +190,7 @@ class TestShellSyntaxIsNeverRepeatedAsSyntax:
             "-$(cmd)",
             "${IFS}x",
             "out\\",
-            "out^&calc",
+            "out^&next",
         ],
     )
     def test_names_with_shell_syntax(self, value):
