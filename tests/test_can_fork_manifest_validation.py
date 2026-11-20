@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.registry.store import RegistryStore
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -82,7 +83,7 @@ def test_the_cli_exits_1_on_a_bad_author(tmp_path, monkeypatch):
     result = runner.invoke(app, ["can", "fork", "src.can", "--out", "fork.can",
                                  "--author", "alice\tbob"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "--author" in " ".join(result.output.split())
+    assert "--author" in " ".join(strip_ansi(result.output).split())
     assert not (tmp_path / "fork.can").exists()
 
 
