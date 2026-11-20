@@ -1251,8 +1251,8 @@ Usage: `soup data filter [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_filtered.jsonl) |
-| `--perplexity`, `--ppl` | float |  |  | Max perplexity threshold (rows above this are removed) |
-| `--coherence`, `--min-coherence` | float |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
+| `--perplexity`, `--ppl` | float, at least 0.0 |  |  | Max perplexity threshold (rows above this are removed) |
+| `--coherence`, `--min-coherence` | float, 0.0 to 1.0 |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
 | `--ppl-model` | text | `gpt2` |  | Model for perplexity scoring (default: gpt2) |
 | `--field`, `-f` | text |  |  | Field to score (default: all text fields concatenated) |
 | `--score-only` | flag | off |  | Add scores to data without filtering (writes \_scored.jsonl) |
