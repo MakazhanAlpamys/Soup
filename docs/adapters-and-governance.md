@@ -608,7 +608,8 @@ and `--canary-on-timeout` (default `errors-only`) decides:
 - `errors-only`: the request-error verdict decides alone. A canary whose requests succeeded
   is promoted, and the iteration notes say so: `promoted on errors only - quality
   unverified: 7/30 canary rated in 24h`. One whose requests failed is withdrawn as ever,
-  and one with too few answers for the error verdict keeps waiting. **A canary that got no
+  and one with too few answers for the error verdict is decided on request errors all the
+  same: a single answer is enough, with or without ratings. **A canary that got no
   answers at all** (serve restarted without it, a wrong rollout id, too little traffic for the
   share) is not promoted on a timeout: it is withdrawn, the reason is `timeout_no_answers`, and
   the notes say `withdrawn on timeout: 0 canary answers`. Only `--canary-on-timeout errors-only`
@@ -616,6 +617,12 @@ and `--canary-on-timeout` (default `errors-only`) decides:
 - `rollback`: the canary is withdrawn and production is untouched, even without
   `--autoroll-on-regress`. The notes name the timeout and `--canary-on-timeout rollback`.
 - `wait`: no time limit; the quality verdict stays `UNKNOWN`.
+
+Today the default `errors-only` therefore promotes a canary that answered at least one
+request and shows no major regression in request errors against the stable adapter when
+`--canary-max-wait` runs out before 30 ratings per side have come in, even with no ratings
+at all. The default is planned to become `rollback` in v0.79.0 (#3083); `errors-only` and
+`wait` stay selectable.
 
 Both settings are in `loop.yaml` and `soup loop status`. The time counts from the rollout
 start (`canary_started_ts`); a rollout without one is never timed out. The iteration
