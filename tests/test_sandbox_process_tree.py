@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -566,7 +567,7 @@ class TestProcessTree:
 
     def test_popen_kwargs_per_platform(self):
         if sys.platform == "win32":
-            assert popen_kwargs() == {}
+            assert popen_kwargs() == {"creationflags": 0x00000004}  # CREATE_SUSPENDED
         else:
             assert popen_kwargs() == {"start_new_session": True}
 
@@ -614,14 +615,58 @@ class TestProcessTree:
             proc.stderr.close()
 
     @_posix_only
-    def test_wait_gone_has_nothing_to_wait_for_on_posix(self):
-        proc = self._start("pass")
+    def test_wait_gone_is_verified_against_the_process_group_on_posix(self):
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
         tree = ProcessTree(proc)
         try:
-            proc.wait(timeout=10)
             assert tree.has_job is False
-            assert tree.wait_gone(0.0) is True
+            assert tree.wait_gone(0.2) is False
+
+            tree.kill()
+            proc.wait(timeout=_GONE_WITHIN_SECONDS)
+
+            assert tree.wait_gone(_GONE_WITHIN_SECONDS) is True
         finally:
+            tree.kill()
+            tree.close()
+            proc.stdout.close()
+            proc.stderr.close()
+
+    @_posix_only
+    def test_wait_gone_does_not_claim_gone_when_the_group_cannot_be_probed(self, monkeypatch):
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+
+        def refuse(pid, sig):
+            raise PermissionError(1, "not permitted")
+
+        monkeypatch.setattr(os, "killpg", refuse)
+        try:
+            assert tree.wait_gone(0.2) is False
+        finally:
+            monkeypatch.undo()
+            tree.kill()
+            tree.close()
+            proc.wait(timeout=_GONE_WITHIN_SECONDS)
+            proc.stdout.close()
+            proc.stderr.close()
+
+    @_posix_only
+    def test_the_child_is_still_ended_when_the_group_cannot_be_signalled(self, monkeypatch):
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+
+        def refuse(pid, sig):
+            raise PermissionError(1, "not permitted")
+
+        monkeypatch.setattr(os, "killpg", refuse)
+        try:
+            tree.kill()
+
+            assert proc.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+        finally:
+            monkeypatch.undo()
+            tree.kill()
             tree.close()
             proc.stdout.close()
             proc.stderr.close()
@@ -657,3 +702,167 @@ class TestProcessTree:
             tree.close()
             proc.stdout.close()
             proc.stderr.close()
+
+
+_windows_only = pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows only")
+
+
+def _fake_job_api(**replaced):
+    """The real job API with some of its members replaced (Windows only)."""
+    real = process_tree._job_api()
+    return types.SimpleNamespace(**{**vars(real), **replaced})
+
+
+class _Delegating:
+    """Forwards every attribute to ``target`` except the ones given as keyword arguments."""
+
+    def __init__(self, target, **replaced):
+        self._target = target
+        self._replaced = replaced
+
+    def __getattr__(self, name):
+        if name in self._replaced:
+            return self._replaced[name]
+        return getattr(self._target, name)
+
+
+@_windows_only
+class TestWindowsJobWithoutOrBeforeTheJob:
+    """The child is created suspended and runs only once it is in the job; when there is no
+    job it still runs, is still ended, and ``wait_gone`` does not claim the tree is gone."""
+
+    def _start(self, code: str) -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **popen_kwargs(),
+        )
+
+    def _close(self, proc, tree) -> None:
+        tree.kill()
+        tree.close()
+        proc.wait(timeout=_GONE_WITHIN_SECONDS)
+        proc.stdout.close()
+        proc.stderr.close()
+
+    def test_a_child_without_a_job_still_runs(self, monkeypatch):
+        monkeypatch.setattr(process_tree, "_create_job_for", lambda process: None)
+        proc = self._start("print('ran')")
+        tree = ProcessTree(proc)
+        try:
+            assert tree.has_job is False
+            assert proc.wait(timeout=10) == 0
+            assert proc.stdout.read().strip() == b"ran"
+        finally:
+            self._close(proc, tree)
+
+    def test_a_child_without_a_job_is_ended_by_the_direct_kill(self, monkeypatch):
+        monkeypatch.setattr(process_tree, "_create_job_for", lambda process: None)
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+        try:
+            tree.kill()
+
+            assert proc.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+        finally:
+            self._close(proc, tree)
+
+    def test_without_a_job_the_tree_is_not_reported_gone(self, monkeypatch):
+        monkeypatch.setattr(process_tree, "_create_job_for", lambda process: None)
+        proc = self._start("pass")
+        tree = ProcessTree(proc)
+        try:
+            proc.wait(timeout=10)
+            tree.kill()
+
+            assert tree.wait_gone(0.0) is False
+        finally:
+            self._close(proc, tree)
+
+    def test_a_failed_job_query_is_not_reported_as_gone(self, monkeypatch):
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+        real = process_tree._job_api()
+        failing = _Delegating(real.kernel32, QueryInformationJobObject=lambda *args: 0)
+        fake = _fake_job_api(kernel32=failing)
+        try:
+            tree.kill()
+            monkeypatch.setattr(process_tree, "_job_api", lambda: fake)
+
+            assert tree.wait_gone(0.2) is False
+        finally:
+            monkeypatch.undo()
+            self._close(proc, tree)
+
+    def test_a_child_that_cannot_be_resumed_is_ended_not_left_suspended(self, monkeypatch):
+        real = process_tree._job_api()
+        refusing = _Delegating(real.ntdll, NtResumeProcess=lambda handle: -1)
+        fake = _fake_job_api(ntdll=refusing)
+        monkeypatch.setattr(process_tree, "_job_api", lambda: fake)
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+        try:
+            assert proc.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+        finally:
+            monkeypatch.undo()
+            self._close(proc, tree)
+
+
+@_windows_only
+class TestAChildThatStartsProcessesAtOnce:
+    """Assigning a started process to a job is not instant. A child that is not held back
+    until then (a virtual environment's ``python.exe`` starts the real interpreter at once)
+    starts processes that never join the job. The assignment is made slow here, so a child
+    that runs before it is in the job would do exactly that."""
+
+    @pytest.fixture()
+    def slow_assignment(self, monkeypatch):
+        real = process_tree._create_job_for
+
+        def slow(process):
+            time.sleep(0.6)
+            return real(process)
+
+        monkeypatch.setattr(process_tree, "_create_job_for", slow)
+
+    def test_a_process_started_as_soon_as_the_child_runs_is_ended(
+        self, helpers, sandbox_tmp, slow_assignment
+    ):
+        pidfile = helpers.pidfile("started-at-once")
+        code = _spawn_grandchild_code(pidfile, tail="time.sleep(60)")
+
+        result = _run(code)
+
+        assert result.timed_out is True
+        _assert_all_gone(helpers)
+
+    def test_both_processes_of_a_virtual_environment_launcher_chain_are_ended(
+        self, helpers, sandbox_tmp, slow_assignment, tmp_path
+    ):
+        import venv
+
+        env_dir = tmp_path / "launcher-env"
+        try:
+            venv.create(env_dir, with_pip=False)
+        except Exception as exc:  # no venv support or a locked-down runner
+            pytest.skip(f"cannot create a virtual environment here: {exc}")
+        launcher = env_dir / "Scripts" / "python.exe"
+        if not launcher.is_file():
+            pytest.skip("the virtual environment has no Scripts/python.exe launcher")
+        started = helpers.pidfile("launcher-of-the-helper")
+        interpreter = helpers.pidfile("interpreter-of-the-helper")
+        program = (
+            "import os, time; "
+            f"open({str(interpreter)!r}, 'w').write(str(os.getpid())); "
+            f"time.sleep({_HELPER_LIFETIME_SECONDS})"
+        )
+        code = _spawn_grandchild_code(started, program, "time.sleep(60)")
+
+        result = _run_sandboxed_subprocess(
+            [str(launcher), "-I", "-S", "-c", code], None, timeout_seconds=4
+        )
+
+        assert result.timed_out is True
+        assert len(helpers.pids()) == 2, "the helper chain did not start"
+        _assert_all_gone(helpers)

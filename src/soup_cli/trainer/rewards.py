@@ -488,6 +488,9 @@ def _run_sandboxed_subprocess(
             with contextlib.suppress(Exception):
                 proc.kill()
                 proc.wait(timeout=1.0)
+            for stream in (proc.stdout, proc.stderr):
+                with contextlib.suppress(Exception):
+                    stream.close()
             raise
         try:
             return _collect_sandbox_result(proc, tree, max_output_bytes, timeout_seconds)

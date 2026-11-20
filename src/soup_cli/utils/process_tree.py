@@ -10,19 +10,23 @@ removed.
   so its process group is its own pid and ``os.killpg`` ends the child and every process
   that is still in that group, whether or not it is still linked to the child as a parent.
   ``SIGKILL`` cannot be caught or ignored, so a child that ignores ``SIGTERM`` ends too.
-* Windows: the child is assigned to a job object created with
-  ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``. Every process it starts afterwards joins the job
-  (the job does not allow breakaway), ``TerminateJobObject`` ends all of them, and closing
-  the handle ends any that are left.
+* Windows: the child is created suspended, assigned to a job object created with
+  ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` and only then allowed to run, so it has not
+  started anything before it is in the job. Every process it starts afterwards joins the
+  job (the job does not allow breakaway), including the interpreter that a launcher (a
+  virtual environment's ``python.exe``) starts, ``TerminateJobObject`` ends all of them,
+  and closing the handle ends any that are left.
+
+``wait_gone`` reports True only when it has verified that nothing of the tree is left; when
+it cannot ask (no job could be created, a query failed) it reports False.
 
 Best-effort, like the sandbox itself: a process that moves itself into another process
-group is out of the POSIX group's reach, and a process the child starts in the few
-milliseconds between ``CreateProcess`` and the job assignment (before the interpreter has
-run any of the caller's code) is not in the job. On POSIX the child no longer shares the
-terminal's foreground group, so Ctrl-C and a terminal hangup do not reach it directly: an
-interrupted caller ends the tree in its ``finally``, but a caller that is killed outright
-runs no ``finally`` and the group lives until its code ends it (Windows ends the job when
-the controller exits).
+group is out of the POSIX group's reach, and a Windows host that refuses the job (for
+example one that does not allow nested jobs) leaves only the direct child to end. On POSIX
+the child no longer shares the terminal's foreground group, so Ctrl-C and a terminal
+hangup do not reach it directly: an interrupted caller ends the tree in its ``finally``,
+but a caller that is killed outright runs no ``finally`` and the group lives until its
+code ends it (Windows ends the job when the controller exits).
 """
 
 from __future__ import annotations
@@ -41,13 +45,17 @@ _WIN_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _WIN_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _WIN_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 _WIN_TERMINATED_BY_US = 1
+_WIN_CREATE_SUSPENDED = 0x00000004
 _WAIT_POLL_SECONDS = 0.01
 
 
 def popen_kwargs() -> dict:
-    """Extra ``subprocess.Popen`` keyword arguments for a child run as a ``ProcessTree``."""
+    """Extra ``subprocess.Popen`` keyword arguments for a child run as a ``ProcessTree``.
+
+    Windows: the child starts suspended; ``ProcessTree`` lets it run once it is in the job.
+    """
     if sys.platform == "win32":
-        return {}
+        return {"creationflags": _WIN_CREATE_SUSPENDED}
     return {"start_new_session": True}
 
 
@@ -126,9 +134,13 @@ def _job_api() -> types.SimpleNamespace:
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
     return types.SimpleNamespace(
         ctypes=ctypes,
         kernel32=kernel32,
+        ntdll=ntdll,
         extended_limits=ExtendedLimits,
         accounting=Accounting,
     )
@@ -158,9 +170,11 @@ def _create_job_for(process: subprocess.Popen) -> "int | None":
 class ProcessTree:
     """A started child plus everything it starts, ended together.
 
-    Start the child with ``**popen_kwargs()``, then wrap it. ``kill`` is idempotent and
-    never raises; ``wait_gone`` waits (Windows) until the job holds no process; ``close``
-    ends whatever is left and releases the job. Safe to call from several threads.
+    Start the child with ``**popen_kwargs()``, then wrap it at once (on Windows the child
+    waits, suspended, until this constructor has put it in the job). ``kill`` is
+    idempotent and never raises; ``wait_gone`` waits until no process of the tree is left
+    and says whether that was verified; ``close`` ends whatever is left and releases the
+    job. Safe to call from several threads.
     """
 
     def __init__(self, process: subprocess.Popen) -> None:
@@ -170,6 +184,21 @@ class ProcessTree:
         if sys.platform == "win32":
             with contextlib.suppress(OSError, ValueError, AttributeError):
                 self._job = _create_job_for(process)
+            self._resume()
+
+    def _resume(self) -> None:
+        """Windows: let the child run (it was started suspended by ``popen_kwargs``).
+
+        Harmless for a child that is already running. A child that cannot be resumed
+        would wait for ever, so it is ended instead.
+        """
+        try:
+            status = _job_api().ntdll.NtResumeProcess(int(self._process._handle))
+        except (OSError, ValueError, AttributeError):
+            status = -1
+        if status != 0:
+            with contextlib.suppress(OSError):
+                self._process.kill()
 
     @property
     def has_job(self) -> bool:
@@ -195,15 +224,32 @@ class ProcessTree:
     def wait_gone(self, timeout: float) -> bool:
         """Wait up to ``timeout`` seconds until no process of the tree is left.
 
-        Windows only: the processes a job ends release their handles (the working
-        directory among them) a moment after ``TerminateJobObject`` returns. POSIX has
-        nothing to wait for: the signal is delivered and the files are free. Returns
-        whether the tree is gone.
+        The processes that were ended release their handles (the working directory among
+        them) a moment after the kill returns. Returns True only when it was verified that
+        none is left (Windows: the job holds no active process; POSIX: the process group
+        is empty). Returns False when processes are still there after ``timeout`` and
+        also when it cannot tell: no job on Windows, a failed query, a group that cannot
+        be probed.
         """
+        if sys.platform == "win32":
+            return self._wait_job_empty(timeout)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                os.killpg(self._process.pid, 0)
+            except ProcessLookupError:
+                return True
+            except OSError:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_WAIT_POLL_SECONDS)
+
+    def _wait_job_empty(self, timeout: float) -> bool:
         with self._lock:
             job = self._job
         if job is None:
-            return True
+            return False
         api = _job_api()
         deadline = time.monotonic() + timeout
         while True:
@@ -215,7 +261,9 @@ class ProcessTree:
                 api.ctypes.sizeof(info),
                 None,
             )
-            if not ok or info.ActiveProcesses == 0:
+            if not ok:
+                return False
+            if info.ActiveProcesses == 0:
                 return True
             if time.monotonic() >= deadline:
                 return False
