@@ -1774,7 +1774,10 @@ def test_cli_output_failure_reports_all_errors_and_still_attempts_evidence_and_p
     assert "cannot write the task rows next to --output: OSError: rows disk full" in run.plain
 
 
-def test_cli_evidence_failure_still_posts_pr_comment_after_writing_verdict(monkeypatch):
+@pytest.mark.parametrize(("correct", "code"), [({0, 1, 2}, 1), (set(), 2)])
+def test_cli_evidence_failure_still_posts_pr_comment_after_writing_verdict(
+    monkeypatch, correct, code
+):
     from soup_cli.utils import adapter_pr
 
     posted = []
@@ -1790,13 +1793,64 @@ def test_cli_evidence_failure_still_posts_pr_comment_after_writing_verdict(monke
 
     monkeypatch.setattr(ship_cmd, "atomic_write_text", broken_evidence)
     base = _scripted(_answers(correct={0}))
-    tuned = _scripted(_answers(correct={0, 1, 2}))
+    tuned = _scripted(_answers(correct=correct))
     run = _run(monkeypatch, _tasks(), base, tuned, "--push", "owner/repo#42")
 
-    assert run.result.exit_code == 1
+    assert run.result.exit_code == code
     assert "out.json" in run.files and "ev.json" not in run.files
     assert len(posted) == 1
     assert "cannot write --emit-evidence: OSError: evidence disk full" in run.plain
+
+
+@pytest.mark.parametrize(("correct", "code"), [({0, 1, 2}, 1), (set(), 2)])
+def test_cli_all_write_failures_are_reported_in_attempt_order(monkeypatch, correct, code):
+    from soup_cli.utils import adapter_pr
+
+    posted = []
+    monkeypatch.setattr(
+        adapter_pr, "post_pr_comment", lambda target, body: posted.append(body) or "https://x/1"
+    )
+
+    def broken_rows(rows, anchor):
+        raise OSError("rows disk full")
+
+    def broken_write(text, path, **kwargs):
+        raise OSError(f"{kwargs['field']} disk full")
+
+    monkeypatch.setattr(ship_cmd, "write_task_rows", broken_rows)
+    monkeypatch.setattr(ship_cmd, "atomic_write_text", broken_write)
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct=correct))
+    run = _run(monkeypatch, _tasks(), base, tuned, "--push", "owner/repo#42")
+
+    assert run.result.exit_code == code, (run.result.output, repr(run.result.exception))
+    assert len(posted) == 1
+    messages = [
+        "cannot write the task rows next to --output: OSError: rows disk full",
+        "cannot write --output: OSError: output disk full",
+        "cannot write --emit-evidence: OSError: emit-evidence disk full",
+    ]
+    positions = [run.plain.index(message) for message in messages]
+    assert positions == sorted(positions)
+
+
+def test_cli_write_errors_are_reported_before_an_escaping_push_oserror(monkeypatch):
+    from soup_cli.utils import adapter_pr
+
+    def broken_rows(rows, anchor):
+        raise OSError("rows disk full")
+
+    def broken_push(target, body):
+        raise OSError("network down")
+
+    monkeypatch.setattr(ship_cmd, "write_task_rows", broken_rows)
+    monkeypatch.setattr(adapter_pr, "post_pr_comment", broken_push)
+    base = _scripted(_answers(correct={0}))
+    tuned = _scripted(_answers(correct={0, 1, 2}))
+    run = _run(monkeypatch, _tasks(), base, tuned, "--push", "owner/repo#42")
+
+    assert isinstance(run.result.exception, OSError)
+    assert "cannot write the task rows next to --output: OSError: rows disk full" in run.plain
 
 
 def test_cli_a_failed_write_changes_neither_the_decision_nor_the_numbers(monkeypatch):
