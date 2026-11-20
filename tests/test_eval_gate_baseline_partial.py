@@ -143,6 +143,26 @@ def test_fresh_mixed_write_still_records_the_measured_subset(gate):
     assert "Wrote stamped baseline" in _plain(result)
 
 
+def test_empty_map_still_uses_the_writers_refusal(gate):
+    """The empty-map guard routes an all-unscored refresh to the writer's refusal.
+
+    The empty-result test in test_issue404_baseline_scorer_stamp.py uses a fresh
+    output path with no prior coverage, so it does not exercise this guard.
+    """
+    assert gate("gold", "--write-baseline", BASELINE).exit_code == 0
+    before = Path(BASELINE).read_bytes()
+    gate.hide("first")
+    gate.hide("second")
+
+    result = gate("gold", "--write-baseline", BASELINE)
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "refusing to write an empty baseline" in text
+    assert "not scored this run" not in text
+    assert Path(BASELINE).read_bytes() == before
+
+
 def test_fully_measured_run_still_writes(gate):
     result = gate("gold", "--write-baseline", BASELINE)
 
