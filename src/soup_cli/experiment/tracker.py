@@ -262,7 +262,7 @@ class ExperimentTracker:
             # A reinforcement-style run's per-step training reward and its spread
             # (experiment/reward_columns.py). Nullable with no default and never
             # backfilled, like the columns above: NULL is "not measured". Fresh
-            # tables follow the v0.77.2 upgrade order: timestamp, kind, then these
+            # tables follow the upgrade order from 0.77.2: timestamp, kind, then these
             # two fields. Existing tables keep their order, which can differ for
             # older upgrades and databases created by v0.78.0. get_metrics reads
             # columns by name, so both orders work without rebuilding any table.
