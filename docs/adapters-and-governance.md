@@ -503,7 +503,9 @@ SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" sou
 # Start serve with the candidate loaded, then promote it at 5% traffic. The command refuses an
 # adapter whose last verdict was DON'T SHIP (the latest line of the iteration that trained it in
 # iterations.jsonl, or a verdict file .soup-loops/verdicts/<adapter>.json) and exits 2 naming the
-# adapter; --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
+# adapter. The check also recognises paths to a direct checkpoint directory and spelling variants
+# of the adapter name on a case-insensitive filesystem.
+# --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
 # (canary_override), in the canary start line of progress.jsonl and, if the canary is promoted,
 # in the promotion's note and its line in versions.jsonl. An adapter the loop has no verdict for
 # (trained by hand, verified by a hand-run soup ship with another file name) is not checked.
