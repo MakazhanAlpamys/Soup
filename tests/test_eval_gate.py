@@ -675,3 +675,75 @@ class TestJudgeTaskNormalization:
         assert task_res.score == pytest.approx(1.0)
         assert task_res.passed is True
         assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# #3122: empty / NUL task names refused at suite load (CLI, exit 3)
+# ---------------------------------------------------------------------------
+
+BAD_NAMES = ["", "draft\x00task"]
+
+
+def _name_suite(tmp_path, name: str) -> str:
+    import json
+    tasks_path = tmp_path / "tasks.jsonl"
+    tasks_path.write_text(
+        '{"prompt": "0", "expected": "gold"}\n', encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        "suite: names\n"
+        "tasks:\n"
+        "  - type: custom\n"
+        f"    name: {json.dumps(name)}\n"
+        "    tasks: tasks.jsonl\n"
+        "    scorer: exact\n"
+        "    threshold: 0.0\n",
+        encoding="utf-8",
+    )
+    return str(suite_path)
+
+
+@pytest.mark.parametrize("name", BAD_NAMES)
+def test_cli_bad_task_name_refusal_never_mints_baseline(
+    tmp_path, monkeypatch, name,
+):
+    monkeypatch.chdir(tmp_path)
+    from rich.console import Console
+
+    from soup_cli.commands import eval as eval_command
+    from soup_cli.eval import quant_check
+    from tests.conftest import strip_ansi
+
+    factory_calls = []
+
+    def factory(model):
+        factory_calls.append(model)
+        return lambda prompt: "gold"
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    baseline = tmp_path / "baseline.json"
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", _name_suite(tmp_path, name),
+        "--model", "synthetic-base", "--write-baseline", str(baseline),
+    ])
+    output = " ".join(strip_ansi(result.output).split())
+    suite_path = str(tmp_path / "suite.yaml")
+    assert result.exit_code == 3
+    assert (
+        f"Cannot load suite: eval-gate suite '{suite_path}': "
+        "tasks[0].name: task name must be non-empty and null-free" in output
+    )
+    assert "GATE PASSED" not in output
+    assert factory_calls == []
+    assert not baseline.exists()
+
+
+@pytest.mark.parametrize("name", ["math", "  math  "])
+def test_cli_accepted_task_names_load_unchanged(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.eval import gate
+
+    suite = gate.load_suite(_name_suite(tmp_path, name))
+    assert suite.tasks[0].name == name
