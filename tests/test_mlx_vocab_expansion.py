@@ -651,7 +651,7 @@ class TestConsumerRefusals:
 
         # Case A: has added_tokens.safetensors
         (tmp_path / "added_tokens.safetensors").write_text("stub", encoding="utf-8")
-        with pytest.raises(ValueError, match="Native MLX generation does not currently support"):
+        with pytest.raises(ValueError, match=r"expanded vocabularies \(#3089\)"):
             read_native_adapter(tmp_path)
 
         (tmp_path / "added_tokens.safetensors").unlink()
@@ -660,7 +660,7 @@ class TestConsumerRefusals:
         (tmp_path / "adapter_config.json").write_text(
             json.dumps({"model": "org/base", "vocab_expansion": True}), encoding="utf-8"
         )
-        with pytest.raises(ValueError, match="Native MLX generation does not currently support"):
+        with pytest.raises(ValueError, match=r"expanded vocabularies \(#3089\)"):
             read_native_adapter(tmp_path)
 
     def test_soup_merge_refuses_expanded_vocab(self, tmp_path, monkeypatch):
