@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 SUPPORTED_UNLEARN_METHODS: frozenset[str] = frozenset({"npo", "simnpo", "rmu"})
 
 _MAX_METHOD_LEN: int = 32
@@ -130,7 +132,7 @@ def validate_unlearn_alpha(value: object) -> float:
         raise TypeError(
             f"unlearn_alpha must be a number, got {type(value).__name__}"
         )
-    fval = float(value)
+    fval = float_with_overflow_check(value, "unlearn_alpha")
     if not math.isfinite(fval):
         raise ValueError("unlearn_alpha must be finite (no NaN / Inf)")
     if fval < 0.0:

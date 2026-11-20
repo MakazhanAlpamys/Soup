@@ -1,0 +1,72 @@
+{
+  "label": "q32-n1-train-only",
+  "train_guard": {
+    "outcome": "completed",
+    "failure": null,
+    "elapsed_s": 305.5469999999623,
+    "worker_returncode": 0,
+    "sampled_device_peak_mib": 3002.0,
+    "gpu_samples": 238,
+    "min_host_available_mib": 3795.7265625,
+    "min_commit_headroom_mib": 23738.390625,
+    "max_own_private_commit_mib": 9822.6953125,
+    "max_own_peak_working_set_mib": 6130.671875
+  },
+  "train_worker": {
+    "status": "passed",
+    "pid": 76844,
+    "seq_len": 128,
+    "device": "cuda:0",
+    "elapsed_seconds": 256.1321995999897,
+    "torch_peak_allocated_mib": 2651.39794921875,
+    "torch_peak_reserved_mib": 2828.0,
+    "torch_peak_allocated_bytes": 2780192256,
+    "torch_peak_reserved_bytes": 2965372928,
+    "adapter_params": 9961472,
+    "adapter_tensors": 256,
+    "step_seconds": [
+      30.504817500011995,
+      22.324613699980546,
+      22.474958399950992
+    ],
+    "step_losses": [
+      3.5959742069244385,
+      4.572229862213135,
+      4.455287456512451
+    ],
+    "heldout_before": [
+      4.3093791007995605,
+      4.310735702514648
+    ],
+    "heldout_after": [
+      4.298623561859131,
+      4.307984352111816
+    ],
+    "heldout_reloaded": [],
+    "fresh_process_exact": null,
+    "adapter_hashes": {
+      "adapter_config.json": "dcd3efac8117c5afede10a2a8840faa18419e90187b2795800eab0eac47ce68c",
+      "adapter_model.safetensors": "88aa4279ed57aa75b10c758810415441e22251ad71f8c0185783c40eb614b048",
+      "README.md": "e2efd27d638293b0e29747242fcf20f218696330677a7307cf3aa08ec1c5068e",
+      "stage32_provenance.json": "8ac72bb94bd06054534dc1f017c1dcfe88324e0d8266034cf46cc1c1a4cc8f69"
+    },
+    "reloaded_artifact_hashes": null,
+    "runtime_manifest_sha256": "dd429e47af337550e10f0b16a463a1a9ab1085e062a584a944b6f87430ac10e3",
+    "runner_sha256": "813a9a17d40997f1152d7e8895439f7e812d5db9c6227fba9a0093030a28c0b6",
+    "environment": {
+      "python": "3.12.10",
+      "executable": "<HOME>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "packages": {
+        "torch": "2.14.0+cu130",
+        "transformers": "5.17.0",
+        "peft": "0.20.0",
+        "accelerate": "1.15.0",
+        "bitsandbytes": "0.50.2",
+        "safetensors": "0.8.0"
+      }
+    },
+    "runtime_path": "<ASSETS>\\soup-runtime-f215941b",
+    "runtime_layer_loads_initial": 0,
+    "runtime_layer_loads_final": 628
+  }
+}

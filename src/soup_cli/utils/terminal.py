@@ -21,7 +21,11 @@ terminal" in the tree.
 
 from __future__ import annotations
 
+from typing import Optional, Union
+
 from rich.markup import escape as _escape_markup
+from rich.style import Style
+from rich.text import Text
 
 #: Every C0 control character except TAB / LF / CR, plus DEL, plus the C1
 #: range U+0080-U+009F.
@@ -60,3 +64,8 @@ def strip_control(text: object) -> str:
 def for_terminal(text: object) -> str:
     """Strip control characters, then escape Rich markup, in that order."""
     return _escape_markup(strip_control(text))
+
+
+def terminal_text(value: object, style: Optional[Union[str, Style]] = None) -> Text:
+    """Return control-stripped text as a :class:`rich.text.Text` (never parsed as markup)."""
+    return Text(strip_control(value), style="" if style is None else style)

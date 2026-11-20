@@ -84,16 +84,16 @@ requires the first content frame to arrive while the generator is still blocked.
   the three CLI runs completes six real HTTP generation calls, checks direct
   engine equality and exits successfully on SIGINT.
 
-Each JSON records the upstream base commit, SHA256 of the changed source files,
+Each JSON records the pre-merge branch head, SHA256 of the changed source files,
 the sorted whole-source manifest digest, fixture/benchmark hashes, model files,
 dependency versions, commands and exact content/count comparisons. The source
 digest identifies the qualified implementation even before its publishing commit.
 
-The three linked records were rerun after integrating #2124 on 2026-11-10.
-Their source-file and whole-source digests identify that merged working tree;
-`soup_base_sha` names its pre-merge HEAD because qualification preceded the
-integration commit. Earlier records retained in Git history used the `serve.py`
-file from `efab186c`, as documented in the preceding revision.
+The three linked records were rerun on 2026-11-20 after integrating
+`main` at `f1533b967c`. Their source-file and whole-source digests identify the
+merged working tree. Qualification ran before the merge commit, so
+`soup_base_sha` records the previous branch head `6f7470518`. The November 10
+qualification records after integrating #2124 are available at that head.
 
 Default tests remain offline and deterministic; real-native tests are explicitly
 selected in the existing `mlx-smoke` job, installing the serving extras and HTTP

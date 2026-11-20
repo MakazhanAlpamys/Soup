@@ -1,0 +1,56 @@
+Loading tokenizer: 
+<tmp>/pytest-0/test_cuda_first_applied_update0/model
+╭────────────────────── Layer streaming disk pre-flight ───────────────────────╮
+│ HF/local source: 0.00 GB                                                     │
+│ Soup materialized copy: 0.00 GB (no write required)                          │
+│ Layer-shard cache: 0.00 GB (write required)                                  │
+│ Projected total on disk: 0.00 GB                                             │
+│ Additional writes before training: 0.00 GB                                   │
+│ Free on target volume (layer-shard cache): 1037.82 GB                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> 
+<tmp>/pytest-0/test_cuda_first_applied_update0/cache/<tmp>
+__pytest-0__test_cuda_first_applied_update0__model
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────── training.stream_layers ───────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                  │
+│   base store   0.00 GB across 2 layers (pinned)                              │
+│   VRAM buffers 2 x 0 MB + 1 x 0 MB large-layer slot = 0 MB                   │
+│   resident     0 MB extras + adapters                                        │
+│   peak VRAM    ~0.03 GB at batch 1 x seq 64 (2 rows — chosen+rejected are    │
+│ one concatenated tensor) (logits 0.00 GB)                                    │
+│   cuBLAS       16.2 MiB PyTorch allocator workspace, included above          │
+│   free VRAM    15.51 GB                                                      │
+│   forecast     31471211-46281193 tok/s — a compute-bound bound, not a        │
+│ promise                                                                      │
+│                (from 22.84 TFLOPS measured on this card now using float16 @  │
+│ 585 MHz)                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not 
+run resident on this card at all.
+expandable_segments allocator hint not enabled: CUDA was already initialised 
+before Soup could set it — the allocator reads PYTORCH_CUDA_ALLOC_CONF once, at 
+context creation
+Layer streaming ready: 2 layers, 0.00 GB pinned RAM store (0.00 GB page-locked),
+2 x 0 MB decoder buffers + 1 x 0 MB large-layer slot
+chat_template override applied. Subsequent tokenizer.save_pretrained() / soup 
+push will persist this Jinja string into tokenizer_config.json — replacing 
+whatever the model originally shipped.
+LoRA applied: 1,792 trainable / 82,240 total (2.18%)
+Adding EOS to train dataset:   0%|          | 0/4 [00:00<?, ? examples/s]Adding EOS to train dataset: 100%|██████████| 4/4 [00:00<00:00, 96.07 examples/s]
+Tokenizing train dataset:   0%|          | 0/4 [00:00<?, ? examples/s]Tokenizing train dataset: 100%|██████████| 4/4 [00:00<00:00, 115.22 examples/s]
+[transformers] The model is already on multiple devices. Skipping the move to device specified in `args`.
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]Map: 100%|██████████| 4/4 [00:00<00:00, 620.14 examples/s]
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 3}.
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:03<00:00,  3.75s/it]                                             {'loss': '25', 'grad_norm': '15.56', 'learning_rate': '2e-05', 'entropy': '4.146', 'num_tokens': '7', 'logits/chosen': '0.00147', 'logits/rejected': '0.00356', 'mean_token_accuracy': '0', 'rewards/chosen': '0', 'rewards/rejected': '0', 'rewards/accuracies': '0', 'rewards/margins': '0', 'logps/chosen': '-11.96', 'logps/rejected': '-8.064', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:03<00:00,  3.75s/it]                                             {'train_runtime': '3.831', 'train_samples_per_second': '0.261', 'train_steps_per_second': '0.261', 'train_loss': '25', 'epoch': '0.25'}
+100%|██████████| 1/1 [00:03<00:00,  3.75s/it]100%|██████████| 1/1 [00:03<00:00,  3.83s/it]
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 3013.77it/s]
+.
+=============================== warnings summary ===============================
+tests/test_ipo_streaming.py: 14 warnings
+  <site-packages>/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 14 warnings in 55.19s

@@ -117,11 +117,13 @@ def test_only_fixed_model_routes_and_real_usage():
         for path in [
             "/metrics",
             "/v1/adapters",
+            "/v1/adapters/load",
             "/v1/completions",
             "/v1/messages",
             "/v1/tools/python",
             "/v1/tools/bash",
             "/v1/output_constraint",
+            "/v1/feedback",
         ]:
             assert client.get(path).status_code == 404
             assert client.post(path, json={}).status_code == 404
@@ -565,6 +567,7 @@ def test_invalid_engine_usage_cannot_escape_the_response_schema(stream):
         (["--speculative-decoding", "draft"], "--speculative-decoding"),
         (["--num-speculative-tokens", "3"], "--num-speculative-tokens"),
         (["--adapters", "other=./adapter"], "--adapters"),
+        (["--adapter-dir", "base"], "--adapter-dir"),
         (["--prefix-cache"], "--prefix-cache"),
         (["--auto-spec"], "--auto-spec"),
         (["--structured-output", "json"], "--structured-output"),
@@ -577,6 +580,7 @@ def test_invalid_engine_usage_cannot_escape_the_response_schema(stream):
         (["--trace-log", "out.jsonl"], "--trace-log"),
         (["--trace-log-cap-mb", "1"], "--trace-log-cap-mb"),
         (["--record-thumbs", "out.db"], "--record-thumbs"),
+        (["--feedback-log", "out.jsonl"], "--feedback-log"),
         (["--reasoning-parser", "qwen3"], "--reasoning-parser"),
         (["--steer", "x"], "--steer"),
         (["--steer-strength", "2"], "--steer-strength"),
@@ -584,7 +588,6 @@ def test_invalid_engine_usage_cannot_escape_the_response_schema(stream):
         (["--bank-strength", "2"], "--bank-strength"),
         (["--mole", "x"], "--mole"),
         (["--kv-cache-type", "bf16"], "--kv-cache-type"),
-        (["--max-tokens", "0"], "max_tokens"),
     ],
 )
 def test_native_cli_refuses_unimplemented_flags_before_loading(

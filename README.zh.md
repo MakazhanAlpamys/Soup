@@ -91,36 +91,32 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 
 ## 最新动态
 
-**v0.77.2——基于 v0.77.1 之后 `main` 的一次发布：159 个拉取请求，其中 153 个来自维护者之外的 30 位
-贡献者。** 大部分是修复。它也新增了功能，以及两条可能拒绝 v0.77.1 所接受内容的规则，因此在升级服务器或
-`task: sft` 配置之前，请先阅读 [v0.77.2 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)。从 0.76.x 升级时，请先运行
+**v0.78.0——基于 v0.77.2 之后 `main` 的一次发布：271 个拉取请求，其中 218 个来自维护者之外的 48 位
+贡献者。** 它新增了功能，以及若干条会拒绝 v0.77.2 所接受输入的规则，因此在升级配置或脚本之前，
+请先阅读 [v0.78.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)。从 0.76.x 升级时，请先运行
 `soup doctor --config soup.yaml`，并阅读 [v0.77.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)。
 
-- **`soup profile --model <id>` 无需 `soup.yaml` 即可回答“放得下吗？”。** 它根据模型的 `config.json`
-  估算该次运行，由 `--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer` 和
-  `--gradient-checkpointing` 决定形状；在 Apple Silicon 上，它与 Metal 的工作集大小比较。
-  `soup plan` 和 `soup apply` 现在接受 `--minillm-on-policy`。
-- **Apple Silicon 上支持更多训练。** 带有 `preference_loss: dpo`、`orpo` 或 `simpo` 的
-  `task: preference` 运行原生 MLX 训练器，MLX GRPO 可在 4 位 `mlx-community` 基座上训练，
-  MLX Adafactor 会遵循配置的学习率和调度。
-- **两个新的 DPO 配方：** `qwen3.5-0.8b-dpo` 和 `qwen3.5-27b-dpo`。
-- **更接近实际的 VRAM 估算。** 优化器步骤被视为独立阶段，PRM 步骤只计一个位置的 logits，
-  分片的 FSDP 或 ZeRO 运行按每张卡估算，`stream_loss_chunk` 步骤计入最后一层的重计算，
-  Unsloth 的 LoRA 目标按其加载器的选择估算。
-- **更少的静默覆盖和空结果。** 更多命令会拒绝指向某个输入的 `--output`（`soup data ingest`、
-  `persona-mix`、`generate` 等）；`soup ship --adapter` 会拒绝不改变任何东西的适配器；
-  `soup distill-prompt`、`soup data evolve`、`gen-magpie` 和 `filter --perplexity` 会报错，
-  而不是写出空文件或未过滤的文件。
-- **偏好与强化学习修复。** `data.max_length` 对 SimPO 和 KTO 重新生效，PPO 在要求时会对策略启用
-  gradient checkpointing（在 4 位和 8 位下也不再崩溃），`soup merge` 会加载适配器训练时所用的基座提交。
-- **文本按输入原样显示。** 数十个命令在显示路径、名称和消息时保留方括号和 `:name:` 文本，
-  并移除终端控制字符。
+- **持续学习循环。** `soup serve` 为每个回答分配一个 ID 并接收对它的反馈（点赞、评分、修改）；
+  `soup loop` 用这些反馈训练候选模型，用 `soup ship --gate loop-v2` 评判，作为金丝雀（canary）运行，
+  并自动回滚。
+- **`soup ship` 展示其数字的构成。** 每个任务的更好/更差/不变计数、逐行审计文件、用你提供的函数打分的
+  `--task-mode reward --reward-fn`（会执行一个 `.py` 文件）、适配器对基座的改动幅度，以及用于比较
+  两个适配器的 `--base-adapter`。
+- **新命令。** `soup eval retention`（跨模型版本的遗忘）、`soup data leakage`（训练与评估的重叠）、
+  `soup docs search`（离线）、`soup prune-layer-cache` 以及 `soup eval quant-check --performance`。
+- **Apple Silicon 上支持更多。** 原生 MLX 对话、合并、选择性损失掩码、预处理缓存、词表扩展、
+  RoPE 扩展和稠密 Llama SFT。
+- **分层流式能做更多。** 仅前向的推理模式、预量化 NF4 的导入，以及在流式基座上的 BCO、IPO 和
+  `task: preference` 训练。
+- **更贴合短行的 VRAM 估算。** 带填充的 SFT 运行按其最长一行估算，计入 8 位的检查点、cuBLAS 工作区和
+  蒸馏教师模型，预检还会说明为什么没有检查是否放得下。
+- **8 个新配方**（共 181 个），以及用于 Qwen2 QLoRA SFT 的 Triton 内核库（没有配置键）。
+- **文本按输入原样显示。** 又有数十个命令在显示路径和名称时保留方括号和 `:name:` 文本，并移除终端控制字符。
 
-**需要了解的行为变化。** `soup serve --tool-auth-token` 必须是由 `A-Z`、`a-z`、`0-9`、`_` 和 `-`
-组成的 16 到 128 个字符（否则退出码为 2）。`task: sft` 会在从未应用这些设置的视觉、音频、MLX、
-Unsloth、RAFT 和预分词路径上拒绝 `reasoning_effort`、`train_on_eot`、`use_flash_attn` 和
-`use_liger`。`soup completions` 生成的脚本需要重新生成。`soup data from-traces --signal thumbs_up`、
-MLX Adafactor、`soup merge` 和 VRAM 预检可能给出与 v0.77.1 不同的结果。
+**需要了解的行为变化。** `training` 的数值字段中的布尔值会被拒绝。`--push-as` 创建的仓库默认为私有
+（用 `--push-public` 改变）。在 MLX、`prm`、`unlearn` 或 `moe_lora_routing` 上启用 eval gate 会被拒绝。
+`soup serve --max-tokens` 上限为 16384。`soup adapters merge` 的权重和 `tool_call_args_subset` 的得分
+发生了变化，因此合并和 ship 的结论可能不同。`soup ship` 写出的证据文件为第 2 版，v0.77.x 会拒绝它。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 

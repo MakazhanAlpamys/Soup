@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from soup_cli.utils.numeric import float_with_overflow_check
+
 # Closed allowlists.
 EBFT_VARIANTS: frozenset[str] = frozenset({"structured", "strided"})
 GDPO_VARIANTS: frozenset[str] = frozenset({"standard", "length_normalized", "margin"})
@@ -123,7 +125,7 @@ def validate_ebft_temperature(value: object) -> float:
         raise TypeError(
             f"ebft_temperature must be float, got {type(value).__name__}"
         )
-    fval = float(value)
+    fval = float_with_overflow_check(value, "ebft_temperature")
     if not math.isfinite(fval):
         raise ValueError(
             f"ebft_temperature must be finite, got {value!r}"

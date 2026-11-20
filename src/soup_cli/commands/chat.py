@@ -36,6 +36,7 @@ def chat(
     max_tokens: int = typer.Option(
         512,
         "--max-tokens",
+        min=1,
         help="Maximum number of tokens to generate",
     ),
     temperature: float = typer.Option(

@@ -1,7 +1,6 @@
 """soup runs prints run names and curriculum-history file names as typed, not as Rich markup."""
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -10,16 +9,12 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.experiment.tracker import ExperimentTracker
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
-
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +82,7 @@ def _curve(db: Path, history: str):
 
 
 @pytest.mark.parametrize(
-    "name", ["x[red]h.jsonl", pytest.param("h:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS)]
+    "name", ["x[red]h.jsonl", pytest.param("h:warning:.jsonl", marks=skip_colon_on_windows)]
 )
 def test_curriculum_curve_names_a_missing_history_file_as_typed(db, name):
     result = _curve(db, name)
@@ -107,7 +102,7 @@ def test_curriculum_curve_strips_controls_from_a_missing_history_file(db):
 
 _SYMLINK_NAMES = [
     "x[red]l.jsonl",
-    pytest.param("l:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("l:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]l{_CONTROLS}.jsonl",
 ]
 
@@ -128,7 +123,7 @@ def test_curriculum_curve_names_a_symlinked_history_file_as_typed(db, name):
 
 _UNREADABLE_NAMES = [
     "x[red]s.jsonl",
-    pytest.param("s:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("s:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]s{_CONTROLS}.jsonl",
 ]
 

@@ -1,5 +1,7 @@
-"""Kimi K2 on layer streaming: its ``config.json`` loaded into transformers' own
-``DeepseekV3Config``, behind a guard.
+"""Kimi K2 through transformers' own class: layer streaming and the resident route.
+
+Both routes read the checkpoint's ``config.json`` as data into transformers' own
+``DeepseekV3Config`` behind a guard, so the repository's modelling code never runs.
 
 Kimi-K2-Base and -Instruct (moonshotai) declare ``model_type: "kimi_k2"`` and an ``auto_map``
 onto their repository's own ``configuration_deepseek`` / ``modeling_deepseek``. The decoder is
@@ -38,6 +40,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
+import re
+import shutil
+from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Tuple
 
 KIMI_K2_MODEL_TYPE = "kimi_k2"
@@ -84,6 +90,20 @@ _UNEXPECTED_REASON = (
     "unexpected field {name}: training.stream_layers admits kimi_k2 only with the published K2 "
     "config fields"
 )
+#: The resident route's wording (ruling D15): no streamed-route naming anywhere in a
+#: resident refusal, and the resident loader dequantises the published FP8 block spelling.
+_UNEXPECTED_REASON_RESIDENT = (
+    "unexpected field {name}: the resident route admits kimi_k2 only with the published K2 "
+    "config fields"
+)
+#: The resident route's FP8 support wording (ruling D15): replaces ``fp8_block``'s
+#: streamed tail in a resident refusal.
+_FP8_RESIDENT_SUPPORT = (
+    "The resident route dequantises one FP8 format: DeepSeek-V3 FP8 block "
+    "(weight_block_size [128,128], e4m3, float scales) - see "
+    "docs/performance-and-quantization.md."
+)
+_UNEXPECTED_REASONS = {"stream": _UNEXPECTED_REASON, "resident": _UNEXPECTED_REASON_RESIDENT}
 #: Published keys a config may leave out: the rewrite drops ``auto_map`` anyway, and a copy
 #: dequantised to bf16 carries no ``quantization_config``. Every other published key must be
 #: present: a missing one would not be refused by the allowlist, and the native class would
@@ -250,38 +270,57 @@ def _rope_failures(rope: Any) -> list:
     return failures
 
 
-def _quantization_failures(quant: Any) -> list:
+def _quantization_failures(quant: Any, route: str = "stream") -> list:
     """Unquantised, or the FP8 block spelling the sharder dequantises (``utils/fp8_block``)."""
-    from soup_cli.utils.fp8_block import UnsupportedFP8Error, fp8_block_size
+    from soup_cli.utils.fp8_block import SUPPORTED_FP8_FORMAT, UnsupportedFP8Error, fp8_block_size
 
     if quant is _ABSENT or quant is None:
         return []
     try:
         block = fp8_block_size(quant, arch=NATIVE_MODEL_TYPE)
     except UnsupportedFP8Error as exc:
-        return [GuardFailure("quantization_config", _brief(quant), str(exc))]
+        detail = str(exc)
+        if route == "resident":
+            # fp8_block's tail names layer streaming (its other callers are the streamed
+            # sharder); a resident refusal must not (D15). The problem sentence is
+            # route-neutral; swap the support tail for the resident route's own.
+            detail = detail.removesuffix(SUPPORTED_FP8_FORMAT).rstrip()
+            detail = f"{detail} {_FP8_RESIDENT_SUPPORT}"
+        return [GuardFailure("quantization_config", _brief(quant), detail)]
     if block is not None:
         return []
     if isinstance(quant, Mapping) and "quant_method" in quant:
-        return [
-            GuardFailure(
-                "quantization_config.quant_method", _brief(quant["quant_method"]),
+        if route == "resident":
+            detail = (
+                "the resident route reads Kimi K2 unquantised or dequantises DeepSeek-V3's "
+                "block FP8 (the format K2-Base and K2-Instruct are published in); it does not "
+                "handle this one (Kimi-K2-Thinking's is compressed-tensors INT4)"
+            )
+        else:
+            detail = (
                 "layer streaming reads Kimi K2 unquantised or in DeepSeek-V3's block FP8 (the "
                 "format K2-Base and K2-Instruct are published in); it does not dequantise this "
-                "one (Kimi-K2-Thinking's is compressed-tensors INT4)",
+                "one (Kimi-K2-Thinking's is compressed-tensors INT4)"
             )
+        return [
+            GuardFailure("quantization_config.quant_method", _brief(quant["quant_method"]), detail)
         ]
-    return [
-        GuardFailure(
-            "quantization_config", _brief(quant),
-            "not a quantization_config layer streaming can read",
-        )
-    ]
+    if route == "resident":
+        detail = "not a quantization_config the resident route can read"
+    else:
+        detail = "not a quantization_config layer streaming can read"
+    return [GuardFailure("quantization_config", _brief(quant), detail)]
 
 
-def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
+def kimi_k2_guard_failures(
+    raw: Mapping[str, Any], route: str = "stream"
+) -> Tuple[GuardFailure, ...]:
     """Every field of a ``kimi_k2`` config the native class would not compute like K2, in
     guard order; ``()`` when the config is admitted.
+
+    ``route`` words the refusal reasons: ``"stream"`` (the default, the streamed loader's
+    wording, pinned byte-identical by its suite) or ``"resident"`` (no streamed-route
+    naming anywhere, ruling D15).
 
     The order is the table in ``benchmarks/gate-kimi-k2-admission.md`` (G1b), then every
     published key that is absent (second review; ``auto_map`` and ``quantization_config`` may
@@ -350,7 +389,7 @@ def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
         "the two compute alike",
     )
     failures.extend(_rope_failures(value("rope_scaling")))
-    failures.extend(_quantization_failures(value("quantization_config")))
+    failures.extend(_quantization_failures(value("quantization_config"), route))
     # Every published key present (second review): absent, the native class would compute
     # with its own default for it. A key whose row above already refused it is named once.
     named = {failure.field for failure in failures}
@@ -365,22 +404,38 @@ def kimi_k2_guard_failures(raw: Mapping[str, Any]) -> Tuple[GuardFailure, ...]:
             name = _key_name(key)
             quoted = name if name.startswith(("'", '"')) else f"'{name}'"
             failures.append(
-                GuardFailure(name, _brief(raw[key]), _UNEXPECTED_REASON.format(name=quoted))
+                GuardFailure(
+                    name, _brief(raw[key]),
+                    _UNEXPECTED_REASONS[route].format(name=quoted),
+                )
             )
     return tuple(failures)
 
 
-def _refusal(failures: Tuple[GuardFailure, ...]) -> UnsupportedKimiK2Error:
+def _refusal(failures: Tuple[GuardFailure, ...], route: str = "stream") -> UnsupportedKimiK2Error:
     listed = "; ".join(
         f"{item.field}={item.value} ({item.reason})" for item in failures[:_MAX_LISTED]
     )
     if len(failures) > _MAX_LISTED:
         listed += f"; and {len(failures) - _MAX_LISTED} more"
+    if route == "stream":
+        lead = (
+            f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') streams through transformers' own "
+            f"DeepseekV3 class"
+        )
+        scope = _OUT_OF_SCOPE
+    else:
+        lead = (
+            f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') runs resident through transformers' "
+            f"own DeepseekV3 class"
+        )
+        scope = _OUT_OF_SCOPE.replace(
+            "layer streaming does not admit them yet", "the resident route does not admit them yet"
+        )
     return UnsupportedKimiK2Error(
-        f"Kimi K2 (model_type '{KIMI_K2_MODEL_TYPE}') streams through transformers' own "
-        f"DeepseekV3 class, admitted only for a config it computes like K2's own modelling "
+        f"{lead}, admitted only for a config it computes like K2's own modelling "
         f"code: Kimi-K2-Base and Kimi-K2-Instruct as published (FP8 block, or dequantised to "
-        f"bf16). {_OUT_OF_SCOPE} This config differs: {listed}."
+        f"bf16). {scope} This config differs: {listed}."
     )
 
 
@@ -449,6 +504,670 @@ def load_stream_model_config(model_id: str, *, trust_remote_code: bool = False, 
     return DeepseekV3Config.from_dict(native, **unused)
 
 
+def load_resident_model_config(
+    model_id: str, *, revision: str | None = None, **kwargs: Any
+):
+    """The RESIDENT (non-streamed) route's config loader (#2104), the twin of
+    :func:`load_stream_model_config`.
+
+    ``AutoConfig``'s config for every model it loads; when it refuses (a ``ValueError``: K2
+    is "custom code" to it), the raw ``config.json`` is read — no remote code is executed —
+    and a ``model_type: kimi_k2`` config goes through :func:`kimi_k2_guard_failures` into
+    :func:`kimi_k2_native_config_dict` and ``DeepseekV3Config``. The checkpoint itself is
+    never modified: the rewrite is in-memory only. Any other model_type re-raises
+    ``AutoConfig``'s own error, and a refusal names every field the guard rejects, worded
+    for the resident route rather than the streamed one.
+    """
+    from transformers import AutoConfig
+
+    if kwargs.pop("trust_remote_code", None):
+        raise ValueError(
+            "resident Kimi K2 route: trust_remote_code is not honoured here — the guarded "
+            "rewrite reads config.json as data and never runs a repository's config code. "
+            "Remove the flag; the checkpoint needs none."
+        )
+    # Explicit False, not the default: transformers prompts and, on a "y", imports the
+    # repository's configuration module, which is exactly the code this route promises
+    # never to run (and the class it returns would bypass the guard).
+    try:
+        return AutoConfig.from_pretrained(
+            model_id, revision=revision, trust_remote_code=False, **kwargs
+        )
+    except ValueError:
+        read = _raw_config_dict(model_id, dict(kwargs, revision=revision))
+        if read is None or read[0].get("model_type") != KIMI_K2_MODEL_TYPE:
+            raise
+    config_dict, unused = read
+    failures = kimi_k2_guard_failures(config_dict, route="resident")
+    if failures:
+        raise _refusal(failures, route="resident")
+
+    from transformers import DeepseekV3Config
+
+    return DeepseekV3Config.from_dict(kimi_k2_native_config_dict(config_dict), **unused)
+
+
+#: Tensor key suffixes the resident load ignores entirely: the published K2 checkpoint
+#: carries one stale per-layer rotary buffer per layer that neither K2's own code (a
+#: non-persistent buffer) nor the native class (no per-layer rotary module) reads. The
+#: published shape is not asserted here on purpose — the suffix is what identifies it.
+_RESIDENT_IGNORED_SUFFIXES = (".rotary_emb.inv_freq",)
+
+
+def _local_kimi_k2_dir(base: str) -> bool:
+    """A local directory whose ``config.json`` declares ``model_type: kimi_k2`` (JSON only)."""
+    if not os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        return False
+    read = _raw_config_dict(base, {})
+    return read is not None and read[0].get("model_type") == KIMI_K2_MODEL_TYPE
+
+
+def uses_resident_kimi_k2_route(base: str) -> bool:
+    """True iff ``base`` loads through the resident K2 route.
+
+    That is a known K2 hub id (case-insensitively, local directories carved out) or a local
+    directory whose ``config.json`` declares ``model_type: kimi_k2``. Kept as one predicate
+    so the loader and the trainer call sites cannot disagree about which route a base takes.
+    """
+    from soup_cli.utils.kimi import is_resident_kimi_k2_base
+
+    return is_resident_kimi_k2_base(base) or _local_kimi_k2_dir(base)
+
+
+def resident_kimi_k2_rope_refusal(
+    base: str, rope_scaling_type: str | None, *, stream_layers: bool = False
+) -> str | None:
+    """Why a rope-scaling override cannot ride the resident K2 route, or ``None``.
+
+    The route rewrites the checkpoint config in memory behind the guard and never runs a
+    repository's config code, so a per-run rope override has no config object to land on
+    (the loader refuses a caller-supplied ``config``). Refusing here — before a tokenizer,
+    a config or a single weight is fetched — keeps that promise and replaces what would
+    otherwise be either a transformers ``auto_map`` error or a late, opaque refusal.
+    """
+    if stream_layers or not rope_scaling_type or not uses_resident_kimi_k2_route(base):
+        return None
+    return (
+        f"resident Kimi K2 route: rope_scaling_type {rope_scaling_type!r} cannot be applied "
+        "here — the route rewrites the checkpoint config in memory and never runs the "
+        "repository's config code, so a per-run rope override has nowhere to land. K2 "
+        "refuses the field on the streamed route too (training.stream_layers: true, #1697), "
+        "so remove it: this route trains at K2's published rope."
+    )
+
+
+def _resolve_resident_device(device_map: Any, torch: Any):
+    """The single device an accelerate-style ``device_map`` asks the whole model to live on.
+
+    ``None`` loads on CPU; ``"auto"`` is accelerate's "one device" plan, resolved to the
+    current CUDA device when one is available and to CPU otherwise; a plain device string
+    or accelerate's whole-model entry (a single-entry dict ``{"": <rank|device>}``,
+    what a per-rank map reduces to) names the target. Multi-device maps
+    (``"balanced"`` and friends, dicts with more than the ``""`` entry) are refused: v1
+    moves one whole model to one device, never shards it.
+
+    An explicit CUDA target (``"cuda:N"``, ``{"": N}``) is validated here, before a single
+    weight is read: the host must have the device, else a ``ValueError`` names the
+    request and refuses — not a raw ``RuntimeError`` from ``model.to`` after the whole
+    checkpoint is already in RAM.
+    """
+    device = _resident_device_target(device_map, torch)
+    if device.type == "cuda":
+        count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if count == 0 or (device.index or 0) >= count:
+            raise ValueError(
+                f"resident Kimi K2 route: device_map asks for {device}, but this host "
+                f"serves {count} CUDA device(s) "
+                f"(torch.cuda.is_available()={torch.cuda.is_available()}); refusing "
+                "before loading the checkpoint. Pass a device this host serves, 'auto', "
+                "or leave device_map unset (loads on CPU)."
+            )
+    return device
+
+
+def _resident_device_target(device_map: Any, torch: Any):
+    """The raw device a ``device_map`` names, with multi-device plans refused. ``"auto"``
+    resolves to the current CUDA device when available, else CPU."""
+    if device_map is None:
+        return torch.device("cpu")
+    if isinstance(device_map, str):
+        if device_map == "auto":
+            if torch.cuda.is_available():
+                return torch.device("cuda", torch.cuda.current_device())
+            return torch.device("cpu")
+        if device_map in ("balanced", "balanced_low_0", "sequential"):
+            raise NotImplementedError(
+                f"resident Kimi K2 route: device_map {device_map!r} is a multi-device "
+                "accelerate plan the v1 loader does not implement; pass 'auto', a plain "
+                "device string (e.g. 'cuda:0'), or leave device_map unset (loads on CPU)."
+            )
+        return torch.device(device_map)
+    if isinstance(device_map, dict) and len(device_map) == 1 and "" in device_map:
+        target = device_map[""]
+        if isinstance(target, bool):
+            target = None  # refused below
+        if isinstance(target, int):
+            return torch.device("cuda", target)
+        if isinstance(target, (str, torch.device)):
+            return torch.device(target)
+    raise NotImplementedError(
+        f"resident Kimi K2 route: device_map {device_map!r} is a multi-device accelerate "
+        "map the v1 loader does not resolve; pass 'auto', a plain device string "
+        "(e.g. 'cuda:0'), or leave device_map unset (loads on CPU)."
+    )
+
+
+def _resident_torch_dtype(key: str, raw_dtype: str, torch: Any):
+    """The torch dtype a checkpoint tensor is read as, from its safetensors spelling.
+
+    Every spelling the header reader admits resolves here; anything else is refused by name
+    — a raw ``KeyError`` would name neither the tensor nor the route, and a future reader
+    spelling must not crash the load with a bare traceback. An FP8 spelling is refused too
+    when no block plan claimed the tensor: FP8 bytes have no meaning without their scales,
+    so casting them to a float dtype would be silently wrong rather than merely unsupported.
+    """
+    table = {
+        "F8_E4M3": torch.float8_e4m3fn,
+        "BF16": torch.bfloat16,
+        "F16": torch.float16,
+        "F32": torch.float32,
+        "F64": torch.float64,
+        "I64": torch.int64,
+        "I32": torch.int32,
+        "I16": torch.int16,
+        "I8": torch.int8,
+        "U8": torch.uint8,
+        "BOOL": torch.bool,
+    }
+    stored = table.get(raw_dtype)
+    if stored is not None:
+        return stored
+    if raw_dtype.startswith("F8_"):
+        raise ValueError(
+            f"checkpoint tensor {key} is stored as FP8 ({raw_dtype}) but no FP8 block plan "
+            "covers it, and FP8 bytes have no meaning without their block scales — refusing "
+            "rather than casting them as numbers. The checkpoint is not the FP8 block layout "
+            "this route dequantises."
+        )
+    raise ValueError(
+        f"checkpoint tensor {key} is stored as {raw_dtype}, a dtype this route cannot read "
+        f"(supported: {', '.join(sorted(table))})."
+    )
+
+
+def _hub_connection_error(error: Exception) -> bool:
+    """Recognise the connection failures used by supported Hub HTTP transports."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    for module_name, names in (
+        ("httpx2", ("ConnectError", "TimeoutException")),
+        ("httpx", ("ConnectError", "TimeoutException")),
+        ("requests.exceptions", ("ConnectionError", "Timeout")),
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if any(isinstance(error, getattr(module, name)) for name in names):
+            return True
+    return False
+
+
+def _check_resident_hub_cache_space(repo_id: str, revision: str | None) -> str:
+    """Check the uncached files against free space and return their resolved revision."""
+    from fnmatch import fnmatch
+
+    from huggingface_hub import model_info, try_to_load_from_cache
+    from huggingface_hub.constants import HF_HUB_CACHE
+    from huggingface_hub.file_download import are_symlinks_supported, repo_folder_name
+
+    info = model_info(repo_id, revision=revision, files_metadata=True)
+    resolved_revision = info.sha
+    if not resolved_revision:
+        raise ValueError(f"resident Kimi K2 route: no revision returned for {repo_id!r}")
+    cache_dir = str(Path(HF_HUB_CACHE).expanduser().resolve())
+    blobs = os.path.join(cache_dir, repo_folder_name(repo_id=repo_id, repo_type="model"), "blobs")
+    required = 0
+    for sibling in info.siblings:
+        name = sibling.rfilename
+        if not (fnmatch(name, "*.safetensors") or fnmatch(name, "*.json")):
+            continue
+        cached = try_to_load_from_cache(
+            repo_id, name, cache_dir=cache_dir, revision=resolved_revision
+        )
+        if isinstance(cached, str):
+            continue
+        lfs = getattr(sibling, "lfs", None)
+        oid = lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)
+        oid = oid or getattr(sibling, "blob_id", None)
+        if (
+            isinstance(oid, str)
+            and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid)
+            and os.path.isfile(os.path.join(blobs, oid))
+            and os.path.getsize(os.path.join(blobs, oid)) == sibling.size
+            and are_symlinks_supported(cache_dir)
+        ):
+            continue
+        if sibling.size is None:
+            raise ValueError(f"resident Kimi K2 route: no file size for {name!r} in {repo_id!r}")
+        required += sibling.size
+    if not required:
+        return resolved_revision
+    anchor = cache_dir
+    while not os.path.exists(anchor):
+        parent = os.path.dirname(anchor)
+        if parent == anchor:
+            break  # filesystem root: disk_usage still answers for it
+        anchor = parent
+    free = int(shutil.disk_usage(anchor).free)
+    if required > free:
+        raise OSError(
+            f"resident Kimi K2 route: the pinned revision of {repo_id!r} needs {required} "
+            f"bytes of cache space for its safetensors/json files, but only {free} bytes "
+            f"are free on the volume holding the Hugging Face cache ({cache_dir}); "
+            "refusing before the first byte. Free space on that volume or point "
+            "HF_HOME / HF_HUB_CACHE at a larger one."
+        )
+    return resolved_revision
+
+
+def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
+    """The RESIDENT (non-streamed) route's model loader (#2104): a guarded Kimi K2
+    checkpoint loaded natively into ``DeepseekV3ForCausalLM``, FP8-block weights
+    dequantised per-tensor on load.
+
+    Every base that is not Kimi K2 (a hub id :func:`~soup_cli.utils.kimi.is_resident_kimi_k2_base`
+    admits, or a local directory whose ``config.json`` declares ``model_type: kimi_k2``)
+    passes straight through to ``AutoModelForCausalLM.from_pretrained(base,
+    **model_kwargs)``, so call sites may call this unconditionally.
+
+    For a K2 base the config goes through :func:`load_resident_model_config` (the guard
+    refuses Thinking/0905/bad configs, naming every failing field), the safetensors are
+    read tensor by tensor — each FP8 block weight is dequantised to ``dtype`` against its
+    float32 ``_scale_inv`` exactly as the streamed sharder does
+    (:func:`~soup_cli.utils.fp8_block.dequantize_fp8_block`), raw FP8 bytes released
+    before the next tensor — and the state dict is assigned onto a meta skeleton built
+    under ``init_empty_weights``.
+
+    Honoured ``model_kwargs``: ``dtype`` (default ``torch.bfloat16``), ``revision``, and
+    ``attn_implementation`` (set on the config). ``trust_remote_code`` is accepted and
+    ignored: this route never runs a repository's code. When it is set on a local
+    directory, the loader prints one line saying the model load ignores it (the tokenizer
+    load still honours it), so nobody assumes the directory's own model code ran.
+    ``quantization_config`` is refused — the resident route loads bf16 only; train on a
+    dequantised copy or use the streamed route for 4-bit. A caller-supplied ``config``
+    (e.g. the long-context rope override) is refused too: per-config rope overrides are
+    not supported on the resident K2 route yet (follow-up), and a foreign config would
+    bypass the guard — drop the kwarg or use the streamed route. ``device_map``: v1 loads
+    on CPU and then moves to one device — ``"auto"`` resolves to the current CUDA device
+    when one is available, else CPU; a plain device string (``"cpu"``, ``"cuda:0"``, ...)
+    or accelerate's whole-model entry (a single-entry dict like ``{"": 0}``) names it
+    directly; any multi-device accelerate map is refused rather than guessed.
+
+    Parameters load at ``dtype``; float buffers keep their stored dtype (the checkpoint
+    and ``from_pretrained`` keep ``e_score_correction_bias`` float32), and integer
+    buffers keep their exact dtype.
+
+    A hub id's weights resolve through ``huggingface_hub.snapshot_download`` with the
+    safetensors/json allow-pattern. Online, the sizes of files missing from the cache at
+    the resolved revision are compared with free cache space before downloading; a
+    refusal names both numbers and the cache directory. Offline, the cached snapshot is
+    used without requesting Hub metadata.
+
+    The model is returned on the requested device in the requested dtype; train/eval mode
+    is the caller's to set. No layer streaming is involved on this route: nothing here
+    reads or builds a streamed shard cache.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    if not uses_resident_kimi_k2_route(base):
+        return AutoModelForCausalLM.from_pretrained(base, **model_kwargs)
+
+    model_kwargs = dict(model_kwargs)
+    revision = model_kwargs.pop("revision", None)
+    if model_kwargs.pop("quantization_config", None) is not None:
+        raise ValueError(
+            "resident Kimi K2 route: model_kwargs['quantization_config'] is set, but the "
+            "resident route loads bf16 only. Remove it and load the FP8-block checkpoint "
+            "dequantised (this loader does that), train on a dequantised bf16 copy, or "
+            "use the streamed route for 4-bit training."
+        )
+    dtype = model_kwargs.pop("dtype", torch.bfloat16)
+    device_map = model_kwargs.pop("device_map", None)
+    trust_remote_code = model_kwargs.pop("trust_remote_code", None)
+    if (
+        trust_remote_code
+        and console is not None
+        and os.path.isdir(os.path.realpath(os.path.expanduser(base)))
+    ):
+        console.print(
+            "resident Kimi K2 route: trust_remote_code is set, but this route's model "
+            "load ignores it — the guarded native loader never runs the directory's own "
+            "model code (the tokenizer load still honours the flag).",
+            markup=False,
+        )
+    attn_implementation = model_kwargs.pop("attn_implementation", None)
+    if model_kwargs.pop("config", None) is not None:
+        # Ruling D17: a caller-supplied config would bypass the guard, and with
+        # trust_remote_code resolved it would even be code AutoConfig already ran.
+        raise UnsupportedKimiK2Error(
+            "resident Kimi K2 route: model_kwargs['config'] (a pre-built config, e.g. the "
+            "long-context rope override) is not supported yet — the guarded published K2 "
+            "config is the only admitted one on this route, and a foreign config would "
+            "bypass that guard. Remove the config kwarg (drop the rope override), or use "
+            "the streamed route."
+        )
+    if model_kwargs:
+        raise ValueError(
+            "resident Kimi K2 route: unsupported model_kwargs "
+            f"{sorted(model_kwargs)}; supported: dtype, revision, "
+            "attn_implementation, device_map, trust_remote_code."
+        )
+
+    device = _resolve_resident_device(device_map, torch)
+    allowed_symlink_root = None
+    if os.path.isdir(os.path.realpath(os.path.expanduser(base))):
+        config = load_resident_model_config(base, revision=revision)
+        weights_dir = os.path.realpath(os.path.expanduser(base))
+    else:
+        from huggingface_hub import snapshot_download
+        from huggingface_hub.constants import HF_HUB_CACHE, HF_HUB_OFFLINE
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        allowed_symlink_root = HF_HUB_CACHE
+        weights_dir = None
+        if HF_HUB_OFFLINE:
+            weights_dir = snapshot_download(
+                repo_id=base, revision=revision, allow_patterns=["*.safetensors", "*.json"],
+                local_files_only=True,
+            )
+            resolved_revision = os.path.basename(os.path.normpath(weights_dir))
+        else:
+            try:
+                resolved_revision = _check_resident_hub_cache_space(base, revision)
+            except Exception as exc:
+                if not _hub_connection_error(exc):
+                    raise
+                try:
+                    weights_dir = snapshot_download(
+                        repo_id=base, revision=revision,
+                        allow_patterns=["*.safetensors", "*.json"], local_files_only=True,
+                    )
+                except LocalEntryNotFoundError:
+                    raise exc
+                resolved_revision = os.path.basename(os.path.normpath(weights_dir))
+        config = load_resident_model_config(base, revision=resolved_revision)
+        if weights_dir is None:
+            weights_dir = snapshot_download(
+                repo_id=base, revision=resolved_revision,
+                allow_patterns=["*.safetensors", "*.json"],
+            )
+
+    from soup_cli.utils.fp8_block import (
+        SUPPORTED_FP8_FORMAT,
+        FP8BlockPlan,
+        UnsupportedFP8Error,
+        dequantize_fp8_block,
+        plan_fp8_block,
+        quantization_config_of,
+    )
+    from soup_cli.utils.layer_shard import (
+        _canonical_stream_key,
+        _discover_safetensors,
+        _read_source_tensors,
+    )
+    from soup_cli.utils.safetensors_reader import read_header, read_into
+
+    shard_paths = _discover_safetensors(weights_dir, allowed_symlink_root=allowed_symlink_root)
+    tensors = _read_source_tensors(shard_paths)
+    try:
+        plan = plan_fp8_block(quantization_config_of(config), tensors, arch="deepseek_v3")
+    except UnsupportedFP8Error as exc:
+        # plan_fp8_block's tail names the streamed route; this is the resident one.
+        message = str(exc)
+        if message.endswith(SUPPORTED_FP8_FORMAT):
+            message = message[: -len(SUPPORTED_FP8_FORMAT)] + _FP8_RESIDENT_SUPPORT
+        raise ValueError(message) from exc
+    if plan is not None:
+        # The saved model contains dequantised weights, not an FP8 checkpoint.
+        delattr(config, "quantization_config")
+
+    # Every tensor's (file, byte range), canonical key, so an FP8 weight's scale is found
+    # whether or not it sits in the same shard.
+    entries = {}
+    for path in shard_paths:
+        for key, entry in read_header(path).items():
+            entries[_canonical_stream_key(key)] = (path, entry)
+
+    from accelerate import init_empty_weights
+    from transformers import DeepseekV3ForCausalLM
+
+    if attn_implementation is not None:
+        config._attn_implementation = attn_implementation
+    with init_empty_weights():
+        model = DeepseekV3ForCausalLM(config)
+    model.tie_weights()
+    # Only the model's own buffers keep their stored dtype (e_score_correction_bias is
+    # float32 in the checkpoint and in from_pretrained's own load); everything else —
+    # parameters and per-expert tensors awaiting the fuse — takes the requested dtype.
+    buffer_keys = {name for name, _buffer in model.named_buffers()}
+
+    state = {}
+    handles = {}
+    dequantised = 0
+    try:
+        for key in sorted(entries):
+            path, entry = entries[key]
+            raw_dtype, shape = tensors[key]
+            if plan is not None and key in plan.weights:
+                scale_key = FP8BlockPlan.scale_key(key)
+                scale_path, scale_entry = entries[scale_key]
+                raw_weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
+                read_into(_shard_handle(handles, path), entry, raw_weight)
+                raw_scale = torch.empty(tensors[scale_key][1], dtype=torch.float32)
+                read_into(_shard_handle(handles, scale_path), scale_entry, raw_scale)
+                state[key] = dequantize_fp8_block(
+                    raw_weight, raw_scale, plan.block, name=key, dtype=dtype
+                )
+                dequantised += 1
+                del raw_weight, raw_scale
+            elif plan is not None and key in plan.scales:
+                continue  # consumed by its weight's dequantisation, never a parameter
+            elif key.endswith(_RESIDENT_IGNORED_SUFFIXES):
+                continue  # stale per-layer rotary buffer; the native class has none
+            else:
+                stored_dtype = _resident_torch_dtype(key, raw_dtype, torch)
+                tensor = torch.empty(shape, dtype=stored_dtype)
+                read_into(_shard_handle(handles, path), entry, tensor)
+                if key in buffer_keys:
+                    # A float buffer keeps its stored dtype; only parameters (and the
+                    # per-expert tensors the fuse turns into parameters) take ``dtype``.
+                    state[key] = tensor
+                else:
+                    state[key] = tensor if stored_dtype == dtype else tensor.to(dtype)
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    _fuse_per_expert_state(state, config)
+
+    model_state = model.state_dict()
+    expected = set(model_state)
+    if getattr(config, "tie_word_embeddings", False):
+        # Not the published K2 layout — its config says ``tie_word_embeddings: false`` and
+        # the index ships ``lm_head.weight`` — but a re-saved tied copy may omit the head,
+        # and one that ships it must ship the same matrix (the re-point below owns the
+        # head). A differing head means the checkpoint is mislabelled: refusing beats
+        # training on the embedding while the config claims the head is shared.
+        expected.discard("lm_head.weight")
+        shipped_head = state.pop("lm_head.weight", None)
+        if shipped_head is not None:
+            embedding = state.get("model.embed_tokens.weight")
+            if embedding is None or not torch.equal(
+                shipped_head.to(embedding.dtype), embedding
+            ):
+                raise ValueError(
+                    "checkpoint declares tie_word_embeddings but ships an lm_head.weight "
+                    "that differs from model.embed_tokens.weight; the two cannot both be "
+                    "right. The checkpoint is damaged or mislabelled."
+                )
+    unexpected = sorted(set(state) - expected)
+    if unexpected:
+        raise ValueError(
+            "checkpoint holds tensors the native DeepseekV3 model has no parameters for: "
+            + ", ".join(unexpected[:_MAX_LISTED])
+            + (
+                f" and {len(unexpected) - _MAX_LISTED} more"
+                if len(unexpected) > _MAX_LISTED
+                else ""
+            )
+        )
+    missing = sorted(expected - set(state))
+    if missing:
+        raise ValueError(
+            "checkpoint is missing tensors the native DeepseekV3 model needs: "
+            + ", ".join(missing[:_MAX_LISTED])
+            + (f" and {len(missing) - _MAX_LISTED} more" if len(missing) > _MAX_LISTED else "")
+        )
+    mismatched = sorted(
+        key for key in state
+        if tuple(int(dim) for dim in model_state[key].shape)
+        != tuple(int(dim) for dim in state[key].shape)
+    )
+    if mismatched:
+        raise ValueError(
+            "checkpoint tensors whose shapes differ from the native model's parameters: "
+            + ", ".join(mismatched[:_MAX_LISTED])
+        )
+    model.load_state_dict(state, assign=True, strict=False)
+    if getattr(config, "tie_word_embeddings", False):
+        # assign=True replaced embed_tokens; re-point the tied head at the loaded tensor.
+        model.lm_head.weight = model.get_input_embeddings().weight
+
+    if console is not None:
+        detail = f", {dequantised} FP8 block weights dequantised" if dequantised else ""
+        console.print(
+            f"[green]Kimi K2 resident load:[/] {len(state)} tensors{detail} "
+            f"({dtype}, device {device})"
+        )
+    # ``state`` is a second reference to every tensor the model now owns (``assign=True``),
+    # so drop it before the device move: otherwise a CUDA move keeps the whole CPU model
+    # alive while building the whole device copy, i.e. two models at the peak.
+    del state
+    return model.to(device)
+
+
+def _shard_handle(handles: dict, path: str):
+    """The cached read handle for one shard file, opened on first use."""
+    handle = handles.get(path)
+    if handle is None:
+        handle = open(path, "rb")
+        handles[path] = handle
+    return handle
+
+
+#: Per-expert checkpoint spelling (the published K2 index, and what ``save_pretrained``
+#: writes for the fused native model) -> the fused 3-D parameters the native model holds
+#: in transformers 5, the layout :func:`transformers.AutoModelForCausalLM.from_pretrained`
+#: itself produces via its qwen2_moe conversion (MergeModulelist + Concatenate).
+_EXPERT_KEY_RE = re.compile(r"^(.*)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+
+
+def _fuse_per_expert_state(state: dict, config: Any) -> None:
+    """Merge ``mlp.experts.<i>.*.weight`` tensors into the fused ``gate_up_proj`` /
+    ``down_proj`` parameters, in place, one preallocated copy per layer.
+
+    Per-expert tensors stay per-expert on disk and in the read loop; this is the single
+    materialisation the fused native module tree needs. Any expert index missing, or any
+    of the three projections missing for one expert, is refused by name.
+    """
+    import torch
+
+    grouped = {}
+    for key in list(state):
+        match = _EXPERT_KEY_RE.match(key)
+        if match is not None:
+            grouped.setdefault(match.group(1), {}).setdefault(
+                int(match.group(2)), {}
+            )[match.group(3)] = state.pop(key)
+    if not grouped:
+        return
+    n_routed = int(config.n_routed_experts)
+    for prefix, experts in sorted(grouped.items()):
+        fused_keys = (
+            prefix + ".mlp.experts.gate_up_proj",
+            prefix + ".mlp.experts.down_proj",
+        )
+        if any(key in state for key in fused_keys):
+            raise ValueError(
+                f"checkpoint layer {prefix} carries both per-expert tensors and a fused "
+                f"{fused_keys[0]}; the two spellings would fight over the same parameters. "
+                "The checkpoint is damaged or two exports were mixed."
+            )
+        indices = sorted(experts)
+        incomplete = [
+            index
+            for index in indices
+            if set(experts[index]) != {"gate_proj", "up_proj", "down_proj"}
+        ]
+        if incomplete or indices != list(range(n_routed)):
+            raise ValueError(
+                f"checkpoint layer {prefix} holds per-expert tensors for experts "
+                f"{indices}, not every index 0..{n_routed - 1} with gate_proj, up_proj "
+                f"and down_proj (incomplete: {incomplete}). The checkpoint is damaged or "
+                "not a complete Kimi K2 copy."
+            )
+        for projection in ("gate_proj", "up_proj", "down_proj"):
+            reference_shape = tuple(int(dim) for dim in experts[0][projection].shape)
+            for index in range(1, n_routed):
+                shape = tuple(int(dim) for dim in experts[index][projection].shape)
+                if shape != reference_shape:
+                    raise ValueError(
+                        f"checkpoint layer {prefix} holds {projection} tensors of "
+                        f"differing shapes: expert 0 has {list(reference_shape)}, but "
+                        f"{prefix}.mlp.experts.{index}.{projection}.weight has "
+                        f"{list(shape)}. The checkpoint is damaged."
+                    )
+        gate_shape = tuple(int(dim) for dim in experts[0]["gate_proj"].shape)
+        up_shape = tuple(int(dim) for dim in experts[0]["up_proj"].shape)
+        if up_shape != gate_shape:
+            # The fused parameter is half gate, half up, so the two row blocks must match:
+            # a shorter up would broadcast into the slice and duplicate rows silently.
+            raise ValueError(
+                f"checkpoint layer {prefix} pairs gate_proj {list(gate_shape)} with "
+                f"up_proj {list(up_shape)}; the fused gate_up_proj needs both blocks the "
+                "same shape. The checkpoint is damaged."
+            )
+        down_shape = tuple(int(dim) for dim in experts[0]["down_proj"].shape)
+        expected_down = (int(config.hidden_size), gate_shape[0])
+        if down_shape != expected_down:
+            raise ValueError(
+                f"checkpoint layer {prefix} holds a down_proj of {list(down_shape)}, but "
+                f"the native fused expert needs [hidden_size, intermediate] = "
+                f"{list(expected_down)}. The checkpoint is damaged."
+            )
+        gate_shape = experts[0]["gate_proj"].shape
+        down_shape = experts[0]["down_proj"].shape
+        gate_up = torch.empty(
+            (n_routed, 2 * int(gate_shape[0]), int(gate_shape[1])),
+            dtype=experts[0]["gate_proj"].dtype,
+        )
+        down = torch.empty(
+            (n_routed, int(down_shape[0]), int(down_shape[1])),
+            dtype=experts[0]["down_proj"].dtype,
+        )
+        for index in range(n_routed):
+            parts = experts[index]
+            rows = int(parts["gate_proj"].shape[0])
+            gate_up[index, :rows].copy_(parts["gate_proj"])
+            gate_up[index, rows:].copy_(parts["up_proj"])
+            down[index].copy_(parts["down_proj"])
+            del parts["gate_proj"], parts["up_proj"], parts["down_proj"]
+        state[prefix + ".mlp.experts.gate_up_proj"] = gate_up
+        state[prefix + ".mlp.experts.down_proj"] = down
+
+
 def _tiktoken_available() -> bool:
     return importlib.util.find_spec("tiktoken") is not None
 
@@ -464,9 +1183,8 @@ def kimi_k2_tokenizer_hint(model_id: str, **kwargs: Any) -> Optional[str]:
         return None
     hint = (
         "Kimi K2's tokenizer exists only as code in its repository (tokenization_kimi.py), so "
-        "it needs --trust-remote-code. Under layer streaming that flag reaches the tokenizer "
-        "only: the config and the model are still transformers' own DeepseekV3 classes, never "
-        "the repository's code."
+        "it needs --trust-remote-code. That flag reaches the tokenizer only: the config and "
+        "the model are transformers' own DeepseekV3 classes, never the repository's code."
     )
     if not _tiktoken_available():
         hint += (

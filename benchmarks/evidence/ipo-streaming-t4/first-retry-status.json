@@ -1,0 +1,44 @@
+[
+  {
+    "cell": "streamed-ipo-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-ipo-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-ipo-nf4-1024",
+    "status": "fail",
+    "reason": "Command '['/usr/bin/python3', '-m', 'pytest', 'tests/test_ipo_streaming.py::test_cuda_first_applied_update[streamed-ipo-nf4-1024]', '-m', 'gpu', '--no-cov', '-q', '-s']' returned non-zero exit status 1."
+  },
+  {
+    "cell": "resident-ipo-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-preference-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-preference-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-preference-nf4-1024",
+    "status": "fail",
+    "reason": "Command '['/usr/bin/python3', '-m', 'pytest', 'tests/test_ipo_streaming.py::test_cuda_first_applied_update[streamed-preference-nf4-1024]', '-m', 'gpu', '--no-cov', '-q', '-s']' returned non-zero exit status 1."
+  },
+  {
+    "cell": "resident-preference-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-ipo-none-default",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-ipo-none-default",
+    "status": "pass"
+  }
+]

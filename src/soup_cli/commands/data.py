@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.commands._common import refuse_output_over_input
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -97,6 +97,7 @@ def validate(
         "--min-valid-fraction",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
 ):
@@ -788,6 +789,8 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
     """Random sampling without replacement."""
+    if num <= 0:
+        return []
     rng = random.Random(seed)
     num = min(num, len(data))
     return rng.sample(data, num)
@@ -800,6 +803,8 @@ def _sample_diverse(
 
     Falls back to random sampling if sklearn is not available.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -870,6 +875,8 @@ def _sample_hard(data: list[dict], num: int) -> list[dict]:
 
     Longer texts tend to be more complex / challenging.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -894,11 +901,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
@@ -919,6 +926,17 @@ def sample_data(
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
         raise typer.Exit(1)
+
+    if num is not None and num <= 0:
+        console.print("[red]--n must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if pct is not None:
+        import math as _math
+
+        if not _math.isfinite(pct) or not (0.0 < pct <= 100.0):
+            console.print("[red]--pct must be a finite number in (0, 100].[/]")
+            raise typer.Exit(1)
 
     if strategy not in ("random", "diverse", "hard"):
         console.print(
@@ -1030,6 +1048,14 @@ def split_data(
     # train — a silently inverted split).
     if (val is not None and val < 0) or (test is not None and test < 0):
         console.print("[red]--val and --test must be non-negative.[/]")
+        raise typer.Exit(1)
+
+    if (val or 0) == 0 and (test or 0) == 0:
+        console.print("[red]Specify at least one positive split (--val or --test).[/]")
+        raise typer.Exit(1)
+
+    if not absolute and ((val or 0) + (test or 0) >= 100):
+        console.print("[red]Split percentages must sum to less than 100.[/]")
         raise typer.Exit(1)
 
     if stratify and stratify_semantic:
@@ -1190,7 +1216,13 @@ def _stratified_split(
     data: list, val_count: int, test_count: int,
     stratify_keys: str | list[str], seed: int | None = None,
 ) -> tuple:
-    """Stratified split preserving category distribution."""
+    """Stratified split preserving category distribution.
+
+    A separate ``random.Random(seed)`` supplies the tie ranks for both passes.
+    With an explicit seed it shares the start of the stream used to shuffle
+    the first group, but does not advance the row RNG, so the shuffle within
+    each group matches v0.78.0. With ``seed=None``, both RNGs stay unseeded.
+    """
     # Group by stratify keys
     groups: dict[str, list[int]] = {}
     for idx, row in enumerate(data):
@@ -1201,23 +1233,24 @@ def _stratified_split(
         groups.setdefault(key, []).append(idx)
 
     rng = random.Random(seed)
-    total = len(data)
+    group_keys = list(groups)
+    group_capacities = [len(groups[key]) for key in group_keys]
+    tie_rank = list(range(len(group_keys)))
+    random.Random(seed).shuffle(tie_rank)
+    holdout_counts = _largest_remainder_allocation(
+        val_count + test_count, group_capacities, tie_rank
+    )
+    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts, tie_rank)
 
     train_indices = []
     val_indices = []
     test_indices = []
 
-    for key, indices in groups.items():
+    for group_index, key in enumerate(group_keys):
+        indices = groups[key]
         rng.shuffle(indices)
-        group_size = len(indices)
-        group_frac = group_size / total
-
-        group_val = round(val_count * group_frac) if val_count else 0
-        group_test = round(test_count * group_frac) if test_count else 0
-
-        # Ensure we don't take more than available
-        group_val = min(group_val, group_size)
-        group_test = min(group_test, group_size - group_val)
+        group_test = group_test_counts[group_index]
+        group_val = holdout_counts[group_index] - group_test
 
         test_indices.extend(indices[:group_test])
         val_indices.extend(indices[group_test:group_test + group_val])
@@ -1228,6 +1261,42 @@ def _stratified_split(
     test_data = [data[idx] for idx in test_indices]
 
     return train_data, val_data, test_data
+
+
+def _largest_remainder_allocation(
+    count: int, capacities: list[int], tie_rank: list[int]
+) -> list[int]:
+    """Allocate ``count`` proportionally, using ``tie_rank`` only for equal remainders."""
+    allocation = [0] * len(capacities)
+    total_capacity = sum(capacities)
+    target = min(max(count, 0), total_capacity)
+    if target == 0 or total_capacity == 0:
+        return allocation
+
+    numerators = [target * capacity for capacity in capacities]
+    allocation = [
+        min(numerator // total_capacity, capacity)
+        for numerator, capacity in zip(numerators, capacities, strict=True)
+    ]
+    remaining = target - sum(allocation)
+    remainders = [numerator % total_capacity for numerator in numerators]
+    remainder_order = sorted(
+        range(len(capacities)),
+        key=lambda index: (-remainders[index], tie_rank[index]),
+    )
+    while remaining:
+        progressed = False
+        for index in remainder_order:
+            if allocation[index] < capacities[index]:
+                allocation[index] += 1
+                remaining -= 1
+                progressed = True
+                if remaining == 0:
+                    break
+        if not progressed:
+            break
+
+    return allocation
 
 
 # ---------------------------------------------------------------------------
@@ -4613,3 +4682,47 @@ def brain_rot_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{_escape(str(exc))}[/]")
             raise typer.Exit(3) from exc
+
+
+@app.command(name="leakage", cls=GateCommand)
+def leakage(
+    train: str = typer.Option(..., "--train", help="Training JSONL under cwd."),
+    evaluation: str = typer.Option(..., "--eval", help="Evaluation JSONL under cwd."),
+    samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
+    as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
+):
+    """Check input-text overlap without writing datasets.
+
+    Exit 0 when clean, 2 on overlap and 3 on unusable input.
+    """
+    from soup_cli.utils.data_leakage import check_leakage
+    from soup_cli.utils.data_score import load_jsonl_rows
+
+    try:
+        report = check_leakage(
+            load_jsonl_rows(train, strict=True),
+            load_jsonl_rows(evaluation, strict=True),
+            samples=samples,
+        )
+    except (TypeError, ValueError, OSError) as error:
+        console.print(f"[red]Leakage input error: {for_terminal(error)}[/]", emoji=False)
+        raise typer.Exit(EXIT_USAGE_ERROR) from error
+
+    if as_json:
+        typer.echo(json.dumps(report, ensure_ascii=False))
+    else:
+        table = Table(title="Train/eval input-text overlap")
+        table.add_column("Metric")
+        table.add_column("Value")
+        table.add_row("Train records", str(report["train_rows"]))
+        table.add_row("Eval records", str(report["eval_rows"]))
+        table.add_row("Matched eval records", str(report["overlap_eval_rows"]))
+        table.add_row("Overlap", f"{report['overlap_percent']:.2f}%")
+        console.print(table)
+        for pair in report["samples"]:
+            console.print(
+                f"Train record {pair['train_row']} / eval record {pair['eval_row']}: "
+                f"{for_terminal(pair['prompt_preview'])}", emoji=False,
+            )
+    if report["overlap_eval_rows"]:
+        raise typer.Exit(EXIT_GATE_FAILED)
