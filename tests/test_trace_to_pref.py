@@ -260,6 +260,31 @@ class TestFromTracesCLI:
             for chosen, rejected in expected
         ]
 
+    def test_bom_prefixed_log_keeps_first_record(self, tmp_path, monkeypatch):
+        """A UTF-8 BOM must not drop the first JSONL record (#3099)."""
+        monkeypatch.chdir(tmp_path)
+        logs = tmp_path / "bom.jsonl"
+        self._write_langchain_log(logs, [
+            ("Hi", "Hello!", 1),
+            ("Hi", "Ugh.", 0),
+        ])
+        # Rewrite the same payload with a leading BOM.
+        logs.write_bytes(b"\xef\xbb\xbf" + logs.read_bytes())
+        output = tmp_path / "prefs.jsonl"
+
+        result = runner.invoke(app, [
+            "data", "from-traces",
+            "--logs", str(logs),
+            "--format", "langchain",
+            "--signal", "thumbs_up",
+            "--output", str(output),
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        pairs = [json.loads(ln) for ln in output.read_text(encoding="utf-8").splitlines()]
+        assert len(pairs) == 1
+        assert pairs[0]["chosen"] == "Hello!"
+        assert pairs[0]["rejected"] == "Ugh."
+
     def test_invalid_format_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "x.jsonl"
