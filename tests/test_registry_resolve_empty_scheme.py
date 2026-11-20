@@ -66,4 +66,5 @@ def test_delete_of_a_bare_scheme_keeps_the_entry(one_entry):
 def test_show_of_a_bare_scheme_is_not_found(one_entry):
     result = runner.invoke(app, ["registry", "show", "registry://"])
     assert result.exit_code != 0
+    assert "Registry entry not found: registry://" in " ".join(strip_ansi(result.output).split())
     assert one_entry not in strip_ansi(result.output)
