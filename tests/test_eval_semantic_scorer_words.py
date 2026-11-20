@@ -2,8 +2,10 @@
 
 ``score_semantic`` is Jaccard overlap of the two sides' lowercased words. A word
 used to keep the punctuation around it, so ``h2o.`` was not ``h2o``. A word is
-now read with its leading and trailing non-word characters removed, a word that
-is only punctuation is dropped, and punctuation inside a word stays part of it.
+now read with its leading and trailing punctuation and symbols removed, a word
+that is only punctuation is dropped, and punctuation inside a word stays part of
+it. A combining mark (a vowel sign, a niqqud point, an accent written as its own
+character) is part of the word, also at its edge.
 """
 
 from __future__ import annotations
@@ -44,6 +46,32 @@ def test_punctuation_inside_a_word_keeps_it_one_word(output: str, part: str) -> 
 def test_a_non_ascii_word_keeps_its_letters() -> None:
     assert score_semantic("café.", "Café") == 1.0
     assert score_semantic("café", "caf") == 0.0
+
+
+# Each pair differs only in a final combining mark, so the two are different words. The
+# strings are built from escapes so that this file stays ASCII.
+COMBINING_MARK_PAIRS = [
+    # Hindi: the last vowel sign is U+0940 in one word and U+0942 in the other.
+    ("\u0939\u093f\u0928\u094d\u0926\u0940", "\u0939\u093f\u0928\u094d\u0926\u0942"),
+    # cafe with a combining acute accent (U+0301) against cafe.
+    ("cafe\u0301", "cafe"),
+    # Thai: the vowel sign U+0E34 against U+0E35 on the same consonant.
+    ("\u0e01\u0e34", "\u0e01\u0e35"),
+    # Hebrew: a final kaf with a qamats (U+05B8) against the bare letters.
+    ("\u05dc\u05b0\u05da\u05b8", "\u05dc\u05b0\u05da"),
+]
+
+
+@pytest.mark.parametrize(("word", "other"), COMBINING_MARK_PAIRS)
+def test_a_final_combining_mark_is_part_of_the_word(word: str, other: str) -> None:
+    assert score_semantic(word, other) == 0.0
+    assert score_semantic(other, word) == 0.0
+
+
+@pytest.mark.parametrize("word", [w for pair in COMBINING_MARK_PAIRS for w in pair])
+def test_a_full_stop_after_a_combining_mark_is_still_removed(word: str) -> None:
+    assert score_semantic(f"{word}.", word) == 1.0
+    assert score_semantic(f"({word})", word) == 1.0
 
 
 @pytest.mark.parametrize("output", ["", "   ", "...", "— ?! ,", "()"])
