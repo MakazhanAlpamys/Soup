@@ -299,6 +299,9 @@ class LoopState:
     # Consecutive failures from raised loop stages, kept apart from dataset-specific train retry.
     # State written before this field loads with None.
     failed_stage: Optional[dict] = None
+    # Back-off for a refused deploy whose trained candidate remains in pending_deploy.
+    # Older state files load with None and keep their pending candidate.
+    failed_deploy: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -498,6 +501,8 @@ class LoopState:
             _check_failed_train(self.failed_train)
         if self.failed_stage is not None:
             _check_failed_stage(self.failed_stage)
+        if self.failed_deploy is not None:
+            _check_failed_deploy(self.failed_deploy)
         if self.last_idle is not None:
             _check_last_idle(self.last_idle)
         if self.canary_override is not None:
@@ -615,8 +620,8 @@ def _check_pending_deploy(pending: object) -> None:
         if not isinstance(pending.get(key), dict):
             raise ValueError(f"pending_deploy must hold a {key} dict")
     attempts = pending.get("attempts")
-    if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 100:
-        raise ValueError("pending_deploy attempts must be an int from 1 to 100")
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or not 0 <= attempts <= 100:
+        raise ValueError("pending_deploy attempts must be an int from 0 to 100")
 
 
 _FAILED_TRAIN_KEYS = ("inputs", "attempts", "last_at", "retry_after", "held", "reason")
@@ -644,8 +649,13 @@ def _check_failed_stage(record: object) -> None:
         raise ValueError("failed_stage has_non_train_failure must be bool")
 
 
+def _check_failed_deploy(record: object) -> None:
+    """Validate back-off timing for a refused deploy."""
+    _check_failure_record(record, "failed_deploy")
+
+
 def _check_failure_record(record: object, field: str) -> None:
-    """Validate the shared persisted shape used by retry records."""
+    """Validate the common persisted retry-record shape."""
     if not isinstance(record, dict):
         raise ValueError(f"{field} must be a dict or None")
     if sorted(record) != sorted(_FAILED_TRAIN_KEYS):

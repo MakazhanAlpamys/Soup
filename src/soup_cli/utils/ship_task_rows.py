@@ -736,7 +736,8 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
     anywhere else). The file must then agree with the numbers of the JSON that names it: the row
     count is ``task_win.rows.n`` / ``task.rows.n``, the column means are ``base`` / ``tuned``
     (exactly, except for a ``judge_score`` verdict: within ``JUDGE_MEAN_TOLERANCE``), the class
-    counts are the ``rows`` block.
+    counts are the ``rows`` block. When measured, ``generation_failures`` must agree with the
+    row count and the number of failed flags on each side.
     """
     payload = _read_json_object(json_path)
     pointer = payload.get("task_rows")
@@ -759,7 +760,7 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
     if block is None:
         raise ValueError("the file has no task_win or task block to check the rows against")
     rows = _rows_block(block["rows"]) if isinstance(block.get("rows"), dict) else None
-    return load_task_rows(
+    loaded = load_task_rows(
         target,
         n=None if rows is None else rows["n"],
         base=_reported(block, "base"),
@@ -768,6 +769,24 @@ def load_task_rows_for(json_path: str) -> LoadedTaskRows:
         mean_tolerance=JUDGE_MEAN_TOLERANCE if block.get("mode") == "judge_score" else 0.0,
         decimal=block.get("mode") == MODE_REWARD,
     )
+    failures = block.get("generation_failures")
+    if failures is not None:
+        if not isinstance(failures, dict):
+            raise ValueError("generation_failures must be an object")
+        expected = {
+            "n": len(loaded.rows),
+            "base": sum(row["base_failed"] for row in loaded.rows),
+            "tuned": sum(row["tuned_failed"] for row in loaded.rows),
+        }
+        for field, actual in expected.items():
+            reported = failures.get(field)
+            if type(reported) is not int:
+                raise ValueError(f"generation_failures.{field} must be an integer")
+            if reported != actual:
+                raise ValueError(
+                    f"generation_failures.{field}: recorded {reported}, task-rows file has {actual}"
+                )
+    return loaded
 
 
 __all__ = [
