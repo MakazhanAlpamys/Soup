@@ -731,7 +731,7 @@ def _infer_asr(
 def _read_prompts(path: Path) -> list[str]:
     """Read prompts from a JSONL or plain text file."""
     prompts = []
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line:
