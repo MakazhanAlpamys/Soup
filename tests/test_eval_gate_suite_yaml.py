@@ -219,7 +219,7 @@ def test_load_suite_checks_the_last_repeated_root_tasks_key(
         gate.load_suite(str(path))
 
 
-@pytest.mark.parametrize("merge_shape", ["single", "chained", "first-of-two"])
+@pytest.mark.parametrize("merge_shape", ["single", "chained", "sequence"])
 def test_cli_rejects_duplicate_key_in_effective_inherited_tasks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, merge_shape: str,
 ) -> None:
@@ -230,7 +230,7 @@ def test_cli_rejects_duplicate_key_in_effective_inherited_tasks(
     merge = {
         "single": "<<: *defaults\n",
         "chained": "<<: {<<: *defaults}\n",
-        "first-of-two": "<<: [*defaults, {tasks: []}]\n",
+        "sequence": "<<: [*defaults, {note: unused}]\n",
     }[merge_shape]
     path = _write_suite_text(
         tmp_path,
@@ -283,22 +283,29 @@ def test_cli_inherited_single_threshold_still_fails_on_wrong_answer(
     [
         "<<: *defaults\ntasks: [{type: custom, name: clean, threshold: 0.0}]\n",
         "<<: [{tasks: [{type: custom, name: clean, threshold: 0.0}]}, *defaults]\n",
+        "<<: [*defaults, {tasks: [{type: custom, name: clean, threshold: 0.0}]}]\n",
     ],
-    ids=["explicit-override", "first-of-two"],
+    ids=["explicit-override", "clean-first", "clean-last"],
 )
 def test_load_suite_only_checks_the_winning_task_list(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    path = _write_suite_text(
-        tmp_path,
+    source = (
         "suite: precedence\ndefaults: &defaults\n"
-        "  tasks: [{type: custom, name: shadowed, threshold: 0.75, threshold: 0.0}]\n"
-        + root,
+        "  tasks: [{type: custom, name: repeated, threshold: 0.75, threshold: 0.0}]\n"
+        + root
     )
+    path = _write_suite_text(tmp_path, source)
 
-    (task,) = gate.load_suite(str(path)).tasks
-    assert (task.name, task.threshold) == ("clean", 0.0)
+    # PyYAML 6.0.4 changed the precedence of a sequence of merge sources.
+    (expected,) = yaml.safe_load(source)["tasks"]
+    if expected["name"] == "repeated":
+        with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 3"):
+            gate.load_suite(str(path))
+    else:
+        (task,) = gate.load_suite(str(path)).tasks
+        assert (task.name, task.threshold) == (expected["name"], expected["threshold"])
 
 
 def test_load_suite_preserves_merge_overrides_in_shared_task_mapping(
