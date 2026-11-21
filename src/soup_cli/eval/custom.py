@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -216,14 +217,51 @@ def score_regex(output: str, expected: str) -> bool:
         return False
 
 
-def score_semantic(output: str, expected: str) -> float:
-    """Compute similarity via Jaccard token overlap (bag-of-words).
+def _is_edge(char: str) -> bool:
+    """Whether ``char`` is removed at the edge of a word: punctuation, a symbol or a space.
 
-    This is a lexical metric, not embedding-based semantic similarity.
-    Returns a float 0-1. Considered a match if similarity >= 0.5.
+    A letter, a digit, the underscore and a combining mark (a vowel sign, a niqqud
+    point, an accent written as its own character) are part of the word.
     """
-    out_tokens = set(output.strip().lower().split())
-    exp_tokens = set(expected.strip().lower().split())
+    return not (char.isalnum() or char == "_" or unicodedata.category(char).startswith("M"))
+
+
+def _strip_edges(word: str) -> str:
+    start, end = 0, len(word)
+    while start < end and _is_edge(word[start]):
+        start += 1
+    while end > start and _is_edge(word[end - 1]):
+        end -= 1
+    return word[start:end]
+
+
+def _semantic_words(text: str) -> set[str]:
+    """The lowercased words of ``text`` with leading and trailing punctuation removed.
+
+    ``h2o.``, ``(h2o)`` and ``"h2o",`` are the word ``h2o``; a word that is only
+    punctuation (``—``, ``...``) is dropped. Punctuation inside a word stays, so
+    ``3.14``, ``don't`` and ``e-mail`` are one word each and do not match ``14``,
+    ``don`` or ``mail``. A combining mark at the edge of a word is kept (see
+    ``_is_edge``), so two words that differ only in a final vowel sign or accent
+    stay two words.
+    """
+    words = (_strip_edges(word) for word in text.lower().split())
+    return {word for word in words if word}
+
+
+def score_semantic(output: str, expected: str) -> float:
+    """Compute similarity via Jaccard overlap of the two sides' words (bag-of-words).
+
+    This is a lexical metric, not embedding-based semantic similarity. A word is
+    a whitespace-separated piece, lowercased, with its leading and trailing
+    punctuation and symbols removed (see ``_semantic_words``). Returns a float 0-1;
+    a row is a match if the similarity is >= 0.5. Every word of the output
+    counts in the union, so a short expected answer inside a long sentence
+    scores low: ``H2O`` against ``The chemical symbol for water is H2O.`` is
+    1/7. For such answers use the ``contains`` or ``answer`` scorer.
+    """
+    out_tokens = _semantic_words(output)
+    exp_tokens = _semantic_words(expected)
     if not out_tokens or not exp_tokens:
         return 0.0
     intersection = out_tokens & exp_tokens
