@@ -203,7 +203,6 @@ class _MergeBudgetError(Exception):
 
 
 _MERGE_TAG = "tag:yaml.org,2002:merge"
-_VALUE_TAG = "tag:yaml.org,2002:value"
 
 
 class _LimitedLoader(yaml.SafeLoader):
@@ -215,8 +214,9 @@ class _LimitedLoader(yaml.SafeLoader):
 
     ``flatten_mapping`` is the one place PyYAML copies nodes: a merge key puts
     the pairs of each mapping it names into the mapping that holds it. The
-    version here builds the same pair list, charges two nodes per copied pair
-    to ``node_budget`` before copying, and counts how deep merges chain.
+    version here runs the installed PyYAML's own, so the merged result is the
+    one ``yaml.safe_load`` builds, charges two nodes per copied pair to
+    ``node_budget`` before the copy is made, and counts how deep merges chain.
     Sequences, sets, ``!!omap`` and ``!!pairs`` are built in one pass over
     their own node and copy nothing.
     """
@@ -239,62 +239,46 @@ class _LimitedLoader(yaml.SafeLoader):
             self._open_collections -= 1
         return event
 
-    def _merged_pairs(self, owner: yaml.MappingNode, source: yaml.Node) -> list:
-        """The pairs ``source`` contributes to a merge, charged to the budget."""
-        if not isinstance(source, yaml.MappingNode):
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                owner.start_mark,
-                f"expected a mapping for merging, but found {source.id}",
-                source.start_mark,
-            )
-        self.flatten_mapping(source)
-        self.merged_nodes += 2 * len(source.value)
-        if self.merged_nodes > self._node_budget:
-            raise _MergeBudgetError
-        return source.value
-
     def flatten_mapping(self, node: yaml.MappingNode) -> None:
-        """As ``SafeConstructor.flatten_mapping``, step for step, with the copies counted."""
+        """The installed PyYAML's ``flatten_mapping``, with merge chains and copies counted.
+
+        The merge rule itself (which pair wins, which duplicates are dropped, which
+        merges are refused and how) is not written out here: it is whatever
+        ``SafeConstructor.flatten_mapping`` does, so a document loads as
+        ``yaml.safe_load`` loads it on every PyYAML release, including the ones
+        that change that rule. PyYAML flattens a mapping by calling
+        ``self.flatten_mapping`` on each mapping it merges and copying that
+        mapping's pairs into the one that names it as soon as the call returns.
+        So a call made while another is running is a merge source, and the
+        charge for its copy is made here, on the way out, before the copy.
+        """
         self._merge_depth += 1
-        if self._merge_depth > MAX_YAML_NESTING:
-            raise _MergeChainError
-        merged: list = []
-        index = 0
-        while index < len(node.value):
-            key_node, value_node = node.value[index]
-            if key_node.tag != _MERGE_TAG:
-                if key_node.tag == _VALUE_TAG:
-                    key_node.tag = "tag:yaml.org,2002:str"
-                index += 1
-                continue
-            # Taken out before the mappings it names are visited, as PyYAML does:
-            # a mapping that names itself is then merged without this entry.
-            del node.value[index]
-            if isinstance(value_node, yaml.MappingNode):
-                merged.extend(self._merged_pairs(node, value_node))
-            elif isinstance(value_node, yaml.SequenceNode):
-                parts = [self._merged_pairs(node, source) for source in value_node.value]
-                # A later mapping in the list yields to an earlier one.
-                for pairs in reversed(parts):
-                    merged.extend(pairs)
-            else:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "expected a mapping or list of mappings for merging, "
-                    f"but found {value_node.id}",
-                    value_node.start_mark,
-                )
-        if merged:
-            node.value = merged + node.value
-        self._merge_depth -= 1
+        try:
+            if self._merge_depth > MAX_YAML_NESTING:
+                raise _MergeChainError
+            super().flatten_mapping(node)
+        finally:
+            self._merge_depth -= 1
+        if self._merge_depth:
+            self.merged_nodes += 2 * len(node.value)
+            if self.merged_nodes > self._node_budget:
+                raise _MergeBudgetError
 
 
 class YamlScalarError(yaml.constructor.ConstructorError, ValueError):
     """A scalar that reads as a YAML type but cannot be built, such as a date
     that does not exist. Both a ``yaml.YAMLError`` (it carries the position) and
     the ``ValueError`` the underlying conversion raised."""
+
+
+def set_yaml_error_filename(error: yaml.YAMLError, filename: str) -> None:
+    """Name the file in a PyYAML error produced while reading its text."""
+    if isinstance(error, yaml.MarkedYAMLError):
+        for mark in (error.context_mark, error.problem_mark):
+            if mark is not None:
+                mark.name = filename
+    elif isinstance(error, yaml.reader.ReaderError):
+        error.name = filename
 
 
 def _checked(name: str, build):
@@ -369,6 +353,9 @@ def load_yaml_limited(source: str | bytes, what: str, *, max_bytes: int) -> obje
     data = _parse(source, what, source_bytes=source_bytes)
     check_yaml_expanded_size(data, what, source_bytes=source_bytes)
     return data
+
+
+_VALUE_TAG = "tag:yaml.org,2002:value"
 
 
 class _DuplicateScanLoader(_LimitedLoader):
