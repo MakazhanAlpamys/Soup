@@ -9,6 +9,7 @@ from soup_cli.data.formats import (
     VALID_FORMATS,
     _dispatch_conversion,
 )
+from soup_cli.utils.row_text import _extract_field_text_or_messages
 
 # How many per-row drop reasons to surface in `issues`. Enough to make
 # `validate` actionable ("which rows and why") without flooding the output on a
@@ -48,6 +49,20 @@ def _row_signature(row: dict) -> tuple:
     )
 
 
+def _list_text_length(values: list) -> int:
+    """Text length of a list value, from its extracted text parts, never its repr.
+
+    The parts are joined with one separator character between them, the same
+    convention `_compute_row_text_length` uses between top-level values.
+    A list with no extractable text (an embedding vector, a nested list)
+    contributes 0.
+    """
+    parts = _extract_field_text_or_messages(values)
+    if not parts:
+        return 0
+    return sum(len(part) for part in parts) + len(parts) - 1
+
+
 def _compute_row_text_length(row: dict) -> tuple[int, int]:
     """Compute text length and count empty/None fields without intermediate string joins."""
     parts_len = 0
@@ -57,8 +72,14 @@ def _compute_row_text_length(row: dict) -> tuple[int, int]:
         if v is None:
             empty_count += 1
         elif v:
-            v_str = v if isinstance(v, str) else str(v)
-            parts_len += len(v_str)
+            if isinstance(v, list):
+                text_len = _list_text_length(v)
+                if text_len == 0:
+                    continue
+                parts_len += text_len
+            else:
+                v_str = v if isinstance(v, str) else str(v)
+                parts_len += len(v_str)
             parts_count += 1
 
     char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
