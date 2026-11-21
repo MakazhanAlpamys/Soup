@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -112,7 +112,7 @@ reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yük
 - **Apple Silicon'da daha fazlası.** Yerel MLX sohbeti, birleştirme, seçici kayıp maskeleri, ön işleme
   önbellekleri, sözcük dağarcığı genişletme, RoPE uzatma ve yoğun Llama SFT.
 - **Katman akışı daha fazlasını yapıyor.** Yalnızca ileri geçişli çıkarım kipi, önceden nicemlenmiş NF4
-  içe aktarma ve akıtılan bir tabanda BCO, IPO ve `task: preference` eğitimi.
+  içe aktarma ve akıtılan bir tabanda BCO, IPO ve tek kayıplı `task: preference` eğitimi.
 - **Kısa satırlara uyan VRAM tahminleri.** Dolgulu bir SFT çalıştırması en uzun satırına göre
   fiyatlanıyor; 8-bit checkpointing, cuBLAS çalışma alanları ve bir damıtma öğretmeni ücretlendiriliyor;
   ön kontrol de bir sığma denetiminin neden yapılmadığını söylüyor.
@@ -124,8 +124,9 @@ reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yük
 `--push-as` depoyu özel oluşturuyor (bunu değiştirmek için `--push-public`). MLX'te ya da `prm`,
 `unlearn`, `moe_lora_routing` üzerinde etkin bir eval gate reddediliyor. `soup serve --max-tokens`
 16384'te duruyor. `soup adapters merge` ağırlıkları ve `tool_call_args_subset` puanı değişti; bu yüzden
-birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, v0.77.x'in
-reddettiği 2. sürümde.
+birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, yeni satır
+satır, fonksiyonla puanlanan veya judge ayrıntısını taşıyorsa 2. sürümdedir ve v0.77.x bunları
+reddeder.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -292,6 +293,7 @@ soup train  --config soup.yaml        # eğitin (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # toplu çıkarım
 soup chat   --model ./output          # etkileşimli sohbet
 soup serve  --model ./output          # OpenAI uyumlu API sunucusu
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon üzerinde yerel yoğun metin modeli / LoRA
 soup ui                               # yerel tarayıcı panosu
 soup merge  --adapter ./output        # LoRA'yı taban modele birleştirin
 soup export --model ./output --format gguf           # dağıtım için dışa aktarın
