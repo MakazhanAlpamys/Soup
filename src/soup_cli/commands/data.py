@@ -198,6 +198,11 @@ def convert(
         console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if to not in CONVERTIBLE_FORMATS:
         console.print(
@@ -247,6 +252,11 @@ def convert(
     if output is None:
         output = str(file_path.stem) + f"_{to}.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
 
     _write_jsonl(out_path, converted)
 
@@ -274,6 +284,11 @@ def merge(
         [("--output", output)],
         console=console,
     )
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
     all_data: list[dict] = []
 
     for file_str in files:
@@ -293,6 +308,12 @@ def merge(
         random.shuffle(all_data)
 
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
+
     _write_jsonl(out_path, all_data)
 
     console.print(
@@ -527,6 +548,11 @@ def filter_data(
         console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if perplexity is None and coherence is None and not score_only:
         console.print(
@@ -584,6 +610,11 @@ def filter_data(
         if output is None:
             output = str(file_path.stem) + "_scored.jsonl"
         out_path = Path(output)
+        if not is_under_cwd(out_path):
+            console.print(
+                f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+            )
+            raise typer.Exit(1)
         _write_jsonl(out_path, scored_data)
         console.print(
             f"[green]Scored {len(scored_data)} rows.[/]\n"
@@ -610,6 +641,11 @@ def filter_data(
     if output is None:
         output = str(file_path.stem) + "_filtered.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
     _write_jsonl(out_path, kept)
 
     console.print(
