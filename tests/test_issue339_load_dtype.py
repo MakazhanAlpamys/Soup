@@ -161,9 +161,10 @@ def _wrapper_stub(device="cpu"):
 
 
 class TestResolveLoadDtype:
-    def test_lora_frozen_base_on_cpu_resolves_to_auto(self):
+    def test_lora_frozen_base_on_cpu_resolves_to_float32(self):
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
         wrapper = _wrapper_stub(device="cpu")
-        assert wrapper._resolve_load_dtype(_StubTcfg()) == "auto"
+        assert wrapper._resolve_load_dtype(_StubTcfg()) is torch.float32
 
     def test_lora_r_zero_resolves_to_float32(self):
         torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
@@ -209,12 +210,14 @@ class TestResolveLoadDtypeCardAware:
         wrapper = _wrapper_stub(device="cuda")
         assert wrapper._resolve_load_dtype(_StubTcfg()) is torch.float16
 
-    def test_cpu_frozen_base_stays_auto_regardless_of_cuda_state(self, fake_torch_cuda):
+    def test_cpu_frozen_base_stays_float32_regardless_of_cuda_state(self, fake_torch_cuda):
         """A device='cpu' run must not consult CUDA capability at all — even
-        on a box that also has a (possibly pre-Ampere) GPU."""
+        on a box that also has a (possibly pre-Ampere) GPU. CPU resolves an
+        explicit float32 (bf16 emulated on non-AMX x86 is ~12x slower)."""
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
         fake_torch_cuda(available=True, bf16=False)
         wrapper = _wrapper_stub(device="cpu")
-        assert wrapper._resolve_load_dtype(_StubTcfg()) == "auto"
+        assert wrapper._resolve_load_dtype(_StubTcfg()) is torch.float32
 
     def test_card_check_does_not_apply_to_full_finetune(self, fake_torch_cuda):
         """CONTROL — full-FT's explicit fp32 must win regardless of card;
@@ -309,7 +312,7 @@ def _capturing_from_pretrained(model, captured):
 
 
 class TestModelKwargsCaptureAcrossModalities:
-    def test_text_lora_dtype_is_auto(self, monkeypatch):
+    def test_text_lora_dtype_is_float32_on_cpu(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = _make_config(training={"quantization": "none"})
@@ -342,7 +345,8 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        assert captured["dtype"] is torch.float32  # CPU frozen base resolves fp32
 
     def test_text_lora_dtype_is_float16_on_pre_ampere_cuda(self, monkeypatch, fake_torch_cuda):
         """#471 — the card check reaches all the way into model_kwargs, not
@@ -421,7 +425,8 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        assert captured["dtype"] is torch.float32  # frozen base on CPU (QLoRA is never full-FT)
         assert captured["quantization_config"] is sentinel_quant_config
 
     def test_text_full_finetune_dtype_is_float32(self, monkeypatch):
@@ -460,7 +465,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         assert captured["dtype"] is torch.float32
 
-    def test_vision_dtype_is_always_auto(self, monkeypatch):
+    def test_vision_dtype_is_float32_on_cpu(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = _make_config(
@@ -497,9 +502,10 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_vision_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        assert captured["dtype"] is torch.float32  # CPU frozen base resolves fp32
 
-    def test_audio_dtype_is_always_auto(self, monkeypatch):
+    def test_audio_dtype_is_float32_on_cpu(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = _make_config(
@@ -536,7 +542,8 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_audio_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        assert captured["dtype"] is torch.float32  # CPU frozen base resolves fp32
 
     def test_the_kwarg_key_is_dtype_not_torch_dtype_at_all_three_sites(self, monkeypatch):
         """#492 review — assert the load kwarg name itself at all three sites.
@@ -759,7 +766,9 @@ def _wrapper(tmp_path, monkeypatch, base, **training_over):
 
 
 class TestLoadDtypeMatchesCheckpoint:
-    def test_lora_frozen_base_loads_at_checkpoint_bf16(self, tmp_path, monkeypatch):
+    def test_lora_frozen_base_on_cpu_upcasts_checkpoint_bf16_to_fp32(self, tmp_path, monkeypatch):
+        """A bf16 checkpoint on CPU loads fp32 — bf16 matmuls on non-AMX x86
+        are emulated (~12x slower). CUDA keeps resolving via its own path."""
         _requires_train_extra()
         import torch
 
@@ -771,7 +780,7 @@ class TestLoadDtypeMatchesCheckpoint:
             p for n, p in wrapper.model.named_parameters() if "lora_" not in n
         ]
         assert base_params
-        assert all(p.dtype == torch.bfloat16 for p in base_params)
+        assert all(p.dtype == torch.float32 for p in base_params)
 
     def test_full_ft_loads_fp32_even_from_a_bf16_checkpoint(self, tmp_path, monkeypatch):
         _requires_train_extra()
