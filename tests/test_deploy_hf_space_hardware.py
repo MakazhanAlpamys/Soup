@@ -15,6 +15,11 @@ from soup_cli.commands.deploy import render_space_template
 
 runner = CliRunner()
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_CUSTOM_ZEROGPU_NOTICE = (
+    "ZeroGPU custom template: use Gradio, include spaces in your requirements, and "
+    "decorate GPU-dependent functions with @spaces.GPU. Soup does not add the "
+    "dependency or decorator to custom templates."
+)
 
 
 def _plain(text: str) -> str:
@@ -74,6 +79,7 @@ def test_zero_gpu_cli_uploads_decorated_respond_and_spaces_requirement(
     result, api = _deploy(monkeypatch, tmp_path, "--hardware", "zero-a10g")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _CUSTOM_ZEROGPU_NOTICE not in _plain(result.output)
     files = _uploaded_files(api)
     app_source = files["app.py"].decode("utf-8")
     module = ast.parse(app_source)
@@ -158,7 +164,10 @@ def test_zerogpu_refuses_builtin_streamlit_before_any_hub_call(monkeypatch, tmp_
     api.create_commit.assert_not_called()
 
 
-def test_custom_template_is_uploaded_unchanged_with_hardware(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("hardware", ["zero-a10g", "t4-small"])
+def test_custom_template_is_uploaded_unchanged_with_hardware(
+    monkeypatch, tmp_path, hardware: str,
+) -> None:
     template = tmp_path / "custom"
     template.mkdir()
     source_files = {
@@ -173,11 +182,17 @@ def test_custom_template_is_uploaded_unchanged_with_hardware(monkeypatch, tmp_pa
         monkeypatch,
         tmp_path,
         "--template-dir", "custom",
-        "--hardware", "zero-a10g",
+        "--hardware", hardware,
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert api.create_repo.call_args.kwargs["space_hardware"] == "zero-a10g"
+    assert api.create_repo.call_args.kwargs["space_hardware"] == hardware
     assert _uploaded_files(api) == {
         name: content.encode("utf-8") for name, content in source_files.items()
     }
+    output = _plain(result.output)
+    if hardware == "zero-a10g":
+        assert _CUSTOM_ZEROGPU_NOTICE in output
+        assert output.index(_CUSTOM_ZEROGPU_NOTICE) < output.index("Deploy HuggingFace Space")
+    else:
+        assert _CUSTOM_ZEROGPU_NOTICE not in output

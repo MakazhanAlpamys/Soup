@@ -597,6 +597,14 @@ def hf_space(
         console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
+    if zero_gpu and template_dir is not None:
+        console.print(
+            "[yellow]ZeroGPU custom template:[/] use Gradio, include spaces in your "
+            "requirements, and decorate GPU-dependent functions with @spaces.GPU. "
+            "Soup does not add the dependency or decorator to custom templates.",
+            emoji=False,
+        )
+
     if sdk == "streamlit":
         console.print(
             "[yellow]Deprecation warning (v0.78.0):[/] Hugging Face no longer creates "
