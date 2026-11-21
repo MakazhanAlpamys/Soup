@@ -1,0 +1,30 @@
+{
+  "at": "2026-10-27T16:12:54.354212+00:00",
+  "verified": true,
+  "independent_audit_verified": true,
+  "stage_a_passes": false,
+  "confirmation_passes": null,
+  "timings": 18,
+  "models_repeated_after_completion": 0,
+  "previous_partial_updates_unknown": true,
+  "amendment_published": false,
+  "owner_approval_claimed": false,
+  "production_accepted": false,
+  "files": {
+    "5090-performance-v1-evidence.zip": {
+      "local_sha256": "c0d519ca474ce6100f359752193f5b7266ae159bec5af66f975c8ecd99dd230e",
+      "remote_sha256": "c0d519ca474ce6100f359752193f5b7266ae159bec5af66f975c8ecd99dd230e",
+      "remote_path": "<LAB_CLOSURE_DIR>/5090-performance-v1-evidence.zip"
+    },
+    "results.md": {
+      "local_sha256": "5a577d1facb5d4a1ec35b09a69e8ff9492ea199bc0344cecf51f682d224d470a",
+      "remote_sha256": "5a577d1facb5d4a1ec35b09a69e8ff9492ea199bc0344cecf51f682d224d470a",
+      "remote_path": "<LAB_CLOSURE_DIR>/results.md"
+    },
+    "independent-audit.json": {
+      "local_sha256": "c9e28249a2ca5ec543004dadc344459d513bb4c264dab5a58dd30dd546f174d1",
+      "remote_sha256": "c9e28249a2ca5ec543004dadc344459d513bb4c264dab5a58dd30dd546f174d1",
+      "remote_path": "<LAB_CLOSURE_DIR>/independent-audit.json"
+    }
+  }
+}
