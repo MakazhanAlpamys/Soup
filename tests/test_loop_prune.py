@@ -189,7 +189,17 @@ def test_pending_adapter_path_survives_when_manifest_run_id_differs(tmp_path, mo
     _manifest(root, pending_id, "manifest-run-id")
     (root / "adapters" / "run-newest").mkdir(parents=True)
     pending_adapter = root / "adapters" / "pending-adapter-path"
-    pending_adapter.mkdir()
+    pending_adapter.mkdir(parents=True)
+    unrelated_newest = root / "adapters" / "unrelated-newest"
+    unrelated_newest.mkdir()
+    unrelated_oldest = root / "adapters" / "unrelated-oldest"
+    unrelated_oldest.mkdir()
+    now_ns = pending_adapter.stat().st_mtime_ns
+    os.utime(pending_adapter, ns=(now_ns, now_ns))
+    os.utime(unrelated_newest, ns=(now_ns + 2_000_000_000, now_ns + 2_000_000_000))
+    os.utime(unrelated_oldest, ns=(now_ns - 2_000_000_000, now_ns - 2_000_000_000))
+    os.utime(root / "adapters" / "run-newest", ns=(now_ns + 4_000_000_000,
+                                                     now_ns + 4_000_000_000))
     monkeypatch.setattr(
         "soup_cli.utils.loop_prune.read_state",
         lambda: SimpleNamespace(
@@ -209,7 +219,9 @@ def test_pending_adapter_path_survives_when_manifest_run_id_differs(tmp_path, mo
     result = runner.invoke(app, ["loop", "prune", "--keep-runs", "1"])
 
     assert result.exit_code == 0
-    assert f".soup-loops/adapters/{pending_adapter.name}" not in _plain(result.output)
+    output = _plain(result.output)
+    assert f".soup-loops/adapters/{pending_adapter.name}" not in output
+    assert f".soup-loops/adapters/{unrelated_oldest.name}" in output
 
 
 def test_canary_iteration_dict_preserves_iteration_adapter_and_sidecars(tmp_path, monkeypatch):
@@ -503,7 +515,10 @@ def test_cli_dry_run_explains_pairs_kept_for_missing_retained_history(tmp_path, 
     pair = root / "pairs" / "pairs-unknown.jsonl"
     pair.write_text("data\n", encoding="utf-8")
     iteration_log = root / "iterations.jsonl"
-    iteration_log.write_text("not json\n", encoding="utf-8")
+    iteration_log.write_text(
+        json.dumps({"iteration_id": "other", "dataset": {"path": "ignored"}}) + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "soup_cli.utils.loop_prune.read_state",
         lambda: SimpleNamespace(
