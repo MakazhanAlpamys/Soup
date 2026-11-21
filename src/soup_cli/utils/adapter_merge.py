@@ -347,8 +347,10 @@ def merge_svd(
 
     Without ``rank`` this is :func:`merge_linear`. With it, each ``lora_A`` /
     ``lora_B`` pair (and ``lora_embedding_A`` / ``lora_embedding_B`` pair) of the
-    linear merge, found through ``_lora_role``, is replaced by factors whose
-    product is the best rank-``rank`` approximation of that module's merged
+    linear merge, found through ``_lora_role`` and paired by module, kind and
+    adapter name (``lora_A.<name>.weight`` with ``lora_B.<name>.weight``), is
+    replaced by factors whose product is the best rank-``rank`` approximation
+    of that module's merged
     delta ``B @ A`` (truncated SVD, computed in float64, written as float32),
     so the result depends on the delta and not on how the inputs split it
     between ``A`` and ``B`` (#2984). The new factors are zero-padded back to the
@@ -365,7 +367,7 @@ def merge_svd(
     """
     import numpy as np
 
-    from soup_cli.utils.adapter_arithmetic import _lora_role, _truncated_factors
+    from soup_cli.utils.adapter_arithmetic import _lora_role, _LoraStem, _truncated_factors
 
     if rank is not None:
         if isinstance(rank, bool) or not isinstance(rank, int):
@@ -377,11 +379,13 @@ def merge_svd(
     if rank is None:
         return linear_merged, skipped
 
-    pairs: dict[str, dict[str, str]] = {}
+    # A factor's stem is its module, its kind and its adapter name, so A is
+    # paired with the B of the same adapter name.
+    pairs: dict[_LoraStem, dict[str, str]] = {}
     for name in linear_merged:
         role = _lora_role(name)
         if role is not None:
-            stem, which, _suffix = role
+            stem, which = role
             pairs.setdefault(stem, {})[which] = name
 
     out: dict[str, Any] = dict(linear_merged)
