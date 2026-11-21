@@ -126,11 +126,18 @@ def push(
         )
         raise typer.Exit(1)
 
+    from soup_cli.utils.hf import hf_login_command
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    # --token also reads HF_TOKEN via envvar; only a value typed on the
+    # command line counts as using the flag (#2792).
+    token_typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
+
     # Deprecated --token flag (HF hub): warn once if explicitly provided.
-    if hub_canonical == "hf" and token is not None:
+    if hub_canonical == "hf" and token_typed:
         console.print(
             "[yellow]Warning: --token is deprecated. Use HF_TOKEN env var or "
-            "run 'huggingface-cli login'.[/]"
+            f"run '{hf_login_command()}'.[/]"
         )
 
     # Sanitise commit message: strip to first line, cap length so a crafted
@@ -148,7 +155,12 @@ def push(
         raise typer.Exit(1)
 
     # --- Resolve HF token (env > cached login, see utils.hf.resolve_token) ---
-    from soup_cli.utils.hf import resolve_endpoint, resolve_token, validate_repo_id
+    from soup_cli.utils.hf import (
+        resolve_endpoint,
+        resolve_token,
+        validate_collection_slug,
+        validate_repo_id,
+    )
 
     try:
         validate_repo_id(repo)
@@ -156,17 +168,23 @@ def push(
         console.print(f"[red]Invalid --repo:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
+    # --collection is HF-only; refuse a bad slug before the repo is created and
+    # the model uploaded (#2824). Non-HF hubs keep ignoring it.
+    if hub_canonical == "hf" and collection:
+        try:
+            validate_collection_slug(collection)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --collection slug:[/] {for_terminal(exc)}", emoji=False)
+            raise typer.Exit(1) from exc
+
     hub_token: Optional[str] = None
     hf_token: Optional[str] = None
     hf_endpoint: Optional[str] = None
     if hub_canonical != "hf":
         from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
-        from soup_cli.utils.typer_compat import ParameterSource
 
-        # --token also reads HF_TOKEN via envvar; only a value typed on the
-        # command line is meant for this hub.
-        typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
-        hub_token = resolve_hub_token(hub_canonical, token if typed else None)
+        # Only a value typed on the command line is meant for this hub.
+        hub_token = resolve_hub_token(hub_canonical, token if token_typed else None)
         if not hub_token:
             env_var = hub_token_env_var(hub_canonical)
             console.print(
@@ -182,9 +200,8 @@ def push(
             console.print(
                 "[red]No HuggingFace token found.[/]\n"
                 "Provide one via:\n"
-                "  --token YOUR_TOKEN\n"
                 "  HF_TOKEN=... env variable\n"
-                "  huggingface-cli login"
+                f"  {hf_login_command()}"
             )
             raise typer.Exit(1)
 
@@ -313,19 +330,10 @@ def push(
 
     # --- Optional: add to Collection ---
     if collection:
-        from soup_cli.utils.hf import (
-            add_to_collection,
-            validate_collection_slug,
-        )
+        from soup_cli.utils.hf import add_to_collection
         from soup_cli.utils.hf import (
             resolve_endpoint as _resolve_endpoint,
         )
-
-        try:
-            validate_collection_slug(collection)
-        except ValueError as exc:
-            console.print(f"[red]Invalid --collection slug:[/] {for_terminal(exc)}", emoji=False)
-            raise typer.Exit(1) from exc
 
         try:
             endpoint = _resolve_endpoint()

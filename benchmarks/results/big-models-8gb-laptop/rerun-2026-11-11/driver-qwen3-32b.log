@@ -1,0 +1,12 @@
+[driver] qwen3-32b start UTC 2026-11-11 14:12:34
+[driver] free RAM GB before: 11,5
+[driver] nvidia-smi before: 0 MiB
+[driver] train exit code: 0
+[driver] train start UTC 2026-11-11 14:12:34 ; end UTC 2026-11-11 14:14:01
+wall seconds: 86
+capture-start stamp: 2026/11/11 19:13:52
+whole-GPU peak MiB (training window): 3042
+whole-GPU peak MiB (whole run incl. the capture forward): 3042
+[driver] nvidia-smi after: 0 MiB
+[driver] free RAM GB after: 11,9
+[driver] DONE exit=0

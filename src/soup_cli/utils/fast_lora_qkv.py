@@ -24,6 +24,7 @@ from soup_cli.utils.fast_lora import (
     _dense_weight,
     _flatten,
     _is_supported_lora_projection,
+    _projection_compute_dtype,
     _projection_state,
     _release_single_projection,
     _scaled_lora_add,
@@ -48,6 +49,15 @@ def _qkv_function() -> Any:
     import torch.nn.functional as functional
 
     class _FastLoraQKV(torch.autograd.Function):
+        """Shared-X Q/K/V LoRA block with PEFT's dtype boundary.
+
+        Forward: each 4-bit base matmul runs in its own compute dtype, then
+        returns to the input dtype before the LoRA branch. Backward: the base
+        ``dX`` terms run in the compute dtype, as bitsandbytes'
+        ``MatMul4Bit.backward`` does, then return to the input dtype for the
+        LoRA add.
+        """
+
         @staticmethod
         def forward(
             ctx, x, wq, bq, wk, bk, wv, bv,
@@ -62,15 +72,26 @@ def _qkv_function() -> Any:
             ]
             weights = (wq, wk, wv)
             biases = (bq, bk, bv)
+            # Each 4-bit base matmul uses its own bitsandbytes compute dtype;
+            # a dense sibling stays in x.dtype. The base result returns to the
+            # input dtype before the LoRA branch runs, as PEFT's Linear4bit
+            # does. Casting X wholesale first would round the LoRA input to
+            # fp16 before its own bf16 cast (#792).
             outs = []
             for weight, bias, meta, parts in zip(weights, biases, metas, qlists):
-                dense = _dense_weight(weight, meta, parts, x.dtype)
-                outs.append(
-                    functional.linear(
-                        x, dense, _as_dtype(bias, x.dtype) if bias is not None else None
-                    )
+                base_dtype = _projection_compute_dtype(meta, x.dtype)
+                base_x = x if x.dtype == base_dtype else x.to(base_dtype)
+                dense = _dense_weight(weight, meta, parts, base_dtype)
+                base = functional.linear(
+                    base_x, dense,
+                    _as_dtype(bias, base_dtype) if bias is not None else None,
                 )
-                del dense
+                outs.append(
+                    base.to(x.dtype)
+                    if meta is not None or base_x is not x
+                    else base
+                )
+                del base, dense, base_x
 
             adapters = ((aq, bql, sq), (ak, bkl, sk), (av, bvl, sv))
             ranks = [a.shape[0] if a.numel() else 0 for a, _b, _s in adapters]
@@ -122,8 +143,14 @@ def _qkv_function() -> Any:
             for grad, weight, meta, parts in zip(
                 grads_out, weights, ctx.qmetas, qlists
             ):
-                dense = _dense_weight(weight, meta, parts, grad.dtype)
-                term = torch.matmul(grad, dense)
+                # Match bitsandbytes' MatMul4Bit backward: the base dX GEMM
+                # runs in the compute dtype, then returns to the input dtype
+                # before it is added to the LoRA contribution. The grad that
+                # reaches the LoRA branch stays in the input dtype.
+                base_dtype = _projection_compute_dtype(meta, grad.dtype)
+                dense = _dense_weight(weight, meta, parts, base_dtype)
+                term = torch.matmul(_as_dtype(grad, base_dtype), dense)
+                term = _as_dtype(term, grad.dtype)
 
                 grad_x = term if grad_x is None else torch.add(grad_x, term)
                 del dense
@@ -202,26 +229,15 @@ def _install_attention_patch(attn: Any) -> None:
         if len(compute_dtypes) > 1:
             return originals["q_proj"](x)
 
-        input_dtype = x.dtype
-        work_x = x
-        if compute_dtypes:
-            compute_dtype = next(iter(compute_dtypes))
-            if work_x.dtype != compute_dtype:
-                work_x = work_x.to(compute_dtype)
-
         qparts = [*q.qparts, *k.qparts, *v.qparts]
         q_out, k_out, v_out = fast.apply(
-            work_x,
+            x,
             q.weight, q.bias, k.weight, k.bias, v.weight, v.bias,
             q.lora_a, q.lora_b, k.lora_a, k.lora_b, v.lora_a, v.lora_b,
             q.scaling, k.scaling, v.scaling,
             q.qmeta, k.qmeta, v.qmeta,
             *qparts,
         )
-        if work_x is not x:
-            q_out = q_out.to(input_dtype)
-            k_out = k_out.to(input_dtype)
-            v_out = v_out.to(input_dtype)
 
         setattr(
             attn,

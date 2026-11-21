@@ -645,6 +645,9 @@ class TestRunsEscape:
             def get_metrics(self, run_id):
                 return []
 
+            def get_reward_summary(self, run_id):
+                return None   # `soup runs show` asks; no run in this fake has a reward
+
             def close(self):
                 pass
 

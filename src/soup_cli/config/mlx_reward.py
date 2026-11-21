@@ -61,11 +61,6 @@ def validate_reward_scope(cfg: Any) -> None:
         cfg.training = training = training.model_copy(update={"rewind_log": False})
     if training.quantize_reward_model:
         _refuse("training.quantize_reward_model", True, "false")
-    if training.eval_gate is not None and training.eval_gate.enabled:
-        raise ValueError(
-            "MLX reward_model does not support training.eval_gate.enabled. "
-            "Set training.eval_gate.enabled: false; use the reward trainer validation metrics."
-        )
     if cfg.eval is not None and cfg.eval.auto_eval:
         raise ValueError(
             "MLX reward_model does not support eval.auto_eval. "

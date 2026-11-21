@@ -1,6 +1,5 @@
 """soup runs prints run ids and checkpoint paths as typed, not as Rich markup."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.experiment.tracker import ExperimentTracker
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -182,13 +182,7 @@ def test_clean_failed_directory_delete_warning_is_shown_as_typed(db, tmp_path, m
     assert "cannot [/] remove" in text
 
 
-# A colon is not a legal file-name character on Windows.
-_emoji_dir = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
-
-
-@_emoji_dir
+@skip_colon_on_windows
 @pytest.mark.parametrize(
     ("flags", "label"),
     [
@@ -208,7 +202,7 @@ def test_clean_dry_run_shows_an_emoji_code_in_the_path_as_typed(db, tmp_path, fl
     assert "x:warning:out/checkpoint-1" in text
 
 
-@_emoji_dir
+@skip_colon_on_windows
 @pytest.mark.parametrize(
     ("flags", "patched", "label"),
     [

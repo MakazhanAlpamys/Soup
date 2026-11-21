@@ -1,0 +1,69 @@
+{
+  "schema": "root-context74-independent-verification-v1",
+  "status": "passed",
+  "verified_at": "2026-11-06T01:03:31.459084+05:00",
+  "run_id": "l40s-strict-full88-sft8192-20261106-02",
+  "app": {
+    "app_id": "ap-<redacted>",
+    "description": "soup-stage74-full88-sft8192-v3",
+    "state": "stopped",
+    "tasks": "0",
+    "created_at": "2026-11-06 00:13:34+05:00",
+    "stopped_at": "2026-11-06 01:01:33+05:00"
+  },
+  "sequence": 8192,
+  "supervised_tokens": 124,
+  "forward_layers": 88,
+  "reverse_layers": 88,
+  "trainable_parameters": 26673152,
+  "loss": 0.8814825415611267,
+  "adamw_steps": 1,
+  "checkpoint": {
+    "state_bytes": 320486997,
+    "adapters_exact": 352,
+    "moments_exact": 704,
+    "steps_exact": 352,
+    "rng_exact": {
+      "cpu": true,
+      "cuda": true
+    }
+  },
+  "pids": {
+    "update": 1956,
+    "fresh_restore": 6629
+  },
+  "allocator": {
+    "cap_bytes": 6710886400,
+    "train": {
+      "peak_allocated": 3489752064,
+      "peak_reserved": 3902799872
+    },
+    "restore": {
+      "allocated": 0,
+      "reserved": 320864256,
+      "peak_allocated": 320077824,
+      "peak_reserved": 320864256
+    }
+  },
+  "device_samples": {
+    "count": 3050,
+    "peak_used_mib": 4323
+  },
+  "seconds": {
+    "source": 729.012633287,
+    "worker": 2128.523295229,
+    "restore": 6.560686078999879
+  },
+  "sha256": {
+    "summary.json": "8e522808d1fcb4d5ac98fff70ef290b8d52b2f6ac002759fc09330df63f15b28",
+    "source.log": "77ea69b8c9ff40b2fbcbebd03b8b2a8c748da4bf6e879eb00fa3f1d4c4241706",
+    "worker.log": "6814916bc028762bee739d31eb441b9da877db70b3b2986b458cacd6039ca15f",
+    "result.json": "1d2305a551ffead4b0ef321a17d3774165b2db31c1da680ba4cb98389b817e47",
+    "progress.jsonl": "6c7e7d3eea67cdfba6f5a5a9ebfd6da3573d0ec2e39102217ddf3eb5847e07f6",
+    "checkpoint-001/manifest.json": "a3988b6c13ea2c1dc46a022473efd4748aff9eec1393a77c94368b6b1fb95768",
+    "checkpoint-001/state.pt": "c54e6408892f6b2f3067f86a36260e531c36f9f8893e69dfe1687916c4600512",
+    "restore.log": "e009fffe991535ac5ac758774bb2f05186272c3f61e6a16381bef082c389d84e",
+    "restore-result.json": "e009fffe991535ac5ac758774bb2f05186272c3f61e6a16381bef082c389d84e",
+    "retrieval.json": "b1ec7c34424e18844145099431c80715f1aa4cd7e31fadef44ded8846650f551"
+  }
+}

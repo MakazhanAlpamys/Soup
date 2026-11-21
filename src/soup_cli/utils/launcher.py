@@ -200,10 +200,12 @@ def collect_reexec_passthrough(
     reward_hack_mitigation: str | None = None,
     gate: str | None = None,
     push_as: str | None = None,
+    push_public: bool = False,
     hf_resume: bool = False,
     trust_remote_code: bool = False,
     tracker: str | None = None,
     diagnose_gate: str | None = None,
+    diagnose_gate_require_all_modes: bool = False,
     annex_xi: str | None = None,
     repro_receipt: str | None = None,
     profile_run: bool = False,
@@ -262,10 +264,12 @@ def collect_reexec_passthrough(
     _opt("--reward-hack-mitigation", reward_hack_mitigation)
     _opt("--gate", gate)
     _opt("--push-as", push_as)
+    _switch("--push-public", push_public)
     _switch("--hf-resume", hf_resume)
     _switch("--trust-remote-code", trust_remote_code)
     _opt("--tracker", tracker)
     _opt("--diagnose-gate", diagnose_gate)
+    _switch("--diagnose-gate-require-all-modes", diagnose_gate_require_all_modes)
     _opt("--annex-xi", annex_xi)
     _opt("--repro-receipt", repro_receipt)
     _switch("--profile", profile_run)

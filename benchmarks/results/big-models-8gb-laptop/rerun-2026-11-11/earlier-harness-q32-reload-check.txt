@@ -1,0 +1,41 @@
+# Excerpt of the wrapper log of the earlier-harness Qwen3-32B reload-only check, run once
+# on 2026-11-11 (times UTC). Omitted: the pre-launch wait lines, the worker command line,
+# process ids and cleanup records.
+final precheck: PRECHECK: OK
+launching UTC 15:00:10
+stack matches the recorded versions
+== reload (reload-g): a new process loads the saved adapter and must reproduce the losses and logits slices
+== window open: gpu=0MiB avail=11181MiB
+{
+  "outcome": "completed",
+  "failure": null,
+  "started_utc": "2026-11-11T15:00:20Z",
+  "limits": {
+    "device_mib": 7600,
+    "host_emergency_mib": 256,
+    "host_sustained_mib": 768,
+    "host_sustained_seconds": 5,
+    "commit_floor_mib": 512,
+    "timeout_seconds": 1200.0,
+    "preflight_host_mib": 8192
+  },
+  "elapsed_s": 182.26599999999962,
+  "worker_returncode": 0
+}
+== reload (recorded: sampled 2440 MiB, fresh_process_exact true)
+{
+  "guard_outcome": "completed",
+  "guard_failure": null,
+  "guard_elapsed_s": 182.26599999999962,
+  "worker_status": "passed",
+  "torch_peak_allocated": 2329868288,
+  "torch_peak_reserved": 2384461824,
+  "sampled_whole_device_peak_mib": 2440.0,
+  "gpu_samples": 126,
+  "min_host_available_bytes": 5328457728,
+  "min_commit_headroom_bytes": 33439113216,
+  "step_seconds": [],
+  "fresh_process_exact": true,
+  "recorded_sampled_whole_device_peak_mib": 2440.0
+}
+WRAPPER EXIT: 0  end UTC 15:03:23

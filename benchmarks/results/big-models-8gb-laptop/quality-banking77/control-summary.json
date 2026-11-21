@@ -1,0 +1,10 @@
+{
+ "steps": 300,
+ "micro_batch": 2,
+ "adapter_dtypes": [
+  "torch.float32"
+ ],
+ "seconds": 879.3460236180108,
+ "torch": "2.14.0+cu130",
+ "adapter_sha256": "78722e57538a408d1fb244fcc19be62c3b77a27884a95dba3e7c254b4a3029f5"
+}

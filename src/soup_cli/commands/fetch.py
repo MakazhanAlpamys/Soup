@@ -17,7 +17,7 @@ from soup_cli.utils.fetch_examples import (
     list_entries,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -120,6 +120,11 @@ def fetch(
             emoji=False,
         )
         raise typer.Exit(code=1)
+    if link_stat is not None and stat.S_ISDIR(link_stat.st_mode):
+        console.print(terminal_text(
+            f"Cannot write --output {target_path}: destination is a directory.", "red"
+        ))
+        raise typer.Exit(code=1)
     if link_stat is not None and not force:
         console.print(
             f"[red]{for_terminal(os.path.basename(real_target))} already exists. "
@@ -128,9 +133,13 @@ def fetch(
         )
         raise typer.Exit(code=1)
     parent = os.path.dirname(real_target)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-    shutil.copyfile(src, real_target)
+    try:
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+        shutil.copyfile(src, real_target)
+    except OSError as exc:
+        console.print(terminal_text(f"Cannot write --output {target_path}: {exc}", "red"))
+        raise typer.Exit(code=1) from exc
     console.print(
         f"[green]Wrote[/] {for_terminal(real_target)}\n"
         f"[dim]{escape(entry.description)}[/]",

@@ -1,7 +1,6 @@
 """soup data topics prints paths, the embedding model and errors as typed, not as Rich markup."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,27 +8,24 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 _NAMES = [
     "x[red]n.json",
     "x[bold]n.json",
-    pytest.param("n:warning:.json", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.json", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 _MISSING = [
     "x[red]n.jsonl",
     "x[bold]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
 ]
 
 
@@ -89,6 +85,40 @@ def test_missing_dataset_strips_controls_from_the_display():
     text = _plain(result)
     assert "File not found: x[bold]n.jsonl" in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize("kind", ["directory", "malformed-json"])
+def test_unreadable_dataset_reports_the_path_before_embedding(monkeypatch, kind):
+    path = Path("input[draft].json")
+    if kind == "directory":
+        path.mkdir()
+    else:
+        path.write_text("{", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "soup_cli.commands.data_topics.embed_texts",
+        lambda *a, **k: pytest.fail("an unreadable dataset cannot be embedded"),
+    )
+    result = _topics(str(path), "--output", "report.json")
+
+    assert result.exit_code == 1
+    assert "Cannot load dataset input[draft].json:" in _plain(result)
+    assert not Path("report.json").exists()
+
+
+def test_report_destination_directory_reports_write_failure(dataset, embeddings):
+    path = Path("report[draft].json")
+    path.mkdir()
+    child = path / "keep.json"
+    child.write_text("keep", encoding="utf-8")
+
+    result = _topics(dataset, "--output", str(path))
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Cannot write --output report[draft].json:" in text
+    assert "Report written:" not in text
+    assert child.read_text(encoding="utf-8") == "keep"
 
 
 @pytest.mark.parametrize("name", _NAMES)

@@ -58,15 +58,13 @@ class TestRecipeCatalog:
         assert len(results) > 0
 
     def test_search_by_size(self):
-        """search_recipes filters by matching size token against recipe name or model id (#1161)."""
-        from soup_cli.recipes.catalog import RECIPES, search_recipes
+        """search_recipes filters by matching size token against declared size (#1161, #2930)."""
+        from soup_cli.recipes.catalog import search_recipes
 
         results = search_recipes(size="7b")
         assert len(results) > 0
-        names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
-            name = names_by_recipe.get(id(recipe), "")
-            assert "7b" in name.lower() or "7b" in recipe.model.lower()
+            assert recipe.size.lower() == "7b"
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
@@ -2015,3 +2013,23 @@ class TestR1DistillLlamaAndDpoRecipes:
         assert use_result.exit_code == 0
         content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
         assert "base: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" in content
+
+
+class TestQwen35LargeMoeGrpoRecipe:
+    """The #275 122B and 397B reasoning rows are discoverable through public catalog APIs."""
+
+    def test_122b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-122b-a10b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="122b")
+
+    def test_397b_grpo_is_listed_and_searchable(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe, list_recipes, search_recipes
+
+        recipe = get_recipe("qwen3.5-397b-a17b-grpo")
+        assert recipe is not None
+        assert recipe in list_recipes()
+        assert recipe in search_recipes(query="reasoning", task="grpo", size="397b")

@@ -1,13 +1,13 @@
 """Tunability diagnostics and report paths keep literal user text."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -73,10 +73,7 @@ def test_refusals_keep_error_text(monkeypatch, value, stage):
         "x[red]n",
         "x\\[n",
         "x\x9b\u202en",
-        pytest.param(
-            "n:warning:",
-            marks=pytest.mark.skipif(sys.platform == "win32", reason="colon in filename"),
-        ),
+        pytest.param("n:warning:", marks=skip_colon_on_windows),
     ],
 )
 def test_receipt_names_the_actual_written_file(value):

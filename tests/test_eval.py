@@ -32,7 +32,7 @@ def test_eval_help():
 @pytest.mark.parametrize(
     "function_name, argument, first_work_line, list_input",
     [
-        ("benchmark", "model", "model_path = Path(model)", False),
+        ("benchmark", "model", "resolved_run_id = _resolve_run_id(run_id)", False),
         ("custom", "model", "from soup_cli.eval.custom import load_eval_tasks", False),
         ("judge", "target", "from soup_cli.eval.judge import (", False),
         ("human", "model_a", "from soup_cli.eval.human import (", False),
@@ -72,6 +72,8 @@ def test_reward_bundle_refused_before_work(
     function = getattr(import_module("soup_cli.commands.eval"), function_name)
     value = [str(root)] if list_input else str(root)
     kwargs = {}
+    if function_name == "quant_check_cmd":
+        kwargs["ctx"] = None  # The guard must run before reading any CLI context.
     kwargs[argument] = value
     assert_reward_guard(function, kwargs, first_work_line)
 
@@ -93,11 +95,11 @@ def test_reward_resolved_benchmark_base_refused(tmp_path, monkeypatch):
     )
     # Isolate the post-resolution seam from the independent preflight check.
     monkeypatch.setattr(mlx_reward_bundle, 'read_json', lambda _: {})
-    assert_reward_guard(benchmark, {'model': str(adapter)}, 'if base_model:')
+    assert_reward_guard(benchmark, {'model': str(adapter), 'run_id': None}, 'if base_model:')
     import typer
 
     with pytest.raises(typer.Exit) as error:
-        benchmark(model=str(adapter))
+        benchmark(model=str(adapter), run_id=None)
     assert error.value.exit_code == 1
 
 

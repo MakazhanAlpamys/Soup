@@ -398,6 +398,46 @@ def test_infer_base_override_is_forwarded_and_mismatch_writes_nothing(
     assert not (tmp_path / "results.jsonl").exists()
 
 
+@pytest.mark.parametrize("require_dense", [False, True])
+@pytest.mark.parametrize("return_config", [False, True])
+def test_native_loader_preserves_both_keyword_contracts(
+    tmp_path, native_boundary, require_dense, return_config,
+):
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    native_boundary.config = {"model_type": "llama", "hidden_size": 4}
+    assert len(load_native_model(str(tmp_path))) == 2
+    loaded = load_native_model(
+        str(tmp_path), require_dense=require_dense, return_config=return_config,
+    )
+    assert loaded[0] is native_boundary.model
+    assert callable(loaded[1].encode)
+    assert len(loaded) == (3 if return_config else 2)
+    if return_config:
+        assert loaded[2] is native_boundary.config
+
+
+@pytest.mark.parametrize("return_config", [False, True])
+@pytest.mark.parametrize("kind", ["quantization", "quantization_config", "module"])
+def test_native_dense_refusal_applies_to_both_return_shapes(
+    tmp_path, native_boundary, return_config, kind,
+):
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    if kind == "module":
+        quantized = native_boundary.modules["mlx.nn"].QuantizedLinear()
+        native_boundary.model.named_modules = lambda: [("q_proj", quantized)]
+    else:
+        native_boundary.config = {kind: {"bits": 4}}
+    loaded = load_native_model(str(tmp_path), return_config=return_config)
+    assert loaded[0] is native_boundary.model
+    assert len(loaded) == (3 if return_config else 2)
+    with pytest.raises(ValueError, match="serving currently supports dense checkpoints only"):
+        load_native_model(
+            str(tmp_path), require_dense=True, return_config=return_config,
+        )
+
+
 @pytest.mark.parametrize("base_config", [
     {"vision_config": {"hidden_size": 4}},
     {"audio_config": {"hidden_size": 4}},

@@ -1,0 +1,8 @@
+{
+  "phase": "failed",
+  "updated_at": "2026-10-26T16:21:28.111719+00:00",
+  "completed_gates": 0,
+  "completed_timings": 0,
+  "completed_confirmation": 0,
+  "error": "AssertionError: preflight tests failed"
+}

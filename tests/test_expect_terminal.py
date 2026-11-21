@@ -1,7 +1,7 @@
 """soup expect prints typed paths, judge URLs and loader errors as typed, not as Rich markup."""
 
+import errno
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from soup_cli.cli import app
 from soup_cli.eval.judge import JudgeUnavailableError
 from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
 from soup_cli.utils.paths import quote_path
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -21,16 +22,12 @@ _DASH = chr(0x2014)
 _SUITE = "expectations:\n  - name: expect_no_pii\n"
 _ROW = '{"text": "hello world"}\n'
 
-# A colon is not a legal file-name character on Windows, and "n:" there is a drive.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, an emoji code, and a tag
 # with control characters, so the strip and the escape are pinned separately.
 _NAMES = [
     "x[red]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}.jsonl",
 ]
 # Values that are not file names can also carry a closing tag with nothing to close.
@@ -231,3 +228,27 @@ def test_the_table_title_keeps_its_italic_style(monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     # Italic is SGR 3.
     assert re.search(r"\x1b\[3m\s*soup expect", result.output)
+
+
+@pytest.mark.parametrize(
+    ("module", "filename"),
+    [
+        pytest.param("soup_cli.utils.expectations", "suite.yaml", id="suite"),
+        pytest.param("soup_cli.commands.expect", "data.jsonl", id="data"),
+    ],
+)
+def test_unreadable_input_exits_with_usage_error(monkeypatch, module, filename):
+    data, suite = _data(), _suite()
+
+    def denied_open(path, *args, **kwargs):
+        assert Path(path).name == filename
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+
+    monkeypatch.setattr(f"{module}.open", denied_open, raising=False)
+
+    result = _expect(data, suite)
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "Permission denied" in text
+    assert filename in text

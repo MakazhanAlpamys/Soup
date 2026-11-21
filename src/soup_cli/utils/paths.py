@@ -16,6 +16,8 @@ import errno
 import ntpath
 import os
 import stat
+import struct
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -208,6 +210,101 @@ def _same_file(first: str, second: str) -> bool:
     except (OSError, ValueError):
         # A path that does not exist yet cannot be a hard link to anything.
         return False
+
+
+def _macos_entry_attribute(path: str, common: int, extended: int, size: int) -> Optional[bytes]:
+    """Return one packed macOS directory-entry attribute when available."""
+    if sys.platform != "darwin":
+        return None
+
+    import ctypes
+
+    try:
+        getattrlist = ctypes.CDLL(None).getattrlist
+    except (AttributeError, OSError):
+        return None
+    getattrlist.argtypes = (
+        ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong,
+    )
+    getattrlist.restype = ctypes.c_int
+    # sys/attr.h: five attribute bitmaps and FSOPT_ATTR_CMN_EXTENDED.
+    attributes = ctypes.create_string_buffer(
+        struct.pack("=HHIIIII", 5, 0, common, 0, 0, 0, extended),
+    )
+    payload = ctypes.create_string_buffer(size)
+    if getattrlist(os.fsencode(path), attributes, payload, size, 0x20 if extended else 0):
+        return None
+    length, = struct.unpack_from("=I", payload.raw)
+    return payload.raw[4:length] if 4 < length <= size else None
+
+
+def _macos_link_id(path: str) -> Optional[int]:
+    """Read ATTR_CMNEXT_LINKID when the macOS filesystem supplies one."""
+    payload = _macos_entry_attribute(path, common=0, extended=0x10, size=12)
+    if payload is None or len(payload) != 8:
+        return None
+    link_id, = struct.unpack("=Q", payload)
+    return link_id or None
+
+
+def _macos_entry_name(path: str) -> Optional[str]:
+    """Read ATTR_CMN_NAME using pathname lookup, including the hard-link spelling."""
+    payload = _macos_entry_attribute(path, common=0x1, extended=0, size=1024)
+    if payload is None or len(payload) < 8:
+        return None
+    offset, length = struct.unpack_from("=iI", payload)
+    if offset < 8 or length < 2 or offset + length > len(payload):
+        return None
+    name = payload[offset:offset + length]
+    return os.fsdecode(name[:-1]) if name.endswith(b"\0") else None
+
+
+def same_directory_entry(first: str, second: str) -> bool:
+    """Recognize aliases of an input without treating separate hard links as aliases."""
+    first, second = os.path.realpath(first), os.path.realpath(second)
+    if os.path.normcase(first) == os.path.normcase(second):
+        return True
+    try:
+        first_stat = os.stat(first)
+        if not os.path.samestat(first_stat, os.stat(second)):
+            return False
+    except (OSError, ValueError):
+        return False
+    if first_stat.st_nlink == 1:
+        return True
+
+    first_parent, first_name = os.path.split(first)
+    second_parent, second_name = os.path.split(second)
+    if not _same_file(first_parent, second_parent):
+        return False
+    if first_name == second_name:
+        return True
+    first_id, second_id = _macos_link_id(first), _macos_link_id(second)
+    if first_id is not None and second_id is not None:
+        return first_id == second_id
+
+    from unicodedata import normalize
+
+    folded = normalize("NFC", first_name).casefold()
+    if folded != normalize("NFC", second_name).casefold():
+        return False
+    try:
+        # With no entry IDs, require one actual name. Two folded matches can
+        # be separate hard links on a case-sensitive volume.
+        names = [
+            name for name in os.listdir(first_parent) if normalize("NFC", name).casefold() == folded
+        ]
+        return len(names) == 1 and os.path.samestat(
+            first_stat, os.stat(os.path.join(first_parent, names[0])),
+        )
+    except OSError:
+        # Lookup may be allowed even when the directory cannot be listed.
+        first_native, second_native = _macos_entry_name(first), _macos_entry_name(second)
+        return (
+            first_native is not None
+            and first_native == second_native
+            and normalize("NFC", first_native).casefold() == folded
+        )
 
 
 def ensure_distinct_paths(
@@ -618,3 +715,56 @@ def open_no_follow(
         os.close(fd)
         raise
     return fd
+
+
+def sanitize_run_output_dir(
+    output_dir: Optional[str],
+    base: Optional[Union[str, Path]] = None,
+) -> Optional[str]:
+    """Relativize or shorten a run's output directory for machine-readable surfaces.
+
+    The experiment tracker records ``output_dir`` as an absolute path (#2725)
+    so that CLI readers (``soup runs clean``, ``soup rewind``, ``soup runs show``)
+    can locate the run from any directory. Machine-readable surfaces exposed over
+    a network or IPC boundary (the Web UI API and the MCP server) should not
+    reveal more of the host filesystem layout than they did before:
+
+    - When ``output_dir`` is inside ``base`` (default: the current working
+      directory), return the path relative to ``base``.
+    - When ``output_dir`` is outside ``base``, return only its last path
+      component (e.g. ``"output"``).
+    - If ``output_dir`` is empty or ``None``, return it unchanged.
+    """
+    if not output_dir or not isinstance(output_dir, str):
+        return output_dir
+
+    if os.name != "nt" and ntpath.splitdrive(output_dir)[0]:
+        return ntpath.basename(output_dir.rstrip("/\\"))
+
+    if base is None:
+        base = Path.cwd()
+
+    path_to_check = (
+        output_dir if os.path.isabs(output_dir) else os.path.join(str(base), output_dir)
+    )
+
+    if is_under(path_to_check, base):
+        return os.path.relpath(
+            os.path.realpath(path_to_check), os.path.realpath(str(base))
+        )
+
+    return os.path.basename(output_dir.rstrip("/\\"))
+
+
+def sanitize_run_row(
+    run: Optional[dict],
+    base: Optional[Union[str, Path]] = None,
+) -> Optional[dict]:
+    """Return a copy of ``run`` with its ``output_dir`` sanitized."""
+    if not run or not isinstance(run, dict):
+        return run
+    if "output_dir" not in run:
+        return run
+    run_copy = dict(run)
+    run_copy["output_dir"] = sanitize_run_output_dir(run_copy["output_dir"], base=base)
+    return run_copy

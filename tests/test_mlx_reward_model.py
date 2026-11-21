@@ -657,7 +657,8 @@ def test_documented_reward_configuration_loads_and_dispatches():
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.mlx_routing import resolve_trainer
 
-    page = (Path(__file__).parents[1] / "docs/mlx-reward-model.md").read_text()
+    page = (Path(__file__).parents[1] / "docs/training.md").read_text(encoding="utf-8")
+    page = page.split("## Native MLX reward-model training\n", 1)[1].split("\n## ", 1)[0]
     blocks = re.findall(r"```yaml\n(.*?)\n```", page, re.DOTALL)
     assert blocks
     config = SoupConfig(**yaml.safe_load(blocks[0]))
@@ -719,26 +720,41 @@ def test_publish_does_not_hash_or_reload_the_base(trained, monkeypatch):
 
 
 @pytest.mark.usefixtures("native_stack")
-def test_hub_download_only_selects_native_base_and_tokenizer_assets(trained, monkeypatch):
+@pytest.mark.parametrize("bind_revision", [False, True])
+def test_hub_download_only_selects_native_base_and_tokenizer_assets(
+    trained, monkeypatch, bind_revision,
+):
     import huggingface_hub
     from huggingface_hub.utils import filter_repo_objects
 
     from soup_cli.config.schema import SoupConfig
+    from soup_cli.utils import run_provenance
 
     trainer, _, root, base = trained
     calls = []
+    revision = "a" * 40
 
     def download(model, **kwargs):
         calls.append((model, kwargs))
         return str(base)
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.setattr(
+        run_provenance, "get_hf_api",
+        lambda: SimpleNamespace(model_info=lambda *args, **kwargs: SimpleNamespace(sha=revision)),
+    )
     values = trainer.config.model_dump()
     values.update(base="example/native-reward-base", output=str(root) + "-hub")
     wrapper = MLXRewardModelTrainerWrapper(SoupConfig(**values))
-    wrapper.setup({"train": [{"prompt": "Q", "chosen": "good", "rejected": "bad"}]})
+    identity = run_provenance.BaseRevision(values["base"], binding_supported=bind_revision)
+    with run_provenance.base_revision_scope(identity):
+        wrapper.setup({"train": [{"prompt": "Q", "chosen": "good", "rejected": "bad"}]})
     assert len(calls) == 1 and calls[0][0] == values["base"]
     options = calls[0][1]
+    assert options.get("revision") == identity.revision == (revision if bind_revision else None)
+    assert ("revision" in options) == bind_revision
     allowed = {
         "config.json", "model.safetensors", "model-00001-of-00002.safetensors",
         "model.safetensors.index.json", "tokenizer.json", "tokenizer_config.json",
@@ -858,7 +874,7 @@ def test_reward_raw_data_scope(data, field):
 
 
 def test_eval_policy_and_rslora_dropout_decision():
-    with pytest.raises(ValueError, match="training.eval_gate.enabled"):
+    with pytest.raises(ValueError, match=r"training\.eval_gate is not supported for backend='mlx'"):
         reward_config(training={"eval_gate": {"enabled": True, "suite": "suite.yaml"}})
     with pytest.raises(ValueError, match="eval.auto_eval"):
         reward_config(eval={"auto_eval": True})

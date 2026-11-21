@@ -14,17 +14,22 @@ from rich.text import Text
 
 from soup_cli.templates import list_templates, load_template
 from soup_cli.utils.paths import open_no_follow, refuse_linked_dirs
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
 
 
 def _print_link_refusal(output: str) -> None:
     console.print(
-        f"[red]{for_terminal(output)} is a symbolic link, junction or other reparse "
-        "point; soup init does not write through it.[/]\n"
-        "Remove it or choose a different --output.",
-        emoji=False,
+        Text.assemble(
+            terminal_text(output, style="red"),
+            (
+                " is a symbolic link, junction or other reparse "
+                "point; soup init does not write through it.\n",
+                "red",
+            ),
+            "Remove it or choose a different --output.",
+        )
     )
 
 
@@ -161,13 +166,14 @@ def init(
         config_text = _interactive_wizard()
 
     _write_config(output, config_text)
-    display_output = for_terminal(output_path)
     console.print(
         Panel(
-            Text.from_markup(
-                f"[bold green]Config saved to {display_output}[/]\n\n"
-                f"Next step: [bold]soup train --config {display_output}[/]",
-                emoji=False,
+            Text.assemble(
+                ("Config saved to ", "bold green"),
+                terminal_text(output_path, style="bold green"),
+                "\n\nNext step: ",
+                ("soup train --config ", "bold"),
+                terminal_text(output_path, style="bold"),
             ),
             title="Ready!",
         )

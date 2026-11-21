@@ -51,6 +51,75 @@ EVIDENCE_CORPUS = (
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "4bit",
     },
+    # schema version 2 (soup-cli 0.78): the task detail and what was judged. Truncation 5 -> 14
+    # of 64 raises the truncation_growth warning, which changes neither decision nor exit code.
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.59,
+            "tuned": 0.72,
+            "rows": {"better": 25, "worse": 17, "same": 22, "n": 64},
+            "truncated": {"base": 5, "tuned": 14, "n": 64, "max_new_tokens": 256},
+            "generation_failures": {"base": 0, "tuned": 2, "n": 64},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "judged": {
+            "base": "Qwen/Qwen3-0.6B",
+            "adapter": "out/checkpoint-12",
+            "tuned": None,
+            "base_adapter": "prod",
+            "checkpoint_step": 12,
+        },
+    },
+    # version 2 that names the per-row file written next to it (a bare file name)
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.25,
+            "tuned": 0.5,
+            "rows": {"better": 2, "worse": 0, "same": 2, "n": 4},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "task_rows": "verdict.task-rows.jsonl",
+    },
+    # version 2, reward mode: what scored the leg (a file's name and hash) and the descriptive
+    # paired summary (12 rows: not underpowered); neither decides anything
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "reward",
+            "base": 0.5,
+            "tuned": 0.6,
+            "rows": {"better": 7, "worse": 3, "same": 2, "n": 12},
+            "reward": {"fn": "rewards/score.py", "sha256": "a" * 64},
+            "paired": {
+                "n": 12, "better": 7, "worse": 3, "same": 2, "mean_difference": 0.1,
+                "ci_low": -0.05, "ci_high": 0.25, "confidence": 0.95, "resamples": 2000,
+                "seed": 20261114, "underpowered": False,
+            },
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+    },
+    # version 2 with nothing measured: every count is null, never 0
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "judge_score",
+            "base": 0.45,
+            "tuned": 0.30,
+            "truncated": {"base": None, "tuned": None, "n": 8, "max_new_tokens": None},
+        },
+        "benchmarks": {"mini_math": {"base": 0.80, "tuned": 0.79}},
+        "judged": {
+            "base": "base-model",
+            "adapter": None,
+            "tuned": "tuned-model",
+            "base_adapter": None,
+            "checkpoint_step": None,
+        },
+    },
 )
 
 
@@ -73,6 +142,49 @@ def test_corpus_covers_every_registered_evidence_field():
                 evidence["noise_floor"].keys()
                 for evidence in EVIDENCE_CORPUS
                 if "noise_floor" in evidence
+            )
+        ),
+        # the schema-version-2 blocks nested in the task and at the root
+        "rows": set().union(
+            *(
+                evidence["task"]["rows"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "rows" in evidence["task"]
+            )
+        ),
+        "truncated": set().union(
+            *(
+                evidence["task"]["truncated"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "truncated" in evidence["task"]
+            )
+        ),
+        "generation_failures": set().union(
+            *(
+                evidence["task"]["generation_failures"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "generation_failures" in evidence["task"]
+            )
+        ),
+        "judged": set().union(
+            *(
+                evidence["judged"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "judged" in evidence
+            )
+        ),
+        "reward": set().union(
+            *(
+                evidence["task"]["reward"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "reward" in evidence["task"]
+            )
+        ),
+        "paired": set().union(
+            *(
+                evidence["task"]["paired"].keys()
+                for evidence in EVIDENCE_CORPUS
+                if "paired" in evidence["task"]
             )
         ),
     }
@@ -135,6 +247,97 @@ MALFORMED_CORPUS = (
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "nf4",
+    },
+    # schema version 2: a version this reader does not know, and v2 keys without the version
+    {
+        "schema_version": 3,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "schema_version": True,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "task": {
+            "mode": "metric",
+            "base": 0.50,
+            "tuned": 0.80,
+            "rows": {"better": 1, "worse": 0, "same": 0, "n": 1},
+        },
+        "benchmarks": {},
+    },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "judged": {
+            "base": "m", "adapter": None, "tuned": None, "base_adapter": None,
+            "checkpoint_step": None,
+        },
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric",
+            "base": 0.50,
+            "tuned": 0.80,
+            "rows": {"better": 1, "worse": 1, "same": 1, "n": 4},
+        },
+        "benchmarks": {},
+    },
+    # the per-row pointer must be a bare file name; under version 1 it is a version-2 key
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "../verdict.task-rows.jsonl",
+    },
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "/abs/verdict.task-rows.jsonl",
+    },
+    {
+        "schema_version": 2,
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": True,
+    },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+        "task_rows": "verdict.task-rows.jsonl",
+    },
+    # reward mode must name its function, and no other mode may
+    {
+        "schema_version": 2,
+        "task": {"mode": "reward", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {},
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "metric", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "accuracy", "sha256": None},
+        },
+        "benchmarks": {},
+    },
+    {
+        "schema_version": 2,
+        "task": {
+            "mode": "reward", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "a\x1b[2Jb.py", "sha256": None},
+        },
+        "benchmarks": {},
+    },
+    {
+        "task": {
+            "mode": "reward", "base": 0.50, "tuned": 0.80,
+            "reward": {"fn": "accuracy", "sha256": None},
+        },
+        "benchmarks": {},
     },
 )
 
@@ -239,7 +442,9 @@ def test_schema_keys_are_derived_from_the_canonical_serializer(evidence):
         evidence, forgetting_threshold=FORGETTING_THRESHOLD
     )
     replay = verdict_to_evidence(
-        canonical, provenance=evidence.get(PROVENANCE_FIELD)
+        canonical,
+        provenance=evidence.get(PROVENANCE_FIELD),
+        task_rows=evidence.get("task_rows"),  # metadata of the file, like the provenance
     )
 
     assert replay == evidence

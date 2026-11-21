@@ -13,6 +13,7 @@ from typing import Any
 
 from rich.console import Console
 
+from soup_cli.experiment.row_kinds import ROW_KIND_TRAIN
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.mlx_sft import (
     MLXSFTTrainerWrapper,
@@ -63,9 +64,12 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
         if not base.is_dir():
             from huggingface_hub import snapshot_download
 
+            from soup_cli.utils.run_provenance import base_revision_kwargs
+
             base = Path(snapshot_download(
                 cfg.base, allow_patterns=list(BASE_DOWNLOAD_PATTERNS),
                 ignore_patterns=["*/*.safetensors"],
+                **base_revision_kwargs(cfg.base),
             ))
         self._base_identity = base_identity(base)  # custom-code checks precede MLX-LM
         self.tokenizer = load_tokenizer(base, allow_cache_links=True)
@@ -218,7 +222,7 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
                             f"reward_model update {update}/{total_updates}: loss={loss:.6f}"
                         )
                     if tracker is not None and run_id:
-                        tracker.log_metrics(run_id=run_id, **metrics)
+                        tracker.log_metrics(run_id=run_id, kind=ROW_KIND_TRAIN, **metrics)
             if self._val_pairs:
                 validation = evaluate_pairs(
                     self.model,
