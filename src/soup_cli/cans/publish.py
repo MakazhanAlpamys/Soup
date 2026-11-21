@@ -13,7 +13,7 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.cans.unpack import inspect_can, read_config
-from soup_cli.utils.hf import resolve_token, validate_repo_id
+from soup_cli.utils.hf import hf_login_command, resolve_token, validate_repo_id
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.redaction import RedactionReport, redact_config, redact_text
 from soup_cli.utils.terminal import for_terminal
@@ -92,7 +92,7 @@ def publish_can(
     resolved = token or resolve_token()
     if not resolved:
         raise ValueError(
-            "no HF token found - set HF_TOKEN env var or `huggingface-cli login`"
+            f"no HF token found - set HF_TOKEN env var or `{hf_login_command()}`"
         )
 
     from huggingface_hub import HfApi

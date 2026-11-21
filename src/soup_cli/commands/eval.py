@@ -1362,9 +1362,7 @@ def gate_cmd(
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     if write_baseline:
-        import os
-
-        from soup_cli.utils.paths import check_report_output_path, quote_path
+        from soup_cli.utils.paths import check_report_output_path, quote_path, same_directory_entry
 
         try:
             check_report_output_path(write_baseline, "--write-baseline")
@@ -1378,9 +1376,8 @@ def gate_cmd(
                 inputs.append((f"task {task.name!r} --tasks", task.tasks))
             elif task.type == "judge" and task.prompts:
                 inputs.append((f"task {task.name!r} --prompts", task.prompts))
-        output_identity = os.path.normcase(os.path.realpath(write_baseline))
         for field, input_path in inputs:
-            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+            if same_directory_entry(write_baseline, input_path):
                 message = (
                     f"--write-baseline {quote_path(write_baseline)} aliases "
                     f"{field} {quote_path(input_path)}; choose a different --write-baseline"
@@ -1394,7 +1391,7 @@ def gate_cmd(
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot resolve baseline:[/] {exc}")
+        console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
