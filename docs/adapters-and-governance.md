@@ -416,8 +416,10 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # ends by a signal or an NTSTATUS is named in last_failure (for example "train failed (exit code
 # 3221225786 (STATUS_CONTROL_C_EXIT 0xC000013A: ...)"); POSIX is unchanged.
 # A top-level key that loop.yaml does not support is invalid too: `soup loop status` names the
-# key and, when possible, the closest supported field, and leaves the file untouched. Remove or
-# correct such a key before resuming a loop written by a version that silently ignored it.
+# key and, when possible, the closest supported field, and leaves the file untouched. Every
+# `soup loop` command that reads this state exits 2; a running `soup loop watch` stops, and
+# `soup serve` disables canary traffic and logs a warning. Remove or correct the key before
+# resuming the loop; the canary route stays off until then.
 # A training run that failed is not started again on every poll: the same inputs (the dataset,
 # the method, the base model and the recipe) wait 5 minutes after the first failure, 30 minutes
 # after the second, and after the third the loop holds. A held loop trains again when the inputs

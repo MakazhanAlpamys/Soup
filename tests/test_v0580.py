@@ -308,6 +308,21 @@ class TestStateIO:
         ):
             read_state()
 
+    def test_read_state_bounds_long_unknown_top_level_key(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        long_key = "x" * 500
+        target.write_text(json.dumps({long_key: True}))
+
+        with pytest.raises(ValueError) as exc_info:
+            read_state()
+
+        message = str(exc_info.value)
+        assert len(message) < 200
+        assert "unknown loop.yaml key '" + "x" * 56 + "..." in message
+        assert long_key not in message
+
     def test_status_refuses_unknown_field_without_rewriting_state(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".soup" / "loop.yaml"

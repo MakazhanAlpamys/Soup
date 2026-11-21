@@ -1258,9 +1258,13 @@ def read_state(path: Optional[str] = None) -> LoopState:
                 else []
             )
             if nearest:
-                details.append(f"unknown loop.yaml key {key!r}; did you mean {nearest[0]!r}?")
+                details.append(
+                    f"unknown loop.yaml key {_brief(key)}; did you mean {nearest[0]!r}?"
+                )
             else:
-                details.append(f"unknown loop.yaml key {key!r}; it is not a supported field")
+                details.append(
+                    f"unknown loop.yaml key {_brief(key)}; it is not a supported field"
+                )
         raise ValueError("; ".join(details))
     filtered = data
     if "production_version" not in data:
