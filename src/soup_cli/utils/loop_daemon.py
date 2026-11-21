@@ -71,8 +71,11 @@ from soup_cli.utils.loop_log import (
 from soup_cli.utils.loop_reconcile import finish as finish_promotion
 from soup_cli.utils.loop_reconcile import promoted_state
 from soup_cli.utils.loop_retry import (
+    DEPLOY_FAILURE_FINGERPRINT,
     STAGE_ERROR_STAGES,
     after_failure,
+    deploy_failure_after,
+    deploy_hold_reason,
     is_stage_error,
     stage_error_fingerprint,
     stage_error_hold,
@@ -351,6 +354,34 @@ def run_once(
             projected_total_usd=state.spent_this_month_usd,
             runs_today=state.runs_today,
         )
+    # A refused deploy keeps the candidate on disk; honor its own back-off before calling even the
+    # cost stage. This also makes a `soup serve` restart lasting longer than three polls safe.
+    deploy_wait = deploy_hold_reason(state.failed_deploy, now)
+    if state.pending_deploy is not None and deploy_wait is not None:
+        record = IterationRecord(
+            iteration_id=new_iteration_id(),
+            started_at=_utc_iso(),
+            finished_at=_utc_iso(),
+            pairs_harvested=0,
+            run_id=None,
+            gate_verdict="SKIPPED",
+            canary_verdict=canary_verdict,
+            shipped=False,
+            rolled_back=rolled_back,
+            estimated_cost_usd=0.0,
+            notes=" | ".join([*canary_notes, deploy_wait])[:4096],
+            canary_quality=reading.evidence,
+        )
+        state = _state_with(
+            state,
+            last_idle={"at": _utc_iso(), "reason": _idle_reason(deploy_wait)},
+        )
+        return state, _noted(record, log), BudgetDecision(
+            proceed=False,
+            reason=deploy_wait[:300],
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
+        )
     # A record of a stage that raised (its back-off or hold) is judged before any stage runs, so a
     # cost stage that keeps raising is not called again either. A deploy retry is not held by it.
     legacy_stage_failure = (
@@ -490,24 +521,38 @@ def run_once(
         canary_verdict = str(deploy_verdict)
     shipped = bool(deploy_out.get("deployed", False))
     rolled_back = rolled_back or bool(deploy_out.get("rolled_back", False))
-    # The batch is consumed only by a DECIDED verdict: SHIP deployed, DON'T SHIP, or a deploy
-    # that failed for good (retries used up). A skipped verdict (soup ship crashed) keeps it;
-    # a refused deploy keeps the trained candidate and retries just the deploy next cycle.
+    # The batch is consumed only by a DECIDED verdict: SHIP deployed, DON'T SHIP, or the terminal
+    # deploy hold. A refused deploy retains the trained candidate and its data cursor while waiting.
     verdict_decided = str(gate_out.get("gate_verdict", "SKIPPED")) in ("OK", "MAJOR")
     deploy_refused = deploying and not shipped and bool(deploy_out.get("failed"))
     attempts_used = resumed_attempts + 1 if deploy_refused else 0
-    retry_deploy = deploy_refused and attempts_used < DEPLOY_RETRY_LIMIT
-    consumed = trained_run and verdict_decided and not retry_deploy
+    retry_deploy = False
+    consumed = trained_run and verdict_decided
     failure_note = None
+    failed_deploy = state.failed_deploy
     if deploy_refused:
         reason = str(deploy_out.get("notes") or "deploy failed")
+        failed_deploy = deploy_failure_after(
+            _prior_deploy_failure(state.failed_deploy, pending, now),
+            now,
+            reason,
+        )
+        attempts_used = int(failed_deploy["attempts"])
+        retry_deploy = attempts_used < DEPLOY_RETRY_LIMIT
+        consumed = trained_run and verdict_decided and not retry_deploy
         if retry_deploy:
             failure_note = (
                 f"deploy failed (attempt {attempts_used} of {DEPLOY_RETRY_LIMIT}): {reason}; "
-                "the trained candidate is kept and the deploy will be retried next cycle"
+                f"the trained candidate is kept; next deploy attempt after "
+                f"{failed_deploy['retry_after']}"
             )
         else:
-            failure_note = f"deploy failed after {attempts_used} attempts: {reason}"
+            failure_note = (
+                f"deploy held after {attempts_used} attempts: {reason}; run "
+                "soup loop resume to retry the saved candidate"
+            )
+    elif shipped and pending is not None:
+        failed_deploy = None
     elif train_out.get("failed") and train_out.get("notes"):
         # The failure itself (exit code or signal name, log tail), not the notes that came before
         # it (quantization, max_length, paraphrases): last_failure keeps its first 500 characters.
@@ -618,9 +663,10 @@ def run_once(
                 "cursor_ts": read_up_to,
                 "iteration_id": iteration_id,
             }
-            if retry_deploy
+            if retry_deploy or (deploy_refused and bool(failed_deploy and failed_deploy["held"]))
             else None
         ),
+        failed_deploy=failed_deploy,
         last_failure=(failure_note or "")[:500] or None,
         failed_train=_failed_train_after(state, train_out, pending is None, stage_error),
         failed_stage=_failed_stage_after(
@@ -1074,6 +1120,26 @@ def _failed_stage_after(
         return {**failure, "has_non_train_failure": has_raised_stage}
     # No non-deploy failure occurred; this includes clean idle polls and deploy-only retries.
     return None
+
+
+def _prior_deploy_failure(
+    failed: Optional[Mapping[str, object]], pending: Optional[Mapping[str, object]], now: datetime
+) -> Optional[Mapping[str, object]]:
+    """Seed retry history from pre-backoff pending state written by an older Soup version."""
+    if failed is not None or pending is None:
+        return failed
+    attempts = pending.get("attempts", 0)
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
+        return None
+    moment = now.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    return {
+        "inputs": DEPLOY_FAILURE_FINGERPRINT,
+        "attempts": min(attempts, DEPLOY_RETRY_LIMIT - 1),
+        "last_at": moment,
+        "retry_after": None,
+        "held": False,
+        "reason": "legacy pending deploy; retry schedule starts on next refusal",
+    }
 
 
 def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:

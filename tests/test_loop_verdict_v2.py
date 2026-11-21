@@ -1373,13 +1373,11 @@ class TestLineageCursor:
 
 class TestLoopStateFields:
     NEW = ["attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts", "waiting_note"]
-    # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16: failed_train,
-    # canary_override), review 5b (2026-11-17: last_idle), and the stage retry record: at the very
-    # end, so a reader of an
-    # older loop.yaml is unaffected; they come last in this order
+    # appended after them by the review fixes (2026-11-14), review 5 (2026-11-16), review 5b
+    # (2026-11-17), raised-stage retry and deploy back-off; old loop.yaml readers keep defaults.
     LATER = [
         "pending_deploy", "last_failure", "canary_on_timeout_explicit", "failed_train",
-        "canary_override", "last_idle", "failed_stage",
+        "canary_override", "last_idle", "failed_stage", "failed_deploy",
     ]
 
     def test_the_fields_come_last_in_this_order_and_default_to_none(self):
