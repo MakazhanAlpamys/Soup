@@ -18,8 +18,9 @@ run was made of:
 - a different fingerprint trains at once, and a run that trained clears the record.
 
 A waiting or held cycle is a skipped iteration whose notes say so (``train_backoff: ...`` or
-``train_held: ...``), and ``soup loop status`` shows the ``train_retry`` row. The deploy retry
-(``DEPLOY_RETRY_LIMIT``) is separate and unchanged.
+``train_held: ...``), and ``soup loop status`` shows the ``train_retry`` row. A refused deploy
+keeps its candidate and uses a separate persisted record: 5 minutes, then 30 minutes, then hold
+until ``soup loop resume`` after the third refusal.
 
 A stage of the cycle that RAISES (the cost, harvest, train or gate stage; a locked thumbs
 database, a directory that went away) and a failed training both count in the loop-wide
@@ -46,12 +47,13 @@ RETRY_DELAYS_SEC = (300.0, 1800.0)
 ATTEMPT_LIMIT = len(RETRY_DELAYS_SEC) + 1
 
 _REASON_CHARS = 300
-#: The stages whose exception is remembered (a deploy has its own retry).
+#: The stages whose exception is remembered.
 STAGE_ERROR_STAGES = ("cost", "harvest", "train", "gate")
 #: A ``failed_train`` reason that starts this way is a stage that raised, not a failed training.
 STAGE_ERROR_PREFIX = "stage error: "
 _MAX_DATASET_BYTES = 256 * 1024 * 1024
 _READ_CHUNK = 1024 * 1024
+DEPLOY_FAILURE_FINGERPRINT = hashlib.sha256(b"loop refused deploy").hexdigest()
 
 
 def _iso(moment: datetime) -> str:
@@ -127,6 +129,46 @@ def stage_error_reason(stage: str, error_type: str, detail: str = "") -> str:
     """
     text = f"{STAGE_ERROR_PREFIX}the {stage} stage raised {error_type}"
     return f"{text}: {detail}" if detail else text
+
+
+def deploy_failure_after(
+    previous: Optional[Mapping[str, Any]], now: datetime, reason: str
+) -> "dict[str, Any]":
+    """Persist the next refused-deploy attempt using the shared 5m/30m/hold schedule."""
+    return after_failure(previous, DEPLOY_FAILURE_FINGERPRINT, now, reason)
+
+
+def deploy_hold_reason(failed: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
+    """Why a pending candidate's deploy must wait, or None when it is due."""
+    if not isinstance(failed, Mapping) or failed.get("inputs") != DEPLOY_FAILURE_FINGERPRINT:
+        return None
+    attempts = failed.get("attempts")
+    times = "1 time" if attempts == 1 else f"{attempts} times"
+    seen = f"deploy refused {times} (last {failed.get('last_at')}: {failed.get('reason')})"
+    if failed.get("held"):
+        return f"deploy_held: {seen}; retry after soup loop resume"
+    retry_after = _parse(failed.get("retry_after"))
+    if retry_after is not None and now < retry_after:
+        return f"deploy_backoff: {seen}; next attempt after {failed.get('retry_after')}"
+    return None
+
+
+def describe_deploy_failure(
+    failed: Optional[Mapping[str, Any]], now: Optional[datetime] = None
+) -> Optional[str]:
+    """The deploy retry status row, or None when no deploy refusal is remembered."""
+    if not isinstance(failed, Mapping) or failed.get("inputs") != DEPLOY_FAILURE_FINGERPRINT:
+        return None
+    attempts = failed.get("attempts")
+    plural = "" if attempts == 1 else "s"
+    base = f"refused {attempts} time{plural} ({failed.get('reason')})"
+    if failed.get("held"):
+        return f"held: {base}; run soup loop resume to retry the saved candidate"
+    moment = now or datetime.now(timezone.utc)
+    retry_after = _parse(failed.get("retry_after"))
+    if retry_after is not None and moment < retry_after:
+        return f"waiting: {base}; next attempt after {failed.get('retry_after')}"
+    return f"due: {base}; the next cycle retries the saved candidate"
 
 
 def is_stage_error(failed: Mapping[str, Any]) -> bool:

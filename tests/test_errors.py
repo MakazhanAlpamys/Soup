@@ -8,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.utils import hf
 from soup_cli.utils.errors import format_friendly_error
 from tests.conftest import strip_ansi
 
@@ -222,31 +223,36 @@ def test_cuda_oom_mentions_gradient_checkpointing():
     assert "4bit" in output
 
 
-def test_gated_repo_error():
-    """HF gated repos should suggest login and HF_TOKEN."""
+class GatedRepoError(Exception):
+    """Stand-in for the Hub exception type without importing the Hub SDK."""
+
+    status_code = 403
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        Exception("Cannot access gated repo"),
+        Exception("Access denied to gated-repo"),
+        GatedRepoError("Cannot access this model"),
+    ],
+    ids=("gated-repo-message", "hyphenated-message", "exception-type"),
+)
+@pytest.mark.parametrize(
+    ("installed_version", "command"),
+    [("0.33.5", "huggingface-cli login"), ("0.34.0", "hf auth login")],
+)
+def test_gated_repo_error_hints(exc, installed_version, command, monkeypatch):
+    monkeypatch.setattr(hf, "version", lambda _: installed_version, raising=False)
     buf = StringIO()
     test_console = Console(file=buf, stderr=False)
 
     with patch("soup_cli.utils.errors.console", test_console):
-        exc = Exception("GatedRepoError: Cannot access gated repo")
         format_friendly_error(exc, verbose=False)
 
     output = " ".join(strip_ansi(buf.getvalue()).split())
-    assert "huggingface-cli login" in output
-    assert "HF_TOKEN" in output
-
-
-def test_gated_repo_hyphenated_error():
-    """Hyphenated gated-repo errors should match."""
-    buf = StringIO()
-    test_console = Console(file=buf, stderr=False)
-
-    with patch("soup_cli.utils.errors.console", test_console):
-        exc = Exception("Access denied to gated-repo")
-        format_friendly_error(exc, verbose=False)
-
-    output = " ".join(strip_ansi(buf.getvalue()).split())
-    assert "huggingface-cli login" in output
+    assert f"Run: {command} or set HF_TOKEN." in output
+    assert "Also accept the model license on Hugging Face." in output
 
 
 def test_trust_remote_code_error():

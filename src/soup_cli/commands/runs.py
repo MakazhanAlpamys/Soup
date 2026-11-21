@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
 
@@ -42,7 +43,9 @@ def _code_state(run: dict) -> str:
     return "dirty" if dirty else "clean"
 
 
-def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
+def _filter_runs_by_cwd(
+    runs: Iterable[dict], cwd: str, limit: int = -1
+) -> list[dict]:
     """Return only runs whose output_dir is under ``cwd``.
 
     Runs with no ``output_dir`` are dropped. Comparisons use
@@ -59,6 +62,8 @@ def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
             cand = os.path.realpath(out)
             if os.path.commonpath([cand, cwd_real]) == cwd_real:
                 kept.append(run)
+                if len(kept) == limit:
+                    break
         except (ValueError, OSError):
             # Different drives on Windows / unreadable path — skip.
             continue
@@ -90,9 +95,13 @@ def list_runs(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    runs = tracker.list_runs(limit=limit)
     if cwd_only:
-        runs = _filter_runs_by_cwd(runs, os.getcwd())
+        cwd = os.getcwd()
+        runs = tracker.list_runs(
+            limit=limit, select_runs=lambda rows: _filter_runs_by_cwd(rows, cwd, limit)
+        )
+    else:
+        runs = tracker.list_runs(limit=limit)
 
     if not runs:
         console.print("[dim]No runs found. Train a model with:[/] [bold]soup train[/]")
@@ -187,6 +196,8 @@ def show(
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "stopped":
+        status_str = "[yellow]stopped[/]"
     elif status == "terminated":
         status_str = "[red]terminated[/]"
     elif status == "launching":

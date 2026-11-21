@@ -23,6 +23,15 @@ _CPU_OOM_FIX = (
     "page file (Windows), or use a smaller model."
 )
 
+def _gated_repo_fix() -> str:
+    from soup_cli.utils.hf import hf_login_command
+
+    return (
+        f"Run: {hf_login_command()} or set HF_TOKEN. "
+        "Also accept the model license on Hugging Face."
+    )
+
+
 # Map known error patterns to (short message, fix suggestion)
 ERROR_MAP = [
     # CUDA OOM
@@ -208,26 +217,17 @@ ERROR_MAP = [
     (
         "gated repo",
         "This Hugging Face model requires authentication or license acceptance.",
-        (
-            "Run: huggingface-cli login or set HF_TOKEN. "
-            "Also accept the model license on Hugging Face."
-        ),
+        _gated_repo_fix,
     ),
     (
         "gated-repo",
         "This Hugging Face model requires authentication or license acceptance.",
-        (
-        "Run: huggingface-cli login or set HF_TOKEN. "
-        "Also accept the model license on Hugging Face."
-        ),
+        _gated_repo_fix,
     ),
     (
         "GatedRepoError",
         "This Hugging Face model requires authentication or license acceptance.",
-        (
-            "Run: huggingface-cli login or set HF_TOKEN. "
-            "Also accept the model license on Hugging Face."
-        ),
+        _gated_repo_fix,
     ),
 
     # trust_remote_code errors
@@ -378,6 +378,8 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
 
     if matched is not None:
         error_msg, fix = matched
+        if callable(fix):
+            fix = fix()
         console.print(Text.assemble("\n", ("Error:", "bold red"), f" {strip_control(error_msg)}"))
         console.print(f"[green]Fix:[/] {fix}")
         if verbose:

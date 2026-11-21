@@ -395,7 +395,7 @@ def _safe_read_text(path: str, field: str, max_bytes: int) -> str:
         fd = os.open(path, flags)
     except OSError as exc:
         raise ValueError(f"{field} unreadable: {type(exc).__name__}") from exc
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > max_bytes:
             raise ValueError(f"{field} exceeds {max_bytes} bytes")
         return handle.read()
@@ -2593,6 +2593,7 @@ def ship(
         },
     )
     soup_config = None
+    from soup_cli.utils.run_provenance import warn_stopped_inputs
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
     try:
@@ -2752,6 +2753,13 @@ def ship(
                 verdict.task_win.mode, [item.name for item in verdict.benchmark_deltas],
                 recorded_runs, verdict.task_win.reward,
             )
+        recorded = payload.get("provenance")
+        stopped_input = warn_stopped_inputs(
+            adapter if require_provenance or emit_evidence else None,
+            evidence_stopped=isinstance(recorded, dict)
+            and recorded.get("training_status") == "stopped",
+            stderr=progress != "jsonl",
+        )
     elif base or tuned or adapter or task_eval:
         if emit_evidence:
             # without the reward function: that is added from the verdict below, so the file is
@@ -2779,6 +2787,9 @@ def ship(
             **({"base_adapter": base_adapter} if base_adapter is not None else {}),
             **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
         )
+        stopped_input = warn_stopped_inputs(
+            base, tuned, adapter, base_adapter, stderr=progress != "jsonl",
+        )
         if emit_evidence:
             if binding != capture_binding(task_mode, _parse_suite(general_suite), noise_floor):
                 _fail(
@@ -2804,6 +2815,8 @@ def ship(
         if soup_config is not None:
             provenance.update(_compute_provenance(soup_config))
         provenance["binding"] = binding
+        if stopped_input:
+            provenance["training_status"] = "stopped"
     _emit_and_exit(
         verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
     )

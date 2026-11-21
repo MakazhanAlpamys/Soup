@@ -941,6 +941,9 @@ stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
 gone. Recompute an old baseline, or drop names from it to force a live
 base run.
 
+Local baseline JSON objects must use unique keys. If a baseline file repeats
+a key, keep the intended entry or regenerate the file before running the gate.
+
 `--write-baseline` refuses an output resolving to the suite, custom-task file,
 or judge-prompts file before model construction (exit 3), preserving those inputs.
 Fresh output paths and intentional refreshes of an existing baseline remain allowed.
@@ -1213,7 +1216,10 @@ from the file, only at most five key names (of at most 64 characters) for unsupp
 `load_task_rows_for(path)` does that for a verdict or an evidence file: it follows `task_rows`
 next to it, takes 1e-12 for a `judge_score` verdict, the exact decimal mean for a `reward`
 verdict (`load_task_rows(..., decimal=True)`) and exactness otherwise, and checks the file
-against the same JSON (whose `rows` numbers must be integers in range).
+against the same JSON (whose `rows` numbers must be integers in range). When
+`generation_failures` is present, its row count and both failure counts must agree with the
+row file's size and failure flags, regardless of task mode. An absent or null block leaves
+those counts unchecked.
 
 ### Reward mode (`--task-mode reward`)
 
@@ -1606,6 +1612,17 @@ characters are rejected so leaderboard rows can't be markup-injected.
 
 ## Model Evaluation
 
+When `soup eval benchmark` scores a local adapter with a matching Hub base
+commit in `soup_run.json`, it prints that commit and passes it to lm-eval as
+`revision`. The HF harness uses that revision for the base config, model and
+tokenizer. Its PEFT call also receives the revision, while the adapter itself
+is read from the local directory. Legacy, local and mismatching identities
+print an unknown revision and retain their existing loading behavior.
+
+The recorded commit must be available to the loader. If downloading it fails
+or offline mode has only another snapshot, the harness error ends evaluation.
+It does not retry against a newer base revision.
+
 Full-featured evaluation platform with standard benchmarks, custom evals, LLM-as-a-judge, and human evaluation:
 
 ```bash
@@ -1693,6 +1710,8 @@ the matching full run ID. Existing evaluation rows keep their stored run IDs.
 `soup eval compare` and all `soup eval leaderboard` formats refuse a selected
 non-finite stored score with a named diagnostic and exit `1` before any output;
 they do not fall back to an older finite score (#2466).
+If two finite scores produce an unrepresentable delta, `soup eval compare`
+names the runs and benchmark and exits `1` before displaying the table.
 
 ### Aider Polyglot
 
