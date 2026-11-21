@@ -4230,7 +4230,8 @@ class TrainingConfig(BaseModel):
             "the examples' lengths. A step is still at most batch_size rows of "
             "data.max_length tokens. Needs untrained prompt tokens (e.g. "
             "data.train_on_responses_only) to have anything to share. "
-            "task='sft' on the transformers backend; works with "
+            "task='sft' on the transformers backend only (refused on mlx "
+            "and unsloth); works with "
             "stream_layers. Mutually exclusive with packing, multipack, "
             "stream_loss_chunk, neftune_alpha and curriculum. A bool only: "
             "1 or 'yes' is refused."
@@ -6615,11 +6616,12 @@ class SoupConfig(BaseModel):
             return self
         from soup_cli.utils.prefix_tree_trainer import supports_prefix_tree
 
-        if self.backend == "mlx":
+        if self.backend != "transformers":
             raise ValueError(
-                "training.prefix_tree is not supported on the mlx backend (it "
-                "replaces the HF Trainer's dataloader). Use backend='transformers' "
-                "or set prefix_tree: false."
+                f"training.prefix_tree is supported on backend='transformers' only; got "
+                f"backend={self.backend!r} (it replaces the HF Trainer's dataloader and "
+                "is checked on that path only). Use backend='transformers' or set "
+                "prefix_tree: false."
             )
         if not supports_prefix_tree(self.task):
             raise ValueError(

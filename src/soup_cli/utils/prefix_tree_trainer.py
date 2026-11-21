@@ -48,8 +48,7 @@ TREE_MASK_KEY = "prefix_tree_mask"
 
 #: Planning holds every training example as two ``array('i')`` (ids, labels),
 #: 8 bytes per token, and for a while a second copy of the shareable beginnings.
-#: Measured peak on 10,000 examples / 4,000,000 tokens: 66 MB, 16 bytes per token
-#: (``benchmarks/gate-prefix-tree.md``, "Planning cost").
+#: Measured peak on 10,000 examples / 4,000,000 tokens: 66 MB, 16 bytes per token.
 PLAN_BYTES_PER_TOKEN = 16
 
 #: Reading and planning are pure Python over every token: 7.5 s for the same
@@ -119,7 +118,8 @@ def examples_from_dataset(
     except TypeError as exc:
         raise ValueError(
             "training.prefix_tree needs a dataset with a length (a streaming / "
-            "iterable dataset cannot be grouped by shared beginnings up front)"
+            "iterable dataset cannot be grouped by shared beginnings up front). "
+            "Set data.streaming: false or training.prefix_tree: false."
         ) from exc
     examples: List[Tuple[array, array]] = []
     for start in range(0, total, _READ_CHUNK):
@@ -131,7 +131,8 @@ def examples_from_dataset(
     if len(examples) != total:
         raise RuntimeError(
             f"the collator returned {len(examples)} rows for {total} dataset rows; "
-            "a prefix tree needs one row per example (is TRL packing on?)"
+            "a prefix tree needs one row per example (is TRL packing on?). "
+            "Set training.prefix_tree: false."
         )
     return examples
 
@@ -209,7 +210,7 @@ def make_prefix_tree_trainer_class(base_cls: type) -> type:
                 # let every rank train on the same rows.
                 raise NotImplementedError(
                     "training.prefix_tree is single-process: it has not been validated "
-                    f"across {num_processes} processes"
+                    f"across {num_processes} processes. Set training.prefix_tree: false."
                 )
             args = getattr(self, "args", None)
             num_workers = int(getattr(args, "dataloader_num_workers", 0) or 0)

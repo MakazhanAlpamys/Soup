@@ -93,14 +93,19 @@ class TestConfig:
                 "training:\n  prefix_tree: true\n"
             )
 
-    def test_refused_on_the_mlx_backend(self):
+    @pytest.mark.parametrize("backend", ["mlx", "unsloth"])
+    def test_refused_on_a_backend_other_than_transformers(self, backend):
+        """Only the HF Trainer path is wired; a switch accepted on another
+        backend would silently do nothing."""
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="not supported on the mlx backend"):
+        with pytest.raises(ValueError, match="backend='transformers' only") as exc:
             load_config_from_string(
-                "base: some/model\ntask: sft\nbackend: mlx\n"
+                f"base: some/model\ntask: sft\nbackend: {backend}\n"
                 "data:\n  train: data.jsonl\ntraining:\n  prefix_tree: true\n"
             )
+        assert f"backend='{backend}'" in str(exc.value)
+        assert "set prefix_tree: false" in str(exc.value)
 
     def test_refused_for_a_modality_that_is_not_text(self):
         with pytest.raises(ValueError, match="supports modality='text' only"):
@@ -316,8 +321,9 @@ class TestTrainerClass:
         attach_prefix_tree_state(
             trainer, examples=dataset, max_tokens=32, batch_size=1, pad_token_id=0
         )
-        with pytest.raises(NotImplementedError, match="single-process"):
+        with pytest.raises(NotImplementedError, match="single-process") as exc:
             trainer.get_train_dataloader()
+        assert str(exc.value).endswith("Set training.prefix_tree: false.")
 
     def test_bad_state_is_refused(self):
         from soup_cli.utils.prefix_tree_trainer import attach_prefix_tree_state
@@ -351,8 +357,11 @@ class TestExamplesFromDataset:
     def test_a_dataset_without_a_length_is_refused(self):
         from soup_cli.utils.prefix_tree_trainer import examples_from_dataset
 
-        with pytest.raises(ValueError, match="needs a dataset with a length"):
+        with pytest.raises(ValueError, match="needs a dataset with a length") as exc:
             examples_from_dataset(iter([1, 2]), _collate)
+        assert str(exc.value).endswith(
+            "Set data.streaming: false or training.prefix_tree: false."
+        )
         with pytest.raises(ValueError, match="no training dataset"):
             examples_from_dataset(None, _collate)
 
@@ -363,8 +372,9 @@ class TestExamplesFromDataset:
         def merging(features):
             return _collate(features[:1])
 
-        with pytest.raises(RuntimeError, match="one row per example"):
+        with pytest.raises(RuntimeError, match="one row per example") as exc:
             examples_from_dataset(_shared_dataset(), merging)
+        assert str(exc.value).endswith("Set training.prefix_tree: false.")
 
     def test_planning_is_announced_only_when_it_is_long(self):
         from soup_cli.utils.prefix_tree_trainer import PLAN_NOTICE_TOKENS, planning_notice
@@ -492,7 +502,15 @@ def _rows(turns=_TURNS):
 
 
 def _wrapper(
-    root, monkeypatch, *, stream, prefix_tree=True, batch_size=1, turns=_TURNS, max_length=64
+    root,
+    monkeypatch,
+    *,
+    stream,
+    prefix_tree=True,
+    batch_size=1,
+    turns=_TURNS,
+    max_length=64,
+    responses_only=True,
 ):
     import yaml
 
@@ -515,6 +533,7 @@ def _wrapper(
                     "train": "train.jsonl",
                     "max_length": max_length,
                     "chat_template": "chatml",
+                    "train_on_responses_only": responses_only,
                 },
                 "training": {
                     "batch_size": batch_size,
@@ -578,6 +597,36 @@ def test_no_row_is_wider_than_data_max_length(tmp_path):
         rows, width = batch["input_ids"].shape
         assert rows <= 2
         assert batch[TREE_MASK_KEY].shape[-1] == width <= max_length
+
+
+@pytest.mark.parametrize("shared", [True, False], ids=["shared-prompt", "nothing-shared"])
+def test_setup_prints_the_planning_notice_and_the_sharing_warning(tmp_path, shared):
+    """What ``_attach_prefix_tree`` prints, captured from the wrapper's console.
+
+    The planning notice threshold is lowered so these few examples cross it.
+    Trained on every token (``train_on_responses_only: false``), the examples
+    have nothing to share but their first token, and the setup says so.
+    """
+    pytest.importorskip("torch")
+    from rich.console import Console
+
+    import soup_cli.trainer.sft as sft_module
+    import soup_cli.utils.prefix_tree_trainer as trainer_module
+    from tests.test_stream_resume_exact import _cpu_only
+
+    buffer = io.StringIO()
+    with _cpu_only() as monkeypatch:
+        monkeypatch.setattr(sft_module, "console", Console(file=buffer, width=400))
+        monkeypatch.setattr(trainer_module, "PLAN_NOTICE_TOKENS", 1)
+        _wrapper(tmp_path, monkeypatch, stream=False, responses_only=shared)
+    said = _plain(buffer.getvalue())
+    assert f"planning reads all {len(_TURNS)} training examples" in said, said
+    assert "before the first step" in said
+    warning = "these examples share almost no untrained beginning"
+    if shared:
+        assert warning not in said
+    else:
+        assert warning in said, said
 
 
 def test_setup_refuses_a_model_that_cannot_before_any_step(tmp_path):
