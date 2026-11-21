@@ -548,6 +548,36 @@ def resolve_baseline(
     return scores
 
 
+def lost_baseline_coverage(
+    scores: Mapping[str, float],
+    *,
+    required: set[str],
+    reference: Mapping[str, float],
+    output: str,
+) -> list[str]:
+    """Tasks whose baseline coverage this write would drop (#2951).
+
+    ``reference`` is the map the run compared against (a ``--baseline`` file or
+    ``registry://`` entry), and ``output`` is the file about to be replaced. A
+    task the suite still runs that either source already covers, but this run
+    could not score, must not disappear from the baseline: the next run would
+    have nothing to compare it with, so a regression there would pass.
+
+    The output path is read with the same rules as ``--baseline``; an absent or
+    unreadable file counts as no prior coverage, so a corrupt baseline can still
+    be replaced.
+    """
+    if not scores:
+        return []
+    prior = {name for name in reference if name in required}
+    try:
+        previous = resolve_baseline(output, warn=lambda _message: None)
+    except (FileNotFoundError, ValueError, OSError):
+        previous = {}
+    prior.update(name for name in previous if name in required)
+    return sorted(prior - set(scores))
+
+
 def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     """Split a ``judge_model`` URL into ``(provider, model, api_base)``.
 
