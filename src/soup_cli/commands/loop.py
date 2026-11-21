@@ -30,6 +30,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -77,6 +78,8 @@ from soup_cli.utils.loop_prune import (
 )
 from soup_cli.utils.loop_retry import (
     describe as describe_failed_train,
+)
+from soup_cli.utils.loop_retry import (
     describe_deploy_failure,
     is_stage_error,
 )
@@ -741,31 +744,54 @@ def prune_cmd(
         help="Keep this many newest lines in each loop JSONL log (default: 10000).",
     ),
 ) -> None:
-    """Show a retention plan; remove loop artifacts only with --yes."""
+    """Safely prune loop artifacts. Detects detached daemons only; stop foreground watches first."""
     try:
         if daemon_is_running():
-            console.print("[red]cannot prune while the loop daemon is running[/]")
+            console.print(
+                "[red]cannot prune while a detached loop daemon is running; "
+                "stop any foreground watch first[/]"
+            )
             raise typer.Exit(code=2)
         plan = build_prune_plan(keep_runs=keep_runs, keep_log_lines=keep_log_lines)
         if not plan:
             console.print("[green]nothing to prune[/]")
             return
         for entry in plan:
-            verb = "trim" if entry.reason.startswith("trim ") else "remove"
-            action = f"{verb} ({entry.reason})"
-            console.print(f"{action}: {for_terminal(entry.path)}")
+            verb = entry.action if entry.action in ("keep", "skip") else (
+                "trim" if entry.reason.startswith("trim ") else "remove"
+            )
+            action = f"{verb} ({escape(for_terminal(entry.reason))})"
+            console.print(f"{action}: {escape(for_terminal(entry.path))}")
         if not yes:
-            console.print(f"dry run: {len(plan)} change(s); rerun with --yes to apply")
+            change_count = sum(entry.action in ("remove", "trim") for entry in plan)
+            console.print(f"dry run: {change_count} change(s); rerun with --yes to apply")
             return
         # Close the race with a daemon that started while the dry-run plan was being built.
         if daemon_is_running():
-            console.print("[red]cannot prune while the loop daemon is running[/]")
+            console.print(
+                "[red]cannot prune while a detached loop daemon is running; "
+                "stop any foreground watch first[/]"
+            )
             raise typer.Exit(code=2)
-        count = execute_prune(plan, keep_log_lines=keep_log_lines)
+        result = execute_prune(plan, keep_log_lines=keep_log_lines)
     except (OSError, ValueError, TypeError) as exc:
-        console.print(f"[red]prune refused:[/] {for_terminal(str(exc))}")
+        console.print(f"[red]prune refused:[/] {escape(for_terminal(str(exc)))}")
         raise typer.Exit(code=2)
-    console.print(f"[green]pruned {count} item(s)[/]")
+    for item in result.skipped:
+        console.print(
+            f"[yellow]skipped:[/] {escape(for_terminal(item.path))} — "
+            f"{escape(for_terminal(item.reason))}"
+        )
+    for item in result.failed:
+        console.print(
+            f"[red]failed:[/] {escape(for_terminal(item.path))} — "
+            f"{escape(for_terminal(item.reason))}"
+        )
+    console.print(
+        f"[green]pruned {result.removed} item(s); freed {result.bytes_freed} byte(s)[/]"
+    )
+    if result.failed:
+        raise typer.Exit(code=1)
 
 
 @app.command("status")
@@ -1028,7 +1054,7 @@ def watch_cmd(
     foreground: bool = typer.Option(
         False,
         "--foreground",
-        help="Run in foreground (default).",
+        help="Run in foreground (default); stop this watch before pruning loop artifacts.",
     ),
     detach: bool = typer.Option(
         False,

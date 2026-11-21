@@ -2803,7 +2803,7 @@ Takes no options or arguments.
 
 ### `soup loop prune`
 
-Show a retention plan; remove loop artifacts only with --yes.
+Safely prune loop artifacts; stop foreground watches before applying.
 
 Usage: `soup loop prune [OPTIONS]`
 
@@ -2811,7 +2811,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); rows for retained iterations are also preserved. |
 
 ### `soup loop replay`
 
@@ -2867,7 +2867,7 @@ Usage: `soup loop watch [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--foreground` | flag | off |  | Run in foreground (default). |
+| `--foreground` | flag | off |  | Run in foreground (default); stop this watch before pruning loop artifacts. |
 | `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
