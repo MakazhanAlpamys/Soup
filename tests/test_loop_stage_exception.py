@@ -16,7 +16,7 @@ import json
 import os
 import re
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -25,6 +25,7 @@ from soup_cli.utils.loop_log import LoopLog
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
 PAST = "2000-01-01T00:00:00+00:00"
+NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 LOCKED = "thumbs database could not be read (OperationalError: database is locked)"
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -571,7 +572,7 @@ def test_non_ok_gate_clears_stage_streak_without_counting_as_failure(cwd):
 
 def test_pending_deploy_retry_clears_stage_streak_and_keeps_deploy_retry(cwd):
     refused = {"deployed": False, "failed": True, "notes": "serve refused candidate"}
-    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config())
+    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config(), now=NOW)
     assert state.pending_deploy is not None
     state = replace(
         state,
@@ -585,7 +586,9 @@ def test_pending_deploy_retry_clears_stage_streak_and_keeps_deploy_retry(cwd):
         },
     )
 
-    state, _, _ = run_once(state, Pipeline(deploy_result=refused).config())
+    state, _, _ = run_once(
+        state, Pipeline(deploy_result=refused).config(), now=NOW + timedelta(minutes=5)
+    )
 
     assert state.pending_deploy is not None
     assert state.pending_deploy["attempts"] == 2
@@ -596,7 +599,7 @@ def test_pending_deploy_retry_counts_a_cost_stage_exception(cwd):
     from soup_cli.utils.loop_retry import stage_error_fingerprint
 
     refused = {"deployed": False, "failed": True, "notes": "serve refused candidate"}
-    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config())
+    state, _, _ = run_once(_state(), Pipeline(deploy_result=refused).config(), now=NOW)
     assert state.pending_deploy is not None
     prior = {
         "inputs": stage_error_fingerprint("harvest"),
@@ -610,7 +613,9 @@ def test_pending_deploy_retry_counts_a_cost_stage_exception(cwd):
     state = replace(state, failed_stage=prior)
 
     state, record, _ = run_once(
-        state, Pipeline(raising="cost", deploy_result=refused).config()
+        state,
+        Pipeline(raising="cost", deploy_result=refused).config(),
+        now=NOW + timedelta(minutes=5),
     )
 
     assert state.pending_deploy is not None and state.pending_deploy["attempts"] == 2

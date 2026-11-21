@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock
@@ -14,6 +15,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.eval.gate import GateTask, write_baseline_file
+from soup_cli.utils import paths
 from tests.conftest import strip_ansi
 
 SUITE = "inputs/suite[red].yaml"
@@ -108,6 +110,64 @@ def test_colliding_output_is_refused_before_model(
 def test_parent_directory_alias_is_refused(fixture: dict, source: str, field: str) -> None:
     os.symlink("inputs", "alias", target_is_directory=True)
     assert_collision(fixture, source.replace("inputs/", "alias/", 1), source, field)
+
+
+@pytest.mark.parametrize(
+    "source,field", list(zip(INPUTS, FIELDS)), ids=["suite", "custom", "judge"],
+)
+def test_case_alias_is_refused_using_entry_identity(
+    fixture: dict, source: str, field: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alias = source.upper()
+    real_stat = os.stat
+    alias_absolute = os.path.abspath(alias)
+
+    def stat_with_alias(path, *args, **kwargs):
+        if isinstance(path, (str, Path)) and os.fspath(path) == alias_absolute:
+            return real_stat(source, *args, **kwargs)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(paths.os, "stat", stat_with_alias)
+    assert_collision(fixture, alias, source, field)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS path lookup")
+@pytest.mark.requires_hardlink
+@pytest.mark.parametrize("lookup", ["native", "no-link-id", "no-link-id-or-listing"])
+def test_case_alias_and_separate_link_on_case_insensitive_volume(
+    fixture: dict, monkeypatch: pytest.MonkeyPatch, lookup: str,
+) -> None:
+    alias = str(Path(CUSTOM).with_name("TASKS.JSONL"))
+    if not Path(alias).exists():
+        pytest.skip("the test volume is case-sensitive")
+    separate = str(Path(CUSTOM).with_name("copy.jsonl"))
+    os.link(CUSTOM, separate)
+    if lookup == "native":
+        read_link_id = getattr(paths, "_macos_link_id", lambda _: 0)
+        if read_link_id(CUSTOM) is None:
+            pytest.skip("the test volume does not supply a link ID")
+    else:
+        monkeypatch.setattr(paths, "_macos_link_id", lambda _: None, raising=False)
+
+    directory = Path(CUSTOM).parent
+    original_mode = directory.stat().st_mode & 0o777
+    try:
+        if lookup == "no-link-id-or-listing":
+            directory.chmod(0o300)
+            try:
+                os.listdir(directory)
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("the current user can list a write/search-only directory")
+        assert_collision(fixture, alias, CUSTOM, FIELDS[1])
+        result = invoke(separate.upper())
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert json.loads(Path(separate).read_text())["scores"] == {"custom": 1.0, "judge": 1.0}
+        preserved(fixture)
+    finally:
+        if lookup == "no-link-id-or-listing":
+            directory.chmod(original_mode)
 
 
 def test_fresh_baseline_preserves_inputs(fixture: dict) -> None:

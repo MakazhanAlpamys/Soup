@@ -424,6 +424,12 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # and last chunks, and an unreadable one from its path, so their failures are held too;
 # over the cap a change keeping the size and both ends is not seen, and such a hold ends
 # only with `soup loop resume`.
+# A refused deploy keeps its trained candidate and waits 5 minutes before its second attempt,
+# then 30 minutes before its third. After a third refusal, it holds the candidate until
+# `soup loop resume`; for a SHIP candidate, the data cursor advances on success or that terminal
+# hold, not while the deploy is waiting.
+# `soup loop status` shows a `pending_deploy` row for the waiting, due or held state, and the
+# cycle notes start with deploy_backoff: or deploy_held: while applicable.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to
@@ -505,7 +511,9 @@ soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
 
 # Pause/resume the daemon between iterations (atomic state flip). resume also clears a
-# failed-train hold (`train_retry`) and a raised-stage hold (`stage_retry`), paused or not.
+# failed-train hold (`train_retry`), a raised-stage hold (`stage_retry`), and a deploy hold
+# (`pending_deploy`); it resets saved-candidate deploy attempts and reports `deploy hold cleared`,
+# paused or not.
 soup loop pause
 soup loop resume
 
@@ -600,7 +608,8 @@ and `--canary-on-timeout` (default `errors-only`) decides:
 - `errors-only`: the request-error verdict decides alone. A canary whose requests succeeded
   is promoted, and the iteration notes say so: `promoted on errors only - quality
   unverified: 7/30 canary rated in 24h`. One whose requests failed is withdrawn as ever,
-  and one with too few answers for the error verdict keeps waiting. **A canary that got no
+  and one with too few answers for the error verdict is decided on request errors all the
+  same: a single answer is enough, with or without ratings. **A canary that got no
   answers at all** (serve restarted without it, a wrong rollout id, too little traffic for the
   share) is not promoted on a timeout: it is withdrawn, the reason is `timeout_no_answers`, and
   the notes say `withdrawn on timeout: 0 canary answers`. Only `--canary-on-timeout errors-only`
@@ -608,6 +617,12 @@ and `--canary-on-timeout` (default `errors-only`) decides:
 - `rollback`: the canary is withdrawn and production is untouched, even without
   `--autoroll-on-regress`. The notes name the timeout and `--canary-on-timeout rollback`.
 - `wait`: no time limit; the quality verdict stays `UNKNOWN`.
+
+Today the default `errors-only` therefore promotes a canary that answered at least one
+request and shows no major regression in request errors against the stable adapter when
+`--canary-max-wait` runs out before 30 ratings per side have come in, even with no ratings
+at all. The default is planned to become `rollback` in v0.79.0 (#3083); `errors-only` and
+`wait` stay selectable.
 
 Both settings are in `loop.yaml` and `soup loop status`. The time counts from the rollout
 start (`canary_started_ts`); a rollout without one is never timed out. The iteration
