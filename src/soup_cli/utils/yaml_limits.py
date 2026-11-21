@@ -297,6 +297,16 @@ class YamlScalarError(yaml.constructor.ConstructorError, ValueError):
     the ``ValueError`` the underlying conversion raised."""
 
 
+def set_yaml_error_filename(error: yaml.YAMLError, filename: str) -> None:
+    """Name the file in a PyYAML error produced while reading its text."""
+    if isinstance(error, yaml.MarkedYAMLError):
+        for mark in (error.context_mark, error.problem_mark):
+            if mark is not None:
+                mark.name = filename
+    elif isinstance(error, yaml.reader.ReaderError):
+        error.name = filename
+
+
 def _checked(name: str, build):
     def construct(self: _LimitedLoader, node: yaml.ScalarNode) -> object:
         try:
