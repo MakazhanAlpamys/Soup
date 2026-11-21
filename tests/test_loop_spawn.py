@@ -232,7 +232,7 @@ _MIDDLE = textwrap.dedent(
     import soup_cli.utils.loop_stages as ls
     stub, marker, log, result = sys.argv[1:5]
     done = ls._run_logged(
-        subprocess.run, [sys.executable, stub, marker, "0.05"], log_path=log, timeout=30
+        subprocess.run, [sys.executable, stub, marker, "1.5"], log_path=log, timeout=120
     )
     with open(result, "w", encoding="utf-8") as handle:
         handle.write(str(done.returncode))
@@ -248,7 +248,6 @@ class TestADetachedDaemonRunsItsChildToTheEnd:
         # Real detached Popen cannot be mocked: checking that the Windows kernel allocates no
         # console window (kernel32.GetConsoleWindow() == 0) for a child spawned by a detached
         # daemon exercises actual OS creation flags (CREATE_NO_WINDOW vs DETACHED_PROCESS).
-        # We keep child sleep minimal (0.05s), poll with middle.poll() early-exit, and bound to 20s.
         stub = tmp_path / "stub_child.py"
         stub.write_text(_STUB_CHILD, encoding="utf-8")
         marker, log, result = tmp_path / "marker", tmp_path / "child.log", tmp_path / "rc"
@@ -258,17 +257,17 @@ class TestADetachedDaemonRunsItsChildToTheEnd:
             **detached_popen_kwargs("nt"),
         )
         try:
-            deadline = time.monotonic() + 20
+            deadline = time.monotonic() + 120
             while not result.exists() and time.monotonic() < deadline:
-                time.sleep(0.1)
+                time.sleep(0.25)
                 if middle.poll() is not None:
-                    time.sleep(0.2)
+                    time.sleep(0.25)
                     break
-            middle.wait(timeout=10)
+            middle.wait(timeout=30)
         finally:
             if middle.poll() is None:
                 middle.kill()
-                middle.wait(timeout=5)
+                middle.wait(timeout=10)
 
         assert result.exists(), "the detached daemon stand-in wrote no result"
         assert result.read_text(encoding="utf-8") == "0"

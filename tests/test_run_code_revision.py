@@ -650,6 +650,5 @@ def test_blocked_status_read_is_cancelled_by_the_total_deadline(tmp_path, monkey
     with pytest.raises(subprocess.TimeoutExpired):
         code_revision._bounded_git_output(["unused"], {}, started + 0.03, 1)
     assert stopped.is_set()
-    # Cancelled promptly by deadline (0.03s) rather than hanging; generous bound
-    # prevents flakiness under CPU contention on multi-worker CI runners.
-    assert time.monotonic() - started < 5.0
+    # Cancelled promptly by deadline (0.03s) before BlockedPipe.read's 1.0s wait expires.
+    assert time.monotonic() - started < 0.95

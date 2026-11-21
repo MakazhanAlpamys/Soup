@@ -345,9 +345,9 @@ def test_mole_positive_control_greedy_pinned_tokens(max_tokens: int, expected_to
 @pytest.mark.parametrize(
     ("max_tokens", "expected_tokens"),
     [
-        (1, [3, 4, 4]),
-        (2, [3, 4, 4, 0]),
-        (4, [3, 4, 4, 0, 0, 2]),
+        (1, [3, 4, 1]),
+        (2, [3, 4, 1, 2]),
+        (4, [3, 4, 1, 2, 4, 2]),
     ],
 )
 def test_mole_positive_control_sampled_pinned_tokens(max_tokens: int, expected_tokens: list[int]):

@@ -446,20 +446,9 @@ class TestRedactionKeepsOrdinaryText:
         import time
 
         text = ("-----BEGIN " + "PRIVATE KEY-----\n") * 400 + "z" * 20000
-        baseline_text = "z" * len(text)
-
-        # Measure baseline scan time on plain text of identical length
-        t0 = time.perf_counter()
-        trace_logger.redact_value(baseline_text)
-        baseline = time.perf_counter() - t0
-
-        t1 = time.perf_counter()
+        started = time.perf_counter()
         trace_logger.redact_value(text)
-        elapsed = time.perf_counter() - t1
-
-        # Scanning must scale linearly O(N), not quadratically O(N^2) via ReDoS.
-        # Relative comparison prevents flaky failures under CI runner CPU contention.
-        assert elapsed < max(5.0, baseline * 50)
+        assert time.perf_counter() - started < 5.0
 
 
 class TestConversationIdRedaction:
