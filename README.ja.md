@@ -110,7 +110,7 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 - **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
   前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
 - **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
-  取り込み、ストリーミングしたベースでの BCO、IPO、`task: preference` の学習。
+  取り込み、ストリーミングしたベースでの BCO、IPO、単一の損失を指定した `task: preference` の学習。
 - **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
   チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
   表示します。
@@ -122,7 +122,8 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
 `moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
 `soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
-変わることがあります。`soup ship` が書き出す証拠ファイルはバージョン 2 で、v0.77.x は拒否します。
+変わることがあります。`soup ship` が書き出す証拠ファイルは、行ごと・関数採点・judge の新しい詳細を含む場合にバージョン 2
+となり、v0.77.x はそれを拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 

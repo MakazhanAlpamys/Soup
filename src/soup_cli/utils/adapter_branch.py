@@ -280,11 +280,13 @@ def branch_pointer_path(name: str) -> Path:
 def attach_branch_to_registry(name: str, registry_ref: str) -> int:
     """Attach a branch pointer to a v0.26 Registry entry as ``branch_ref``.
 
-    Resolves ``registry_ref`` (id / prefix / name:tag), attaches the branch
-    JSON file as a ``branch_ref`` artifact (``enforce_cwd=False`` since the
-    pointer lives in ``~/.soup/branches`` outside cwd — a library-produced
-    path), then re-writes the pointer with ``registry_entry_id`` set so the
-    edge is recorded on both sides. Returns the artifact rowid.
+    Resolves ``registry_ref`` (id / prefix / name:tag), re-writes the pointer
+    with ``registry_entry_id`` set so the edge is recorded on both sides, then
+    attaches that JSON file as a ``branch_ref`` artifact (``enforce_cwd=False``
+    since the pointer lives in ``~/.soup/branches`` outside cwd — a
+    library-produced path), so the recorded SHA-256 and size are those of the
+    file on disk. If recording the artifact fails, the previous pointer is
+    written back. Returns the artifact rowid.
     """
     from soup_cli.registry.store import RegistryStore
 
@@ -295,14 +297,22 @@ def attach_branch_to_registry(name: str, registry_ref: str) -> int:
         resolved = store.resolve(registry_ref)
         if resolved is None:
             raise ValueError(f"registry entry not found: {registry_ref}")
-        rowid = store.add_artifact(
-            entry_id=resolved,
-            kind="branch_ref",
-            path=str(pointer),
-            enforce_cwd=False,
-        )
-    # Re-write the pointer with the resolved id so the edge is bidirectional.
-    _atomic_write_branch(branches_dir, replace(branch, registry_entry_id=resolved))
+        # Re-write the pointer with the resolved id first, so the edge is
+        # bidirectional AND the artifact row hashes the bytes that stay on
+        # disk. Hashing before the rewrite recorded a SHA-256 and size of a
+        # file that no longer existed (#2727).
+        _atomic_write_branch(branches_dir, replace(branch, registry_entry_id=resolved))
+        try:
+            rowid = store.add_artifact(
+                entry_id=resolved,
+                kind="branch_ref",
+                path=str(pointer),
+                enforce_cwd=False,
+            )
+        except Exception:
+            # Do not leave the pointer claiming a link the registry never recorded.
+            _atomic_write_branch(branches_dir, branch)
+            raise
     return rowid
 
 
