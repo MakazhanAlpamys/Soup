@@ -2515,8 +2515,10 @@ def _refuse_trainable_streamed_boundary(model: Any, index: Any, lora_config: Any
     if isinstance(targets, str):
         targets = (targets,)
     boundaries = (model.get_input_embeddings(), model.get_output_embeddings())
-    # Match the way PEFT's _set_trainable does: every registered name, aliases
-    # included, by plain suffix, so ["head"] names "lm_head" too (#2548).
+    # Wider than PEFT's own rule on purpose: _set_trainable matched by plain
+    # suffix up to 0.21 and matches by whole module name since 0.22 (pull 3824),
+    # so refusing ["head"] for "lm_head" stays safe on both. Every registered
+    # name, aliases included (#2548).
     for name, module in model.named_modules(remove_duplicate=False):
         if any(module is boundary for boundary in boundaries) and any(
             name.endswith(target) for target in targets
