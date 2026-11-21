@@ -723,8 +723,82 @@ class TestIterativeDPO:
         assert result.exit_code == 1, (result.output, repr(result.exception))
         text = " ".join(strip_ansi(result.output).split())
         assert "prompts file 'prompts.jsonl' has no usable prompts" in text
+        assert "Iterative-DPO plan" not in text
         assert operations == []
         assert pairs.read_bytes() == prior
+
+    @pytest.mark.parametrize(
+        "prompts_path",
+        ["missing.jsonl", "../outside.jsonl"],
+    )
+    def test_cli_refuses_unreadable_prompts_before_printing_plan(
+        self, tmp_path, monkeypatch, prompts_path
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        if prompts_path == "../outside.jsonl":
+            Path("../outside.jsonl").write_text('{"prompt": "outside"}\n', encoding="utf-8")
+        result = CliRunner().invoke(
+            app,
+            [
+                "iterative-dpo", "--base-model", "tiny", "--reward-model", "reward",
+                "--prompts", prompts_path, "--output-dir", "out", "--rounds", "1",
+                "--pairs-per-round", "10",
+            ],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        text = " ".join(strip_ansi(result.output).split())
+        assert "Iterative-DPO plan" not in text
+
+    @pytest.mark.requires_symlink
+    def test_cli_refuses_symlink_prompts_before_printing_plan(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        Path("target.jsonl").write_text('{"prompt": "target"}\n', encoding="utf-8")
+        Path("prompts.jsonl").symlink_to("target.jsonl")
+        result = CliRunner().invoke(
+            app,
+            [
+                "iterative-dpo", "--base-model", "tiny", "--reward-model", "reward",
+                "--prompts", "prompts.jsonl", "--output-dir", "out", "--rounds", "1",
+                "--pairs-per-round", "10",
+            ],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        text = " ".join(strip_ansi(result.output).split())
+        assert "must not be a symlink" in text
+        assert "Iterative-DPO plan" not in text
+
+    def test_cli_pairs_validation_precedes_prompt_preflight(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(
+            app,
+            [
+                "iterative-dpo", "--base-model", "tiny", "--reward-model", "reward",
+                "--prompts", "missing.jsonl", "--output-dir", "out", "--rounds", "1",
+                "--pairs-per-round", "9",
+            ],
+        )
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        text = " ".join(strip_ansi(result.output).split())
+        assert "pairs_per_round must be >= 10" in text
+        assert "prompts file" not in text
 
     def test_run_rejects_non_plan(self):
         from soup_cli.utils.iterative_dpo import run_iterative_dpo
@@ -749,6 +823,23 @@ class TestIterativeDPO:
             ],
         )
         assert res.exit_code == 0, res.output
+
+    def test_cli_plan_only_does_not_read_missing_prompts(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.iterative_dpo import app
+
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app,
+            [
+                "--base-model", "b", "--reward-model", "rm",
+                "--prompts", "missing.jsonl", "--output-dir", "o",
+                "--rounds", "1", "--pairs-per-round", "10", "--plan-only",
+            ],
+        )
+        assert res.exit_code == 0, res.output
+        assert "Iterative-DPO plan" in res.output
 
     def test_cli_runs_with_monkeypatched_runner(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
