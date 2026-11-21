@@ -90,11 +90,11 @@ pip install "soup-cli[mlx]"
 
 `[mlx]` is the standalone extra for all MLX tasks listed in the [optional extras
 table](models.md#optional-extras). For local data, it is sufficient on its own;
-MLX training does not require `[train]`. Add `[train]` only when the same
-environment also needs the PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or streaming
-dataset still needs `datasets` because that data source owns the dependency; the
-local file path below does not.
+native SFT and token distillation do not require `[train]`. Add `[train]` only
+when the same environment also needs the PyTorch/TRL Transformers backend: both
+extras now share the supported `transformers>=5.16.1,<6` range. A Hugging Face
+`datasets` source or streaming dataset still needs `datasets` because that data
+source owns the dependency; the local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -103,7 +103,7 @@ local file path below does not.
 CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
 unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
-mlx-lm trains and evaluates in whole batches of `training.batch_size`
+The SFT/preference mlx-lm loops train and evaluate in whole batches of `training.batch_size`
 ([#1851](https://github.com/MakazhanAlpamys/Soup/issues/1851)). A validation
 split with fewer rows than one batch, which the default `data.val_split: 0.1`
 produces on a small file, is not evaluated: the run warns, naming both numbers,
@@ -153,7 +153,8 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO, GRPO and
+[unquantized token distillation](training.md#native-mlx-token-distillation). `task: preference`
 with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
 native MLX trainer, with the same load-time restrictions and doctor support
 report as the explicit native task. The configured task remains `preference`;
@@ -724,7 +725,7 @@ what ran is recoverable from the output directory.
 ### Transformers on MPS
 
 The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO,
-SimPO, KTO and GRPO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
+SimPO, KTO, GRPO and token distillation surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
 The decision comes from a live MPS allocation probe rather than a macOS version
