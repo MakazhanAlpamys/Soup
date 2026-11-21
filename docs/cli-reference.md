@@ -927,6 +927,7 @@ Usage: `soup cost [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--gpu`, `-g` | text |  |  | Filter by specific GPU (e.g., A100, H100, RTX 4090) |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--history` | flag | off |  | Use comparable local SFT runs with one GPU selected by --gpu. |
 
 ## `soup data`
 
