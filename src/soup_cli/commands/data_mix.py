@@ -23,6 +23,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
+from soup_cli.utils.numeric import float_with_overflow_check
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
@@ -129,8 +130,17 @@ def mix(
         interleave = data_block.get("interleave", {})
         probs = interleave.get("probs", []) if hasattr(interleave, "get") else []
         try:
-            weights = [f"{float(weight):.6f}" for weight in probs]
-        except (TypeError, ValueError, OverflowError) as exc:
+            if not isinstance(probs, list):
+                raise ValueError("expected a list of weights")
+            weights = []
+            for weight in probs:
+                if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                    raise ValueError("weights must be numbers")
+                value = float_with_overflow_check(weight, "weight")
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError("weights must be finite and non-negative")
+                weights.append(f"{value:.6f}")
+        except ValueError as exc:
             console.print(
                 f"[red]apply failed: invalid data.interleave.probs in {for_terminal(apply_recipe)}"
                 f" ({for_terminal(exc)})[/red]",
