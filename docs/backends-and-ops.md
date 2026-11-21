@@ -194,6 +194,13 @@ same-named base cannot be identified as wrong: the message makes the choice
 visible, and an explicit absolute `--base` disambiguates it. Mismatching overrides
 for absolute identities and Hub IDs remain refused.
 
+For native HTTP deployment, install `[mlx,serve]` and use
+`soup serve --backend mlx --model ./mlx-output`. Its initial serving slice is
+dense text models plus optional ordinary native LoRA; native batch inference's
+4-bit support does not imply quantized serving support. See
+[native MLX HTTP serving](serving-and-export.md#native-mlx-http-serving) for the
+three routes, streaming, admission limits and supported request controls.
+
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
@@ -1053,6 +1060,10 @@ covered by offline tests.
 
 
 ## Chat with your model
+
+Chat displays model paths, loader diagnostics, system-prompt receipts and assistant
+replies literally, with terminal controls and bidi marks removed from the display.
+The model's input history and the values passed to its loaders retain their original text.
 
 ```bash
 # Chat with a LoRA adapter (auto-detects base model)
