@@ -367,6 +367,47 @@ class TestInterruptedCaller:
         with pytest.raises(KeyboardInterrupt):
             _run(code)
 
+    @_posix_only
+    def test_the_killed_child_is_reaped_so_the_group_is_seen_empty(
+        self, sandbox_tmp, monkeypatch
+    ):
+        started: list = []
+        verdicts: list = []
+        real_popen = subprocess.Popen
+        real_wait_gone = ProcessTree.wait_gone
+
+        def recording_popen(*args, **kwargs):
+            started.append(real_popen(*args, **kwargs))
+            return started[-1]
+
+        def recording_wait_gone(self, timeout):
+            verdicts.append(real_wait_gone(self, timeout))
+            return verdicts[-1]
+
+        def interrupted(proc, tree, max_output_bytes, timeout_seconds):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(ProcessTree, "wait_gone", recording_wait_gone)
+        monkeypatch.setattr(rewards, "_collect_sandbox_result", interrupted)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                _run(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+
+            (child,) = started
+            # An unreaped leader keeps answering the group probe, so the wait for the
+            # group to empty would run out its whole time and report False.
+            assert child.returncode is not None, "the killed child was not reaped"
+            assert verdicts == [True]
+        finally:
+            for child in started:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=_GONE_WITHIN_SECONDS)
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+
         _assert_all_gone(helpers)
         assert _wait_until(lambda: not _leftover_sandbox_dirs(sandbox_tmp))
 

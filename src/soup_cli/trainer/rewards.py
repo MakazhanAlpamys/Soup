@@ -498,6 +498,11 @@ def _run_sandboxed_subprocess(
             # Also reached when the caller is interrupted: nothing the child started
             # is left running, and (Windows) the job has released the directory.
             tree.kill()
+            if sys.platform != "win32":
+                # An unreaped leader still answers the group probe, so without this
+                # ``wait_gone`` would spend all of its time on an interrupted run.
+                with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                    proc.wait(timeout=_REAP_SECONDS)
             tree.wait_gone(_PROCESS_TREE_GONE_SECONDS)
             tree.close()
 
@@ -505,6 +510,8 @@ def _run_sandboxed_subprocess(
 #: Longest wait, after the kill, for the processes of a Windows job to release the
 #: sandbox directory before it is removed.
 _PROCESS_TREE_GONE_SECONDS = 2.0
+#: Longest wait for a killed child to be reaped (POSIX); SIGKILL ends it at once.
+_REAP_SECONDS = 1.0
 #: Longest wait for a reader thread to reach end-of-file once the tree has been ended.
 _READER_JOIN_SECONDS = 1.0
 
