@@ -1,0 +1,71 @@
+name: native MLX adapters
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # Shared train.py edits have fake-MLX command coverage in the main matrix.
+    # This optional workflow follows explicit MLX and dependency inputs only.
+    # Remove the path filter first if this ever becomes a required check.
+    paths:
+      - 'src/soup_cli/trainer/mlx*.py'
+      - 'src/soup_cli/utils/mlx*.py'
+      - 'src/soup_cli/config/backend_support.py'
+      - 'src/soup_cli/config/schema.py'
+      - 'src/soup_cli/commands/infer.py'
+      - 'src/soup_cli/commands/merge.py'
+      - 'tests/test_mlx*.py'
+      - 'tests/test_issue634_mlx_resume.py'
+      - 'pyproject.toml'
+      - '.github/constraints/pinned-upstream.txt'
+      - '.github/workflows/mlx-adapters.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Unrelated label events must not cancel an approved run, even while it is pending.
+  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-adapters:
+    # Optional during the initial two-week observation period; no required-check change.
+    # Drafts consume no runners. Full PR runs still require maintainer approval.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'ci:full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [floor, current]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the standalone native runtime
+        run: |
+          if [ '${{ matrix.stack }}' = floor ]; then
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }} 'mlx==0.31.2' 'mlx-lm==0.31.3'
+          else
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }}
+          fi
+          python -m pip check
+          python -c "import mlx.core, mlx_lm; import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('torch','trl','datasets','peft','accelerate','bitsandbytes'))"
+      - name: Run offline adapter construction and consumer contracts
+        env:
+          HF_HUB_OFFLINE: '1'
+          HF_DATASETS_OFFLINE: '1'
+          PYTHONPATH: src
+        # Only files already on main. Future feature PRs extend this after landing.
+        run: >-
+          pytest -o addopts= -q tests/test_mlx_generation.py
+          tests/test_mlx_dora_native.py tests/test_issue634_mlx_resume.py
