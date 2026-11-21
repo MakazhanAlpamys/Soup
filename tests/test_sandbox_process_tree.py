@@ -888,6 +888,37 @@ class TestWindowsJobWithoutOrBeforeTheJob:
             proc.stdout.close()
             proc.stderr.close()
 
+    @pytest.mark.parametrize("error", [OSError, ValueError, AttributeError])
+    def test_a_job_that_cannot_be_created_does_not_stop_the_child(self, monkeypatch, error):
+        def refusing(process):
+            raise error("no job")
+
+        monkeypatch.setattr(process_tree, "_create_job_for", refusing)
+        proc = self._start("print('ran')")
+        tree = ProcessTree(proc)
+        try:
+            assert tree.has_job is False
+            assert proc.wait(timeout=10) == 0
+            assert proc.stdout.read().strip() == b"ran"
+        finally:
+            self._close(proc, tree)
+
+    @pytest.mark.parametrize("error", [OSError, ValueError, AttributeError])
+    def test_a_resume_call_that_raises_ends_the_child(self, monkeypatch, error):
+        def raising(handle):
+            raise error("no resume")
+
+        real = process_tree._job_api()
+        fake = _fake_job_api(ntdll=_Delegating(real.ntdll, NtResumeProcess=raising))
+        monkeypatch.setattr(process_tree, "_job_api", lambda: fake)
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        tree = ProcessTree(proc)
+        try:
+            assert proc.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+        finally:
+            monkeypatch.undo()
+            self._close(proc, tree)
+
 
 @_windows_only
 class TestAChildThatStartsProcessesAtOnce:
