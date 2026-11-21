@@ -219,6 +219,104 @@ def test_load_suite_checks_the_last_repeated_root_tasks_key(
         gate.load_suite(str(path))
 
 
+@pytest.mark.parametrize("merge_shape", ["single", "chained", "first-of-two"])
+def test_cli_rejects_duplicate_key_in_effective_inherited_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, merge_shape: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "inputs.jsonl").write_text(
+        '{"prompt":"Question","expected":"correct"}\n', encoding="utf-8",
+    )
+    merge = {
+        "single": "<<: *defaults\n",
+        "chained": "<<: {<<: *defaults}\n",
+        "first-of-two": "<<: [*defaults, {tasks: []}]\n",
+    }[merge_shape]
+    path = _write_suite_text(
+        tmp_path,
+        "suite: inherited\ndefaults: &defaults\n  tasks:\n"
+        "    - {type: custom, name: sample, tasks: inputs.jsonl, scorer: exact,"
+        " threshold: 0.75, threshold: 0.0}\n"
+        + merge,
+    )
+    factory = MagicMock(return_value=lambda prompt: "incorrect")
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    result = CliRunner().invoke(
+        app, ["eval", "gate", "--suite", str(path), "--model", "synthetic"],
+    )
+
+    assert result.exit_code == 3
+    output = " ".join(strip_ansi(result.output).split())
+    assert f"Cannot load suite: eval-gate suite '{path}'" in output
+    assert "duplicate key 'threshold' in a task mapping on line 4" in output
+    factory.assert_not_called()
+
+
+def test_cli_inherited_single_threshold_still_fails_on_wrong_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "inputs.jsonl").write_text(
+        '{"prompt":"Question","expected":"correct"}\n', encoding="utf-8",
+    )
+    path = _write_suite_text(
+        tmp_path,
+        "suite: inherited\ndefaults: &defaults\n  tasks:\n"
+        "    - {type: custom, name: sample, tasks: inputs.jsonl, scorer: exact,"
+        " threshold: 0.75}\n"
+        "<<: *defaults\n",
+    )
+    factory = MagicMock(return_value=lambda prompt: "incorrect")
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    result = CliRunner().invoke(
+        app, ["eval", "gate", "--suite", str(path), "--model", "synthetic"],
+    )
+
+    assert result.exit_code == 2
+    assert "GATE FAILED" in strip_ansi(result.output)
+    factory.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "<<: *defaults\ntasks: [{type: custom, name: clean, threshold: 0.0}]\n",
+        "<<: [{tasks: [{type: custom, name: clean, threshold: 0.0}]}, *defaults]\n",
+    ],
+    ids=["explicit-override", "first-of-two"],
+)
+def test_load_suite_only_checks_the_winning_task_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: precedence\ndefaults: &defaults\n"
+        "  tasks: [{type: custom, name: shadowed, threshold: 0.75, threshold: 0.0}]\n"
+        + root,
+    )
+
+    (task,) = gate.load_suite(str(path)).tasks
+    assert (task.name, task.threshold) == ("clean", 0.0)
+
+
+def test_load_suite_preserves_merge_overrides_in_shared_task_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: shared\n"
+        "task: &task {<<: {threshold: 0.75}, type: custom, name: sample, threshold: 0.0}\n"
+        "defaults: &defaults {tasks: [*task]}\n"
+        "<<: [*defaults, *task]\n",
+    )
+
+    (task,) = gate.load_suite(str(path)).tasks
+    assert (task.name, task.threshold) == ("sample", 0.0)
+
+
 def test_load_suite_rejects_duplicate_key_in_a_merged_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
