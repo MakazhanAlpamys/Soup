@@ -2,8 +2,10 @@
 
 A 500 response body is untrusted input. ``_error_detail`` collapses whitespace
 but leaves ESC/NUL/BEL bytes alone, so ``commands/ingest.py`` must route the
-rendered ``PullError`` through the shared ``utils/terminal.py:for_terminal``
-helper (C0 strip + markup escape) instead of bare ``rich.markup.escape``.
+rendered ``PullError`` through the shared ``utils/terminal.py:terminal_text``
+helper (control strip, printed as ``Text``) instead of bare
+``rich.markup.escape``. Until #2489 it went through ``for_terminal`` (control
+strip + markup escape), which kept the strip but still read ``:name:`` aliases.
 """
 
 from __future__ import annotations
@@ -61,7 +63,7 @@ def test_stripped_body_renders_on_a_colour_console() -> None:
 
     from rich.console import Console
 
-    from soup_cli.utils.terminal import for_terminal
+    from soup_cli.utils.terminal import terminal_text
 
     creds = LangfuseCredentials(
         public_key="pk", secret_key="sk", host="https://langfuse.example.com"
@@ -70,8 +72,8 @@ def test_stripped_body_renders_on_a_colour_console() -> None:
 
     out = StringIO()
     console = Console(file=out, force_terminal=True, width=300)
-    # This is the exact production expression from commands/ingest.py.
-    console.print(f"[red]{for_terminal(message)}[/]")
+    # This is the exact production expression from commands/ingest.py (``_refuse``).
+    console.print(terminal_text(message, "red"))
     rendered = out.getvalue()
 
     # Control: the console really did colour, so the assertions below are not
@@ -79,14 +81,13 @@ def test_stripped_body_renders_on_a_colour_console() -> None:
     assert "\x1b[" in rendered
     # Erase-display is payload-only; Rich has no reason to emit it.
     assert "\x1b[2J" not in rendered
-    # C0 bytes stripped by for_terminal().
+    # C0 bytes stripped by terminal_text().
     assert "\x00" not in rendered
     assert "\x07" not in rendered
-    # The server's message itself is preserved, not dropped. Rich's own
-    # ReprHighlighter restyles numbers (``500`` -> ``\x1b[1;31m500\x1b[0m``),
-    # splitting "HTTP 500" with SGR codes that are Rich's own, not payload --
-    # so compare against the SGR-stripped text here. The absence assertions
-    # above already ran against the raw bytes.
+    # The server's message itself is preserved, not dropped. The red style wraps
+    # it in SGR codes that are Rich's own, not payload, so compare against the
+    # SGR-stripped text here. The absence assertions above already ran against
+    # the raw bytes.
     plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
     assert "HTTP 500" in plain
     assert "FAKE ERROR" in plain
