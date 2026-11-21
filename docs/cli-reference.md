@@ -2803,7 +2803,7 @@ Takes no options or arguments.
 
 ### `soup loop prune`
 
-Safely prune loop artifacts; stop foreground watches before applying.
+Safely prune loop artifacts. Detects detached daemons only; stop foreground watches first.
 
 Usage: `soup loop prune [OPTIONS]`
 
@@ -2811,7 +2811,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); rows for retained iterations are also preserved. |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
 
 ### `soup loop replay`
 

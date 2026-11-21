@@ -206,11 +206,10 @@ def test_pending_adapter_path_survives_when_manifest_run_id_differs(tmp_path, mo
         ),
     )
 
-    plan = build_prune_plan(keep_runs=1)
+    result = runner.invoke(app, ["loop", "prune", "--keep-runs", "1"])
 
-    assert f".soup-loops/adapters/{pending_adapter.name}" not in {
-        entry.path for entry in plan
-    }
+    assert result.exit_code == 0
+    assert f".soup-loops/adapters/{pending_adapter.name}" not in _plain(result.output)
 
 
 def test_canary_iteration_dict_preserves_iteration_adapter_and_sidecars(tmp_path, monkeypatch):
@@ -630,7 +629,7 @@ def test_cli_dry_run_is_read_only_and_terminal_safe(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.loop.build_prune_plan",
         lambda **_kwargs: [SimpleNamespace(
-            path=hostile, reason="hostile path", is_dir=False, action="remove"
+            path=hostile, reason="hostile \x1b[red]reason[/]", is_dir=False, action="remove"
         )],
     )
 
@@ -639,6 +638,38 @@ def test_cli_dry_run_is_read_only_and_terminal_safe(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "dry run:" in output
     assert "[bold]x.txt" in output
+    assert "\\[bold]" not in output
+    assert "hostile [red]reason[/]" in output
+    assert "\x1b" not in result.output
+
+
+def test_cli_failed_line_strips_controls_and_renders_markup_once(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.loop.daemon_is_running", lambda: False)
+    monkeypatch.setattr(
+        "soup_cli.commands.loop.build_prune_plan",
+        lambda **_kwargs: [PruneEntry(".soup-loops/pairs/[bold]x.txt", "remove", False)],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.loop.execute_prune",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            removed=0,
+            bytes_freed=0,
+            skipped=[],
+            failed=[SimpleNamespace(
+                path=".soup-loops/pairs/[bold]x.txt",
+                reason="hostile \x1b [red]reason[/]",
+            )],
+        ),
+    )
+
+    result = runner.invoke(app, ["loop", "prune", "--yes"])
+    output = _plain(result.output)
+
+    assert result.exit_code == 1
+    assert "failed:" in output
+    assert "[bold]x.txt" in output
+    assert "hostile [red]reason[/]" in output
     assert "\\[bold]" not in output
     assert "\x1b" not in result.output
 
