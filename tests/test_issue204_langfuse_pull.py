@@ -790,7 +790,7 @@ class TestCli:
         assert transport.calls[0]["url"].startswith("https://10.0.0.5/api/public/v2/observations?")
 
     @pytest.mark.parametrize(
-        "source", ["langsmith", "helicone", "openpipe", "otel", "openai-stored"]
+        "source", ["helicone", "openpipe", "otel", "openai-stored"]
     )
     def test_pull_is_langfuse_only_for_now(self, pull_env, source):
         result = _invoke(["--source", source, "--pull"])
