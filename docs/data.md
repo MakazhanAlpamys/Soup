@@ -393,7 +393,7 @@ soup ingest --source otel         --logs ./otel-spans.jsonl
 soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 ```
 
-With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
+With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. `--pull` for LangSmith also reads `LANGSMITH_PROJECT` and `LANGSMITH_ENDPOINT`. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
 In a `--logs` export, Langfuse feedback uses `score` when it is present and non-null, including `0`,
 `0.0` and `false` as negative feedback. Only a missing or null score falls back
@@ -403,7 +403,7 @@ to `rating`. Negative scores remain available for preference-pair construction.
 
 ### Live pull from Langfuse (`--pull`, #204)
 
-Langfuse is the one source Soup can fetch directly, so there is no export step:
+Langfuse and LangSmith (below) can be fetched directly, so there is no export step:
 
 ```bash
 export LANGFUSE_PUBLIC_KEY=pk-lf-...   # Project Settings -> API Keys
@@ -416,6 +416,21 @@ soup ingest --source langfuse --pull --since 7d --output traces.jsonl
 - **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
 - **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local, shared (`100.64.0.0/10`), site-local (`fec0::/10`) or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
 - **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
+- **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
+
+### Live pull from LangSmith (`--pull`, #204)
+
+```bash
+export LANGSMITH_API_KEY=lsv2_...
+export LANGSMITH_PROJECT=my-project    # the tracing project to read
+export LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com   # optional: default is https://api.smith.langchain.com
+soup ingest --source langsmith --pull --since 7d --output traces.jsonl
+```
+
+- **What one row is.** One output row per LLM run of the project in the window: the run that holds the exact model input and output. Chain, tool and other runs are not model calls and give no row. The run type is sent as a filter and checked again on each run, so a server that ignores the filter cannot turn them into rows; they are counted as skipped in the summary. Runs go through the same parser as a `--logs` export (`parse_langsmith`), so a LangChain chat model run and an OpenAI-style run read the same either way. A row's `trace_id` is the run id, and thumbs feedback becomes the `signal`.
+- **The API.** The project named by `LANGSMITH_PROJECT` is looked up with `GET /api/v1/sessions?name=`, and its runs are read with `POST /api/v2/runs/query`, asking for the fields Soup reads. The window is always sent: without it the API covers only the last day.
+- **Settings.** `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` are required; `LANGSMITH_ENDPOINT` is read the way the LangSmith SDK reads it, so a self-hosted `https://host/api/v1` works as is. All three come from the environment only, never from a flag. The key is sent as `X-API-Key` and is not written to the output, the console, debug logs or error messages.
+- **Host checks and bounds** are those of the Langfuse pull above: HTTPS only, the same SSRF validator, `--allow-private-host` for a private or loopback address, redirects refused, the 30 s deadline and 64 MiB cap per request, pages of 100 runs up to `--max-pages`, a stop with exit 1 and nothing written when results are still pending, the same 429 retries and the repeated-cursor stop.
 - **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
 
 The other sources have no live pull yet — export them and pass `--logs`.
