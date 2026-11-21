@@ -498,6 +498,17 @@ def _peft_rewrites_a_gate_entry(torch) -> bool:
     )
 
 
+def _peft_keeps_all_linear_a_string(layout: dict) -> bool:
+    """Asked of peft: does the installed version leave ``all-linear`` a string
+    on this layout's stand-in, converting neither parameters nor modules?"""
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("peft")
+    converted = moe_mod._peft_converted_targets(
+        _per_expert_linear_moe(torch, **layout), "all-linear"
+    )
+    return converted is None or not (converted[0] or converted[1])
+
+
 def _stand_in_attach(tcfg, target_modules, **layout):
     """Resolve on one stand-in, attach the config ``build_lora_config`` makes to another."""
     torch = pytest.importorskip("torch")
@@ -615,13 +626,19 @@ class TestTheGatesStayOutOnStandIns:
             _tcfg(), "all-linear", model_type="qwen2_moe", shared_gate=True
         )
 
-        if isinstance(targets, MoeLoraTargetString):
+        # the branch is asked of peft, not of the result under test
+        if _peft_keeps_all_linear_a_string(
+            {"model_type": "qwen2_moe", "shared_gate": True}
+        ):
             # a peft that does not convert the family: the string, gates excluded
+            assert isinstance(targets, MoeLoraTargetString)
             assert targets == "all-linear"
             assert set(peft_config.exclude_modules) == {_ROUTER, _SHARED_GATE}
         else:
             # a peft that keeps the router's v4 name as a module target (0.22 on):
             # an explicit list, the gates left out of it
+            assert isinstance(targets, MoeLoraTargets)
+            assert not isinstance(targets, MoeLoraTargetString)
             assert not [entry for entry in targets if entry.rsplit(".", 1)[-1] == "gate"]
             assert "shared_expert_gate" not in targets
         assert not {_ROUTER, _SHARED_GATE} & modules and not params
@@ -637,10 +654,16 @@ class TestTheGatesStayOutOnStandIns:
 
         assert gate_proj in modules
         assert _ROUTER not in modules and not params
-        if model_type == "qwen2_moe" and isinstance(targets, MoeLoraTargetString):
+        if model_type == "qwen2_moe" and _peft_keeps_all_linear_a_string(
+            {"model_type": model_type, "block_gate_proj": 16}
+        ):
             # a peft that converts the family keeps the router's v4 name as a module
             # target (0.22 on), and the string becomes a list instead
+            assert isinstance(targets, MoeLoraTargetString)
             assert list(peft_config.exclude_modules) == [_ROUTER]
+        else:
+            assert isinstance(targets, MoeLoraTargets)
+            assert not isinstance(targets, MoeLoraTargetString)
 
     def test_vera_gets_a_list_because_vera_has_no_exclude_modules(self):
         targets, peft_config, modules, _ = _stand_in_attach(
