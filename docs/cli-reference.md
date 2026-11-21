@@ -3536,14 +3536,14 @@ Usage: `soup runs replay [OPTIONS] RUN_ID`
 
 ### `soup runs show`
 
-Show detailed info about a specific run, including loss curve.
+Show run details and available loss and training score curves.
 
 Usage: `soup runs show [OPTIONS] RUN_ID`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `RUN_ID` | text |  | yes | Run ID (or prefix) to show |
-| `--plot` / `--no-plot` | flag | on |  | Show loss curve |
+| `--plot` / `--no-plot` | flag | on |  | Show training curves |
 
 ## `soup serve`
 
