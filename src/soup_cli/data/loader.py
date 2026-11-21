@@ -73,11 +73,15 @@ MAX_REMOTE_ROWS = 1_000_000
 
 def load_raw_data(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    row_numbers: list[int] | None = None,
 ) -> list[dict]:
     """Load file rows, skipping non-objects unless a caller needs the original JSON rows.
 
     ``issues`` receives at most ``_MAX_REASON_SAMPLES`` messages per kind of skipped row.
     Pass a ``SkippedRows`` to also get the exact number of skipped rows in ``.total``.
+    For JSONL and JSON, ``row_numbers`` collects the 1-based source positions of
+    retained rows (line or array position, respectively). Other formats keep
+    the loaded row order and use sequential row numbers.
     """
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
@@ -87,9 +91,13 @@ def load_raw_data(
         raise ValueError(f"Unsupported file format: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
     if ext == ".jsonl":
-        return _load_jsonl(path, issues=issues, skip_non_object=skip_non_object)
+        return _load_jsonl(
+            path, issues=issues, skip_non_object=skip_non_object, row_numbers=row_numbers,
+        )
     elif ext == ".json":
-        return _load_json(path, issues=issues, skip_non_object=skip_non_object)
+        return _load_json(
+            path, issues=issues, skip_non_object=skip_non_object, row_numbers=row_numbers,
+        )
     elif ext == ".csv":
         return _load_csv(path)
     elif ext == ".parquet":
@@ -151,6 +159,7 @@ class SkipTally:
 
 def _load_jsonl(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    row_numbers: list[int] | None = None,
 ) -> list[dict]:
     data = []
     non_objects = SkipTally(
@@ -171,6 +180,8 @@ def _load_jsonl(
                     non_objects.add(non_object_row_issue(row, i + 1))
                     continue
                 data.append(row)
+                if row_numbers is not None:
+                    row_numbers.append(i + 1)
             except json.JSONDecodeError as e:
                 bad_json.add(f"invalid JSON on line {i + 1}: {e}")
     non_objects.finish()
@@ -180,11 +191,14 @@ def _load_jsonl(
 
 def _load_json(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    row_numbers: list[int] | None = None,
 ) -> list[dict]:
     with open(path, encoding="utf-8-sig") as f:
         raw = json.load(f)
     if isinstance(raw, list):
         if not skip_non_object:
+            if row_numbers is not None:
+                row_numbers.extend(range(1, len(raw) + 1))
             return raw
         rows = []
         non_objects = SkipTally(
@@ -195,6 +209,8 @@ def _load_json(
                 non_objects.add(non_object_row_issue(row, position, "row"))
                 continue
             rows.append(row)
+            if row_numbers is not None:
+                row_numbers.append(position)
         non_objects.finish()
         return rows
     raise ValueError("JSON file must contain a list of objects")
