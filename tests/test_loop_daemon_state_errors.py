@@ -285,6 +285,26 @@ class TestSignalHandlers:
 
         assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
 
+    def test_a_lock_timeout_at_start_up_runs_on_and_restores_the_handlers(
+        self, cwd, monkeypatch
+    ):
+        # #3055 — the lock-timeout arm is the one transient case: `watch` runs
+        # on without the promotion instead of raising, still with the
+        # daemon's handlers uninstalled before the first cycle.
+        write_state(_state(), _path(cwd))
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        def locked(mutate, path=None):
+            raise TimeoutError("loop.yaml is locked by another process (pid 1)")
+
+        monkeypatch.setattr(daemon, "update_state", locked)
+
+        state, ran = watch(_config(cwd))
+
+        assert ran == 1
+        assert state.iteration_count == 1
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
     def test_watch_puts_the_signal_handlers_back(self, cwd):
         write_state(_state(), _path(cwd))
         before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
