@@ -312,15 +312,17 @@ class TestStateIO:
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".soup" / "loop.yaml"
         target.parent.mkdir()
-        long_key = "x" * 500
+        long_key = "previous_production_iteration_id" + "x" * 35
         target.write_text(json.dumps({long_key: True}))
 
         with pytest.raises(ValueError) as exc_info:
             read_state()
 
         message = str(exc_info.value)
+        assert len(long_key) > 60
         assert len(message) < 200
-        assert "unknown loop.yaml key '" + "x" * 56 + "..." in message
+        assert "unknown loop.yaml key '" + "previous_production_iteration_id" in message
+        assert "did you mean 'previous_production_iteration_id'?" in message
         assert long_key not in message
 
     def test_status_refuses_unknown_field_without_rewriting_state(self, tmp_path, monkeypatch):
