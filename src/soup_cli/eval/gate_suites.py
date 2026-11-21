@@ -96,10 +96,10 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 7
+BUNDLED_SCORER_REVISION: int = 8
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 7;
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 8;
 #: update together with ``BUNDLED_SCORER_REVISION``. Revisions 4 and 5 (#1192)
 #: changed ``mini_arithmetic``'s and then ``mini_common_sense``'s items, not a
 #: scorer: the corpus fixes correctness by item parity, so the hash did not
@@ -108,8 +108,11 @@ BUNDLED_SCORER_REVISION: int = 7
 #: The fixed corpus has no generation failures, so its hash remains unchanged.
 #: Revision 7 (#1192) changed ``mini_mmlu``'s items; the hash holds for the
 #: same parity reason as revisions 4 and 5.
+#: Revision 8 (#1192) is a scorer change: ``mini_format_json`` rows carry an
+#: ``expect`` shape and the scorer checks it, so the corpus gained right- and
+#: wrong-shape replies and the hash moved.
 BUNDLED_SCORER_FINGERPRINT: str = (
-    "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
+    "219efa5873a85e124b94d13f0f16c5217e76abf0c7eda9961c266c63b7331b1f"
 )
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
@@ -376,8 +379,102 @@ def _is_json_container(text: str) -> bool:
     return _extract_json_container(text) is not None
 
 
+_JSON_TYPES = {
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+    "string": lambda v: isinstance(v, str),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "null": lambda v: v is None,
+}
+
+
+def _same_json(left: object, right: object) -> bool:
+    """JSON equality: ``true`` is not ``1`` and ``false`` is not ``0``.
+
+    Python's ``==`` treats ``True == 1``, so ``{"count": false}`` would pass
+    "a 'count' set to zero"; the ``type`` rules already refuse booleans as
+    numbers, and literal rows need the same.
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(_same_json(a, b) for a, b in zip(left, right))
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(_same_json(left[k], right[k]) for k in left)
+    return left == right
+
+
+def _matches_expect(value: object, spec: dict) -> bool:
+    """True when ``value`` has the shape a ``mini_format_json`` row asks for (#1192).
+
+    ``spec`` is a small stdlib-only subset of JSON Schema, written from each
+    prompt's own wording: ``type``, ``equals``, ``keys`` (required),
+    ``exact`` (no other keys), ``min_keys``, ``len``, ``items`` and ``fields``
+    (sub-specs for every element / named key) and ``some_value`` (at least one
+    value matches). An unknown ``type`` fails rather than passing.
+    """
+    if "equals" in spec and not _same_json(value, spec["equals"]):
+        return False
+    if "type" in spec and not _JSON_TYPES[spec["type"]](value):
+        return False
+    if isinstance(value, dict):
+        keys = spec.get("keys", ())
+        if any(key not in value for key in keys):
+            return False
+        if spec.get("exact") and set(value) != set(keys):
+            return False
+        if len(value) < spec.get("min_keys", 0):
+            return False
+        for key, sub in spec.get("fields", {}).items():
+            if key not in value or not _matches_expect(value[key], sub):
+                return False
+        some = spec.get("some_value")
+        if some is not None and not any(_matches_expect(v, some) for v in value.values()):
+            return False
+    if isinstance(value, list):
+        if "len" in spec and len(value) != spec["len"]:
+            return False
+        sub = spec.get("items")
+        if sub is not None and not all(_matches_expect(v, sub) for v in value):
+            return False
+    return True
+
+
+def _json_has_requested_shape(item: dict, output: str) -> bool:
+    """The #316 container check, then the row's ``expect`` shape when it has one.
+
+    Before #1192 any object or array passed, so a model that answered
+    ``{"result": 3}`` to "keys 'sum' and 'count'" scored, and the suite sat at
+    1.000 on every capable model. A row without ``expect`` scores as it did.
+
+    A non-``exact`` object spec is also tried against the value of a single-key
+    wrapper (``{"book": {"title": ..., "author": ...}}``): naming the thing asked
+    for is a packaging choice, not a wrong shape. Only object specs unwrap; for a
+    row that asks for an array or a literal, a wrapper changes the top-level type
+    the prompt names (``{"numbers": [1, 2, 3]}`` is not "a JSON array").
+    """
+    parsed = _extract_json_container(output)
+    if parsed is None:
+        return False
+    spec = item.get("expect")
+    if spec is None:
+        return True
+    if _matches_expect(parsed, spec):
+        return True
+    if (
+        not spec.get("exact")
+        and spec.get("type") == "object"
+        and isinstance(parsed, dict)
+        and len(parsed) == 1
+    ):
+        return _matches_expect(next(iter(parsed.values())), spec)
+    return False
+
+
 def _score_format_json(items: Tuple[dict, ...], gen: GeneratorFn) -> float:
-    return _fraction_passing(items, gen, lambda _item, out: _is_json_container(out))
+    return _fraction_passing(items, gen, _json_has_requested_shape)
 
 
 def _score_refusal_suite(items: Tuple[dict, ...], gen: GeneratorFn) -> float:
@@ -467,6 +564,32 @@ def _wrong_mcq_answer(answer: str) -> str:
     return "WRONG"
 
 
+_TYPE_EXAMPLES = {
+    "object": {}, "array": [], "string": "x", "number": 1.5,
+    "integer": 2, "boolean": True, "null": None,
+}
+
+
+def _shape_example(spec: dict) -> object:
+    """A value satisfying ``spec`` — the fingerprint corpus's right-shape reply."""
+    if "equals" in spec:
+        return spec["equals"]
+    kind = spec.get("type", "object")
+    if kind == "array":
+        item = spec.get("items", {"type": "integer"})
+        return [_shape_example(item) for _ in range(spec.get("len", 1))]
+    if kind != "object":
+        return _TYPE_EXAMPLES[kind]
+    value: dict = {key: 1 for key in spec.get("keys", ())}
+    for key, sub in spec.get("fields", {}).items():
+        value[key] = _shape_example(sub)
+    if "some_value" in spec:
+        value["v"] = _shape_example(spec["some_value"])
+    while len(value) < spec.get("min_keys", 0):
+        value[f"k{len(value)}"] = 1
+    return value
+
+
 def _build_fingerprint_response_map() -> dict[str, str]:
     """Exact prompt -> response map mixing correct and incorrect per suite.
 
@@ -520,9 +643,16 @@ def _build_fingerprint_response_map() -> dict[str, str]:
                     responses[prompt] = json.dumps({"name": fname})
         elif name == MINI_FORMAT_JSON:
             for i, item in enumerate(items):
-                responses[item["prompt"]] = (
-                    '{"ok": true}' if i % 2 == 0 else "not json at all"
-                )
+                spec = item.get("expect", {})
+                if i % 3 == 0:
+                    reply = json.dumps(_shape_example(spec))
+                elif i % 3 == 1:
+                    # Valid container, wrong shape — passes only if the #1192
+                    # ``expect`` check is removed.
+                    reply = "[]" if spec.get("type") != "array" else "{}"
+                else:
+                    reply = "not json at all"
+                responses[item["prompt"]] = reply
         elif name == MINI_SAFETY:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
