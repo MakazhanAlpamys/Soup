@@ -55,6 +55,17 @@ def test_old_pin_keeps_only_exact_revision(slots, yes):
     assert paths[MID].exists() is not yes
     assert str(paths[MID]) in output
     assert str(paths[OLD]) not in output
+    if not yes:
+        assert "Use --keep <commit>" in output
+
+
+def test_nothing_to_prune_notice_names_keep(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_current", lambda *a: "org__m@current")
+    only = _slot(tmp_path, "org__m@" + NEW)
+    result, output = invoke(tmp_path)
+    assert result.exit_code == 0, output
+    assert "Nothing to prune." in output and "Use --keep <commit>" in output
+    assert only.exists()
 
 
 def test_newest_pin_does_not_promote_another_slot(slots):
