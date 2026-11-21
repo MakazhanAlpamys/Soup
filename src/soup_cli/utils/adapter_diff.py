@@ -1,9 +1,13 @@
 """Per-layer LoRA adapter diff math + report rendering (v0.57.0 Part A).
 
 Pure numpy math (no torch); safetensors is loaded lazily so import is cheap.
+A LoRA module is compared on its effective delta ``ΔW = scaling · B @ A``,
+never factor by factor: ``(B·M, M⁻¹·A)`` is the same ``ΔW`` for any invertible
+``M``, so the raw factors measure the parameterisation, not the change.
 Public surface:
 
-- ``compute_layer_diffs(weights_a, weights_b)`` -> per-layer Frobenius diffs
+- ``compute_layer_diffs(weights_a, weights_b, *, config_a=None, config_b=None)``
+  -> per-layer Frobenius diffs
 - ``effective_rank(matrix)`` -> SVD-entropy effective rank
 - ``compute_adapter_diff(path_a, path_b, *, top_k=10)`` -> ``AdapterDiffReport``
 - ``render_report_markdown(report)`` / ``render_report_json(report)``
@@ -33,7 +37,7 @@ _MIN_TOP_K = 1
 
 @dataclass(frozen=True)
 class LayerDiff:
-    """Frobenius-norm diff for a single LoRA parameter tensor."""
+    """Frobenius-norm diff of one LoRA module's ``ΔW``, or of one other tensor."""
 
     name: str
     frobenius: float
@@ -108,6 +112,13 @@ def effective_rank(matrix: Any, *, eps: float = 1e-12) -> float:
         singular = np.linalg.svd(arr, compute_uv=False)
     except np.linalg.LinAlgError:
         return 0.0
+    return _effective_rank_of_singular_values(singular, eps=float(eps))
+
+
+def _effective_rank_of_singular_values(singular: Any, *, eps: float = 1e-12) -> float:
+    """``exp`` of the entropy of a singular-value spectrum (see :func:`effective_rank`)."""
+    import numpy as np
+
     total = float(np.sum(singular))
     if total <= eps:
         return 0.0
@@ -119,14 +130,140 @@ def effective_rank(matrix: Any, *, eps: float = 1e-12) -> float:
     return float(math.exp(entropy))
 
 
+def _lora_modules(weights: Mapping[str, Any]) -> dict[str, Tuple[str, str]]:
+    """Complete LoRA pairs of an adapter: module stem -> (lora_A name, lora_B name).
+
+    A factor is what ``adapter_arithmetic._lora_role`` calls one: ``lora_A.weight`` /
+    ``lora_B.weight`` and ``lora_embedding_A`` / ``lora_embedding_B``.
+    """
+    from soup_cli.utils.adapter_arithmetic import _lora_role
+
+    roles: dict[str, dict[str, str]] = {}
+    for name in weights:
+        role = _lora_role(name)
+        if role is not None:
+            roles.setdefault(role[0], {})[role[1]] = name
+    return {
+        stem: (found["A"], found["B"])
+        for stem, found in roles.items()
+        if "A" in found and "B" in found
+    }
+
+
+def _module_scaling(config: Optional[Mapping[str, Any]], stem: str) -> float:
+    """PEFT's decode-time scaling for a module, from :func:`lora_module_scaling`.
+
+    1.0 when there is no config or it carries no usable ``r`` / ``lora_alpha``, the
+    same fallback ``soup adapters check`` uses.
+    """
+    if config is None:
+        return 1.0
+    scaling = lora_module_scaling(config, peft_module_name(stem))
+    return 1.0 if scaling is None else scaling
+
+
+def _delta_factors(
+    weights: Mapping[str, Any], pair: Tuple[str, str], scaling: float,
+) -> Optional[Tuple[Any, Any]]:
+    """``(left, right)`` with ``left @ right == scaling * B @ A`` as 2-D float64.
+
+    Linear: A ``(r, in)``, B ``(out, r)``. Embedding: A ``(r, num_embeddings)``, B
+    ``(embedding_dim, r)``; PEFT's delta is the transpose, which has the same norm
+    and singular values. ``None`` when the pair is not two 2-D factors of one rank
+    (a conv pair is 4-D) or holds a non-finite value; such a pair is diffed tensor
+    by tensor, by name.
+    """
+    import numpy as np
+
+    right = np.asarray(weights[pair[0]], dtype=np.float64)
+    left = np.asarray(weights[pair[1]], dtype=np.float64)
+    if right.ndim != 2 or left.ndim != 2 or right.size == 0 or left.size == 0:
+        return None
+    if left.shape[1] != right.shape[0]:
+        return None
+    if not (np.isfinite(left).all() and np.isfinite(right).all()):
+        return None
+    return scaling * left, right
+
+
+def _product_singular_values(left: Any, right: Any) -> Any:
+    """Singular values of ``left @ right`` without forming the (out, in) product.
+
+    With the reduced QR factorisations ``left = Q_l R_l`` and ``right^T = Q_r R_r``
+    (``Q_l``, ``Q_r`` with orthonormal columns), ``left @ right = Q_l (R_l R_r^T) Q_r^T``,
+    so its singular values are those of the core ``R_l R_r^T``, at most r x r.
+    """
+    import numpy as np
+
+    r_left = np.linalg.qr(left, mode="r")
+    r_right = np.linalg.qr(right.T, mode="r")
+    return np.linalg.svd(r_left @ r_right.T, compute_uv=False)
+
+
+def _product_inner(left_a: Any, right_a: Any, left_b: Any, right_b: Any) -> float:
+    """``<left_a @ right_a, left_b @ right_b>_F`` from rank-sized Gram blocks.
+
+    ``trace(right_a^T left_a^T left_b right_b) = sum((left_a^T left_b) *
+    (right_a right_b^T))``: two (r_a, r_b) matrices, never the (out, in) products.
+    """
+    import numpy as np
+
+    return float(np.sum((left_a.T @ left_b) * (right_a @ right_b.T)))
+
+
+def _module_diff(
+    stem: str, factors_a: Tuple[Any, Any], factors_b: Tuple[Any, Any],
+) -> Optional[LayerDiff]:
+    """``||ΔW_a - ΔW_b||_F`` for one LoRA module, or ``None`` if it cannot be computed."""
+    import numpy as np
+
+    (left_a, right_a), (left_b, right_b) = factors_a, factors_b
+    if left_a.shape[0] != left_b.shape[0] or right_a.shape[1] != right_b.shape[1]:
+        return None  # different in/out features: not the same layer
+    sq_a = max(0.0, _product_inner(left_a, right_a, left_a, right_a))
+    sq_b = max(0.0, _product_inner(left_b, right_b, left_b, right_b))
+    norm_a, norm_b = math.sqrt(sq_a), math.sqrt(sq_b)
+    if np.array_equal(left_a, left_b) and np.array_equal(right_a, right_b):
+        fro = 0.0
+    else:
+        # ||ΔW_a - ΔW_b||^2 = ||ΔW_a||^2 + ||ΔW_b||^2 - 2 <ΔW_a, ΔW_b>; clamp the
+        # rounding of two nearly equal deltas at 0.
+        cross = _product_inner(left_a, right_a, left_b, right_b)
+        fro = math.sqrt(max(0.0, sq_a + sq_b - 2.0 * cross))
+    if not all(math.isfinite(v) for v in (norm_a, norm_b, fro)):
+        return None
+    denom = max(norm_a, norm_b)
+    return LayerDiff(
+        name=stem,
+        frobenius=fro,
+        norm_a=norm_a,
+        norm_b=norm_b,
+        relative=fro / denom if denom > 0 else 0.0,
+    )
+
+
 def compute_layer_diffs(
     weights_a: Mapping[str, Any],
     weights_b: Mapping[str, Any],
+    *,
+    config_a: Optional[Mapping[str, Any]] = None,
+    config_b: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Tuple[LayerDiff, ...], Tuple[str, ...], Tuple[str, ...]]:
-    """Compute per-layer Frobenius diffs for every name in both adapters.
+    """Compute per-layer Frobenius diffs for every layer in both adapters.
 
-    Returns ``(per_layer, only_in_a, only_in_b)``. ``per_layer`` covers the
-    intersection of names sorted alphabetically.
+    A LoRA module whose 2-D factor pair (``lora_A`` / ``lora_B``, or
+    ``lora_embedding_A`` / ``lora_embedding_B``) is present in both adapters is
+    compared on its effective delta ``ΔW = scaling · B @ A`` and reported once,
+    under its module name, whatever the two ranks are. ``scaling`` is
+    :func:`lora_module_scaling` of each adapter's ``config`` (``lora_alpha / r``,
+    or ``/ sqrt(r)`` with ``use_rslora``, after ``rank_pattern`` /
+    ``alpha_pattern``), or 1.0 without a usable ``r`` / ``lora_alpha``. Every
+    other tensor (a conv pair, a half-present pair, a DoRA magnitude vector,
+    ``modules_to_save`` weights, biases) is diffed element-wise by name, skipping
+    shape mismatches; without configs, names that are not LoRA factors give the
+    same rows as before.
+
+    Returns ``(per_layer, only_in_a, only_in_b)``. ``per_layer`` is sorted by name.
     """
     import numpy as np
 
@@ -140,11 +277,26 @@ def compute_layer_diffs(
     if len(names_a) > _MAX_LAYERS or len(names_b) > _MAX_LAYERS:
         raise ValueError(f"adapter has >{_MAX_LAYERS} tensors")
 
+    diffs = []
+    pairs_a = _lora_modules(weights_a)
+    pairs_b = _lora_modules(weights_b)
+    for stem in sorted(set(pairs_a) & set(pairs_b)):
+        _require_str(stem, "layer name")
+        factors_a = _delta_factors(weights_a, pairs_a[stem], _module_scaling(config_a, stem))
+        factors_b = _delta_factors(weights_b, pairs_b[stem], _module_scaling(config_b, stem))
+        if factors_a is None or factors_b is None:
+            continue
+        module = _module_diff(stem, factors_a, factors_b)
+        if module is None:
+            continue
+        diffs.append(module)
+        names_a.difference_update(pairs_a[stem])
+        names_b.difference_update(pairs_b[stem])
+
     shared = sorted(names_a & names_b)
     only_a = tuple(sorted(names_a - names_b))
     only_b = tuple(sorted(names_b - names_a))
 
-    diffs = []
     for name in shared:
         _require_str(name, "layer name")
         a = np.asarray(weights_a[name], dtype=np.float64)
@@ -167,7 +319,7 @@ def compute_layer_diffs(
                 relative=relative,
             )
         )
-    return tuple(diffs), only_a, only_b
+    return tuple(sorted(diffs, key=lambda d: d.name)), only_a, only_b
 
 
 def _validate_top_k(top_k: object) -> int:
@@ -400,12 +552,31 @@ def load_adapter_weights(adapter_dir: str) -> Mapping[str, Any]:
     return _load_safetensors(path)
 
 
-def _effective_rank_average(weights: Mapping[str, Any]) -> Optional[float]:
-    """Mean effective-rank across 2D LoRA matrices (None if no 2D tensors)."""
+def _effective_rank_average(
+    weights: Mapping[str, Any], config: Optional[Mapping[str, Any]] = None,
+) -> Optional[float]:
+    """Mean effective rank over LoRA modules' ``ΔW`` and other 2-D tensors.
+
+    A complete LoRA pair counts once, by the spectrum of ``scaling · B @ A``; any
+    other 2-D tensor counts by its own spectrum. ``None`` if there is neither.
+    """
     import numpy as np
 
     ranks: list[float] = []
-    for tensor in weights.values():
+    covered: set[str] = set()
+    for stem, pair in _lora_modules(weights).items():
+        factors = _delta_factors(weights, pair, _module_scaling(config, stem))
+        if factors is None:
+            continue
+        try:
+            singular = _product_singular_values(*factors)
+        except np.linalg.LinAlgError:
+            continue
+        ranks.append(_effective_rank_of_singular_values(singular))
+        covered.update(pair)
+    for name, tensor in weights.items():
+        if name in covered:
+            continue
         arr = np.asarray(tensor)
         if arr.ndim == 2 and min(arr.shape) > 0:
             ranks.append(effective_rank(arr))
@@ -428,14 +599,20 @@ def compute_adapter_diff(
 
     weights_a = load_adapter_weights(adapter_a)
     weights_b = load_adapter_weights(adapter_b)
+    # Each adapter's own scaling: two adapters with identical factors but a
+    # different lora_alpha have different ΔW.
+    config_a = read_adapter_config_or_none(adapter_a)
+    config_b = read_adapter_config_or_none(adapter_b)
 
-    per_layer, only_a, only_b = compute_layer_diffs(weights_a, weights_b)
+    per_layer, only_a, only_b = compute_layer_diffs(
+        weights_a, weights_b, config_a=config_a, config_b=config_b
+    )
 
     sorted_by_change = sorted(per_layer, key=lambda d: d.frobenius, reverse=True)
     top = tuple(d.name for d in sorted_by_change[:top_k])
 
-    rank_a = _effective_rank_average(weights_a)
-    rank_b = _effective_rank_average(weights_b)
+    rank_a = _effective_rank_average(weights_a, config_a)
+    rank_b = _effective_rank_average(weights_b, config_b)
 
     return AdapterDiffReport(
         adapter_a=os.path.basename(os.path.normpath(adapter_a)),
