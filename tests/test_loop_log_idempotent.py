@@ -15,6 +15,7 @@ import json
 import pytest
 
 import soup_cli.utils.loop_daemon as loop_daemon
+import soup_cli.utils.loop_log as loop_log_module
 from soup_cli.utils.canary_router import CanaryPolicy, record_bucket_outcome
 from soup_cli.utils.loop_daemon import WatchConfig, run_once, watch
 from soup_cli.utils.loop_log import LoopLog
@@ -95,6 +96,82 @@ class TestLogLevel:
         log.progress({"schema_version": 1, "id": "p2", "iteration_id": "x", "stage": "train"})
 
         assert len(_lines(cwd / "logs" / "progress.jsonl")) == 2
+
+    def test_large_log_is_scanned_once_then_only_new_bytes_are_read(self, cwd, monkeypatch):
+        path = cwd / "logs" / "iterations.jsonl"
+        path.parent.mkdir()
+        target = _iteration("iter-target", "skipped")
+        rows = [
+            {"schema_version": 1, "iteration_id": f"iter-{i}", "outcome": "skipped"}
+            for i in range(20_000)
+        ]
+        rows.append(target)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+        reads = []
+        real_read = loop_log_module.os.read
+
+        def record_read(fd, size):
+            data = real_read(fd, size)
+            reads.append(len(data))
+            return data
+
+        monkeypatch.setattr(loop_log_module.os, "read", record_read)
+        log = LoopLog(str(path.parent))
+        assert log.iteration(target) is True
+        assert sum(reads) >= path.stat().st_size
+
+        reads.clear()
+        later = _iteration("iter-later", "skipped")
+        assert log.iteration(later) is True
+        assert log.iteration(later) is True
+
+        assert sum(reads) < 2048
+        assert sum(line.get("iteration_id") == "iter-later" for line in _lines(path)) == 1
+
+    def test_incremental_index_observes_an_append_from_another_writer(self, cwd):
+        first = LoopLog(str(cwd / "logs"))
+        target = _iteration("iter-external", "canary")
+        first.iteration(_iteration("iter-warm", "skipped"))
+
+        loop_log_module.append_json_line(str(cwd / "logs" / "iterations.jsonl"), target)
+        assert first.iteration(target) is True
+
+        assert sum(line.get("iteration_id") == "iter-external"
+                   for line in _lines(cwd / "logs" / "iterations.jsonl")) == 1
+
+    def test_restart_rebuilds_the_idempotency_index_from_existing_logs(self, cwd):
+        first = LoopLog(str(cwd / "logs"))
+        target = _iteration("iter-restart", "promoted")
+        first.iteration(target)
+
+        restarted = LoopLog(str(cwd / "logs"))
+        assert restarted.iteration({**target, "id": "different-id"}) is True
+
+        assert len(_lines(cwd / "logs" / "iterations.jsonl")) == 1
+
+    def test_truncating_a_log_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-after-truncate", "failed")
+        log.iteration(target)
+        path.write_bytes(b"")
+
+        assert log.iteration(target) is True
+        assert len(_lines(path)) == 1
+
+    def test_same_size_rewrite_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        old = _iteration("iter-same-size", "canary")
+        replacement = _iteration("iter-same-size", "failed")
+        log.iteration(old)
+        old_size = path.stat().st_size
+        path.write_bytes((json.dumps(replacement) + "\n").encode("utf-8"))
+        assert path.stat().st_size == old_size
+
+        assert log.iteration(old) is True
+        assert len(_lines(path)) == 2
 
 
 class TestEveryIterationGetsItsLine:
