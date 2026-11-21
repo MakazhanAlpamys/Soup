@@ -1698,7 +1698,20 @@ soup runs delete run_1
 soup runs replay run_1
 ```
 
-Every completed run also stores an estimated cost (`$` per run) computed from the
+For HF Trainer-backed `soup train` runs, `stopped` means the second Ctrl+C
+ended training after a successful checkpoint and before the last planned
+step. The final artifact and run summary are still saved, and the command's
+exit code is unchanged. A normal finish or configured early stop stays
+`completed`. `soup runs`, `soup runs show`, and `soup runs compare` show the
+recorded status; a `completed` filter does not include `stopped`. Existing
+database rows are not reclassified.
+
+The final artifact's `soup_run.json` carries the `stopped` status with it.
+`soup ship` and `soup eval` warn about stopped inputs without refusing them
+or changing evaluation results. Emitted `soup ship` evidence carries the
+notice through offline replay.
+
+Every completed or stopped run also stores an estimated cost (`$` per run) computed from the
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
