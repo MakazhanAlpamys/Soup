@@ -441,7 +441,7 @@ def _read_asr_rows(path: Path) -> list[dict]:
     rows: list[dict] = []
     dropped = 0
     capped = False
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line:
