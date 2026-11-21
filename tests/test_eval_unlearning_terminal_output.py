@@ -511,6 +511,10 @@ def test_a_refusal_keeps_its_red_label(monkeypatch, tmp_path):
 def test_the_table_keeps_its_bold_metric_and_coloured_verdict(monkeypatch, tmp_path):
     result, out = _run_coloured(monkeypatch, tmp_path, "run1")
     _exit(result, 0)
+    # A ``Text`` title is rendered as it is, so it stays italic only through the
+    # explicit ``table.title`` style; the title is centred inside the italic span.
+    title = out.split(ESC + "[3m", 1)
+    assert len(title) == 2 and title[1].lstrip(" ").startswith("Unlearn eval"), repr(out)
     assert ESC + "[1mforget_quality" in out, repr(out)
     assert ESC + "[32mOK" + ESC + "[0m" in out, repr(out)
     assert "Overall: " + ESC + "[32mOK" + ESC + "[0m" in out, repr(out)
