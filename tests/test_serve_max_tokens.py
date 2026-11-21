@@ -25,7 +25,7 @@ pytest.importorskip("uvicorn")
 
 runner = CliRunner()
 
-BACKENDS = ["transformers", "vllm", "sglang", "mii"]
+BACKENDS = ["transformers", "vllm", "sglang", "mii", "mlx"]
 
 # Each is reached only after the check, so none may run on a refused value.
 _GUARDED = [

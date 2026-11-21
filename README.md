@@ -109,7 +109,7 @@ read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/release
 - **More on Apple Silicon.** Native MLX chat, merge, selective loss masks, preprocessing caches,
   vocabulary expansion, RoPE extension and dense Llama SFT.
 - **Layer streaming does more.** A forward-only inference mode, pre-quantised NF4 import, and BCO,
-  IPO and `task: preference` training on a streamed base.
+  IPO and `task: preference` with a single loss train on a streamed base.
 - **VRAM estimates that fit short rows.** A padded SFT run is priced by its longest row, 8-bit
   checkpointing, cuBLAS workspaces and a distillation teacher are charged, and the pre-flight says
   why a fit is not checked.
@@ -121,7 +121,8 @@ read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/release
 creates the repository private (`--push-public` to change that). An enabled eval gate on MLX,
 `prm`, `unlearn` or `moe_lora_routing` is refused. `soup serve --max-tokens` stops at 16384.
 `soup adapters merge` weights and the `tool_call_args_subset` score changed, so merges and ship
-verdicts can differ. Evidence files written by `soup ship` are version 2, which v0.77.x refuses.
+verdicts can differ. Evidence files written by `soup ship` are version 2 when they carry the new
+per-row, function-scored or judge detail, and v0.77.x refuses those.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -287,6 +288,7 @@ soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/I
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
+soup serve  --backend mlx --model ./mlx-output  # native dense text model / LoRA on Apple Silicon
 soup ui                               # local browser dashboard
 soup merge  --adapter ./output        # merge LoRA into the base model
 soup export --model ./output --format gguf           # export for deployment
