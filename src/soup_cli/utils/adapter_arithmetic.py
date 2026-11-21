@@ -392,6 +392,25 @@ def _lora_role(name: str) -> tuple[_LoraStem, str] | None:
     return None
 
 
+def _truncated_factors(delta: Any, rank: int) -> tuple[Any, Any]:
+    """Best rank-``rank`` approximation of a LoRA delta, as ``(B, A)`` factors.
+
+    ``delta`` is ``B @ A`` of one module, shape ``(out, in)``. Its truncated SVD
+    ``U_k S_k V_kᵀ`` is split as ``B = U_k·S_k`` (``(out, k)``) and
+    ``A = V_kᵀ`` (``(k, in)``), so ``A`` has orthonormal rows and ``B @ A`` is
+    the Eckart–Young optimum. ``k`` is ``rank`` clamped to the number of
+    singular values. A delta of lower rank (all zero included) gives zero
+    columns of ``B``, never a NaN: nothing is divided. Shared by the concat path
+    of ``soup adapters arithmetic --rank`` and ``soup adapters merge --strategy
+    svd --rank``.
+    """
+    import numpy as np
+
+    u, s, vt = np.linalg.svd(delta, full_matrices=False)
+    k = min(rank, s.shape[0])
+    return u[:, :k] * s[:k], vt[:k, :]
+
+
 def _detect_lora_rank(weights: Mapping[str, Any]) -> int | None:
     """Infer the LoRA rank of an adapter from its first ``lora_A`` tensor.
 
@@ -562,11 +581,8 @@ def merge_task_arithmetic_concat(
         b_out = np.concatenate(b_blocks, axis=1)  # (out, Σr)
         concat_rank = a_out.shape[0]
         if rank is not None and rank < concat_rank:
-            delta = b_out @ a_out  # (out, in)
-            u, s, vt = np.linalg.svd(delta, full_matrices=False)
-            k = min(rank, s.shape[0])
-            b_out = u[:, :k] * s[:k]  # (out, k)
-            a_out = vt[:k, :]  # (k, in)
+            # (out, k) and (k, in): the best rank-k approximation of the delta.
+            b_out, a_out = _truncated_factors(b_out @ a_out, rank)
         max_stem_rank = max(max_stem_rank, a_out.shape[0])
         stem_results.append((output_names["A"], output_names["B"], a_out, b_out))
 
