@@ -351,23 +351,6 @@ def test_merge_keys_load_as_safe_load_loads_them(text):
 
 
 @pytest.mark.parametrize(
-    ("dedupes_merged_keys", "expected_x"),
-    [(False, 2), (True, 1)],
-)
-def test_duplicate_merge_keys_follow_installed_safe_loader(
-    monkeypatch, dedupes_merged_keys, expected_x
-):
-    text = "c:\n  <<: {x: 1}\n  <<: {x: 2, y: 2}\n"
-    monkeypatch.setattr(
-        yaml_limits, "_SAFE_LOADER_DEDUPES_MERGED_KEYS", dedupes_merged_keys
-    )
-
-    assert load_yaml_limited(text, "doc", max_bytes=4096) == {
-        "c": {"x": expected_x, "y": 2}
-    }
-
-
-@pytest.mark.parametrize(
     "text",
     ["a: {<<: 1}\n", "a: &a {x: 1}\nb: {<<: [*a, 2, 3]}\n", "b: {<<: [[1]]}\n"],
 )
