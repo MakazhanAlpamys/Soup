@@ -1710,7 +1710,7 @@ def _print_gate_result(result) -> None:
             else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
         )
         table.add_row(
-            row.name,
+            for_terminal(row.name),
             score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",

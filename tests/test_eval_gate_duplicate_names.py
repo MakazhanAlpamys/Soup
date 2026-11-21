@@ -166,6 +166,26 @@ def test_distinct_baseline_roundtrip_retains_regression(
     assert "GATE FAILED" in strip_ansi(candidate.output)
 
 
+def test_cli_displays_markup_task_names_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _suite(tmp_path, ("math", "[red]math[/red]"))
+    monkeypatch.setattr(
+        quant_check, "make_model_generator", lambda model: lambda prompt: "gold",
+    )
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", str(path), "--model", "synthetic",
+    ])
+
+    output = strip_ansi(result.output)
+    assert result.exit_code == 0, (output, repr(result.exception))
+    assert "[red]math[/red]" in output
+    assert "GATE PASSED" in output
+
+
 @pytest.mark.parametrize(
     ("baseline", "error", "message"),
     [
