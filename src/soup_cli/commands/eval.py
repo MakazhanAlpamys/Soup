@@ -561,6 +561,7 @@ def judge(
         JudgeEvaluator,
         JudgeUnavailableError,
         load_rubric,
+        rubric_file_label,
         validate_judge_api_base,
     )
 
@@ -602,9 +603,17 @@ def judge(
     if rubric:
         try:
             rubric_data = load_rubric(Path(rubric))
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
             # The message quotes the path it was given.
             console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1)
+        except ValueError as exc:
+            message = str(exc)
+            # An error of reading the file already names it; one of the rubric's shape
+            # gets the prefix the evaluator's refusals below carry.
+            if not message.startswith(rubric_file_label(Path(rubric))):
+                message = f"Cannot use rubric {rubric!r}: {message}"
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
     console.print(

@@ -206,7 +206,7 @@ Usage: `soup adapters bisect [OPTIONS] HISTORY...`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `HISTORY...` | text, any number |  | yes | Ordered checkpoint identifiers (oldest first). At least 2. Example: `soup adapters bisect ckpt-100 ckpt-200 ckpt-300 ckpt-400` |
-| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
+| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Quotes group words on every platform. On Windows a single quote groups when it starts a word ('a b') or when its closing quote ends the word (--opt='a b'); any other ' (don't) is a literal character. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
 | `--plan-only` | flag | off |  | Print the plan and exit without running the bisect |
 | `--output`, `-o` | text |  |  | Write JSON result to path |
 

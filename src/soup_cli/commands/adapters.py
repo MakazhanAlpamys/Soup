@@ -1641,9 +1641,27 @@ def adapter_pr(
     )
 
 
+def _closes_at_word_end(command: str, index: int) -> bool:
+    """Whether the ``'`` at ``index``, inside a word, opens a single-quoted group.
+
+    It does when the next ``'`` of the command ends a word (whitespace or the end
+    of the command follows it): ``--opt='a b'`` is ``--opt=a b``. Otherwise it is
+    a literal character, as an apostrophe is: ``don't``, ``a'b c``, ``O'Brien``,
+    an unclosed ``--opt='a b``, and ``don't stop 'x'`` (the next ``'`` opens a
+    word, it does not end one) keep it.
+    """
+    closing = command.find("'", index + 1)
+    return closing != -1 and (closing + 1 == len(command) or command[closing + 1] in " \t")
+
+
 def _split_windows_command(command: str) -> list[str]:
     """Split a command line according to Microsoft C runtime rules,
     with single-quote grouping support for cross-platform compatibility.
+
+    A ``'`` that starts a word groups to the next ``'``. A ``'`` inside a word
+    groups only as :func:`_closes_at_word_end` says, so ``--opt='a b'`` groups as
+    ``--opt="a b"`` does. A ``'`` inside double quotes, or after a backslash, is
+    a literal character.
     """
     args: list[str] = []
     current: list[str] = []
@@ -1673,7 +1691,7 @@ def _split_windows_command(command: str) -> list[str]:
                 current.append(char)
                 index += 1
                 continue
-            elif char == "'" and not has_token:
+            elif char == "'" and (not has_token or _closes_at_word_end(command, index)):
                 in_squote = True
                 has_token = True
                 index += 1
@@ -1701,6 +1719,10 @@ def _split_windows_command(command: str) -> list[str]:
                         index += 1
             else:
                 current.append("\\" * num_bs)
+                if index < length and command[index] == "'":
+                    # A backslash before ``'`` keeps it a literal character.
+                    current.append("'")
+                    index += 1
             continue
 
         if char == '"':
@@ -1754,6 +1776,9 @@ def adapter_bisect(
         help=(
             "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
+            "Quotes group words on every platform. On Windows a single quote groups "
+            "when it starts a word ('a b') or when its closing quote ends the word "
+            "(--opt='a b'); any other ' (don't) is a literal character. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
     ),
