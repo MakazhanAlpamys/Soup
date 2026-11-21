@@ -152,6 +152,19 @@ def test_an_anchor_that_cannot_carry_the_rows_file_is_refused_with_a_named_reaso
         task_rows_path(anchor)
 
 
+@pytest.mark.parametrize(("control", "escaped"), [("\x7f", "\\x7f"), ("\x85", "\\x85")])
+def test_del_and_c1_in_the_derived_file_name_are_named_safely(control, escaped):
+    with pytest.raises(ValueError) as exc_info:
+        task_rows_path(f"verdict{control}.json")
+
+    message = _plain(str(exc_info.value))
+    assert message == (
+        f"the task-rows file name for 'verdict{escaped}.json' has a control character; "
+        "use a plain --output name"
+    )
+    assert control not in message
+
+
 @pytest.mark.skipif(os.name == "nt", reason="a backslash is a path separator on Windows")
 def test_on_posix_a_backslash_in_the_file_name_cannot_be_named_by_the_pointer():
     with pytest.raises(ValueError, match="path separator.*use a plain --output name"):
@@ -802,6 +815,47 @@ def test_the_file_is_found_through_the_pointer_of_a_verdict_or_of_evidence(tmp_p
     assert len(loaded.rows) == 3
 
 
+@pytest.mark.parametrize("key", ["task_win", "task"])
+@pytest.mark.parametrize("equal", [False, True], ids=["different", "equal"])
+@pytest.mark.parametrize("location", ["pointer", "count", "unused"])
+def test_parent_json_refuses_repeated_keys_at_any_depth(tmp_path, key, equal, location):
+    path = Path(_write_pair(tmp_path, key=key, n=1))
+    text = path.read_text(encoding="utf-8")
+    if location == "pointer":
+        first = "v.task-rows.jsonl" if equal else "missing.task-rows.jsonl"
+        text = text.replace('"task_rows":', f'"task_rows": "{first}", "task_rows":')
+    elif location == "count":
+        first = 1 if equal else 2
+        text = text.replace('"n": 1', f'"n": {first}, "n": 1')
+    else:
+        first = 1 if equal else 2
+        text = text.replace('{"' + key + '"', f'{{"unused": [{{"secret": {first}, '
+                            f'"secret": 1}}], "{key}"')
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "the verdict or evidence file repeats a key"
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
+def test_parent_json_unique_keys_still_load_and_wrong_count_is_named(tmp_path, key):
+    path = Path(_write_pair(tmp_path, key=key, n=1))
+    assert len(load_task_rows_for(str(path)).rows) == 1
+    text = path.read_text(encoding="utf-8").replace('"n": 1', '"n": 2')
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "task-rows has 1 rows but the evidence says n = 2"
+
+
+def test_parent_json_non_finite_number_remains_invalid_json(tmp_path):
+    path = tmp_path / "verdict.json"
+    path.write_text('{"unused": NaN}', encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_task_rows_for(str(path))
+    assert _plain(str(exc.value)) == "the verdict or evidence file is not valid JSON"
+
+
 def test_a_pointer_that_names_nothing_or_nothing_in_this_directory_is_refused(tmp_path):
     with pytest.raises(ValueError, match="names no task-rows file"):
         load_task_rows_for(_write_pair(tmp_path, pointer=None))
@@ -1217,6 +1271,93 @@ def test_cli_a_failed_generation_is_flagged_in_its_row(monkeypatch):
     assert failed["tuned_score"] == 0.0
     assert sum(row["tuned_failed"] for row in rows) == run.json("out.json")["task_win"][
         "generation_failures"]["tuned"]
+
+
+@pytest.mark.parametrize(("filename", "key"), [("out.json", "task_win"), ("ev.json", "task")])
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("base flag", r"generation_failures\.base: recorded 1, task-rows file has 0"),
+        ("tuned flag", r"generation_failures\.tuned: recorded 2, task-rows file has 1"),
+        ("both flags", r"generation_failures\.base: recorded 1, task-rows file has 0"),
+        ("high", r"generation_failures\.base: recorded 2, task-rows file has 1"),
+        ("low", r"generation_failures\.tuned: recorded 1, task-rows file has 2"),
+        ("n", r"generation_failures\.n: recorded 9, task-rows file has 8"),
+        ("bool", r"generation_failures\.base must be an integer"),
+        ("float", r"generation_failures\.base must be an integer"),
+        ("missing", r"generation_failures\.tuned must be an integer"),
+        ("malformed", "generation_failures must be an object"),
+    ],
+)
+def test_cli_task_rows_reject_inconsistent_failure_counts(
+    monkeypatch, tmp_path, filename, key, change, message
+):
+    base = _scripted(_answers(correct={0}), fail={"q2"})
+    tuned = _scripted(_answers(correct={0, 1, 2}), fail={"q3", "q4"})
+    run = _run(monkeypatch, _tasks(), base, tuned)
+    assert run.result.exit_code == 0, run.result.output
+    summary = run.json(filename)
+    failures = summary[key]["generation_failures"]
+    assert failures == {"base": 1, "tuned": 2, "n": 8}
+
+    summary_path = tmp_path / filename
+    rows_path = tmp_path / "out.task-rows.jsonl"
+    summary_path.write_bytes(run.files[filename])
+    rows_path.write_bytes(run.files[rows_path.name])
+    assert len(load_task_rows_for(str(summary_path)).rows) == 8
+
+    if change in ("base flag", "tuned flag", "both flags"):
+        rows = run.rows()
+        sides = ("base", "tuned") if change == "both flags" else (change.split()[0],)
+        for side in sides:
+            flag = f"{side}_failed"
+            next(row for row in rows if row[flag])[flag] = False
+        rows_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    elif change == "high":
+        failures["base"] += 1
+    elif change == "low":
+        failures["tuned"] -= 1
+    elif change == "n":
+        failures["n"] += 1
+    elif change == "bool":
+        failures["base"] = True
+    elif change == "float":
+        failures["base"] = 1.0
+    elif change == "missing":
+        del failures["tuned"]
+    else:
+        summary[key]["generation_failures"] = []
+
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_task_rows_for(str(summary_path))
+
+
+def test_null_failure_counts_do_not_require_a_measurement(tmp_path):
+    path = Path(_write_pair(tmp_path, mode="judge_score"))
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    summary["task_win"]["generation_failures"] = None
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
+@pytest.mark.parametrize("mode", ["metric", "judge_score", "pairwise", "reward"])
+def test_supplied_failure_counts_are_checked_in_every_mode(tmp_path, key, mode):
+    path = Path(_write_pair(tmp_path, key=key, mode=mode))
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+    counts = {"base": 0, "tuned": 0, "n": 3}
+    summary[key]["generation_failures"] = counts
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    assert len(load_task_rows_for(str(path)).rows) == 3
+
+    counts["tuned"] = 1
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    message = r"generation_failures\.tuned: recorded 1, task-rows file has 0"
+    with pytest.raises(ValueError, match=message):
+        load_task_rows_for(str(path))
 
 
 def test_cli_a_semantic_row_is_scored_by_matched_not_by_similarity(monkeypatch):

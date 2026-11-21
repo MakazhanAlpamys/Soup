@@ -1587,8 +1587,8 @@ class TrainingConfig(BaseModel):
         ),
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
-    save_steps: int = Field(default=100, description="Save checkpoint every N steps")
-    logging_steps: int = Field(default=10, description="Log metrics every N steps")
+    save_steps: int = Field(default=100, ge=0, description="Save checkpoint every N steps")
+    logging_steps: int = Field(default=10, ge=1, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
     # "evaluate each epoch" and "evaluate every N steps" stay distinguishable,
@@ -2402,7 +2402,7 @@ class TrainingConfig(BaseModel):
     nvfp4: bool = Field(
         default=False,
         description=(
-            "Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, "
+            "NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). DPO-family, "
             "GRPO/PPO, pre-training, reward-model, and embedding wrappers "
             "route it through torchao conversion; the default SFT path does "
             "not consume it."

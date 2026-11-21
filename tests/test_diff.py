@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 
 def _plain(output: str) -> str:
@@ -428,6 +428,50 @@ class TestDiffCLI:
         assert plain == "Cannot read prompts file locked.jsonl: Permission denied"
         assert "Diff Plan" not in plain
 
+    @pytest.mark.parametrize(
+        "output_name",
+        [
+            "prompts",
+            "relative_alias",
+            pytest.param("hardlink", marks=pytest.mark.requires_hardlink),
+        ],
+    )
+    def test_output_cannot_overwrite_prompts(self, tmp_path, monkeypatch, output_name):
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        prompt_file = tmp_path / "[saved].jsonl"
+        original = b'{"prompt":"Hello","source":"keep this metadata"}\n'
+        prompt_file.write_bytes(original)
+        output = prompt_file.name
+        if output_name == "relative_alias":
+            output = f"./{prompt_file.name}"
+        elif output_name == "hardlink":
+            alias = tmp_path / "output.jsonl"
+            alias.hardlink_to(prompt_file)
+            output = alias.name
+
+        with (
+            patch("soup_cli.commands.diff._load_model", return_value=(None, None)) as load_model,
+            patch("soup_cli.commands.diff._generate", return_value="stub reply"),
+        ):
+            result = make_cli_runner().invoke(app, [
+                "diff",
+                "--model-a", ".",
+                "--model-b", ".",
+                "--prompts", prompt_file.name,
+                "--device", "cpu",
+                "--output", output,
+            ])
+
+        assert prompt_file.read_bytes() == original
+        assert result.exit_code == 1
+        plain = _plain(result.stdout)
+        assert "--output" in plain
+        assert "same file as --prompts" in plain
+        assert "[saved].jsonl" in plain
+        load_model.assert_not_called()
+
     def test_prompts_file_with_utf8_bom_cli(self, tmp_path, monkeypatch):
         """BOM-prefixed JSONL row must come out as prompt text, not raw JSON line."""
         from typer.testing import CliRunner
@@ -471,7 +515,8 @@ class TestDiffCLI:
         model_b = tmp_path / "model_b"
         model_a.mkdir()
         model_b.mkdir()
-        (tmp_path / "prompts.txt").write_text("From file prompt\n", encoding="utf-8")
+        prompts_file = tmp_path / "prompts.txt"
+        prompts_file.write_text("From file prompt\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
         with (
@@ -485,9 +530,15 @@ class TestDiffCLI:
                 "--prompts", "prompts.txt",
                 "--prompt", "From inline prompt",
                 "--device", "cpu",
+                "--output", "results.jsonl",
             ])
         plain = _plain(result.output)
         assert result.exit_code == 0, plain
         assert "Prompts: 2" in plain
         assert "From file prompt" in plain
         assert "From inline prompt" in plain
+        assert prompts_file.read_text(encoding="utf-8") == "From file prompt\n"
+        rows = (tmp_path / "results.jsonl").read_text(encoding="utf-8").splitlines()
+        assert [json.loads(row)["prompt"] for row in rows] == [
+            "From file prompt", "From inline prompt",
+        ]

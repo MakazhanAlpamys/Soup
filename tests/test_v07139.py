@@ -128,6 +128,30 @@ class TestVerdictToEvidence:
 # Part A — CLI --emit-evidence
 # ---------------------------------------------------------------------------
 
+class TestShipEvidenceUtf8Bom:
+    def test_evidence_json_bom_matches_plain_utf8_verdict(self):
+        from soup_cli.commands import ship as ship_cmd
+
+        with runner.isolated_filesystem():
+            for encoding, name in (
+                ("utf-8", "plain"),
+                ("utf-8-sig", "bom"),
+            ):
+                Path(f"{name}.json").write_text(
+                    json.dumps(_ship_evidence()), encoding=encoding,
+                )
+                assert ship_cmd._load_evidence(f"{name}.json") == _ship_evidence()
+                result = runner.invoke(
+                    ship_cmd.app,
+                    ["--evidence", f"{name}.json", "--output", f"{name}-verdict.json"],
+                )
+                assert result.exit_code == 0, (result.output, repr(result.exception))
+
+            plain = json.loads(Path("plain-verdict.json").read_text(encoding="utf-8"))
+            bom = json.loads(Path("bom-verdict.json").read_text(encoding="utf-8"))
+            assert bom == plain
+
+
 class TestEmitEvidenceCli:
     def test_emit_from_evidence_round_trips_through_cli(self):
         """`ship --evidence A --emit-evidence B` then `ship --evidence B` agree."""
@@ -873,6 +897,64 @@ class TestSecurityHardening:
             Path("big.txt").write_text("x" * 100, encoding="utf-8")
             with pytest.raises(ValueError, match="exceeds"):
                 _safe_read_text("big.txt", "big", 10)
+
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_safe_read_text_strips_optional_bom(self, encoding):
+        from soup_cli.commands.ship import _safe_read_text
+
+        with runner.isolated_filesystem():
+            Path("input.txt").write_text("plain text", encoding=encoding)
+            assert _safe_read_text("input.txt", "input", 100) == "plain text"
+
+    def test_safe_read_text_bom_counts_toward_byte_cap(self):
+        from soup_cli.commands.ship import _safe_read_text
+
+        with runner.isolated_filesystem():
+            Path("input.txt").write_text("x", encoding="utf-8-sig")
+            with pytest.raises(ValueError, match="exceeds"):
+                _safe_read_text("input.txt", "input", 3)
+            assert _safe_read_text("input.txt", "input", 4) == "x"
+
+    @pytest.mark.parametrize(
+        ("flag", "row", "parser"),
+        [
+            (
+                "--corrections",
+                {"edit_id": "edit-1", "expected": "yes", "original": "no",
+                 "paraphrases": ["question"]},
+                "parse_corrections",
+            ),
+            (
+                "--held-out",
+                {"edit_id": "edit-1", "prompt": "question",
+                 "expected": "yes", "original": "no"},
+                "parse_held_out",
+            ),
+        ],
+    )
+    def test_gate_file_bom_preserves_parsed_rows(self, flag, row, parser):
+        from soup_cli.commands import ship as ship_cmd
+
+        with runner.isolated_filesystem():
+            content = json.dumps(row) + "\n"
+            Path("plain.jsonl").write_text(content, encoding="utf-8")
+            Path("bom.jsonl").write_text(content, encoding="utf-8-sig")
+            parse = getattr(ship_cmd, parser)
+            plain = parse(ship_cmd._read_gate_file("plain.jsonl", flag), flag)
+            bom = parse(ship_cmd._read_gate_file("bom.jsonl", flag), flag)
+            assert len(plain) == 1
+            assert bom == plain
+
+    def test_config_bom_matches_plain_utf8(self):
+        from soup_cli.commands.ship import _parse_ship_config
+
+        with runner.isolated_filesystem():
+            Path("plain.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
+            Path("bom.yaml").write_text(_CONFIG_MIN, encoding="utf-8-sig")
+            plain_cfg, plain_ship = _parse_ship_config("plain.yaml")
+            bom_cfg, bom_ship = _parse_ship_config("bom.yaml")
+            assert plain_cfg == bom_cfg
+            assert plain_ship == bom_ship
 
     def test_safe_hash_file_skips_oversize(self):
         from soup_cli.commands.ship import _safe_hash_file
