@@ -344,10 +344,49 @@ def _allowance(text: str) -> int:
         "a: &a {x: 1}\nb: &b {<<: [*a, *b], y: 2}\n",
         "a: &a {x: 1}\nb: &b {y: 2, <<: [*b, *a], <<: *b}\n",
         "? ab\n: 1\n",
+        # PyYAML 6.0.4 drops a merged pair whose key text is the same object as one
+        # already merged, and no longer reverses a list of merged mappings; 6.0.3
+        # kept every pair and let the earlier mapping of a list win. So these rows
+        # (a repeated key of one or of several characters, merged from a list, from
+        # two ``<<`` keys, or through a diamond of anchors) load differently on the
+        # two versions, and each must still load as the installed one loads it.
+        "c:\n  <<: {xx: 1}\n  <<: {xx: 2, yy: 2}\n",
+        "c:\n  <<: [{kk: 1}, {kk: 2}, {kk: 3}]\n",
+        "c:\n  <<: [{k: 1}, {k: 2}, {k: 3}]\n",
+        "a: &a {xx: 1}\nb: &b {xx: 2, yy: 2}\nc: {<<: [*a, *b]}\n",
+        "c:\n  <<: [{kk: 1}, {kk: 2}]\n  <<: {kk: 3}\n",
+        "a: &a {xx: 1}\nb: &b {xx: 2}\nc: {<<: *a, <<: *b}\n",
+        "a: &a {xx: 1, yy: 2}\nc: {<<: [*a, *a]}\n",
+        "a: &a {xx: 1, yy: 2}\nc: {<<: *a, <<: *a}\n",
+        "base: &base {kk: 1}\nl: &l {<<: *base, ll: 2}\nr: &r {<<: *base, rr: 3}\n"
+        "c: {<<: [*l, *r]}\n",
+        "a: &a {xx: 1}\nb: &b {<<: *a, xx: 2}\nc: {<<: *b, zz: 3}\n",
+        "a: &a {xx: 1}\nb: &b {<<: *a, yy: 2}\nc: {<<: *b, xx: 9}\n",
+        "a: &a {xx: 1}\nc:\n  xx: 0\n  <<: *a\n  yy: 5\n",
     ],
 )
 def test_merge_keys_load_as_safe_load_loads_them(text):
     assert load_yaml_limited(text, "doc", max_bytes=4096) == yaml.safe_load(text)
+
+
+def test_merge_keys_are_flattened_by_the_installed_pyyaml(monkeypatch):
+    """The merge rule is PyYAML's own, so it cannot drift from ``safe_load`` on an upgrade.
+
+    A flattening that ignores every merge key stands in for whatever the installed
+    PyYAML does; the loader must follow it (a copy of one release's rule would
+    still merge) and ``safe_load`` must agree.
+    """
+    flattened = []
+
+    def ignore_merge_keys(self, node):
+        flattened.append(node)
+        node.value = [pair for pair in node.value if pair[0].tag != yaml_limits._MERGE_TAG]
+
+    monkeypatch.setattr(yaml.constructor.SafeConstructor, "flatten_mapping", ignore_merge_keys)
+    text = "c:\n  <<: [{xx: 1}, {xx: 2}]\n  yy: 3\n"
+    assert load_yaml_limited(text, "doc", max_bytes=4096) == {"c": {"yy": 3}}
+    assert load_yaml_limited(text, "doc", max_bytes=4096) == yaml.safe_load(text)
+    assert flattened, "the installed PyYAML's flatten_mapping was never called"
 
 
 @pytest.mark.parametrize(
