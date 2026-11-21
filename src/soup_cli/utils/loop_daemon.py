@@ -847,10 +847,16 @@ def _harvest_message(harvest_out: Mapping[str, object]) -> str:
 def _emit_train_end(
     events: StageEvents, train_out: Mapping[str, object], trained: bool
 ) -> None:
+    # How an sft recipe's ``quantization: auto`` was decided (and why, when it fell back to
+    # 4bit) is on the line a person watching reads, not only in the iteration record.
+    note = train_out.get("quantization_note")
+    decided = f"; {note}" if isinstance(note, str) and note else ""
     if trained:
-        events.emit("train", "end", message=f"trained {train_out.get('run_id')}")
+        events.emit("train", "end", message=f"trained {train_out.get('run_id')}{decided}")
     elif train_out.get("failed"):
-        events.emit("train", "error", error="train_failed", message="training failed")
+        events.emit(
+            "train", "error", error="train_failed", message=f"training failed{decided}"
+        )
     else:
         events.emit("train", "end", message="training skipped")
 
