@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -109,7 +109,7 @@ soup train
 - **مزيد على Apple Silicon.** محادثة MLX أصلية، والدمج، وأقنعة الخسارة الانتقائية، وذاكرات المعالجة
   المسبقة، وتوسيع المفردات، وتمديد RoPE، وSFT كثيف لـ Llama.
 - **بثّ الطبقات يفعل أكثر.** وضع استدلال للأمام فقط، واستيراد NF4 مُكمَّم مسبقًا، وتدريب BCO وIPO
-  و`task: preference` على قاعدة مبثوثة.
+  و`task: preference` بخسارة واحدة على قاعدة مبثوثة.
 - **تقديرات VRAM تناسب الصفوف القصيرة.** يُسعَّر تشغيل SFT المحشوّ بحسب أطول صف فيه، ويُحتسب
   gradient checkpointing بـ 8 بت ومساحات عمل cuBLAS ومعلّم التقطير، ويقول الفحص المسبق لماذا لم
   يُفحص الاتّساع.
@@ -121,7 +121,7 @@ soup train
 المستودع خاصًا (و`--push-public` لتغيير ذلك). ويُرفض تفعيل eval gate على MLX أو `prm` أو `unlearn`
 أو `moe_lora_routing`. ويتوقف `soup serve --max-tokens` عند 16384. وتغيّرت أوزان `soup adapters merge`
 ودرجة `tool_call_args_subset`، فقد تختلف نتائج الدمج وأحكام ship. وملفات الأدلة التي يكتبها `soup ship`
-من الإصدار 2، وهو ما يرفضه v0.77.x.
+من الإصدار 2 حين تحمل التفاصيل الجديدة لكل صف أو للتقييم بدالة أو للـ judge، ويرفضها v0.77.x.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -287,6 +287,7 @@ soup train  --config soup.yaml        # درّب (SFT/DPO/GRPO/PPO/KTO/ORPO/SimP
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # استدلال دُفعي
 soup chat   --model ./output          # دردشة تفاعلية
 soup serve  --model ./output          # خادم API متوافق مع OpenAI
+soup serve  --backend mlx --model ./mlx-output  # نموذج نصي كثيف أصلي / LoRA على Apple Silicon
 soup ui                               # لوحة متصفح محلية
 soup merge  --adapter ./output        # ادمج LoRA في النموذج الأساسي
 soup export --model ./output --format gguf           # صدِّر للنشر

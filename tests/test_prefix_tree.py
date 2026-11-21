@@ -21,6 +21,7 @@ same examples:
 from __future__ import annotations
 
 import random
+import sys
 from array import array
 
 import pytest
@@ -360,6 +361,22 @@ def _dataset(seed=0, documents=6, per_document=5, extra=7):
     return examples
 
 
+@pytest.fixture
+def default_recursion_limit():
+    """Python's own recursion limit (1,000) for the length of one test, then what it was.
+
+    The limit belongs to the whole process: a library that an earlier test imported can have
+    raised it (2,000 was seen), and a claim of the form "this is deeper than the limit" is only
+    true while the limit is the default.
+    """
+    saved = sys.getrecursionlimit()
+    sys.setrecursionlimit(1000)
+    try:
+        yield sys.getrecursionlimit()
+    finally:
+        sys.setrecursionlimit(saved)
+
+
 class TestSampler:
     def test_every_example_once_per_epoch(self):
         examples = _dataset()
@@ -405,14 +422,15 @@ class TestSampler:
         first.set_epoch(0)
         assert list(first) == epoch_0
 
-    def test_a_thousand_nested_beginnings_do_not_recurse(self):
+    def test_a_thousand_nested_beginnings_do_not_recurse(self, default_recursion_limit):
         """Prefix ``k`` is the first ``k`` tokens of one stream (a trace cut after
         each step, only the last answer trained): with ``min_group_tokens=1``
         every example opens a level of grouping, 1,200 levels in all, past
         Python's recursion limit of 1,000. The default threshold of 16 nests the
         same way with prefixes of ``16 * k`` tokens, 16 times the tokens for the
-        same depth. Grouping and flattening are walks over an explicit stack."""
-        import sys
+        same depth. Grouping and flattening are walks over an explicit stack. The limit
+        is pinned at 1,000 for the test: the claim is about Python's default, and a
+        library imported earlier in the same process can have raised it."""
 
         count = 1200
         assert count > sys.getrecursionlimit()
