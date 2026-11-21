@@ -16,8 +16,18 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control, terminal_text
+
+# The run id, paths, registry id, evidence lines and error text come from
+# outside the program, so every line that carries them is printed as ``Text``:
+# shown as typed, never read as markup or ``:name:`` emoji, control characters
+# removed (#2489).
+
+
+def _refuse(console: Console, label: str, exc: object) -> None:
+    console.print(Text.assemble((label, "red"), " ", strip_control(exc)))
 
 
 def register(app: typer.Typer, console: Console) -> None:
@@ -66,7 +76,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             bench = validate_benchmark_name(benchmark)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid benchmark:[/] {for_terminal(exc)}")
+            _refuse(console, "Invalid benchmark:", exc)
             raise typer.Exit(2) from exc
 
         # The attach links the --output file, so without one nothing can be
@@ -86,12 +96,10 @@ def register(app: typer.Typer, console: Console) -> None:
                 # json.JSONDecodeError is a ValueError subclass — catch it
                 # FIRST so we can label the message specifically (review
                 # MEDIUM M10 — was unreachable after the broader except).
-                console.print(
-                    f"[red]Evidence file is not valid JSON:[/] {for_terminal(exc)}"
-                )
+                _refuse(console, "Evidence file is not valid JSON:", exc)
                 raise typer.Exit(2) from exc
             except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
-                console.print(f"[red]Cannot read evidence:[/] {for_terminal(exc)}")
+                _refuse(console, "Cannot read evidence:", exc)
                 raise typer.Exit(2) from exc
 
         try:
@@ -101,11 +109,11 @@ def register(app: typer.Typer, console: Console) -> None:
                 evidence=evidence_data,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Eval failed:[/] {for_terminal(exc)}")
+            _refuse(console, "Eval failed:", exc)
             raise typer.Exit(2) from exc
 
         # Render the table.
-        table = Table(title=f"Unlearn eval — {escape(bench)} — {for_terminal(run_id)}")
+        table = Table(title=terminal_text(f"Unlearn eval — {bench} — {run_id}", "table.title"))
         table.add_column("metric", style="bold")
         table.add_column("score", justify="right")
         table.add_column("verdict")
@@ -120,7 +128,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 escape(m.name),
                 f"{m.score:.3f}",
                 f"[{colour}]{escape(m.verdict)}[/]",
-                for_terminal(m.evidence),
+                terminal_text(m.evidence),
             )
         console.print(table)
         overall_colour = {
@@ -137,9 +145,9 @@ def register(app: typer.Typer, console: Console) -> None:
             try:
                 write_unlearn_report(report, output)
             except (TypeError, ValueError, OSError) as exc:
-                console.print(f"[red]Cannot write report:[/] {for_terminal(exc)}")
+                _refuse(console, "Cannot write report:", exc)
                 raise typer.Exit(2) from exc
-            console.print(f"Wrote report -> {for_terminal(output)}")
+            console.print(terminal_text(f"Wrote report -> {output}"))
 
         # Optional registry attach. Once requested it is part of the command's
         # success: a failure exits 1, with the report already on disk.
@@ -154,10 +162,10 @@ def register(app: typer.Typer, console: Console) -> None:
                     kind="eval_results",
                 )
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]Registry attach failed:[/] {for_terminal(exc)}")
+                _refuse(console, "Registry attach failed:", exc)
                 raise typer.Exit(1) from exc
             console.print(
-                f"Attached eval_results -> registry {for_terminal(attach_to_registry)}"
+                terminal_text(f"Attached eval_results -> registry {attach_to_registry}")
             )
 
         # Exit code: 0 on OK / MINOR; 2 on MAJOR (matches v0.56.0 diagnose
