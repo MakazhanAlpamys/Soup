@@ -195,7 +195,7 @@ def test_ties_does_not_look_at_tensor_names() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write(name: str, tensors: dict[str, np.ndarray]) -> str:
+def _write(name: str, tensors: dict[str, np.ndarray], *, rank: int = 2) -> str:
     from safetensors.numpy import save_file
 
     folder = Path(name)
@@ -203,7 +203,12 @@ def _write(name: str, tensors: dict[str, np.ndarray]) -> str:
     save_file(tensors, str(folder / "adapter_model.safetensors"))
     (folder / "adapter_config.json").write_text(
         json.dumps(
-            {"peft_type": "LORA", "r": 2, "lora_alpha": 2, "base_model_name_or_path": "tiny-base"}
+            {
+                "peft_type": "LORA",
+                "r": rank,
+                "lora_alpha": rank,
+                "base_model_name_or_path": "tiny-base",
+            }
         ),
         encoding="utf-8",
     )
@@ -337,8 +342,7 @@ def test_the_cmaes_command_writes_its_best_weights_with_the_same_rule(on_disk, m
 #
 # PEFT's ``lora_bias=True`` saves ``<module>.lora_B.bias``. It is added to the
 # output once, not multiplied by ``lora_A``, so it scales by the coefficient
-# itself. ``_factor_coeff`` matched ``lora_b`` anywhere in a name and gave it
-# the square root; it now asks ``_lora_role``, which the ``--rank`` path uses.
+# itself, not the square root.
 # ---------------------------------------------------------------------------
 
 BIAS_KEY = f"{MODULE}.lora_B.bias"
@@ -347,44 +351,100 @@ SECOND_BIAS = np.full((8,), 10.0, dtype=np.float32)
 BIASED_FIRST = {**FIRST, BIAS_KEY: FIRST_BIAS}
 BIASED_SECOND = {**SECOND, BIAS_KEY: SECOND_BIAS}
 
-# Every kind of tensor name these tests use, with the PEFT spelling.
-TENSOR_NAMES = [
-    A_KEY,
-    B_KEY,
-    BIAS_KEY,
-    "base_model.model.model.embed_tokens.lora_embedding_A",
-    "base_model.model.model.embed_tokens.lora_embedding_B",
-    f"{MODULE}.lora_magnitude_vector",
-    "base_model.model.lm_head.modules_to_save.default.weight",
-    "bias",
-]
-COEFFICIENTS = [0.0, 0.25, 4.0, -4.0, 1.0, -1.0, 0.7]
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [
+        ("lora_A.weight", 0.5),
+        ("lora_B.weight", -0.5),
+        ("lora_A.default.weight", 0.5),
+        ("lora_B.default.weight", -0.5),
+        ("lora_A.my_adapter.weight", 0.5),
+        ("lora_B.lora_A.weight", -0.5),
+        ("lora_A..weight", -0.25),
+        # Dots separate segments: a.b is two segments, not one adapter name.
+        ("lora_A.a.b.weight", -0.25),
+        ("lora_B.bias", -0.25),
+        ("lora_B.default.bias", -0.25),
+        ("lora_B.lora_embedding_A.bias", -0.25),
+        ("lora_embedding_A", 0.5),
+        ("lora_embedding_B", -0.5),
+        ("lora_embedding_A.default", 0.5),
+        ("lora_embedding_B.default", -0.5),
+        ("lora_embedding_B.lora_embedding_A", -0.5),
+        ("lora_embedding_B.bias", -0.5),
+        ("lora_embedding_A.", -0.25),
+        ("lora_embedding_A.a.b", -0.25),
+        ("lora_magnitude_vector", -0.25),
+        ("modules_to_save.default.weight", -0.25),
+        ("bias", -0.25),
+    ],
+)
+def test_arithmetic_weights_tensor_spellings(suffix: str, expected: float) -> None:
+    from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+    name = f"{MODULE}.{suffix}"
+    merged, _ = merge_task_arithmetic([{name: np.ones((1, 1), dtype=np.float32)}], [-0.25])
+    np.testing.assert_array_equal(merged[name], [[expected]])
 
 
-@pytest.mark.parametrize("name", TENSOR_NAMES)
-@pytest.mark.parametrize("c", COEFFICIENTS)
-def test_factor_coeff_and_lora_role_agree_on_what_a_factor_is(name: str, c: float) -> None:
-    # The element-wise path (_factor_coeff) and the --rank path (_lora_role)
-    # must call the same names LoRA factors, or the two paths drift apart.
-    import math
+@pytest.mark.parametrize("strategy", ["linear", "dare"])
+def test_merge_command_weights_named_factors_and_bias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strategy: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    a_key = f"{MODULE}.lora_A.default.weight"
+    b_key = f"{MODULE}.lora_B.default.weight"
+    bias_key = f"{MODULE}.lora_B.default.bias"
+    _write("a", {**_unit(0, 0, a_key=a_key, b_key=b_key), bias_key: FIRST_BIAS})
+    _write("b", {**_unit(1, 1, a_key=a_key, b_key=b_key), bias_key: SECOND_BIAS})
 
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff, _lora_role
+    result = _soup(
+        "adapters", "merge", "a", "b", "-o", "out", "--weights", "0.7,0.3",
+        "--strategy", strategy, "--density", "1.0", "--allow-unscanned",
+    )
+    assert result.exit_code == 0, _plain(result.output)
+    written = _load("out")
+    delta = _delta(written, a_key, b_key)
+    assert [delta[0, 0], delta[1, 1]] == pytest.approx([0.7, 0.3], abs=1e-6)
+    np.testing.assert_allclose(written[bias_key], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
 
-    role = _lora_role(name)
-    if role is None:
-        expected = c
-    elif role[1] == "A":
-        expected = math.sqrt(abs(c))
-    else:
-        expected = math.copysign(math.sqrt(abs(c)), c)
-    assert _factor_coeff(name, c) == pytest.approx(expected)
 
+@pytest.mark.parametrize("second_name", ["my_adapter", "lora_A"])
+def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_name: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    pairs = [
+        (f"{MODULE}.lora_A.{name}.weight", f"{MODULE}.lora_B.{name}.weight")
+        for name in ("default", second_name)
+    ]
+    # Same module and name as the first weight pair; only the factor kind differs.
+    pairs.append((f"{MODULE}.lora_embedding_A.default", f"{MODULE}.lora_embedding_B.default"))
+    for folder, slot in (("a", 0), ("b", 1)):
+        rank = slot + 1
+        tensors = {}
+        for pair_index, (a_key, b_key) in enumerate(pairs):
+            tensors.update(
+                _unit(slot, 2 * pair_index + slot, rank=rank, dim=6, a_key=a_key, b_key=b_key)
+            )
+        _write(folder, tensors, rank=rank)
 
-def test_the_bias_is_not_a_factor() -> None:
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff, _lora_role
-
-    assert _lora_role(BIAS_KEY) is None
-    assert _factor_coeff(BIAS_KEY, 0.25) == 0.25
+    result = _soup(
+        "adapters", "arithmetic", "0.7*a - 0.3*b", "--adapter", "a=a", "--adapter", "b=b",
+        "-o", "out", "--rank", "2", "--allow-unscanned",
+    )
+    assert result.exit_code == 0, _plain(result.output)
+    written = _load("out")
+    assert set(written) == {key for pair in pairs for key in pair}
+    expected_diagonals = (
+        [0.7, -0.3, 0, 0, 0, 0],
+        [0, 0, 0.7, -0.3, 0, 0],
+        [0, 0, 0, 0, 0.7, -0.3],
+    )
+    for pair, diagonal in zip(pairs, expected_diagonals, strict=True):
+        np.testing.assert_allclose(
+            _delta(written, *pair), np.diag(diagonal), atol=1e-6, err_msg=pair[0]
+        )
 
 
 @pytest.mark.parametrize("c", [0.25, 4.0, -4.0])
