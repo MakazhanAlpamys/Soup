@@ -212,6 +212,7 @@
     "training.ppo_kl_penalty": 0.05,
     "training.preference_loss": null,
     "training.preference_loss_weights": null,
+    "training.prefix_tree": false,
     "training.prm_aggregate": "min",
     "training.prm_reward": null,
     "training.quantization": "4bit",
