@@ -32,7 +32,8 @@ def test_freezing_with_lora_stays_refused(field, value):
     assert str(exc.value) == (
         f": Value error, training.{field} is not applied by task='sft' with backend='mlx': "
         "layers are frozen only on the text path with backend: transformers and no layer "
-        "streaming, so this run would train every layer. Use backend: transformers, "
+        "streaming, or in native MLX text SFT with lora.r: 0, so this run would train "
+        "every layer. Use backend: transformers, or lora.r: 0 with quantization: none, "
         "or remove the key."
     )
 
