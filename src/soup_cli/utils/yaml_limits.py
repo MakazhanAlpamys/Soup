@@ -45,6 +45,7 @@ import os
 from typing import Iterator
 
 import yaml
+from packaging.version import Version
 
 #: Nodes allowed beyond one per source byte, so small documents (including the
 #: empty document, which loads as ``{}``) and modest alias reuse still load.
@@ -204,6 +205,10 @@ class _MergeBudgetError(Exception):
 
 _MERGE_TAG = "tag:yaml.org,2002:merge"
 _VALUE_TAG = "tag:yaml.org,2002:value"
+# PyYAML 6.0.4 changed merge-key precedence for duplicate keys: first occurrence
+# wins and repeated key pairs are dropped. Keep the bounded loader aligned with
+# the installed SafeLoader while older supported versions retain their behavior.
+_SAFE_LOADER_DEDUPES_MERGED_KEYS = Version(yaml.__version__) >= Version("6.0.4")
 
 
 class _LimitedLoader(yaml.SafeLoader):
@@ -260,6 +265,18 @@ class _LimitedLoader(yaml.SafeLoader):
         if self._merge_depth > MAX_YAML_NESTING:
             raise _MergeChainError
         merged: list = []
+        merged_key_ids: set[int] = set()
+
+        def add_pairs(pairs: list) -> None:
+            if not _SAFE_LOADER_DEDUPES_MERGED_KEYS:
+                merged.extend(pairs)
+                return
+            for pair in pairs:
+                key_id = id(pair[0].value)
+                if key_id not in merged_key_ids:
+                    merged_key_ids.add(key_id)
+                    merged.append(pair)
+
         index = 0
         while index < len(node.value):
             key_node, value_node = node.value[index]
@@ -272,12 +289,17 @@ class _LimitedLoader(yaml.SafeLoader):
             # a mapping that names itself is then merged without this entry.
             del node.value[index]
             if isinstance(value_node, yaml.MappingNode):
-                merged.extend(self._merged_pairs(node, value_node))
+                add_pairs(self._merged_pairs(node, value_node))
             elif isinstance(value_node, yaml.SequenceNode):
                 parts = [self._merged_pairs(node, source) for source in value_node.value]
-                # A later mapping in the list yields to an earlier one.
-                for pairs in reversed(parts):
-                    merged.extend(pairs)
+                # SafeLoader before 6.0.4 reverses merge-list precedence; newer
+                # versions keep the first pair for each key in list order.
+                if _SAFE_LOADER_DEDUPES_MERGED_KEYS:
+                    for pairs in parts:
+                        add_pairs(pairs)
+                else:
+                    for pairs in reversed(parts):
+                        add_pairs(pairs)
             else:
                 raise yaml.constructor.ConstructorError(
                     "while constructing a mapping",
