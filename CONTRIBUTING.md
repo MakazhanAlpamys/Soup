@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (181 recipes)
+  recipes/            - Ready-made configs for popular models (182 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -381,6 +381,17 @@ released as a penalty.
   a plan is read as a question, not as a claim. A claim that is blocked on another issue
   (`infra-blocked`, or "lands after #N" in the thread) does not take one of the two slots,
   and neither does a claim whose pull request is open and waiting only for the merge line.
+- **A plan waiting for confirmation.** The earliest plan on an issue keeps its place in line
+  while it waits for the maintainer to confirm it, and a later plan, or a pull request from
+  someone else, does not displace it; this does not change the 3 days an area holder has on a
+  newly triaged issue (see [Maintained areas](#maintained-areas)). Work you start before the
+  confirmation is at your own risk, because the maintainer may still decline the plan or ask
+  for changes to it. If a plan has had no answer for 3 days, you can ask once in the thread.
+  A plan names what will change for that issue and which tests fail without it, and
+  answers the questions the issue puts before a plan; a comment that could stand under any
+  issue, or one posted automatically when an issue opens, is not a plan and holds no place.
+  A plan whose author stays silent for 7 days after a maintainer's question is released with
+  a comment, as a quiet claim is, and the next plan in line is considered.
 - **Regression tests.** A bug-fix pull request carries a test that fails on `main` without
   the fix; the review checks that, and checks that undoing the fix makes the test fail.
   Merged pull requests that meet this get the `regression-test` label, visible in the
@@ -736,9 +747,20 @@ with `gh cache delete suite-green-v1-<merge sha>-ubuntu-latest-3.12 --ref
 refs/pull/<number>/merge`, then re-run the job (`gh run rerun <run id> --job
 <job id>`).
 
+**The macOS cell of a pull request leaves out a few heavy test files.**
+`.github/ci/macos-pr-skip.txt` lists test files that take a minute or more on
+the macOS runner and have no platform branch. The macOS cell of a pull request
+run skips them (`--ignore`); the Linux and Windows cells of the same run run
+them, and so does every cell of the nightly, release and manual runs, macOS
+included. A new test file is added to the list only after a maintainer has
+timed it, and a file that gains a `sys.platform`, `darwin`, `mlx` or `mps`
+branch (or starts a subprocess) has to come off it:
+`tests/test_ci_macos_pr_skip_list.py` fails while it stays.
+
 **A hung test is cut off.** The test steps run with `--timeout=600
 --timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
-`dev` extra), a 90-minute step limit and a 105-minute job limit. A test that
+`dev` extra), a 90-minute step limit and a 105-minute job limit (120 and 135
+minutes on the macOS cells, whose runners are the slowest). A test that
 runs for ten minutes fails and the worker running it is killed and replaced;
 xdist runs that test again on the new worker, and gives up after two
 replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of

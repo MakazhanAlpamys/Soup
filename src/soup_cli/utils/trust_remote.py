@@ -50,8 +50,17 @@ KNOWN_SAFE_PREFIXES: tuple[str, ...] = (
 
 
 def is_known_safe(model_name: Any) -> bool:
-    """Return True if ``model_name`` starts with a known-safe org prefix."""
+    """Return True if ``model_name`` is a Hub repo id under a known-safe org prefix.
+
+    The allowlist answers for Hub repo ids only. A name that exists on disk,
+    relative to the working directory, is a local path: that is how
+    ``from_pretrained`` reads it, so an existing path wins over a Hub id of the
+    same spelling. A local directory such as ``Qwen/my-merge`` is therefore
+    never known-safe, and ``--trust-remote-code`` keeps its warning panel.
+    """
     if not isinstance(model_name, str) or not model_name:
+        return False
+    if os.path.exists(model_name):
         return False
     return any(model_name.startswith(prefix) for prefix in KNOWN_SAFE_PREFIXES)
 

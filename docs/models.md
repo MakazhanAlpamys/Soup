@@ -19,6 +19,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
 | **Qwen 3.5 / 3.6 / 3.8** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B/35B-A3B, Qwen3.8-27B | 0.8B–397B | 262K context, native vision, MoE |
+| **Qwen 3.5 MoE Base** | Qwen3.5-35B-A3B-Base | 35B | Text continued pre-training |
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
@@ -141,6 +142,18 @@ pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the ship
 text architecture and LoRA attachment are checked on the meta device, with a tiny random
 decoder's forward/backward pass checked on CPU. Full-weight training, NF4 execution, a
 real pre-training run and memory fit are not checked.
+
+`soup recipes use qwen3.5-35b-a3b-pretrain` selects
+`Qwen/Qwen3.5-35B-A3B-Base`'s language decoder for plaintext rows in
+`./data/corpus.jsonl`. It inherits the `qwen3.5-4b-pretrain` settings:
+one epoch, `lr: 1e-4`, `batch_size: auto`, eight accumulation steps,
+LoRA rank 32 / alpha 64, 4-bit quantization and a 4096-token limit.
+It adds `moe_lora: true` and zero LoRA dropout for the fused experts.
+The parsed recipe inherits `moe_aux_loss_coeff: 0.01`, matching the value written
+in the 35B-A3B SFT row. These are inherited starting values. The pretrain setup
+attaches LoRA to a tiny floating-point CPU model with both native attention block
+kinds, and both fused expert projections receive finite gradients. Training the
+published checkpoint, NF4 execution and memory fit remain unverified.
 
 `soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
 decoder for the same text preference layout. It inherits the 9B DPO recipe's

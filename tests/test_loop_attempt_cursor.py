@@ -14,6 +14,7 @@ candidate was lost. Now:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -75,7 +76,13 @@ class Cycle:
         result = self._deploy
         return dict(result(len(self.deploys)) if callable(result) else result)
 
-    def run(self) -> LoopState:
+    def run(self, *, times=None, monkeypatch=None) -> LoopState:
+        if times is not None:
+            assert monkeypatch is not None
+            from soup_cli.utils import loop_daemon
+
+            clock = iter(times)
+            monkeypatch.setattr(loop_daemon, "_now", lambda: next(clock))
         watch(self.config)
         return read_state(self.path)
 
@@ -116,16 +123,17 @@ class TestFailedDeploy:
         assert state.pending_deploy is not None
         assert state.pending_deploy["attempts"] == 1
         assert state.pending_deploy["train"]["adapter_path"] == "out/a1"
-        assert "retried" in cycle.records[0].notes
+        assert "next deploy attempt after" in cycle.records[0].notes
         assert "serve restarting" in cycle.records[0].notes
 
-    def test_the_next_cycle_retries_only_the_deploy_and_then_consumes_the_batch(self, cwd):
+    def test_retry_after_backoff_only_redeploys_then_consumes_the_batch(self, cwd, monkeypatch):
+        start = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
         cycle = Cycle(
             cwd, gate={"gate_verdict": "OK"}, cycles=2,
             deploy=lambda call: DEPLOY_REFUSED if call == 1 else SHIPPED,
         )
 
-        state = cycle.run()
+        state = cycle.run(times=[start, start + timedelta(minutes=5)], monkeypatch=monkeypatch)
 
         assert (cycle.harvests, cycle.trains) == (1, 1), "the candidate was trained again"
         assert len(cycle.deploys) == 2
@@ -135,20 +143,24 @@ class TestFailedDeploy:
         assert state.attempt_cursor_ts == CURSOR and state.canary_active == "cand"
         assert cycle.records[1].shipped is True
 
-    def test_a_deploy_that_never_works_is_recorded_as_failed_after_the_limit(self, cwd):
+    def test_a_deploy_that_never_works_is_held_after_the_limit(self, cwd, monkeypatch):
+        start = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
         cycle = Cycle(
             cwd, gate={"gate_verdict": "OK"}, cycles=DEPLOY_RETRY_LIMIT,
             deploy=DEPLOY_REFUSED,
         )
 
-        state = cycle.run()
+        state = cycle.run(
+            times=[start, start + timedelta(minutes=5), start + timedelta(minutes=35)],
+            monkeypatch=monkeypatch,
+        )
 
         assert len(cycle.deploys) == DEPLOY_RETRY_LIMIT
         assert (cycle.harvests, cycle.trains) == (1, 1)
-        assert state.pending_deploy is None
+        assert state.pending_deploy is not None
         assert state.attempt_cursor_ts == CURSOR
         last = cycle.records[-1].notes
-        assert f"deploy failed after {DEPLOY_RETRY_LIMIT} attempts" in last
+        assert f"deploy held after {DEPLOY_RETRY_LIMIT} attempts" in last
         assert "serve restarting" in last
         assert state.last_failure is not None and "serve restarting" in state.last_failure
 

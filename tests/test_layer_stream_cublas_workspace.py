@@ -200,8 +200,8 @@ def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
         torch.cuda.init()
         torch.cuda.synchronize()
         baseline = torch.cuda.memory_allocated()
-        left = torch.randn((128, 128), device="cuda")
-        right = torch.randn((128, 128), device="cuda")
+        left = torch.randn((128, 128), device="cuda", requires_grad=True)
+        right = torch.randn((128, 128), device="cuda", requires_grad=True)
         output = torch.mm(left, right)
         loss = output.square().mean()
         loss.backward()
@@ -218,11 +218,11 @@ def test_configured_workspace_is_visible_to_allocator_in_fresh_process():
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
-        check=True,
         env=env,
         text=True,
         timeout=120,
     )
+    assert result.returncode == 0, result.stderr
     reading = json.loads(result.stdout.strip().splitlines()[-1])
     assert reading["retained_workspace_bytes"] == 8 * 1024 * 1024, result.stdout
 
