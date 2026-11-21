@@ -237,6 +237,19 @@ def test_status_titles_the_table_with_the_database_as_typed(workdir, value):
     _assert_shown(result, 0, "Thumbs up │ 1 │")
 
 
+def test_status_prints_the_table_for_a_database_named_with_a_closing_tag(workdir):
+    # On main this raised MarkupError from the table title instead of printing it.
+    db = f"{CLOSING_TAG}.db"
+    _with_pair(db)
+
+    result = _local_rl("status", "--db", db)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert result.exception is None, repr(result.exception)
+    _assert_shown(result, 0, f"soup local-rl status {DASH} {db}")
+    _assert_shown(result, 0, "Interactions │")
+
+
 @pytest.mark.parametrize("value", VALUES)
 def test_status_names_a_missing_database_as_typed(workdir, value):
     db = f"db-{value}.db"
@@ -255,6 +268,22 @@ def test_the_receipt_names_the_prompt_as_typed(workdir, value):
     _assert_shown(result, 0, f"Recorded up for prompt {_shown(value)}{ELLIPSIS}")
     with sqlite3.connect("local_rl.db") as conn:
         assert conn.execute("SELECT prompt, thumb FROM thumbs").fetchall() == [(value, "up")]
+
+
+def test_the_receipt_cuts_the_prompt_before_it_strips_it(workdir):
+    # The receipt shows the first 32 characters of the typed prompt, then strips
+    # the controls among them: the cut counts the controls, as it did before.
+    head = "ab\x1b\x07cd\x9b\u202eef:rocket:x\\[n[red]g"
+    prompt = head + "-" * (32 - len(head)) + "TAIL-NOT-SHOWN"
+    assert len(prompt[:32]) == 32 and "TAIL" not in prompt[:32]
+    init_local_rl_db("local_rl.db")
+
+    result = _local_rl("record", "--prompt", prompt, "--response", "r", "--thumb", "down")
+
+    _assert_shown(result, 0, f"Recorded down for prompt {_shown(prompt[:32])}{ELLIPSIS}")
+    assert "TAIL" not in strip_ansi(result.output), result.output
+    with sqlite3.connect("local_rl.db") as conn:
+        assert conn.execute("SELECT prompt FROM thumbs").fetchall() == [(prompt,)]
 
 
 @pytest.mark.parametrize("value", FILE_VALUES)
