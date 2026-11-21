@@ -192,7 +192,7 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
     return terms
 
 
-def _factor_coeff(name: str, c: float) -> float:
+def factor_coeff(name: str, c: float) -> float:
     """Per-factor coefficient so the reconstructed delta scales *linearly*.
 
     A LoRA contributes ``ΔW = B @ A``. Applying the raw coefficient ``c`` to
@@ -222,7 +222,7 @@ def merge_task_arithmetic(
     """Signed task-vector combine over the intersection of tensor names.
 
     Per adapter ``i`` and tensor ``k`` the effective factor coefficient is
-    :func:`_factor_coeff` of ``coeffs[i]`` so that the reconstructed LoRA delta
+    :func:`factor_coeff` of ``coeffs[i]`` so that the reconstructed LoRA delta
     ``B_out @ A_out`` scales linearly with each coefficient (negation flips the
     delta, ``0.5·`` halves it — not the ``c²`` a naive element-wise sum gives).
     Names present in only some adapters are reported in ``skipped``. A shape
@@ -257,7 +257,7 @@ def merge_task_arithmetic(
             )
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += _factor_coeff(name, float(c)) * t
+            acc += factor_coeff(name, float(c)) * t
         merged[name] = acc.astype(np.float32)
 
     skipped = tuple(sorted(all_keys - shared))
@@ -358,24 +358,37 @@ def read_adapter_lora_scaling(adapter_dir: str) -> float | None:
 # ---------------------------------------------------------------------------
 # Mixed-rank concat+SVD path (#305) — PEFT ``combination_type='cat'`` style
 # ---------------------------------------------------------------------------
-_LORA_ROLE_SUFFIXES: tuple[tuple[str, str], ...] = (
-    (".lora_A.weight", "A"),
-    (".lora_B.weight", "B"),
-    (".lora_embedding_A", "A"),
-    (".lora_embedding_B", "B"),
-)
+_LoraStem = tuple[str, str, str]  # module, factor kind, adapter name (empty if unnamed)
+_LORA_WEIGHT_FACTORS = ("lora_A", "lora_B")
+_LORA_EMBEDDING_FACTORS = ("lora_embedding_A", "lora_embedding_B")
 
 
-def _lora_role(name: str) -> tuple[str, str, str] | None:
-    """Classify a tensor name as a LoRA factor.
+def _lora_role(name: str) -> tuple[_LoraStem, str] | None:
+    """Return the A/B pair identity and role, or None for non-factors.
 
-    Returns ``(stem, role, suffix)`` where ``role`` is ``"A"`` / ``"B"`` and
-    ``suffix`` is the matched suffix (so the emitted tensor keeps the adapter's
-    own naming convention), or ``None`` when the name is not a LoRA factor.
+    A named factor adds exactly one non-empty dot-separated segment:
+    ``lora_A.<name>.weight`` or ``lora_embedding_A.<name>`` (likewise for B).
+    The named spelling takes precedence when it also matches an unnamed suffix.
     """
-    for suffix, role in _LORA_ROLE_SUFFIXES:
-        if name.endswith(suffix):
-            return name[: -len(suffix)], role, suffix
+    prefix, dot, tail = name.rpartition(".")
+    if not dot or not tail:
+        return None
+
+    stem, dot, part = prefix.rpartition(".")
+    if dot:
+        if part and tail in ("weight", "bias"):
+            module, marker_dot, marker = stem.rpartition(".")
+            if marker_dot and marker in _LORA_WEIGHT_FACTORS:
+                if tail == "bias":
+                    # A named bias is not an embedding factor with adapter name "bias".
+                    return None
+                return (module, "weight", part), marker[-1]
+            if tail == "weight" and part in _LORA_WEIGHT_FACTORS:
+                return (stem, "weight", ""), part[-1]
+        if part in _LORA_EMBEDDING_FACTORS:
+            return (stem, "embedding", tail), part[-1]
+    if tail in _LORA_EMBEDDING_FACTORS:
+        return (prefix, "embedding", ""), tail[-1]
     return None
 
 
@@ -467,20 +480,20 @@ def merge_task_arithmetic_concat(
             f"({len(weights_list)}) length mismatch"
         )
 
-    # Per-adapter: stem -> {"A": name, "B": name}; and a flat set of all names.
-    per_adapter_pairs: list[dict[str, dict[str, tuple[str, str]]]] = []
+    # Per-adapter: (module, factor kind, adapter name) -> {"A": key, "B": key}.
+    per_adapter_pairs: list[dict[_LoraStem, dict[str, str]]] = []
     for weights in weights_list:
-        pairs: dict[str, dict[str, tuple[str, str]]] = {}
+        pairs: dict[_LoraStem, dict[str, str]] = {}
         for name in weights:
             role = _lora_role(name)
             if role is None:
                 continue
-            stem, which, suffix = role
-            pairs.setdefault(stem, {})[which] = (name, suffix)
+            stem, which = role
+            pairs.setdefault(stem, {})[which] = name
         per_adapter_pairs.append(pairs)
 
     # Stems that are a COMPLETE (A and B) pair in EVERY adapter.
-    shared_stems: set[str] | None = None
+    shared_stems: set[_LoraStem] | None = None
     for pairs in per_adapter_pairs:
         complete = {s for s, roles in pairs.items() if "A" in roles and "B" in roles}
         shared_stems = complete if shared_stems is None else (shared_stems & complete)
@@ -500,35 +513,34 @@ def merge_task_arithmetic_concat(
     stem_results: list[tuple[str, str, Any, Any]] = []  # (a_key, b_key, a_out, b_out)
     max_stem_rank = 0
     for stem in sorted(shared_stems):
+        module = stem[0]
         a_blocks = []
         b_blocks = []
-        a_suffix = per_adapter_pairs[0][stem]["A"][1]
-        b_suffix = per_adapter_pairs[0][stem]["B"][1]
+        output_names = per_adapter_pairs[0][stem]
         in_dim: int | None = None
         out_dim: int | None = None
         stem_rank_sum = 0
         for idx, weights in enumerate(weights_list):
-            a_name = per_adapter_pairs[idx][stem]["A"][0]
-            b_name = per_adapter_pairs[idx][stem]["B"][0]
-            a_mat = np.asarray(weights[a_name], dtype=np.float64)
-            b_mat = np.asarray(weights[b_name], dtype=np.float64)
+            pair = per_adapter_pairs[idx][stem]
+            a_mat = np.asarray(weights[pair["A"]], dtype=np.float64)
+            b_mat = np.asarray(weights[pair["B"]], dtype=np.float64)
             if a_mat.ndim != 2 or b_mat.ndim != 2:
                 raise ValueError(
-                    f"LoRA factor for {stem!r} is not 2-D "
+                    f"LoRA factor for {module!r} is not 2-D "
                     f"(A{a_mat.shape}, B{b_mat.shape})"
                 )
             r_a, in_a = a_mat.shape
             out_b, r_b = b_mat.shape
             if r_a != r_b:
                 raise ValueError(
-                    f"A/B rank mismatch within adapter {idx} for {stem!r} "
+                    f"A/B rank mismatch within adapter {idx} for {module!r} "
                     f"(A rows {r_a} != B cols {r_b})"
                 )
             if in_dim is None:
                 in_dim, out_dim = in_a, out_b
             elif in_a != in_dim or out_b != out_dim:
                 raise ValueError(
-                    f"in/out dim mismatch on {stem!r} across adapters "
+                    f"in/out dim mismatch on {module!r} across adapters "
                     f"(expected in={in_dim}, out={out_dim}; got in={in_a}, "
                     f"out={out_b}) — task vectors are not comparable"
                 )
@@ -540,7 +552,7 @@ def merge_task_arithmetic_concat(
             # must be bounded regardless of --rank.
             if stem_rank_sum > _MAX_CONCAT_RANK:
                 raise ValueError(
-                    f"concatenated rank for {stem!r} exceeds cap "
+                    f"concatenated rank for {module!r} exceeds cap "
                     f"{_MAX_CONCAT_RANK} (Σ rᵢ > {_MAX_CONCAT_RANK}); pass "
                     "--rank N to SVD-truncate the merged adapter to a bounded rank"
                 )
@@ -556,7 +568,7 @@ def merge_task_arithmetic_concat(
             b_out = u[:, :k] * s[:k]  # (out, k)
             a_out = vt[:k, :]  # (k, in)
         max_stem_rank = max(max_stem_rank, a_out.shape[0])
-        stem_results.append((stem + a_suffix, stem + b_suffix, a_out, b_out))
+        stem_results.append((output_names["A"], output_names["B"], a_out, b_out))
 
     new_rank = max_stem_rank
     # Bound the total emitted element count BEFORE the padding allocations, so
