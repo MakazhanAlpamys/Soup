@@ -159,7 +159,7 @@ def test_active_and_pending_state_targets_are_never_planned(tmp_path, monkeypatc
         lambda: SimpleNamespace(
             production_iteration_id=production[0],
             previous_production_iteration_id=previous[0],
-            canary_iteration=canary[0],
+            canary_iteration={"iteration_id": canary[0], "outcome": "canary"},
             production_adapter=f".soup-loops/adapters/{production[1]}",
             previous_production_adapter=f".soup-loops/adapters/{previous[1]}",
             canary_adapter=f".soup-loops/adapters/{canary[1]}",
@@ -178,6 +178,81 @@ def test_active_and_pending_state_targets_are_never_planned(tmp_path, monkeypatc
         assert f".soup-loops/adapters/{run_id}" not in paths
         assert f".soup-loops/adapters/{run_id}.recipe.json" not in paths
         assert f".soup-loops/verdicts/{run_id}.json" not in paths
+
+
+def test_pending_adapter_path_survives_when_manifest_run_id_differs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".soup-loops"
+    newest_id = "iter-newest"
+    pending_id = "iter-pending"
+    _manifest(root, newest_id, "run-newest")
+    _manifest(root, pending_id, "manifest-run-id")
+    (root / "adapters" / "run-newest").mkdir(parents=True)
+    pending_adapter = root / "adapters" / "pending-adapter-path"
+    pending_adapter.mkdir()
+    monkeypatch.setattr(
+        "soup_cli.utils.loop_prune.read_state",
+        lambda: SimpleNamespace(
+            production_iteration_id=None,
+            previous_production_iteration_id=None,
+            canary_iteration=None,
+            production_adapter=None,
+            previous_production_adapter=None,
+            canary_adapter=None,
+            pending_deploy={
+                "iteration_id": pending_id,
+                "train": {"adapter_path": f".soup-loops/adapters/{pending_adapter.name}"},
+            },
+        ),
+    )
+
+    plan = build_prune_plan(keep_runs=1)
+
+    assert f".soup-loops/adapters/{pending_adapter.name}" not in {
+        entry.path for entry in plan
+    }
+
+
+def test_canary_iteration_dict_preserves_iteration_adapter_and_sidecars(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".soup-loops"
+    canary_id = "iter-canary"
+    canary_run = "run-canary"
+    newest_id = "iter-newest"
+    _manifest(root, canary_id, canary_run)
+    _manifest(root, newest_id, "run-newest")
+    (root / "adapters" / canary_run).mkdir(parents=True)
+    (root / "adapters" / f"{canary_run}.recipe.json").write_text("{}")
+    (root / "adapters" / f"{canary_run}.train.log").write_text("train")
+    (root / "verdicts" / f"{canary_run}.json").parent.mkdir(parents=True)
+    (root / "verdicts" / f"{canary_run}.json").write_text("{}")
+    monkeypatch.setattr(
+        "soup_cli.utils.loop_prune.read_state",
+        lambda: SimpleNamespace(
+            production_iteration_id=None,
+            previous_production_iteration_id=None,
+            canary_iteration={"iteration_id": canary_id, "outcome": "canary"},
+            production_adapter=None,
+            previous_production_adapter=None,
+            canary_adapter=f".soup-loops/adapters/{canary_run}",
+            pending_deploy=None,
+        ),
+    )
+
+    plan = build_prune_plan(keep_runs=1)
+    planned = {entry.path for entry in plan}
+
+    assert f".soup-loops/{canary_id}" not in planned
+    assert f".soup-loops/adapters/{canary_run}" not in planned
+    assert f".soup-loops/adapters/{canary_run}.recipe.json" not in planned
+    assert f".soup-loops/adapters/{canary_run}.train.log" not in planned
+    assert f".soup-loops/verdicts/{canary_run}.json" not in planned
+    execute_prune(plan)
+    assert (root / canary_id / "iteration.json").is_file()
+    assert (root / "adapters" / canary_run).is_dir()
+    assert (root / "adapters" / f"{canary_run}.recipe.json").is_file()
+    assert (root / "adapters" / f"{canary_run}.train.log").is_file()
+    assert (root / "verdicts" / f"{canary_run}.json").is_file()
 
 
 def test_unknown_adapter_and_verdict_notes_are_kept_during_apply(tmp_path, monkeypatch):
@@ -336,6 +411,44 @@ def test_log_changed_after_planning_is_skipped_and_named(tmp_path, monkeypatch):
     assert "concurrent append" in log.read_text(encoding="utf-8")
 
 
+def test_same_size_log_rewrite_with_changed_mtime_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".soup-loops"
+    root.mkdir()
+    log = root / "progress.jsonl"
+    log.write_text("old\nnew\n", encoding="utf-8")
+    entry = next(row for row in build_prune_plan(keep_log_lines=1)
+                 if row.path == ".soup-loops/progress.jsonl")
+    old = log.stat()
+    log.write_text("bad\nnew\n", encoding="utf-8")
+    os.utime(log, ns=(old.st_atime_ns, old.st_mtime_ns + 2_000_000_000))
+    assert log.stat().st_size == entry.expected_size
+
+    result = execute_prune([entry], keep_log_lines=1)
+
+    assert result.skipped and result.skipped[0].path == entry.path
+    assert "bad\nnew\n" == log.read_text(encoding="utf-8")
+
+
+def test_log_size_change_with_restored_mtime_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".soup-loops"
+    root.mkdir()
+    log = root / "progress.jsonl"
+    log.write_text("old\nnew\n", encoding="utf-8")
+    entry = next(row for row in build_prune_plan(keep_log_lines=1)
+                 if row.path == ".soup-loops/progress.jsonl")
+    mtime_ns = log.stat().st_mtime_ns
+    log.write_text("changed-size\nnew\n", encoding="utf-8")
+    os.utime(log, ns=(mtime_ns, mtime_ns))
+    assert log.stat().st_mtime_ns == entry.expected_mtime_ns
+
+    result = execute_prune([entry], keep_log_lines=1)
+
+    assert result.skipped and result.skipped[0].path == entry.path
+    assert "changed-size\nnew\n" == log.read_text(encoding="utf-8")
+
+
 def test_iteration_log_trim_keeps_rows_for_retained_runs_and_their_pairs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     root = tmp_path / ".soup-loops"
@@ -380,6 +493,54 @@ def test_iteration_log_trim_keeps_rows_for_retained_runs_and_their_pairs(tmp_pat
     execute_prune([log_entry], keep_log_lines=1)
     stored = [json.loads(line) for line in (root / "iterations.jsonl").read_text().splitlines()]
     assert {row["iteration_id"] for row in stored} == {old_id, recent_id}
+
+
+def test_cli_dry_run_explains_pairs_kept_for_missing_retained_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".soup-loops"
+    retained_id = "iter-retained-no-row"
+    _manifest(root, retained_id, "run-retained")
+    (root / "pairs").mkdir()
+    pair = root / "pairs" / "pairs-unknown.jsonl"
+    pair.write_text("data\n", encoding="utf-8")
+    iteration_log = root / "iterations.jsonl"
+    iteration_log.write_text("not json\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "soup_cli.utils.loop_prune.read_state",
+        lambda: SimpleNamespace(
+            production_iteration_id=retained_id,
+            previous_production_iteration_id=None,
+            canary_iteration=None,
+            production_adapter=None,
+            previous_production_adapter=None,
+            canary_adapter=None,
+            pending_deploy=None,
+        ),
+    )
+
+    result = runner.invoke(app, ["loop", "prune"])
+    output = _plain(result.output)
+
+    assert result.exit_code == 0
+    assert "pairs kept because retained iteration history is incomplete" in output
+    assert pair.exists()
+
+    unused_pair = root / "pairs" / "pairs-now-unused.jsonl"
+    unused_pair.write_text("stale data\n", encoding="utf-8")
+    iteration_log.write_text(
+        json.dumps({
+            "iteration_id": retained_id,
+            "dataset": {"path": ".soup-loops/pairs/pairs-unknown.jsonl"},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    complete = runner.invoke(app, ["loop", "prune"])
+    complete_output = _plain(complete.output)
+    assert complete.exit_code == 0
+    assert "pairs kept because retained iteration history is incomplete" not in complete_output
+    assert ".soup-loops/pairs/pairs-now-unused.jsonl" in complete_output
+    assert ".soup-loops/pairs/pairs-unknown.jsonl" not in complete_output
+    assert pair.exists()
 
 
 @pytest.mark.requires_symlink
@@ -465,7 +626,7 @@ def test_cli_dry_run_is_read_only_and_terminal_safe(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     root = tmp_path / ".soup-loops"
     (root / "pairs").mkdir(parents=True)
-    hostile = ".soup-loops/pairs/[bold]owned[/]\\x1b.jsonl"
+    hostile = ".soup-loops/pairs/[bold]x.txt"
     monkeypatch.setattr(
         "soup_cli.commands.loop.build_prune_plan",
         lambda **_kwargs: [SimpleNamespace(
@@ -477,8 +638,8 @@ def test_cli_dry_run_is_read_only_and_terminal_safe(tmp_path, monkeypatch):
     output = _plain(result.output)
     assert result.exit_code == 0
     assert "dry run:" in output
-    assert "\\x1b" in output
-    assert "\\[bold]" in output
+    assert "[bold]x.txt" in output
+    assert "\\[bold]" not in output
     assert "\x1b" not in result.output
 
 

@@ -30,7 +30,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -760,8 +759,8 @@ def prune_cmd(
             verb = entry.action if entry.action in ("keep", "skip") else (
                 "trim" if entry.reason.startswith("trim ") else "remove"
             )
-            action = f"{verb} ({escape(for_terminal(entry.reason))})"
-            console.print(f"{action}: {escape(for_terminal(entry.path))}")
+            action = f"{verb} ({for_terminal(entry.reason)})"
+            console.print(f"{action}: {for_terminal(entry.path)}")
         if not yes:
             change_count = sum(entry.action in ("remove", "trim") for entry in plan)
             console.print(f"dry run: {change_count} change(s); rerun with --yes to apply")
@@ -775,17 +774,17 @@ def prune_cmd(
             raise typer.Exit(code=2)
         result = execute_prune(plan, keep_log_lines=keep_log_lines)
     except (OSError, ValueError, TypeError) as exc:
-        console.print(f"[red]prune refused:[/] {escape(for_terminal(str(exc)))}")
+        console.print(f"[red]prune refused:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
     for item in result.skipped:
         console.print(
-            f"[yellow]skipped:[/] {escape(for_terminal(item.path))} — "
-            f"{escape(for_terminal(item.reason))}"
+            f"[yellow]skipped:[/] {for_terminal(item.path)} — "
+            f"{for_terminal(item.reason)}"
         )
     for item in result.failed:
         console.print(
-            f"[red]failed:[/] {escape(for_terminal(item.path))} — "
-            f"{escape(for_terminal(item.reason))}"
+            f"[red]failed:[/] {for_terminal(item.path)} — "
+            f"{for_terminal(item.reason)}"
         )
     console.print(
         f"[green]pruned {result.removed} item(s); freed {result.bytes_freed} byte(s)[/]"

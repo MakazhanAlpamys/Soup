@@ -236,11 +236,14 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
     except FileNotFoundError:
         state = None
     if state is not None:
+        canary_iteration = state.canary_iteration
+        if isinstance(canary_iteration, dict):
+            canary_iteration = canary_iteration.get("iteration_id")
         keep_ids.update(i for i in (
             state.production_iteration_id,
             state.previous_production_iteration_id,
-            state.canary_iteration,
-        ) if i)
+            canary_iteration,
+        ) if isinstance(i, str) and i)
         pending = getattr(state, "pending_deploy", None)
         if isinstance(pending, dict):
             pending_iteration = pending.get("iteration_id")
@@ -467,14 +470,7 @@ def execute_prune(
                         or before.st_mtime_ns != entry.expected_mtime_ns):
                     skipped.append(PruneFailure(entry.path, "changed since the plan was read"))
                     continue
-                after_read = path.stat()
-                if (after_read.st_size != entry.expected_size
-                        or after_read.st_mtime_ns != entry.expected_mtime_ns):
-                    skipped.append(PruneFailure(
-                        entry.path, "changed while reading; left untouched"
-                    ))
-                    continue
-                mode = stat.S_IMODE(after_read.st_mode)
+                mode = stat.S_IMODE(before.st_mode)
                 fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
                 try:
                     with os.fdopen(fd, "wb") as handle:
