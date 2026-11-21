@@ -60,7 +60,7 @@ from soup_cli.utils.config_bounds import (
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
 from soup_cli.utils.numeric import float_with_overflow_check
-from soup_cli.utils.preference import resolve_preference_loss
+from soup_cli.utils.preference import SUPPORTED_PREFERENCE_LOSSES, resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
@@ -7787,6 +7787,12 @@ class SoupConfig(BaseModel):
                 "simpo, bco or ipo, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
+        if self.task == "preference" and tcfg.preference_loss is None:
+            losses = sorted(SUPPORTED_PREFERENCE_LOSSES.intersection(_STREAM_SUPPORTED_TASKS))
+            raise ValueError(
+                "training.stream_layers with task='preference' requires a single "
+                f"training.preference_loss. Choose one of {', '.join(losses)}."
+            )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
