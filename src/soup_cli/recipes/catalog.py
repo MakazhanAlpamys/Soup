@@ -5130,6 +5130,45 @@ training:
 output: ./output
 """,
     ),
+    "glm-5-grpo": RecipeMeta(
+        model="zai-org/GLM-5",
+        task="grpo",
+        size="744B",
+        tags=("glm", "zai-org", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "GLM-5 MoE GRPO reasoning (MIT, 744B), using the GLM-5.1 recipe settings. "
+            "Multi-GPU / multi-node recommended."
+        ),
+        yaml_str="""\
+base: zai-org/GLM-5
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "glm-5.1-grpo": RecipeMeta(
         model="zai-org/GLM-5.1",
         task="grpo",
