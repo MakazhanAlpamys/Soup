@@ -147,6 +147,36 @@ def test_the_embedding_pair_is_truncated_like_the_linear_pair() -> None:
     assert merged[EMB_B_KEY].shape == (4, 2)
 
 
+@pytest.mark.parametrize(("a_key", "b_key"), [
+    (f"{MODULE}.lora_A.{{name}}.weight", f"{MODULE}.lora_B.{{name}}.weight"),
+    (f"{EMBED}.lora_embedding_A.{{name}}", f"{EMBED}.lora_embedding_B.{{name}}"),
+])
+def test_named_factors_are_paired_by_adapter_name(a_key, b_key) -> None:
+    """Two adapter names on one module: each ``A`` is truncated with the ``B`` of
+    its own name, so each written delta is the best rank-k one of that name."""
+    names = ("default", "other")
+    inputs = []
+    for seed in (0, 1):
+        tensors = {}
+        for offset, name in enumerate(names):
+            pair = _random_pair(seed * 2 + offset)
+            tensors[a_key.format(name=name)] = pair[A_KEY]
+            tensors[b_key.format(name=name)] = pair[B_KEY]
+        inputs.append(tensors)
+
+    merged, _ = merge_svd(inputs, [0.5, 0.5], rank=2)
+
+    assert set(merged) == set(inputs[0])
+    for name in names:
+        a_name, b_name = a_key.format(name=name), b_key.format(name=name)
+        full = _linear_delta(inputs, [0.5, 0.5], a_name, b_name)
+        np.testing.assert_allclose(
+            _delta(merged, a_name, b_name), _best_rank(full, 2), atol=1e-4 * np.abs(full).max(),
+        )
+        assert merged[a_name].shape == (8, 24)
+        assert merged[b_name].shape == (20, 8)
+
+
 # ---------------------------------------------------------------------------
 # Tensors that are not LoRA factors keep the linear merge
 # ---------------------------------------------------------------------------
