@@ -239,7 +239,7 @@ class TestFilterCommand:
         )
         assert result.exit_code != 0
 
-    def test_filter_with_coherence(self, tmp_path):
+    def test_filter_with_coherence(self, tmp_path, monkeypatch):
         """soup data filter --coherence should filter low-quality rows."""
         import json
 
@@ -247,6 +247,7 @@ class TestFilterCommand:
 
         from soup_cli.cli import app
 
+        monkeypatch.chdir(tmp_path)
         # Create test data
         data_file = tmp_path / "test.jsonl"
         rows = [
@@ -282,6 +283,7 @@ class TestFilterCommand:
 
         from soup_cli.cli import app
 
+        monkeypatch.chdir(tmp_path)
         data_file = tmp_path / "test.jsonl"
         rows = [
             {"text": "Hello world. This is a test sentence."},

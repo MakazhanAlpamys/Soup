@@ -43,8 +43,9 @@ Validate a config without training:
 soup train --config examples/configs/sft_basic.yaml --dry-run
 ```
 
-Gated models (Llama-2, Llama-3.1) need Hugging Face access and a login first:
-`huggingface-cli login`. The TinyLlama configs need neither.
+Gated models (Llama-2, Llama-3.1) need Hugging Face access and a login first.
+Run `hf auth login` with `huggingface-hub` 0.34 or newer, or `huggingface-cli login`
+with older versions. The TinyLlama configs need neither.
 
 `soup train` estimates peak VRAM before it loads anything and refuses to start a run it
 predicts won't fit, printing the breakdown and what to change. The TinyLlama configs are
@@ -336,7 +337,7 @@ soup train --config your_config.yaml --wandb
 ### "Model not found on Hugging Face"
 
 - Check the model id spelling
-- Gated models (Llama, Gemma) need `huggingface-cli login` and accepted terms
+- Gated models (Llama, Gemma) need a [Hugging Face login](#runnable-examples) and accepted terms
 
 ### Config validation errors
 
