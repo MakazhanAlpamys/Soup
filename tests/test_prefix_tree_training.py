@@ -599,34 +599,22 @@ def test_no_row_is_wider_than_data_max_length(tmp_path):
         assert batch[TREE_MASK_KEY].shape[-1] == width <= max_length
 
 
-@pytest.mark.parametrize("shared", [True, False], ids=["shared-prompt", "nothing-shared"])
-def test_setup_prints_the_planning_notice_and_the_sharing_warning(tmp_path, shared):
-    """What ``_attach_prefix_tree`` prints, captured from the wrapper's console.
-
-    The planning notice threshold is lowered so these few examples cross it.
-    Trained on every token (``train_on_responses_only: false``), the examples
-    have nothing to share but their first token, and the setup says so.
-    """
+def test_setup_warns_when_the_examples_share_nothing(tmp_path):
+    """Trained on every token (``train_on_responses_only: false``), the examples
+    have nothing to share but their first token, and the setup says so. (Its
+    absence where a prompt is shared is asserted in ``TestARealRun``.)"""
     pytest.importorskip("torch")
     from rich.console import Console
 
     import soup_cli.trainer.sft as sft_module
-    import soup_cli.utils.prefix_tree_trainer as trainer_module
     from tests.test_stream_resume_exact import _cpu_only
 
     buffer = io.StringIO()
     with _cpu_only() as monkeypatch:
         monkeypatch.setattr(sft_module, "console", Console(file=buffer, width=400))
-        monkeypatch.setattr(trainer_module, "PLAN_NOTICE_TOKENS", 1)
-        _wrapper(tmp_path, monkeypatch, stream=False, responses_only=shared)
+        _wrapper(tmp_path, monkeypatch, stream=False, responses_only=False)
     said = _plain(buffer.getvalue())
-    assert f"planning reads all {len(_TURNS)} training examples" in said, said
-    assert "before the first step" in said
-    warning = "these examples share almost no untrained beginning"
-    if shared:
-        assert warning not in said
-    else:
-        assert warning in said, said
+    assert "these examples share almost no untrained beginning" in said, said
 
 
 def test_setup_refuses_a_model_that_cannot_before_any_step(tmp_path):
@@ -670,6 +658,13 @@ class TestARealRun:
             import soup_cli.trainer.sft as sft_module
 
             monkeypatch.setattr(sft_module, "console", Console(file=buffer, width=200))
+            if batch_size == 1:
+                # The planning notice, printed by the setup: lowered so these few
+                # examples cross it. The two-row case keeps the default and so
+                # must not print it.
+                import soup_cli.utils.prefix_tree_trainer as trainer_module
+
+                monkeypatch.setattr(trainer_module, "PLAN_NOTICE_TOKENS", 1)
             wrapper = _wrapper(
                 tmp_path, monkeypatch, stream=stream, batch_size=batch_size, turns=turns
             )
@@ -685,6 +680,9 @@ class TestARealRun:
                 said = _plain(buffer.getvalue())
                 assert "Prefix-tree batches enabled" in said
                 assert f"{stats.ratio:.2f}x fewer" in said
+                notice = f"planning reads all {len(turns)} training examples"
+                assert (notice in said) is (batch_size == 1), said
+                assert "share almost no untrained beginning" not in said
 
                 # Record the ordinary batch each prefix-tree batch was built from.
                 plain_batches: list = []
