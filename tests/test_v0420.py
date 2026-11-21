@@ -292,8 +292,8 @@ class TestPartBRemoteLoading:
 
     def test_streaming_buffer_cross_validator(self):
         with pytest.raises(Exception, match="streaming"):
-            DataConfig(train="data.jsonl", buffer_size=128, streaming=False)
-        cfg = DataConfig(train="data.jsonl", buffer_size=128, streaming=True)
+            DataConfig(train="org/dataset", buffer_size=128, streaming=False)
+        cfg = DataConfig(train="org/dataset", buffer_size=128, streaming=True)
         assert cfg.buffer_size == 128
 
     def test_streaming_default(self):
@@ -891,11 +891,10 @@ class TestRoundTrip:
 base: meta-llama/Llama-3.1-8B
 task: sft
 data:
-  train: ./data.jsonl
+  train: org/dataset
   format: multimodal
   streaming: true
   buffer_size: 1024
-  shards: 4
   mask_history: true
   train_on_prompt: false
   train_on_responses_only: true
@@ -936,13 +935,7 @@ output: ./out
         )
         assert cfg.data.streaming is True
         assert cfg.data.buffer_size == 1024
-        assert cfg.data.shards == 4
-        # interleave is intentionally not in this kitchen-sink fixture: #443
-        # made data.interleave + data.streaming mutually exclusive at parse
-        # time (interleave now has a real training-time consumer, and it's
-        # local-files-only), so it can no longer sit alongside streaming:
-        # true here. interleave's own round-trip is covered by
-        # TestPartDInterleave below and by tests/test_issue443_interleave_wiring.py.
+        # Interleave has its own round-trip and streaming tests.
         assert cfg.data.mask_history is True
         assert cfg.data.image_resize_algorithm == "bicubic"
         assert cfg.data.video_fps == 24.0

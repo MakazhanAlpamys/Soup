@@ -1490,9 +1490,9 @@ def _load_remote_dataset(
     (bucket regex, no userinfo/query/fragment) BEFORE opening any
     connection — defends against URL injection into the fsspec backend.
 
-    Streaming knobs (``data_config.streaming`` + ``buffer_size`` + ``shards``)
-    are honoured via :func:`datasets.load_dataset` when present; otherwise
-    the file is streamed as JSONL through :func:`fsspec.open`.
+    When ``data_config.streaming`` is true, try HF datasets streaming and
+    shuffle with ``buffer_size`` if set. Otherwise, or if the streaming loader
+    is unavailable, read JSONL through :func:`fsspec.open`.
 
     Image / audio paths resolve against ``data.image_dir`` /
     ``data.audio_dir`` (:func:`_resolve_remote_media`): a remote object has
