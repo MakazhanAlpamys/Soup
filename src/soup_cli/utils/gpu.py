@@ -691,16 +691,25 @@ def resolve_frozen_base_load_dtype(device: str):
     resident weights in bf16 storage while every other tensor on the card is
     float16, the same storage/compute split v0.73.1 (#385/#387) removed from
     the other bf16-hardcoded call sites. Returning ``torch.float16`` there
-    keeps storage and compute in the same dtype. On CPU this still returns
-    ``"auto"``: the VRAM-saving reason for keeping the checkpoint's own dtype
-    does not apply there, but CPU use in this codebase is smoke tests only,
-    so a bf16-saved checkpoint loading bf16 on CPU is harmless in practice.
+    keeps storage and compute in the same dtype. On CPU a frozen bf16-saved
+    base must load float32: x86 CPUs without AMX have no bf16 units, so the
+    base's forward/backward matmuls fall back to dtype emulation — measured
+    12x slower end-to-end (TinyLlama-1.1B LoRA, Ryzen 2600, 12 threads:
+    ~1.0 tok/s bf16-cast base vs ~12.6 tok/s fp32). The old docstring called
+    CPU "smoke tests only"; with CPU LoRA training of small models as a
+    supported path, throughput is the correct tie-break and fp32 the correct
+    default. Memory-constrained CPU users can still override via explicit
+    ``dtype=`` in their config.
     """
     _, fp16_only = bf16_fp16_flags(device)
     if fp16_only:
         import torch
 
         return torch.float16
+    if str(device).lower().startswith("cpu"):
+        import torch
+
+        return torch.float32
     return "auto"
 
 
