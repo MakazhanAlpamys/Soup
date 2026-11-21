@@ -331,6 +331,16 @@ class TestPruneCommandInTheStreamingPreflight:
         assert f"Replace {_BASE_PLACEHOLDER} with the base model name" in text
         assert "is not repeated in the command" in text
 
+    def test_an_empty_base_is_not_blamed_on_the_shell(self, monkeypatch, tmp_path):
+        text = " ".join(_stream_preflight_text(monkeypatch, tmp_path, "").split())
+
+        assert (
+            f"Replace {_BASE_PLACEHOLDER} with the base model name: "
+            "the configuration does not name one."
+        ) in text
+        assert "would interpret" not in text
+        assert "is not repeated in the command" not in text
+
     def test_a_plain_base_has_no_note(self, monkeypatch, tmp_path):
         text = _stream_preflight_text(monkeypatch, tmp_path, "org/model")
 

@@ -764,10 +764,12 @@ def _render_stream_disk_preflight(
         cmd = f"soup prune-layer-cache --model {shown} --yes"
         lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
         if spelled is None:
-            lines.append(
-                f"Replace {_PRUNE_BASE_PLACEHOLDER} with the base model name: it is not "
-                "repeated in the command because a shell would interpret part of it."
+            reason = (
+                "it is not repeated in the command because a shell would interpret part of it."
+                if base
+                else "the configuration does not name one."
             )
+            lines.append(f"Replace {_PRUNE_BASE_PLACEHOLDER} with the base model name: {reason}")
         stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
