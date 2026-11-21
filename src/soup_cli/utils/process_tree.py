@@ -181,9 +181,14 @@ class ProcessTree:
         self._lock = threading.Lock()
         self._job: "int | None" = None
         if sys.platform == "win32":
-            with contextlib.suppress(OSError, ValueError, AttributeError):
-                self._job = _create_job_for(process)
-            self._resume()
+            try:
+                with contextlib.suppress(OSError, ValueError, AttributeError):
+                    self._job = _create_job_for(process)
+                self._resume()
+            except BaseException:
+                # The caller gets no tree to close: release the job handle here.
+                self.close()
+                raise
 
     def _resume(self) -> None:
         """Windows: let the child run (it was started suspended by ``popen_kwargs``).

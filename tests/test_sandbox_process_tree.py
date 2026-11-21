@@ -811,6 +811,42 @@ class TestWindowsJobWithoutOrBeforeTheJob:
             monkeypatch.undo()
             self._close(proc, tree)
 
+    def test_the_job_handle_is_closed_when_the_construction_fails(self, monkeypatch):
+        real = process_tree._job_api()
+        real_create = process_tree._create_job_for
+        created: list = []
+        closed: list = []
+
+        def recording_create(process):
+            created.append(real_create(process))
+            return created[-1]
+
+        def recording_close(handle):
+            closed.append(handle)
+            return real.kernel32.CloseHandle(handle)
+
+        def failing_resume(self):
+            raise RuntimeError("no resume")
+
+        fake = _fake_job_api(kernel32=_Delegating(real.kernel32, CloseHandle=recording_close))
+        monkeypatch.setattr(process_tree, "_job_api", lambda: fake)
+        monkeypatch.setattr(process_tree, "_create_job_for", recording_create)
+        monkeypatch.setattr(ProcessTree, "_resume", failing_resume)
+        proc = self._start(f"import time; time.sleep({_HELPER_LIFETIME_SECONDS})")
+        try:
+            with pytest.raises(RuntimeError, match="no resume"):
+                ProcessTree(proc)
+
+            assert len(created) == 1 and created[0] is not None, "no job was created"
+            assert closed == created, "the job handle was left open"
+        finally:
+            monkeypatch.undo()
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=_GONE_WITHIN_SECONDS)
+            proc.stdout.close()
+            proc.stderr.close()
+
 
 @_windows_only
 class TestAChildThatStartsProcessesAtOnce:
