@@ -718,6 +718,15 @@ class TestDataInspectVision:
         monkeypatch.chdir(elsewhere)
         assert self._images_found(self._inspect("../data/train.jsonl")) == 0
 
+    def test_inspect_counts_images_after_a_text_only_first_row(self, tmp_path, monkeypatch):
+        _, dataset = self._vision_layout(tmp_path)
+        vision_rows = dataset.read_text(encoding="utf-8")
+        first_row = json.dumps({"conversations": [{"from": "human", "value": "text only"}]})
+        dataset.write_text(f"{first_row}\n{vision_rows}", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        assert self._images_found(self._inspect(str(dataset))) == 2
+
     def test_inspect_image_dir_option(self, tmp_path, monkeypatch):
         """Inspect should use --image-dir when it is provided."""
         data_dir, dataset = self._vision_layout(tmp_path)
