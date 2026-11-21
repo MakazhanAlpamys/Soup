@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -59,6 +60,81 @@ def make_binding(
     }
 
 
+# Label table for strict-gate drift messages. Order is part of the contract:
+# multi-field refusals list labels in this sequence. Values from either binding
+# must never appear in the message (hostile evidence fields stay opaque).
+_DRIFT_FIELDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("adapter_merkle_root",), "adapter files"),
+    (("task_eval_sha256",), "task-eval file"),
+    (("source_data_at_verdict_sha256",), "training source"),
+    (("training_data",), "--data-sha256 value"),
+    (("suites", "names"), "general suites"),
+    (("suites", "soup_version"), "Soup version"),
+    (("suites", "scorer_revision"), "scorer revision"),
+    (("policy", "task_mode"), "task mode"),
+    (("policy", "forgetting_threshold"), "forgetting threshold"),
+    (("policy", "general_suite"), "general suites"),
+    (("policy", "judge_model_sha256"), "judge model"),
+    (("policy", "noise_floor_runs"), "noise-floor runs"),
+)
+
+_GENERIC_STALE = (
+    "stale provenance: artifact, task, training source, suites or policy differs"
+)
+_STALE_NEXT = (
+    "Restore what you did not mean to change, or run the evaluation again "
+    "and emit new evidence with --emit-evidence."
+)
+
+
+def _binding_path(block: dict[str, Any], path: tuple[str, ...]) -> Any:
+    cur: Any = block
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _cleared_of_drift_fields(block: dict[str, Any]) -> dict[str, Any]:
+    """Drop every table-covered leaf so leftover inequality is off-table."""
+    out = copy.deepcopy(block)
+    for path, _label in _DRIFT_FIELDS:
+        parent: Any = out
+        for key in path[:-1]:
+            if not isinstance(parent, dict) or key not in parent:
+                break
+            parent = parent[key]
+        else:
+            if isinstance(parent, dict):
+                parent.pop(path[-1], None)
+    # policy_sha256 tracks the policy block; table rows already name policy drift.
+    out.pop("policy_sha256", None)
+    return out
+
+
+def _stale_provenance_message(got: dict[str, Any], expected: dict[str, Any]) -> str:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for path, label in _DRIFT_FIELDS:
+        if _binding_path(got, path) != _binding_path(expected, path):
+            if label not in seen:
+                labels.append(label)
+                seen.add(label)
+    # Off-table drift (e.g. schema_version) must not be hidden behind a partial
+    # label list; after the adapter is restored the user would still be stuck.
+    if _cleared_of_drift_fields(got) != _cleared_of_drift_fields(expected):
+        return _GENERIC_STALE
+    if not labels:
+        return _GENERIC_STALE
+    return (
+        "stale provenance: changed since the evidence was emitted: "
+        + ", ".join(labels)
+        + ". "
+        + _STALE_NEXT
+    )
+
+
 def check_binding(payload: dict[str, Any], expected: dict[str, Any]) -> None:
     """Refuse unknown/drifted identities without echoing untrusted field values."""
     provenance = payload.get("provenance")
@@ -83,9 +159,7 @@ def check_binding(payload: dict[str, Any], expected: dict[str, Any]) -> None:
             and expected["policy"]["judge_model_sha256"] is None):
         raise ValueError("provenance for judge modes needs a declared --judge-model")
     if got != expected:
-        raise ValueError(
-            "stale provenance: artifact, task, training source, suites or policy differs"
-        )
+        raise ValueError(_stale_provenance_message(got, expected))
     # The stored descriptor must describe the scores being replayed, not merely
     # compare equal to an independent block the caller attached to other scores.
     task = payload.get("task")
