@@ -176,7 +176,7 @@ def show(
     run_id: str = typer.Argument(..., help="Run ID (or prefix) to show"),
     plot: bool = typer.Option(True, "--plot/--no-plot", help="Show training curves"),
 ):
-    """Show run details and available loss and GRPO reward curves."""
+    """Show run details and available loss and training score curves."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
@@ -285,8 +285,7 @@ def show(
         metrics = tracker.get_metrics(run["run_id"])
         if metrics:
             _plot_loss_curve(metrics)
-            if run.get("task") == "grpo":
-                _plot_grpo_reward_curves(metrics)
+            _plot_training_score_curves(metrics)
 
 
 @app.command(short_help="Compare two local training runs side by side.")
@@ -801,8 +800,8 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     )
 
 
-def _plot_grpo_reward_curves(metrics: list[dict]) -> None:
-    """Plot the recorded GRPO reward summaries against their logging steps."""
+def _plot_training_score_curves(metrics: list[dict]) -> None:
+    """Plot score summaries over their logging windows, ending at each step."""
     try:
         import plotext as plt
     except ImportError:
@@ -812,10 +811,13 @@ def _plot_grpo_reward_curves(metrics: list[dict]) -> None:
     from soup_cli.experiment.reward_columns import finite_reward
     from soup_cli.utils.plotext_compat import render_line
 
-    train = [row for row in metrics if row.get("kind") == "train"]
+    train = [
+        row for row in metrics
+        if row.get("kind") == "train" and finite_reward(row.get("reward")) is not None
+    ]
     for key, label, title in (
-        ("reward", "Mean reward", "GRPO Mean Training Reward"),
-        ("reward_std", "Reward std. dev.", "GRPO Training Reward Std. Dev."),
+        ("reward", "Mean score", "Training mean score"),
+        ("reward_std", "Recorded spread", "Training recorded spread"),
     ):
         steps = []
         values = []

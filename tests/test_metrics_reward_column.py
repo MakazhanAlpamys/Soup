@@ -46,10 +46,10 @@ from soup_cli.cli import app
 from soup_cli.experiment.tracker import ExperimentTracker
 from soup_cli.monitoring.callback import SoupTrainerCallback
 from soup_cli.utils.eval_schedule import validation_metric
+from tests.conftest import strip_ansi
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 DOCS = Path(__file__).resolve().parent.parent / "docs"
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 runner = CliRunner()
 
 _NAN = float("nan")
@@ -65,7 +65,7 @@ _NEW_COLUMNS = ["reward", "reward_std"]
 
 def _plain_lines(text: str) -> str:
     """Strip colour escapes (they differ per OS) and collapse whitespace within each line."""
-    return "\n".join(" ".join(line.split()) for line in _ANSI_RE.sub("", text).splitlines())
+    return "\n".join(" ".join(line.split()) for line in strip_ansi(text).splitlines())
 
 
 @pytest.fixture(autouse=True)
@@ -876,27 +876,30 @@ def test_soup_runs_show_prints_a_single_reward_once(tracker, monkeypatch):
     assert "│ Reward: 0.5000 (1 step) │" in text.splitlines()
 
 
-def test_soup_runs_show_plots_grpo_training_reward_at_logged_steps(tracker, monkeypatch):
+@pytest.mark.parametrize("command", ["show", "replay"])
+def test_soup_runs_plot_training_scores_at_logged_steps(tracker, monkeypatch, command):
     run_id = _start(tracker, "run_grpo_plots", task="grpo")
     tracker.log_metrics(run_id, step=30, loss=1.0, reward=-0.25, kind="train")
     tracker.log_metrics(run_id, step=10, loss=2.0, reward=0.0, reward_std=0.0, kind="train")
     tracker.log_metrics(run_id, step=15, loss=1.5, kind="train")
+    tracker.log_metrics(run_id, step=17, reward_std=0.3, kind="train")
     tracker.log_metrics(run_id, step=20, reward=0.9, reward_std=0.4, kind="eval")
     tracker.log_metrics(run_id, step=40, reward=0.8, reward_std=0.2, kind="summary")
     tracker.close()
-    curves = {}
 
-    def record_line(_plotext, steps, values, *, title, **_options):
-        curves[title] = (steps, values)
+    def record_line(_plotext, steps, values, *, console, title, **_options):
+        console.print(f"Chart {title}: {steps!s} {values!s}", markup=False)
 
     monkeypatch.setattr("soup_cli.utils.plotext_compat.render_line", record_line)
-    _run_cli(["runs", "show", run_id], monkeypatch)
+    text = _run_cli(["runs", command, run_id], monkeypatch)
 
-    assert curves == {
-        "Training Loss": ([10, 15, 30], [2.0, 1.5, 1.0]),
-        "GRPO Mean Training Reward": ([10, 30], [0.0, -0.25]),
-        "GRPO Training Reward Std. Dev.": ([10], [0.0]),
-    }
+    expected = ["Chart Training Loss: [10, 15, 30] [2.0, 1.5, 1.0]"]
+    if command == "show":
+        expected += [
+            "Chart Training mean score: [10, 30] [0.0, -0.25]",
+            "Chart Training recorded spread: [10] [0.0]",
+        ]
+    assert [line for line in text.splitlines() if line.startswith("Chart ")] == expected
 
 
 @pytest.mark.parametrize(
@@ -905,21 +908,24 @@ def test_soup_runs_show_plots_grpo_training_reward_at_logged_steps(tracker, monk
         ("grpo", 0.0, [], True),
         ("grpo", 0.0, ["--no-plot"], False),
         ("grpo", None, [], False),
-        ("dpo", 0.0, [], False),
+        ("ppo", 0.0, [], True),
+        ("online_dpo", 0.0, [], True),
+        ("sft", None, [], False),
     ],
 )
-def test_soup_runs_show_omits_unavailable_grpo_reward_curves(
+def test_soup_runs_show_omits_unavailable_training_score_curves(
     tracker, monkeypatch, task, reward, flags, expect_mean
 ):
     run_id = _start(tracker, "run_reward_visibility", task=task)
-    tracker.log_metrics(run_id, step=10, loss=0.5, reward=reward, kind="train")
+    loss = None if task in ("ppo", "online_dpo") else 0.5
+    tracker.log_metrics(run_id, step=10, loss=loss, reward=reward, kind="train")
     tracker.close()
 
     text = _run_cli(["runs", "show", run_id, *flags], monkeypatch)
 
-    assert ("Training Loss" in text) == (not flags)
-    assert ("GRPO Mean Training Reward" in text) == expect_mean
-    assert "GRPO Training Reward Std. Dev." not in text
+    assert ("Training Loss" in text) == (not flags and loss is not None)
+    assert ("Training mean score" in text) == expect_mean
+    assert "Training recorded spread" not in text
 
 
 def test_soup_runs_compare_adds_reward_rows_when_either_run_has_a_reward(tracker, monkeypatch):

@@ -3536,7 +3536,7 @@ Usage: `soup runs replay [OPTIONS] RUN_ID`
 
 ### `soup runs show`
 
-Show run details and available loss and GRPO reward curves.
+Show run details and available loss and training score curves.
 
 Usage: `soup runs show [OPTIONS] RUN_ID`
 
