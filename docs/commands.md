@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -401,6 +402,15 @@ soup version [--full] [--json]                Show version (--full: system info,
 soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
 
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
