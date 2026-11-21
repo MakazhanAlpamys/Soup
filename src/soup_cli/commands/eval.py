@@ -136,6 +136,17 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
+            from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            if revision_kwargs:
+                revision = revision_kwargs["revision"]
+                model_arg = f"{model_arg},revision={revision}"
+                console.print(f"[dim]Base revision: {revision} (recorded run)[/]")
+            else:
+                console.print(
+                    "[dim]Base revision: unknown (legacy, local source or base override)[/]"
+                )
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )

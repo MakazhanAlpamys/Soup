@@ -1612,6 +1612,17 @@ characters are rejected so leaderboard rows can't be markup-injected.
 
 ## Model Evaluation
 
+When `soup eval benchmark` scores a local adapter with a matching Hub base
+commit in `soup_run.json`, it prints that commit and passes it to lm-eval as
+`revision`. The HF harness uses that revision for the base config, model and
+tokenizer. Its PEFT call also receives the revision, while the adapter itself
+is read from the local directory. Legacy, local and mismatching identities
+print an unknown revision and retain their existing loading behavior.
+
+The recorded commit must be available to the loader. If downloading it fails
+or offline mode has only another snapshot, the harness error ends evaluation.
+It does not retry against a newer base revision.
+
 Full-featured evaluation platform with standard benchmarks, custom evals, LLM-as-a-judge, and human evaluation:
 
 ```bash
