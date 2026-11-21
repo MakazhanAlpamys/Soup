@@ -728,11 +728,14 @@ class TestIterativeDPO:
         assert pairs.read_bytes() == prior
 
     @pytest.mark.parametrize(
-        "prompts_path",
-        ["missing.jsonl", "../outside.jsonl"],
+        ("prompts_path", "reason"),
+        [
+            ("missing.jsonl", "No such file or directory"),
+            ("../outside.jsonl", "must stay under cwd"),
+        ],
     )
     def test_cli_refuses_unreadable_prompts_before_printing_plan(
-        self, tmp_path, monkeypatch, prompts_path
+        self, tmp_path, monkeypatch, prompts_path, reason
     ):
         from typer.testing import CliRunner
 
@@ -753,6 +756,8 @@ class TestIterativeDPO:
 
         assert result.exit_code == 1, (result.output, repr(result.exception))
         text = " ".join(strip_ansi(result.output).split())
+        assert "Iterative DPO failed:" in text
+        assert reason in text
         assert "Iterative-DPO plan" not in text
 
     @pytest.mark.requires_symlink
@@ -828,6 +833,7 @@ class TestIterativeDPO:
         from typer.testing import CliRunner
 
         from soup_cli.commands.iterative_dpo import app
+        from tests.conftest import strip_ansi
 
         monkeypatch.chdir(tmp_path)
         res = CliRunner().invoke(
@@ -839,7 +845,8 @@ class TestIterativeDPO:
             ],
         )
         assert res.exit_code == 0, res.output
-        assert "Iterative-DPO plan" in res.output
+        text = " ".join(strip_ansi(res.output).split())
+        assert "Iterative-DPO plan" in text
 
     def test_cli_runs_with_monkeypatched_runner(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -847,6 +854,7 @@ class TestIterativeDPO:
         import soup_cli.utils.iterative_dpo as idpo
         from soup_cli.commands.iterative_dpo import app
         from soup_cli.utils.iterative_dpo import IterativeDPOResult
+        from tests.conftest import strip_ansi
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "p.jsonl").write_text(json.dumps({"prompt": "q"}))
@@ -869,6 +877,8 @@ class TestIterativeDPO:
         )
         assert res.exit_code == 0, res.output
         assert "Done" in res.output
+        text = " ".join(strip_ansi(res.output).split())
+        assert "Iterative-DPO plan" in text
 
 
 # --------------------------------------------------------------------------
