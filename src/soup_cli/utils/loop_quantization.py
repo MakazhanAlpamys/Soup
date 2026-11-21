@@ -12,7 +12,10 @@ that moment:
 
 The parameter count is read without loading weights: the safetensors headers of a local model
 directory, else the Hub's header-only metadata (skipped when ``HF_HUB_OFFLINE`` or
-``TRANSFORMERS_OFFLINE`` is set), else unknown, which is also ``4bit``.
+``TRANSFORMERS_OFFLINE`` is set), else what the Hugging Face cache holds of the repo (its cached
+safetensors headers, else its cached ``config.json``; ``model_shape.read_model_shape`` with
+``allow_network=False``), else unknown, which is also ``4bit``. A size guessed from the repo
+name is not a count. The note says where a cached count came from.
 
 The loop's watch daemon never imports torch for this: a CUDA context held by a process that
 lives for days would cost the card's memory for good (and ``soup serve`` often shares the card).
@@ -55,7 +58,16 @@ PROBE_SCRIPT = (
 )
 
 _GB = 1024**3
-_PREFIX = "sft quantization auto"
+#: How every note of this module starts; the train stage finds its note by it.
+NOTE_PREFIX = "sft quantization auto"
+_PREFIX = NOTE_PREFIX
+
+#: ``read_model_shape``'s ``params_source`` values that are counts, and how a note names them.
+#: ``"name"`` (a size guessed from the repo name) is not one.
+_CACHED_SOURCES = {
+    "safetensors": "count from the cached safetensors headers",
+    "config.json": "count from the cached config.json, an estimate without biases",
+}
 
 
 def estimated_need_bytes(params: int) -> int:
@@ -66,21 +78,40 @@ def estimated_need_bytes(params: int) -> int:
 def parameter_count(base: str) -> Optional[int]:
     """Parameter count of ``base`` without loading weights, or None when it cannot be told.
 
+    See :func:`count_parameters`, which also says where the count came from.
+    """
+    return count_parameters(base)[0]
+
+
+def count_parameters(base: str) -> tuple[Optional[int], str]:
+    """``(count, where it came from)``, or ``(None, why it is unknown)``.
+
     A local model directory is counted from its safetensors headers (a symlinked directory
     or weights file is refused); a Hub repo id from the Hub's header-only metadata, unless
-    the environment is offline; anything else is unknown.
+    the environment is offline, else from what the Hugging Face cache holds of it (never the
+    network). The second item is empty for a local directory and the Hub's metadata (exact
+    counts), and names the cached file otherwise.
     """
     if not isinstance(base, str) or not base:
-        return None
+        return None, "no base model"
     if os.path.isdir(base):
         from soup_cli.utils.gpu import param_count_from_local_safetensors
 
-        return param_count_from_local_safetensors(base, refuse_symlinks=True)
+        count = param_count_from_local_safetensors(base, refuse_symlinks=True)
+        return count, "" if count is not None else "no safetensors weights could be read"
     from soup_cli.utils import model_shape
 
     if not model_shape._REPO_ID.fullmatch(base) or ".." in base:
-        return None
-    return model_shape._hub_param_count(base, allow_network=True)
+        return None, "not a local directory or a Hub model id"
+    count = model_shape._hub_param_count(base, allow_network=True)
+    if count is not None:
+        return count, ""
+    shape = model_shape.read_model_shape(base, allow_network=False)
+    source = _CACHED_SOURCES.get(shape.params_source)
+    if source is not None and shape.params > 0:
+        return shape.params, source
+    where = "the Hub is offline" if model_shape.hub_offline() else "the Hub gave no count"
+    return None, f"{where} and the cache has no config.json or weights to count"
 
 
 def free_vram_bytes() -> Optional[int]:
@@ -130,12 +161,15 @@ def resolve_sft_quantization(setting: str, base: str) -> tuple[str, Optional[str
         return setting, None
     if setting != "auto":
         raise ValueError(f'quantization must be one of "4bit", "none", "auto", got {setting!r}')
-    params = parameter_count(base)
+    params, source = count_parameters(base)
     if params is None:
-        return "4bit", f"{_PREFIX}: 4bit (parameter count unknown)"
+        return "4bit", f"{_PREFIX}: 4bit (parameter count unknown: {source})"
     free = free_vram_bytes()
     if free is None:
         return "4bit", f"{_PREFIX}: 4bit (free VRAM unknown: no usable CUDA device)"
     need = estimated_need_bytes(params)
     chosen = "none" if need <= free else "4bit"
-    return chosen, f"{_PREFIX}: {chosen} (need {need / _GB:.1f} GB, free {free / _GB:.1f} GB)"
+    where = f"; {source}" if source else ""
+    return chosen, (
+        f"{_PREFIX}: {chosen} (need {need / _GB:.1f} GB, free {free / _GB:.1f} GB{where})"
+    )
