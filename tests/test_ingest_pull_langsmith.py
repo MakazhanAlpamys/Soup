@@ -1122,8 +1122,6 @@ def test_a_planted_key_never_reaches_any_artefact(name, pull_env, monkeypatch, c
     _use_transport(monkeypatch, transport)
     monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", str(pull_env / "audit.jsonl"))
     monkeypatch.delenv("SOUP_NO_AUDIT_LOG", raising=False)
-    monkeypatch.setenv("NoDefaultCurrentDirectoryInExePath", "placeholder")
-    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath")
     payloads = []
     monkeypatch.setattr(
         webhooks, "send_webhooks", lambda payload, **kwargs: payloads.append(dict(payload)) or []

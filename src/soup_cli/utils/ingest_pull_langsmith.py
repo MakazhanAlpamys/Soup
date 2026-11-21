@@ -4,7 +4,7 @@ The LangSmith slice of #204, after the Langfuse one (``utils/ingest_pull.py``).
 ``commands/ingest.py`` imports this module only when ``--pull`` is passed with
 ``--source langsmith``, so the local-export path loads no HTTP code.
 
-Design decisions, each pinned by ``tests/test_issue204_langsmith_pull.py``:
+Design decisions, each pinned by ``tests/test_ingest_pull_langsmith.py``:
 
 - **Its own module, the Langfuse code unchanged.** LangSmith's runs query is a
   POST with a JSON body, an ``X-API-Key`` header and the cursor in the body;
@@ -19,12 +19,19 @@ Design decisions, each pinned by ``tests/test_issue204_langsmith_pull.py``:
   loop runs away.
 - **Runs API v2.** ``POST /api/v2/runs/query`` with ``project_ids``, so the
   project named by ``LANGSMITH_PROJECT`` is first resolved to its id with
-  ``GET /api/v1/sessions?name=``. Seen on a LangSmith Cloud account on
-  2026-11-15 and matching langsmith-py 0.14.17's ``query_v2``: v2 returns only
-  ``id`` unless ``selects`` asks for the fields; the filter takes
-  ``run_type: "LLM"`` and the runs come back as ``"llm"``; without
+  ``GET /api/v1/sessions?name=``.
+
+  Seen on a LangSmith Cloud account on 2026-11-15 (an observation, not
+  documentation): the sessions lookup returns a list with the project's ``id``;
+  v2 returns only ``id`` unless ``selects`` asks for the fields; the filter
+  takes ``run_type: "LLM"`` and the runs come back as ``"llm"``; without
   ``min_start_time`` it covers only the last day, so the window is always sent;
-  pages are ``next_cursor`` in the answer and ``cursor`` in the next body.
+  a last page has ``next_cursor: null``.
+
+  Read in langsmith-py 0.14.17's ``query_v2`` only, not seen on the account (no
+  second page was returned there): the next page is asked for with ``cursor``
+  in the body, ``max_start_time`` bounds the window, and ``page_size`` is 1 to
+  1000.
 - **One row per LLM run.** An LLM run holds the exact model input and output;
   chain and tool runs are not model calls. ``run_type`` is sent as a filter and
   checked again on each run, so a server that ignores the filter cannot turn
