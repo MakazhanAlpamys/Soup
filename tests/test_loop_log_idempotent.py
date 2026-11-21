@@ -11,6 +11,7 @@ a duplicate. The checks run against the real crash: the state write is made to f
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -131,8 +132,10 @@ class TestLogLevel:
 
     def test_incremental_index_observes_an_append_from_another_writer(self, cwd):
         first = LoopLog(str(cwd / "logs"))
+        warm = _iteration("iter-warm", "skipped")
         target = _iteration("iter-external", "canary")
-        first.iteration(_iteration("iter-warm", "skipped"))
+        first.iteration(warm)
+        assert first.iteration({**warm, "id": "different-id"}) is True
 
         loop_log_module.append_json_line(str(cwd / "logs" / "iterations.jsonl"), target)
         assert first.iteration(target) is True
@@ -155,6 +158,7 @@ class TestLogLevel:
         log = LoopLog(str(path.parent))
         target = _iteration("iter-after-truncate", "failed")
         log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
         path.write_bytes(b"")
 
         assert log.iteration(target) is True
@@ -166,12 +170,55 @@ class TestLogLevel:
         old = _iteration("iter-same-size", "canary")
         replacement = _iteration("iter-same-size", "failed")
         log.iteration(old)
+        assert log.iteration({**old, "id": "different-id"}) is True
+        old_stat = path.stat()
         old_size = path.stat().st_size
         path.write_bytes((json.dumps(replacement) + "\n").encode("utf-8"))
+        rewritten = path.stat()
+        os.utime(path, ns=(rewritten.st_atime_ns, old_stat.st_mtime_ns + 2_000_000_000))
         assert path.stat().st_size == old_size
+        assert path.stat().st_mtime_ns != old_stat.st_mtime_ns
 
         assert log.iteration(old) is True
         assert len(_lines(path)) == 2
+
+    def test_replacing_log_inode_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-replaced", "canary")
+        replacement = _iteration("iter-replaced", "failed")
+        log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
+
+        replacement_path = path.with_name("iterations-replacement.jsonl")
+        replacement_path.write_bytes((json.dumps(replacement) + "\n").encode("utf-8"))
+        os.replace(replacement_path, path)
+
+        assert log.iteration(target) is True
+        rows = _lines(path)
+        assert sum(row.get("outcome") == "canary" for row in rows) == 1
+        assert sum(row.get("outcome") == "failed" for row in rows) == 1
+
+    def test_changed_bytes_before_old_end_are_detected_when_log_grows(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-anchor", "canary")
+        replacement = _iteration("iter-anchor", "failed")
+        log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
+        original_size = path.stat().st_size
+
+        replacement_bytes = (json.dumps(replacement) + "\n").encode("utf-8")
+        assert len(replacement_bytes) == original_size
+        path.write_bytes(replacement_bytes)
+        loop_log_module.append_json_line(
+            str(path), _iteration("iter-after-anchor", "skipped")
+        )
+
+        assert log.iteration(target) is True
+        rows = _lines(path)
+        assert sum(row.get("outcome") == "canary" for row in rows) == 1
+        assert sum(row.get("outcome") == "failed" for row in rows) == 1
 
 
 class TestEveryIterationGetsItsLine:
