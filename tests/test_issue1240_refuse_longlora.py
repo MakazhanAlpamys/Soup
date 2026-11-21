@@ -256,7 +256,7 @@ def test_soup_train_stops_at_config_load(tmp_path, monkeypatch, extra_args):
 
     output = _plain(result.output)
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "training -> use_longlora" in output, output
+    assert "training.use_longlora: true is refused" in output, output
     assert "#1240" in output, output
     assert "leaks future tokens" in output, output
     assert "rope_scaling_type" in output, output
@@ -276,7 +276,7 @@ def test_soup_doctor_config_reports_the_config_as_unloadable(tmp_path, capsys):
 
     assert excinfo.value.exit_code == 2
     output = _plain(capsys.readouterr().out)
-    assert "training -> use_longlora" in output, output
+    assert "training.use_longlora: true is refused" in output, output
     assert "#1240" in output, output
 
 

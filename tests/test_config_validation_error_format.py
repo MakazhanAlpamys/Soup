@@ -50,6 +50,17 @@ data:
 output: ./o
 """
 
+_SFT_PREVIOUS_BASELINE = """\
+base: org/model
+task: sft
+data:
+  train: ./x.jsonl
+training:
+  eval_gate:
+    baseline: previous
+output: ./o
+"""
+
 _GRPO_REMOTE_HTTP_JUDGE = """\
 base: org/model
 task: grpo
@@ -134,6 +145,21 @@ class TestThroughSoupTrainDryRun:
             "Config validation error: data.remove_unused_columns: true never had an effect"
         ) in out, out
         assert "data -> remove_unused_columns" not in out, out
+        assert "Value error" not in out, out
+
+    def test_a_field_level_refusal_that_names_its_field_is_the_message_alone(
+        self, tmp_path, monkeypatch
+    ):
+        """#3030 — the ``baseline: previous`` refusal's text starts with the field's
+        dotted path, so ``<loc>: `` in front printed the location twice. The
+        dedup rule is not only for deprecated values: any message that starts
+        with its own dotted name is the message alone."""
+        result = _dry_run(tmp_path, monkeypatch, _SFT_PREVIOUS_BASELINE)
+        out = _plain(result.output)
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "training.eval_gate.baseline: 'previous' is not implemented" in out, out
+        assert "training -> eval_gate -> baseline: training.eval_gate" not in out, out
         assert "Value error" not in out, out
 
     def test_a_field_level_refusal_keeps_its_location(self, tmp_path, monkeypatch):
