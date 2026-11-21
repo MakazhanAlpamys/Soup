@@ -546,6 +546,9 @@ class TestRemoveDirectory:
 
             (child,) = started
             assert child.wait(timeout=_GONE_WITHIN_SECONDS) is not None
+            # The caller gets the error, not a leaked pair of pipes.
+            assert child.stdout.closed, "stdout of the child was left open"
+            assert child.stderr.closed, "stderr of the child was left open"
         finally:
             for child in started:
                 if child.poll() is None:
