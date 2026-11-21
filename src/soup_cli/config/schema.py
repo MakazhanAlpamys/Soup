@@ -9746,10 +9746,8 @@ class SoupConfig(BaseModel):
         ]
         if not fields:
             return self
-        if (
-            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
-            and tcfg.lora.r == 0 and not tcfg.stream_layers
-        ):
+        mlx_full_route = self._mlx_full_finetune_freezes()
+        if mlx_full_route and tcfg.lora.r == 0:
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
@@ -9768,11 +9766,31 @@ class SoupConfig(BaseModel):
             return self
         settings = " and ".join(setting for setting, _ in off_path)
         changes = " and ".join(change for _, change in off_path)
+        # #3086 T-2: a run that differs from the exemption above only in its LoRA
+        # rank is told about the MLX route too, with the quantization that
+        # ``_validate_full_finetune`` requires of it.
+        route, alternative = (
+            (", or in native MLX text SFT with lora.r: 0",
+             ", or lora.r: 0 with quantization: none")
+            if mlx_full_route else ("", "")
+        )
         raise ValueError(
             f"{named} {verb} not applied by task={self.task!r} with {settings}: "
             "layers are frozen only on the text path with backend: transformers and "
-            "no layer streaming, so this run would train every layer. "
-            f"Use {changes}, or remove {keys}."
+            f"no layer streaming{route}, so this run would train every layer. "
+            f"Use {changes}{alternative}, or remove {keys}."
+        )
+
+    def _mlx_full_finetune_freezes(self) -> bool:
+        """Whether the run is on the one MLX route that freezes layers once
+        ``training.lora.r`` is 0: native MLX text SFT without layer streaming.
+
+        :meth:`_validate_freeze_is_applied` lets the fields through on this route
+        with ``lora.r == 0`` and names the route in its refusal otherwise, so the
+        exemption and the message read the same condition (#3086 T-2)."""
+        return (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and not self.training.stream_layers
         )
 
     @model_validator(mode="after")
