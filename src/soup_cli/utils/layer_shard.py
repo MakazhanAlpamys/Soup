@@ -1866,9 +1866,11 @@ def check_serialized_nf4_request(
             "at a bf16 copy of this model."
         )
     if stripe_roots:
+        from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
         raise ValueError(
             "a pre-quantised bitsandbytes NF4 source is imported into one cache folder; "
-            "the layer cache is striped over several drives here (SOUP_STRIPE_DIRS). "
+            f"the layer cache is striped over several drives here ({STRIPE_DIRS_ENV}). "
             "Unset it for this model, or point base at a bf16 copy of it."
         )
 

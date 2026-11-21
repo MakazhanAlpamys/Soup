@@ -15,7 +15,11 @@ from __future__ import annotations
 import base64
 import copy
 import faulthandler
+import gc
 import json
+import math
+import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -732,14 +736,20 @@ def test_nested_config_is_redacted_by_key_name_and_by_text():
     assert not any("plainvalue" in path or URL_SECRET in path for path in report.paths)
 
 
+def _credential_list(count: int) -> dict:
+    return {"credentials": [f"value-{index}" for index in range(count)] + ["value-0"]}
+
+
 @pytest.mark.usefixtures("perf_watchdog")
 def test_many_redacted_values_in_one_config_are_recorded_in_linear_time():
     count = 40_000
-    config = {"credentials": [f"value-{index}" for index in range(count)] + ["value-0"]}
-    start = time.perf_counter()
+    # a list scan per path is quadratic: 16x per step of 4x, minutes at the last size
+    _time_ladder(
+        _credential_list, redact_config, (2_500, 10_000, count), "config paths",
+        host=_Host(), pauses=RETRY_PAUSES,
+    )
+    config = _credential_list(count)
     redacted, report = redact_config(config)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 5, elapsed  # a list scan per path is quadratic: minutes at this size
     assert report.count == count + 1
     assert len(report.paths) == count + 1
     assert report.paths[0] == "credentials[0]" and report.paths[-1] == f"credentials[{count}]"
@@ -1153,18 +1163,76 @@ def test_every_spelling_is_gone_from_all_three_inputs(row):
 # ---------------------------------------------------------------------------
 # Linear time (model: tests/test_issue1367_quadratic_backtracking.py)
 #
-# Two things keep a regression here from hanging the run instead of failing it: a size
-# ladder (a pattern that is super-linear shows up at 4-64 KiB, long before the 256 KiB and
-# 1 MiB inputs), and assertions on big strings that never put the string into pytest's
+# What is pinned is a RATIO measured on one host in one moment, never a number of seconds: the
+# time ``redact_text`` takes grows about linearly with the size of its input. A hosted runner
+# that is three times slower than a laptop, or a neighbour that steals the CPU for 200 ms, moves
+# every time and leaves the ratios alone, so the ladder below
+#   * keeps the FASTEST of several runs per size (noise only ever adds time) and compares sizes
+#     measured in the same window (the smaller size is run again next to the bigger one);
+#   * fails a step only when it grew faster than ``size ** GROWTH_EXPONENT_LIMIT`` against EVERY
+#     smaller size, and measures a step that looks too slow again, after a pause, before it fails
+#     (a busy spell ends, a quadratic pattern is slow every time);
+#   * keeps one absolute bound, for a pattern that is linear but absurdly slow, and states it in
+#     units of a reference scan timed on the same host (``_host_unit_per_char``), not in seconds;
+#   * times CPU seconds of the thread, not wall seconds (see ``_Host``): who else is running on
+#     the host, or how it slices the CPU, is not part of the cost of the pattern.
+# Two things keep a regression here from hanging the run instead of failing it: the ladder stops at
+# the first step that is too slow (a pattern that is super-linear shows at 4-64 KiB, long before
+# the 256 KiB and 1 MiB inputs), and assertions on big strings never put the string into pytest's
 # failure explanation (``assert secret not in big_text`` makes pytest diff the text with
 # difflib, which on a 1 MiB repeated traceback takes far longer than the code under test).
+# The ladder is an instrument and is checked like one: the stand-in tests below run it on a clock
+# that the stand-in patterns advance (they cost an exactly known time), so a verdict never depends
+# on the speed or the mood of the machine that runs them.
+# ``tests/_growth_timing.py`` checks one size against eight times it, on Linux only, for the scans
+# that have one shape each; this file has seventy shapes that must run everywhere, a stop at the
+# first bad size and bounds for 1 MiB inputs, so it keeps a ladder of its own, on the same rules
+# (the fastest of runs taken next to each other, a floor under the small time, the collector off).
 # ---------------------------------------------------------------------------
 
 LADDER = (4 << 10, 16 << 10, 64 << 10, 256 << 10)
-LADDER_STEP_LIMIT = 10  # 4x more text: linear is about 4x the time, quadratic about 16x
-LADDER_NOISE_FLOOR = 0.02  # seconds; timings below this are noise
-STEP_FLOOR = 0.25  # seconds a step may always take, whatever its size
+# A step of s times the input may cost s ** 1.5 times as much: linear is s ** 1, a quadratic
+# pattern s ** 2 and a cubic one s ** 3, so 1.5 is as far from the linear pattern (measured
+# exponents: 1.00 to 1.06) as from the quadratic one: a factor of 2 on a step of 4.
+GROWTH_EXPONENT_LIMIT = 1.5
+# A time below this is not compared, the step is compared with this instead. Windows accounts CPU
+# time in ticks of 15.6 ms (a run of 1 ms reads 0 or 15.6 ms); 60 ms is four ticks, so above it
+# the error is under a quarter. On Linux and macOS the clock is exact and the floor only keeps a
+# run of a millisecond (a page fault, a cold cache) from deciding a step. With the wall clock the
+# floor could not be low enough: on this box, four busy loops sharing two CPUs with the test
+# (2026-11-19) failed 2 to 7 of the 127 timing tests on every run at a floor of 10 ms, and still
+# the costliest shapes at 60 ms (1.1 s for 64 KiB after 0.1 s for 16 KiB).
+NOISE_FLOOR = 0.06
+# The fastest of several runs is kept. A size is run once when its own step is measured (a step
+# that looks too slow is measured again, below) and again, MIN_RUNS to MAX_RUNS times, in the
+# window of the next step, where it is the smaller size: that is where noise on it would hide
+# a quadratic pattern. The runs add up to SAMPLE_SECONDS at least (7 runs of a 1 ms size, 2 of a
+# 20 ms one); a run of SLOW_RUN is taken once, a stall of some ms is noise next to it.
+MIN_RUNS = 2
+MAX_RUNS = 7
+SAMPLE_SECONDS = 0.02
+SLOW_RUN = 0.5
+# A step that looks too slow is measured again, once per pause, and never more often: the
+# budget is a number of runs, so it follows the speed of the host instead of a number of seconds.
+RETRY_PAUSES = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0)
+# The one absolute bound: a size may cost this many reference units per character. The two
+# costliest shapes (one huge unquoted value, one unclosed quote) measured 109 and 154 units on
+# 2026-11-19, the median shape 4; the bound is 26 times the worst, so only a pattern that is
+# linear but absurdly slow reaches it (one that is merely 10 times slower than today does not).
+# See ``_host_unit_per_char``.
+ABSOLUTE_UNITS = 4000
+ABORT_FACTOR = 4  # one run this many times over the absolute bound is slow, not noise
+REFERENCE_SIZE = 16 << 10
 CASE_DEADLINE = 90  # seconds: past this the whole run is aborted with a traceback
+_REFERENCE_WORDS = re.compile(r"[A-Za-z0-9_]+")
+_REFERENCE_PROSE = (
+    "step 12 failed while loading the shard data/train-0007.jsonl: the tokenizer returned 0 "
+    "rows for batch size 8, so the loop was skipped and the run went on with lr=0.0002 and "
+    "seed=42 (see the notes in the run directory for the config that was used). "
+)
+_REFERENCE_TEXT = (_REFERENCE_PROSE * (REFERENCE_SIZE // len(_REFERENCE_PROSE) + 1))[
+    :REFERENCE_SIZE
+]
 
 
 @pytest.fixture
@@ -1179,13 +1247,82 @@ def perf_watchdog():
     faulthandler.cancel_dump_traceback_later()
 
 
-def _time_bound(size: int) -> float:
-    """Four times the worst rate measured for ``redact_text`` (4.3 s per MiB, 2026-11-15).
+class _Host:
+    """The clock and the pause the ladder uses: the real ones.
 
-    The #1367 test allowed 0.5 s per 50 000 characters (10.5 s per MiB), which is under 2.5x
-    the worst measured case: a slow runner would fail a correct build. This is 17.2 s per MiB.
+    The clock is the CPU time of this thread, not the wall clock. A host that shares its CPUs
+    hands them out in time slices (and a virtual machine loses some to its neighbours): the wall
+    clock charges every slice of someone else to the run that was waiting, and no minimum of runs
+    can take that out, because a run shorter than a slice is never interrupted and a longer one
+    always is, so the ratio between two sizes grows by the inverse of the CPU share (measured
+    here, four busy loops sharing two CPUs with the test: 11x for 4x the input). CPU time is
+    the work the thread did, whoever else was running. Windows accounts it in ticks of 15.6 ms,
+    which is why ``NOISE_FLOOR`` is several of them.
     """
-    return 17.2 * size / (1 << 20)
+
+    def clock(self) -> float:
+        return time.thread_time()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+class _StandInHost(_Host):
+    """A clock that only the stand-in patterns move, by the time they would have taken."""
+
+    def __init__(self, slowdown: float = 1.0) -> None:
+        self.now = 0.0
+        self.slowdown = slowdown  # 3.0: a host three times slower than the one that was measured
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _reference_scan(text: str) -> int:
+    """A regex scan with a Python step per match: the mix ``redact_text`` is made of, and none
+    of its code, so a change of the helper cannot move the unit."""
+    total = 0
+    for match in _REFERENCE_WORDS.finditer(text):
+        total += match.end() - match.start()
+    return total
+
+
+def _measure_unit(host: _Host, scan) -> float:
+    """CPU seconds of ``scan`` per character: the fastest of 3 batches of at least 0.1 s each (a
+    clock of 15.6 ms ticks cannot time a scan of one millisecond, a hundred of them it can)."""
+    best = float("inf")
+    for _ in range(3):
+        runs, start = 0, host.clock()
+        while host.clock() - start < 0.1:
+            scan(_REFERENCE_TEXT)
+            runs += 1
+        best = min(best, (host.clock() - start) / runs)
+    return best / len(_REFERENCE_TEXT)
+
+
+_REAL_UNIT: list[float] = []
+
+
+def _host_unit_per_char(host: _Host | None = None, scan=None) -> float:
+    """CPU seconds one character costs the reference scan on this host. The unit of the real
+    host is measured once per process: it is CPU time, so it does not depend on the load."""
+    if host is None and scan is None:
+        if not _REAL_UNIT:
+            _REAL_UNIT.append(_measure_unit(_Host(), _reference_scan))
+        return _REAL_UNIT[0]
+    return _measure_unit(host or _Host(), scan or _reference_scan)
+
+
+def _host_bound(size: int, host: _Host | None = None) -> float:
+    """What ``size`` characters may cost ``redact_text``: ``ABSOLUTE_UNITS`` units each."""
+    return _bound_in_units(_host_unit_per_char(host))(size)
+
+
+def _bound_in_units(unit_per_char: float):
+    return lambda size: ABSOLUTE_UNITS * unit_per_char * size
 
 
 def _leaked(text: str, *secrets: str) -> list[str]:
@@ -1197,31 +1334,127 @@ def _repeat(unit: str):
     return lambda size: unit * (size // len(unit) + 1)
 
 
-def _assert_scales_linearly(make_text, label: str) -> str:
-    """Time ``redact_text`` up the ladder; fail at the first step that grows too fast."""
-    timings: list[float] = []
-    text = ""
-    for size in LADDER:
-        text = make_text(size)
-        acceptable = max(_time_bound(size), STEP_FLOOR)
-        if timings:
-            acceptable = min(acceptable, LADDER_STEP_LIMIT * max(timings[-1], LADDER_NOISE_FLOOR))
-        # one run; a run over its bound is repeated twice and the best one counts, because a
-        # paused CI runner is not a slow pattern (a slow pattern is slow all three times)
-        best = float("inf")
-        for _attempt in range(3):
-            start = time.perf_counter()
-            redact_text(text)
-            best = min(best, time.perf_counter() - start)
-            if best <= acceptable:
-                break
-        timings.append(best)
-        # every step has its own bound: a case never climbs the whole ladder to fail
-        assert timings[-1] < max(_time_bound(size), STEP_FLOOR), (label, size, timings[-1])
-        if len(timings) > 1:
-            limit = LADDER_STEP_LIMIT * max(timings[-2], LADDER_NOISE_FLOOR)
-            assert timings[-1] <= limit, (label, size, [round(t, 4) for t in timings])
-    assert timings[-1] < _time_bound(len(text)), (label, timings[-1])
+class _Runs:
+    """The runs of one input size. The fastest is the estimate: noise only ever adds time."""
+
+    def __init__(self) -> None:
+        self.best = math.inf
+        self.count = 0
+        self.total = 0.0
+
+    def add(self, took: float) -> None:
+        self.best = min(self.best, took)
+        self.count += 1
+        self.total += took
+
+    def slow(self) -> bool:
+        return self.count > 0 and self.best > SLOW_RUN
+
+    def enough(self) -> bool:
+        if self.count == 0:
+            return False
+        if self.slow() or self.count >= MAX_RUNS:
+            return True
+        return self.count >= MIN_RUNS and self.total >= SAMPLE_SECONDS
+
+
+def _timed(host: _Host, run, item) -> float:
+    # the key-name cache would turn a repeat of the same text, or a bigger text that starts
+    # with the same names, into hits: every run pays for its own names
+    is_secret_key.cache_clear()
+    start = host.clock()
+    run(item)
+    return host.clock() - start
+
+
+def _step_problem(sizes, times, index: int, bound, near: float | None = None) -> str:
+    """Why step ``index`` is too slow, or an empty string.
+
+    ``near`` is the time of the next smaller size taken in the window of this step: a host whose
+    speed changed since that size was first measured does not make the step look slow.
+    """
+    size, took = sizes[index], times[index]
+    if bound is not None and took > bound(size):
+        return "over the absolute bound of the host reference"
+    for earlier in range(index):
+        reference = near if (near is not None and earlier == index - 1) else times[earlier]
+        allowed = (size / sizes[earlier]) ** GROWTH_EXPONENT_LIMIT
+        if took > allowed * max(reference, NOISE_FLOOR):
+            return f"grew faster than size ** {GROWTH_EXPONENT_LIMIT} since {sizes[earlier]}"
+    return ""
+
+
+def _time_ladder(make_input, run, sizes, label: str, *, host, pauses, bound=None):
+    """Time ``run(make_input(size))`` for every size; fail at the first step that is too slow.
+
+    Returns the fastest time of every size and the input of the last one.
+    """
+    items: list = []
+    runs: list[_Runs] = []
+
+    def look(member: int, window: _Runs) -> None:
+        took = _timed(host, run, items[member])
+        runs[member].add(took)
+        window.add(took)
+
+    def climb() -> None:
+        for index, size in enumerate(sizes):
+            items.append(make_input(size))
+            runs.append(_Runs())
+            smaller = index - 1
+            # the step is judged on the runs of both sizes taken while it is measured: they
+            # share the speed of the host at this moment, whatever it was when the smaller
+            # size first ran
+            near, here = _Runs(), runs[index]
+            problem = ""
+            for attempt in range(len(pauses) + 1):
+                if attempt:
+                    host.sleep(pauses[attempt - 1])
+                    if smaller >= 0:
+                        look(smaller, near)
+                    look(index, here)
+                else:
+                    while not (here.count and (smaller < 0 or near.enough())):
+                        if smaller >= 0 and not near.enough():
+                            look(smaller, near)
+                        if not here.count:
+                            look(index, here)
+                times = [member.best for member in runs]
+                problem = _step_problem(
+                    sizes, times, index, bound, near.best if smaller >= 0 else None
+                )
+                # a run far over the absolute bound is a slow pattern, not a busy host: no re-run
+                if not problem or (bound is not None and times[index] > ABORT_FACTOR * bound(size)):
+                    break
+            # every step has its own verdict: a case never climbs the whole ladder to fail
+            assert not problem, (label, size, problem, [round(t, 4) for t in times])
+
+    # a full collection must not land on one size only (as in tests/_growth_timing.py)
+    reenable = gc.isenabled()
+    gc.disable()
+    try:
+        climb()
+    finally:
+        if reenable:
+            gc.enable()
+    return [member.best for member in runs], items[-1]
+
+
+def _assert_scales_linearly(
+    make_text, label: str, redact=None, *, host=None, pauses=RETRY_PAUSES, unit_per_char=None,
+    sizes=LADDER,
+) -> str:
+    """Time ``redact`` (``redact_text``) up the ladder; fail at the first step that is too slow.
+
+    The absolute bound is on whenever the host reference is known: always for ``redact_text``
+    (measured here, in the same moment), for a stand-in when ``unit_per_char`` is given.
+    """
+    host = host or _Host()
+    if redact is None:
+        redact = redact_text
+        unit_per_char = _host_unit_per_char()
+    bound = None if unit_per_char is None else _bound_in_units(unit_per_char)
+    _, text = _time_ladder(make_text, redact, sizes, label, host=host, pauses=pauses, bound=bound)
     return text
 
 
@@ -1241,16 +1474,225 @@ def test_the_helpers_that_keep_a_failing_perf_test_cheap_work():
     assert _assert_scales_linearly(_repeat("hf_"), "hf prefixes").startswith("hf_")
 
 
+# ---- the instrument, checked against stand-ins of known cost ----------------------------------
+
+UNIT = 1e-7  # seconds per character of the reference scan on the pretend host
+LINEAR = 2e-6  # seconds per character: 20 units, about what the common patterns cost
+
+
+def _x_text(size: int) -> str:
+    return "x" * size
+
+
+def _stand_in(host, per_char=0.0, per_char_squared=0.0, per_char_cubed=0.0, extra=None):
+    """A stand-in for ``redact_text`` that costs ``per_char * n + per_char_squared * n ** 2 +
+    per_char_cubed * n ** 3`` seconds, plus ``extra(n, calls)`` when given, on a host that is
+    ``host.slowdown`` times slower; ``.calls`` lists the sizes it was run on."""
+    calls: list[int] = []
+
+    def redact(text: str) -> None:
+        size = len(text)
+        calls.append(size)
+        seconds = per_char * size + per_char_squared * size**2 + per_char_cubed * size**3
+        host.now += (seconds + (extra(size, calls) if extra else 0.0)) * host.slowdown
+
+    redact.calls = calls
+    return redact
+
+
+def _run(redact, host, pauses=RETRY_PAUSES, label="stand-in"):
+    # the reference scan of a host that is 3 times slower takes 3 times as long
+    return _assert_scales_linearly(
+        _x_text, label, redact=redact, host=host, pauses=pauses,
+        unit_per_char=UNIT * host.slowdown,
+    )
+
+
+def _fails_with(redact, host, pauses=RETRY_PAUSES, label="stand-in") -> str:
+    with pytest.raises(AssertionError) as info:
+        _run(redact, host, pauses, label)
+    return str(info.value)
+
+
+def test_the_ladder_fails_a_quadratic_stand_in_at_the_first_step_that_grows_too_fast():
+    # 3 ms, 51 ms (inside the noise floor), 0.86 s at 64 KiB: 16x for 4x the text; the
+    # whole ladder stays far inside the absolute bound, so only the growth can see it
+    host = _StandInHost()
+    redact = _stand_in(host, per_char_squared=2e-10)
+    message = _fails_with(redact, host, label="quadratic")
+    assert message.startswith("('quadratic', 65536, "), message[:80]
+    assert max(redact.calls) == 64 << 10  # it stopped there: 256 KiB was never run
+
+
+def test_the_ladder_fails_a_quadratic_that_only_shows_at_the_last_step():
+    # 43 ms at 64 KiB (fine), 0.69 s at 256 KiB: the 8 x 60 ms the noise floor allows is 0.48 s
+    host = _StandInHost()
+    redact = _stand_in(host, per_char_squared=1e-11)
+    message = _fails_with(redact, host, label="late quadratic")
+    assert message.startswith(f"('late quadratic', {LADDER[-1]}, "), message[:80]
+    assert "grew faster than size ** 1.5" in message
+
+
+def test_the_ladder_fails_a_cubic_stand_in_at_its_second_step():
+    host = _StandInHost()
+    redact = _stand_in(host, per_char_cubed=2e-13)  # 14 ms at 4 KiB, 0.88 s at 16 KiB
+    message = _fails_with(redact, host, label="cubic")
+    assert message.startswith(f"('cubic', {LADDER[1]}, "), message[:80]
+    assert max(redact.calls) == LADDER[1]
+
+
+@pytest.mark.parametrize("slowdown", [0.1, 0.5, 1.0, 3.0, 10.0])
+def test_a_host_that_is_uniformly_slow_or_fast_gets_the_same_verdicts(slowdown):
+    host = _StandInHost(slowdown)
+    _run(_stand_in(host, per_char=LINEAR), host)  # linear passes at any speed
+    if slowdown < 1:
+        return  # a quadratic that costs under 0.48 s at 256 KiB is inside the noise floor
+    host = _StandInHost(slowdown)
+    message = _fails_with(_stand_in(host, per_char_squared=1e-11), host, label="quadratic")
+    # the step where it shows depends on the noise floor (an absolute time), the verdict does not
+    assert message.startswith(("('quadratic', 65536, ", f"('quadratic', {LADDER[-1]}, ")), message
+    assert "grew faster than size ** 1.5" in message
+
+
+def test_a_linear_pattern_ten_times_slower_per_character_is_slow_not_super_linear():
+    host = _StandInHost()
+    redact = _stand_in(host, per_char=10 * LINEAR)  # 200 units per character, 5 s at 256 KiB
+    _run(redact, host)
+    assert max(redact.calls) == LADDER[-1]
+    assert redact.calls.count(LADDER[-1]) == 1  # a 5 s run is taken once, and never retried
+
+
+def test_the_absolute_bound_is_in_units_of_the_host_and_fails_an_absurd_linear_pattern():
+    absurd = 2.5 * ABSOLUTE_UNITS * UNIT  # per character, over the bound at every size
+    host = _StandInHost()
+    redact = _stand_in(host, per_char=absurd)
+    message = _fails_with(redact, host, label="absurd")
+    assert message.startswith(f"('absurd', {LADDER[0]}, 'over the absolute bound"), message[:90]
+    # hopelessly slow (more than ABORT_FACTOR x the bound is not a busy host): run once, not again
+    redact = _stand_in(host, per_char=2 * ABORT_FACTOR * ABSOLUTE_UNITS * UNIT)
+    _fails_with(redact, host, label="hopeless")
+    assert redact.calls == [LADDER[0]]
+
+
+def test_a_rung_above_the_ladder_fails_a_pattern_that_is_linear_only_below_it():
+    rungs = LADDER + (1 << 20,)
+
+    def cliff(size, calls):
+        # linear up to 256 KiB, 5e-11 s per character squared above it (55 s at 1 MiB)
+        return 5e-11 * size**2 if size > LADDER[-1] else 0.0
+
+    host = _StandInHost()
+    redact = _stand_in(host, per_char=LINEAR, extra=cliff)
+    with pytest.raises(AssertionError) as info:
+        _assert_scales_linearly(
+            _x_text, "rung", redact=redact, host=host, unit_per_char=UNIT, sizes=rungs,
+        )
+    assert str(info.value).startswith(f"('rung', {rungs[-1]}, "), str(info.value)[:80]
+    # the same pattern is invisible to the ladder that stops at 256 KiB
+    host = _StandInHost()
+    _run(_stand_in(host, per_char=LINEAR, extra=cliff), host)
+
+
+def test_the_calibration_follows_the_host_it_runs_on():
+    def scan_on(host):
+        return lambda text: setattr(host, "now", host.now + 0.002 * host.slowdown)
+
+    fast, slow = _StandInHost(1.0), _StandInHost(3.0)
+    unit_fast = _host_unit_per_char(fast, scan=scan_on(fast))
+    unit_slow = _host_unit_per_char(slow, scan=scan_on(slow))
+    assert unit_fast == pytest.approx(0.002 / REFERENCE_SIZE)
+    assert unit_slow == pytest.approx(3 * unit_fast)
+
+
+def test_the_real_calibration_is_a_plausible_cost_per_character():
+    unit = _host_unit_per_char()
+    assert 1e-9 < unit < 1e-4, unit
+
+
+def test_the_ladder_does_not_fail_a_linear_pattern_that_met_a_busy_host_at_the_last_step():
+    def busy_host(size, calls):
+        # the first three runs of the 256 KiB step are slowed down about 12x, the fourth is not
+        return 0.6 if size == LADDER[-1] and calls.count(size) <= 3 else 0.0
+
+    host = _StandInHost()
+    redact = _stand_in(host, per_char=2e-7, extra=busy_host)
+    _run(redact, host)  # the production pauses
+    assert redact.calls.count(LADDER[-1]) == 4  # one in the first look, then one per retry
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_stalls_do_not_fail_a_linear_pattern_and_do_not_hide_a_quadratic_one(seed):
+    def stalls(rng):
+        # a fifth of the runs lose up to 0.2 s to a neighbour
+        return lambda size, calls: rng.uniform(0.0, 0.2) if rng.random() < 0.2 else 0.0
+
+    host = _StandInHost()
+    _run(_stand_in(host, per_char=LINEAR, extra=stalls(random.Random(seed))), host)
+    host = _StandInHost()
+    # 3.4 s at 256 KiB, 0.2 s at 64 KiB: a stall of at most 0.2 s cannot make the smaller size look
+    # slow enough to hide it (that takes 0.43 s), whichever runs it lands on
+    quadratic = _stand_in(host, per_char_squared=5e-11, extra=stalls(random.Random(seed)))
+    message = _fails_with(quadratic, host, label="quadratic under stalls")
+    assert message.startswith("('quadratic under stalls', "), message[:80]
+
+
+@pytest.mark.parametrize("slowdown", [1.0, 3.0, 10.0])
+def test_a_step_that_stays_slow_is_measured_a_bounded_number_of_times(slowdown):
+    # whatever the speed of the host, the runs of the failing step are the first look (one run)
+    # plus one per pause: the budget is a number of runs, not of seconds
+    for pauses in ((0.0,) * 7, (0.0,) * 2):
+        host = _StandInHost(slowdown)
+        redact = _stand_in(host, per_char_squared=1e-11)
+        _fails_with(redact, host, pauses=pauses, label="budget")
+        runs = redact.calls.count(max(redact.calls))  # the step that failed
+        assert runs == len(pauses) + 1, (slowdown, pauses, runs)
+
+
+def test_every_timed_run_starts_with_an_empty_key_name_cache():
+    seen: list[int] = []
+    host = _StandInHost()
+
+    def redact(text: str) -> None:
+        seen.append(is_secret_key.cache_info().currsize)
+        is_secret_key("somewhere_token")
+
+    is_secret_key("left_over_token")
+    _assert_scales_linearly(_x_text, "cache", redact=redact, host=host, pauses=(0.0,))
+    assert seen and set(seen) == {0}
+
+
+@pytest.mark.usefixtures("perf_watchdog")
+def test_the_ladder_works_on_the_real_clock_too():
+    # a cliff, not a curve: 0.2 ms at 4 KiB, 1 s above it. Busy-waiting only adds time, and a
+    # stall would have to cost 125 ms in every run of the 4 KiB step to hide it.
+    calls: list[int] = []
+
+    def cliff(text: str) -> None:
+        calls.append(len(text))
+        end = time.thread_time() + (2e-4 if len(text) <= LADDER[0] else 1.0)
+        while time.thread_time() < end:
+            pass
+
+    with pytest.raises(AssertionError) as info:
+        _assert_scales_linearly(_x_text, "cliff", redact=cliff, pauses=(0.0,), unit_per_char=UNIT)
+    assert str(info.value).startswith(f"('cliff', {LADDER[1]}, "), str(info.value)[:80]
+    assert max(calls) == LADDER[1]
+
+
 @pytest.mark.usefixtures("perf_watchdog")
 def test_one_mib_traceback_with_a_url_and_a_token_in_a_repr_is_fast():
-    _assert_scales_linearly(_frame_text, "traceback frames")
+    # 1 MiB is the last rung of the ladder: a pattern that is linear up to 256 KiB and not above
+    # it shows as growth against the sizes measured in the same window. The calibrated bound
+    # below is a backstop only (minutes on a laptop: more than CASE_DEADLINE).
+    _assert_scales_linearly(_frame_text, "traceback frames", sizes=LADDER + (1 << 20,))
     text = _frame_text(1 << 20)
     assert len(text) >= 1 << 20
     report = RedactionReport()
-    start = time.perf_counter()
+    host = _Host()
+    start = host.clock()
     out = redact_text(text, report)
-    elapsed = time.perf_counter() - start
-    assert elapsed < _time_bound(len(text)), elapsed
+    elapsed = host.clock() - start
+    assert elapsed < _host_bound(len(text)), elapsed
     assert not _leaked(out, URL_SECRET, BEARER_VALUE, HF)
     assert report.count >= 4 * (len(text) // len(_frame_text(1)))
 
@@ -1258,11 +1700,12 @@ def test_one_mib_traceback_with_a_url_and_a_token_in_a_repr_is_fast():
 @pytest.mark.usefixtures("perf_watchdog")
 def test_a_one_mib_error_message_goes_through_the_bundle_in_time():
     message = ("step failed " + HF + " ") * (1 << 20 >> 6)
-    start = time.perf_counter()
+    host = _Host()
+    start = host.clock()
     bundle = build_crash_bundle(error=RuntimeError(message))
-    elapsed = time.perf_counter() - start
+    elapsed = host.clock() - start
     # the message is cut at MAX_REDACT_CHARS before redaction (and again in the traceback)
-    assert elapsed < _time_bound(crash.MAX_REDACT_CHARS * 4), elapsed
+    assert elapsed < _host_bound(crash.MAX_REDACT_CHARS * 4), elapsed
     assert len(bundle["error"]["message"]) < crash.MAX_REDACT_CHARS + 200
     assert not _leaked(json.dumps(bundle), HF)
 
@@ -1278,6 +1721,9 @@ ADVERSARIAL = {
     "slack prefixes": _repeat("xoxb-"),
     "jwt prefixes": _repeat("eyJ"),
     "jwt dots": _repeat("eyJabcdef."),
+    "jwt dashed chain": _repeat("eyJ-eyJ_"),
+    "jwt two long parts": lambda size: "eyJ" + "a" * (size // 2) + ".eyJ" + "a" * (size // 2),
+    "jwt long parts between dots": _repeat("eyJ" + "a" * 3000 + ".eyJ" + "b" * 3000 + "."),
     "bearer words": _repeat("Bearer "),
     "bearer then spaces": lambda size: "bearer" + " " * size,
     "authorization words": _repeat("authorization: "),

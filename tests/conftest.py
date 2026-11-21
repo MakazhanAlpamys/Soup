@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,24 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 def strip_ansi(text: "str | None") -> str:
     """Return ``text`` with SGR escape sequences removed."""
     return _ANSI_ESCAPE.sub("", text or "")
+
+
+class InlineThread(threading.Thread):
+    """A ``threading.Thread`` whose ``start()`` runs its target on the calling thread.
+
+    For a test that has to see a side effect of a background thread (``soup ui`` opening the
+    browser) without waiting for one: ``patch("threading.Thread", InlineThread)``.
+
+    It subclasses the real class on purpose. While the patch is live, anything else that builds
+    a thread reaches ``Thread.__init__`` through that name: ``threading.Timer.__init__`` does,
+    and a leftover background timer from an earlier test (a canary buffer retrying a failed
+    flush) builds one on its own thread. A ``MagicMock`` standing there has its ``side_effect``
+    cleared by that call from Python 3.13 on (``unittest.mock`` stopped reading the properties
+    of the spec, so the call no longer raises), and the test's own thread then never runs.
+    """
+
+    def start(self) -> None:
+        self.run()
 
 
 #: Why a ``requires_symlink`` test was skipped. It names the account's missing capability, not
@@ -203,6 +222,39 @@ def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (None, None))
     monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``quantization: auto`` off the GPU: no CUDA device is visible.
+
+    The sft recipe's ``auto`` measures free VRAM when the train stage renders its config
+    (``utils/loop_quantization.py``). Left alone it would answer differently on a machine
+    with a card, and create a CUDA context on it. A test of the rule patches
+    ``free_vram_bytes`` itself.
+    """
+    from soup_cli.utils import loop_quantization
+
+    monkeypatch.setattr(loop_quantization, "free_vram_bytes", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_loop_tokenizer_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``data.max_length`` measurement from starting a tokenizer child.
+
+    The sft / dpo / kto train stage measures the longest row of the dataset it built with the
+    base model's tokenizer, in a short-lived child that imports transformers (and torch) and
+    may reach the Hub (``utils/loop_max_length.py``). Left alone every test that renders the
+    recipe would pay seconds for it and depend on the network. The measurement answers "could
+    not measure" here, which leaves the schema default in the recipe; a test of the
+    measurement patches ``_measure_in_child`` itself.
+    """
+    from soup_cli.utils import loop_max_length
+
+    def refuse(base: str, data_path: str, method: str):
+        raise loop_max_length.MeasureFailedError("no tokenizer is loaded in a test")
+
+    monkeypatch.setattr(loop_max_length, "_measure_in_child", refuse)
 
 
 @pytest.fixture(autouse=True)

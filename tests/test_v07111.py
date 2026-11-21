@@ -683,6 +683,49 @@ class TestIterativeDPO:
             assert [row["prompt"] for row in rows] == prompt_texts
         assert prompts.read_bytes() == original
 
+    @pytest.mark.parametrize(
+        "content", ["\n", '{"response": "no prompt"}\n[]\n'], ids=["empty", "unsupported-rows"]
+    )
+    def test_cli_refuses_no_usable_prompts_before_sampling(self, tmp_path, monkeypatch, content):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.utils import iterative_dpo
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        Path("prompts.jsonl").write_text(content, encoding="utf-8")
+        pairs = Path("out/round-00/pairs.jsonl")
+        pairs.parent.mkdir(parents=True)
+        prior = b'{"prompt":"kept","chosen":"yes","rejected":"no"}\n'
+        pairs.write_bytes(prior)
+        operations = []
+
+        def record_sample(**kwargs):
+            operations.append("sample")
+            return []
+
+        def record_train(**kwargs):
+            operations.append("train")
+
+        monkeypatch.setattr(iterative_dpo, "_default_sample_fn", record_sample)
+        monkeypatch.setattr(iterative_dpo, "_default_train_fn", record_train)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "iterative-dpo", "--base-model", "tiny", "--reward-model", "reward",
+                "--prompts", "prompts.jsonl", "--output-dir", "out",
+                "--rounds", "1", "--pairs-per-round", "10",
+            ],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        text = " ".join(strip_ansi(result.output).split())
+        assert "prompts file 'prompts.jsonl' has no usable prompts" in text
+        assert operations == []
+        assert pairs.read_bytes() == prior
+
     def test_run_rejects_non_plan(self):
         from soup_cli.utils.iterative_dpo import run_iterative_dpo
 
