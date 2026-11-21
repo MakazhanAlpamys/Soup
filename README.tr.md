@@ -112,7 +112,7 @@ reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yük
 - **Apple Silicon'da daha fazlası.** Yerel MLX sohbeti, birleştirme, seçici kayıp maskeleri, ön işleme
   önbellekleri, sözcük dağarcığı genişletme, RoPE uzatma ve yoğun Llama SFT.
 - **Katman akışı daha fazlasını yapıyor.** Yalnızca ileri geçişli çıkarım kipi, önceden nicemlenmiş NF4
-  içe aktarma ve akıtılan bir tabanda BCO, IPO ve `task: preference` eğitimi.
+  içe aktarma ve akıtılan bir tabanda BCO, IPO ve tek kayıplı `task: preference` eğitimi.
 - **Kısa satırlara uyan VRAM tahminleri.** Dolgulu bir SFT çalıştırması en uzun satırına göre
   fiyatlanıyor; 8-bit checkpointing, cuBLAS çalışma alanları ve bir damıtma öğretmeni ücretlendiriliyor;
   ön kontrol de bir sığma denetiminin neden yapılmadığını söylüyor.
@@ -124,8 +124,9 @@ reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yük
 `--push-as` depoyu özel oluşturuyor (bunu değiştirmek için `--push-public`). MLX'te ya da `prm`,
 `unlearn`, `moe_lora_routing` üzerinde etkin bir eval gate reddediliyor. `soup serve --max-tokens`
 16384'te duruyor. `soup adapters merge` ağırlıkları ve `tool_call_args_subset` puanı değişti; bu yüzden
-birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, v0.77.x'in
-reddettiği 2. sürümde.
+birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, yeni satır
+satır, fonksiyonla puanlanan veya judge ayrıntısını taşıyorsa 2. sürümdedir ve v0.77.x bunları
+reddeder.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 

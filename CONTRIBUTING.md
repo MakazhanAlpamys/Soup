@@ -381,6 +381,17 @@ released as a penalty.
   a plan is read as a question, not as a claim. A claim that is blocked on another issue
   (`infra-blocked`, or "lands after #N" in the thread) does not take one of the two slots,
   and neither does a claim whose pull request is open and waiting only for the merge line.
+- **A plan waiting for confirmation.** The earliest plan on an issue keeps its place in line
+  while it waits for the maintainer to confirm it, and a later plan, or a pull request from
+  someone else, does not displace it; this does not change the 3 days an area holder has on a
+  newly triaged issue (see [Maintained areas](#maintained-areas)). Work you start before the
+  confirmation is at your own risk, because the maintainer may still decline the plan or ask
+  for changes to it. If a plan has had no answer for 3 days, you can ask once in the thread.
+  A plan names what will change for that issue and which tests fail without it, and
+  answers the questions the issue puts before a plan; a comment that could stand under any
+  issue, or one posted automatically when an issue opens, is not a plan and holds no place.
+  A plan whose author stays silent for 7 days after a maintainer's question is released with
+  a comment, as a quiet claim is, and the next plan in line is considered.
 - **Regression tests.** A bug-fix pull request carries a test that fails on `main` without
   the fix; the review checks that, and checks that undoing the fix makes the test fail.
   Merged pull requests that meet this get the `regression-test` label, visible in the
