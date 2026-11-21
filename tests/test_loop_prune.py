@@ -271,8 +271,13 @@ def test_unknown_adapter_and_verdict_notes_are_kept_during_apply(tmp_path, monke
     root = tmp_path / ".soup-loops"
     _manifest(root, "iter-20261118T120000-00000001", "run-new")
     _manifest(root, "iter-20261117T120000-00000002", "run-old")
-    (root / "adapters" / "run-old").mkdir(parents=True)
-    (root / "adapters" / "run-new").mkdir()
+    run_old = root / "adapters" / "run-old"
+    run_new = root / "adapters" / "run-new"
+    run_old.mkdir(parents=True)
+    run_new.mkdir()
+    oldest_ns = run_old.stat().st_mtime_ns
+    os.utime(run_old, ns=(oldest_ns, oldest_ns))
+    os.utime(run_new, ns=(oldest_ns + 2_000_000_000, oldest_ns + 2_000_000_000))
     adapter_note = root / "adapters" / "notes.txt"
     adapter_note.write_text("keep", encoding="utf-8")
     (root / "verdicts").mkdir()
