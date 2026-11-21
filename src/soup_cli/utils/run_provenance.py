@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from soup_cli.utils.hf import get_hf_api
+from soup_cli.utils.paths import require_regular_file
 
 PROVENANCE_FILENAME = "soup_run.json"
 _MAX_METADATA_BYTES = 64 * 1024
@@ -214,13 +215,36 @@ def write_run_provenance(output: str | Path, metadata: dict[str, Any]) -> None:
 def read_run_provenance(artifact: str | Path) -> dict[str, Any]:
     """Unknown/malformed/legacy metadata must not introduce new load refusals."""
     try:
-        with (Path(artifact) / PROVENANCE_FILENAME).open("rb") as handle:
+        candidate = (Path(artifact) / PROVENANCE_FILENAME).absolute()
+        # Keep POSIX symlink/.. lookup semantics. On Windows Python 3.11,
+        # absolute() can leave drive-relative paths like C:out rootless.
+        path = str(candidate) if candidate.is_absolute() else os.path.abspath(candidate)
+        with open(require_regular_file(path), "rb") as handle:
             payload = handle.read(_MAX_METADATA_BYTES + 1)
         if len(payload) > _MAX_METADATA_BYTES:
             return {}
         return _validate_metadata(json.loads(payload))
     except (OSError, ValueError, TypeError, RecursionError):
         return {}
+
+
+def warn_stopped_inputs(
+    *artifacts: str | Path | None,
+    evidence_stopped: bool = False,
+    stderr: bool = True,
+) -> bool:
+    """Warn once for stopped training inputs; the notice does not affect a verdict."""
+    stopped = evidence_stopped or any(
+        artifact and read_run_provenance(artifact).get("status") == "stopped"
+        for artifact in artifacts
+    )
+    if stopped:
+        from rich.console import Console
+
+        Console(stderr=stderr).print(
+            "[yellow]Warning:[/] An input comes from a training run stopped by the user."
+        )
+    return stopped
 
 
 def recorded_base_kwargs(artifact: str | None, base: str) -> dict[str, str]:
