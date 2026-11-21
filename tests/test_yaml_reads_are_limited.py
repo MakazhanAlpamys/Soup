@@ -47,6 +47,7 @@ YAML_USERS = {
     "commands/deploy.py": ("YAMLError",),
     "commands/plan.py": ("YAMLError",),
     "commands/push.py": ("YAMLError",),
+    "commands/quickstart.py": ("safe_dump",),
     "commands/ship.py": ("YAMLError",),
     "commands/spectrum.py": ("safe_dump",),
     "commands/sweep.py": ("YAMLError",),
