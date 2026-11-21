@@ -261,6 +261,30 @@ class TestReadStateRetriesAPermissionError:
 
 
 class TestSignalHandlers:
+    def test_a_missing_state_file_at_start_up_raises_and_restores_the_handlers(self, cwd):
+        # #3055 — the start-up `update_state` write must not swallow the errors
+        # it inherited from the plain start-up `read_state`: a gone `loop.yaml`
+        # raises as before, after the signal handlers are back in place.
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        with pytest.raises(FileNotFoundError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    def test_an_invalid_state_file_at_start_up_raises_and_restores_the_handlers(self, cwd):
+        # #3055 — same for an invalid `loop.yaml`: it raises as before, with the
+        # daemon's handlers uninstalled first.
+        path = Path(_path(cwd))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("version: [oops", encoding="utf-8")
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        with pytest.raises(ValueError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
     def test_watch_puts_the_signal_handlers_back(self, cwd):
         write_state(_state(), _path(cwd))
         before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))

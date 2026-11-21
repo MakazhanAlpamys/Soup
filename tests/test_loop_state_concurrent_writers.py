@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import soup_cli.utils.loop_daemon as loop_daemon
 import soup_cli.utils.loop_state as loop_state
 from soup_cli.cli import app
 from soup_cli.utils.loop_daemon import WatchConfig, watch
@@ -169,6 +170,33 @@ class TestSecondWriterDuringAnIteration:
 
         final = read_state(_path(cwd))
         assert final.iteration_count == 1 and final.production_name == "v2"
+
+
+class TestStartUpPromotion:
+    def test_a_pause_that_lands_after_the_first_read_of_watch_survives_the_start_up(
+        self, cwd, monkeypatch
+    ):
+        """#3041 — `watch()`'s start-up promotion of `stopped` to `running` went
+        through `update_state`, which re-reads `loop.yaml` under the lock, so a
+        `soup loop pause` that lands after the first read of the state survives:
+        the old start-up write of the stale pre-pause copy undid it."""
+        write_state(replace(_promoted_state(), status="stopped"), _path(cwd))
+
+        real_read_state = loop_daemon.read_state
+        fired: list[bool] = []
+
+        def read_with_a_pause_landing(path=None):
+            state = real_read_state(path)
+            if not fired:  # a pause lands right after the daemon first looked at the state
+                fired.append(True)
+                update_state(lambda fresh: fresh.with_status("paused"), path)
+            return state
+
+        monkeypatch.setattr(loop_daemon, "read_state", read_with_a_pause_landing)
+
+        watch(_config(cwd, during_train=lambda: None))
+
+        assert read_state(_path(cwd)).status == "paused"
 
 
 # ---------------------------------------------------------------------------
