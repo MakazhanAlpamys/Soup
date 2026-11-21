@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -110,7 +110,7 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 - **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
   前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
 - **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
-  取り込み、ストリーミングしたベースでの BCO、IPO、`task: preference` の学習。
+  取り込み、ストリーミングしたベースでの BCO、IPO、単一の損失を指定した `task: preference` の学習。
 - **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
   チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
   表示します。
@@ -122,7 +122,8 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
 `moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
 `soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
-変わることがあります。`soup ship` が書き出す証拠ファイルはバージョン 2 で、v0.77.x は拒否します。
+変わることがあります。`soup ship` が書き出す証拠ファイルは、行ごと・関数採点・judge の新しい詳細を含む場合にバージョン 2
+となり、v0.77.x はそれを拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -287,6 +288,7 @@ soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon 上のネイティブな密モデル / LoRA
 soup ui                               # ローカルのブラウザダッシュボード
 soup merge  --adapter ./output        # LoRA をベースモデルにマージ
 soup export --model ./output --format gguf           # デプロイ用にエクスポート

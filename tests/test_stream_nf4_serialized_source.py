@@ -345,6 +345,9 @@ def test_a_request_refusal_names_config_keys_that_exist(arguments):
         check_serialized_nf4_request(**arguments)
     message = str(caught.value)
     assert "training.base" not in message and "point base at" in message, message
+    if "stripe_roots" in arguments:
+        assert "(SOUP_LAYER_STREAM_STRIPE_DIRS)" in message, message
+        assert "SOUP_STRIPE_DIRS" not in message, message
 
 
 def test_quant_suffixes_that_disagree_with_the_import_commit_nothing(tmp_path):

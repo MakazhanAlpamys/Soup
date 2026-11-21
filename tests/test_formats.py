@@ -147,6 +147,57 @@ def test_messages_to_format_bad_row():
     assert result is None
 
 
+# --- messages_to_format: alpaca refusal (#2981) ---
+
+def test_messages_to_alpaca_two_user_messages_refused():
+    """A second user message cannot be held by alpaca: refuse the row."""
+    row = {
+        "messages": [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Second question"},
+        ]
+    }
+    assert messages_to_format(row, "alpaca") is None
+
+
+def test_messages_to_alpaca_two_assistant_messages_refused():
+    """A second assistant message cannot be held by alpaca: refuse the row."""
+    row = {
+        "messages": [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "assistant", "content": "Second answer"},
+        ]
+    }
+    assert messages_to_format(row, "alpaca") is None
+
+
+def test_messages_to_alpaca_two_system_messages_refused():
+    """A second system message cannot be held by alpaca: refuse the row."""
+    row = {
+        "messages": [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be formal."},
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "Answer"},
+        ]
+    }
+    assert messages_to_format(row, "alpaca") is None
+
+
+def test_messages_to_alpaca_unknown_role_refused():
+    """A role alpaca has no slot for must not be dropped without a word."""
+    row = {
+        "messages": [
+            {"role": "user", "content": "Question"},
+            {"role": "tool", "content": "Tool result"},
+            {"role": "assistant", "content": "Answer"},
+        ]
+    }
+    assert messages_to_format(row, "alpaca") is None
+
+
 # --- round-trip tests ---
 
 def test_roundtrip_alpaca():
