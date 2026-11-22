@@ -169,7 +169,9 @@ class TestDataParallelGuardIsUnchanged:
 # ==========================================================================
 _WRAPPERS = {
     "sft": ("soup_cli.trainer.sft", "SFTTrainerWrapper"),
+    "bco": ("soup_cli.trainer.bco", "BCOTrainerWrapper"),
     "dpo": ("soup_cli.trainer.dpo", "DPOTrainerWrapper"),
+    "ipo": ("soup_cli.trainer.ipo", "IPOTrainerWrapper"),
     "kto": ("soup_cli.trainer.kto", "KTOTrainerWrapper"),
     "orpo": ("soup_cli.trainer.orpo", "ORPOTrainerWrapper"),
     "simpo": ("soup_cli.trainer.simpo", "SimPOTrainerWrapper"),
@@ -227,7 +229,10 @@ def _trap_model_work(monkeypatch):
     monkeypatch.setattr("soup_cli.utils.layer_shard.shard_checkpoint", _boom)
 
 
-_DATASET = {"train": [{"messages": [{"role": "user", "content": "hi"}]}]}
+def _dataset(task: str) -> dict:
+    if task in {"bco", "ipo"}:
+        return {"train": [{"prompt": "hi", "chosen": "yes", "rejected": "no"}]}
+    return {"train": [{"messages": [{"role": "user", "content": "hi"}]}]}
 
 
 class TestSetupRefusesBeforeAnyModelWork:
@@ -237,7 +242,7 @@ class TestSetupRefusesBeforeAnyModelWork:
         _trap_model_work(monkeypatch)
         wrapper = _wrapper(tmp_path, task)
         with pytest.raises(ValueError) as excinfo:
-            wrapper.setup(_DATASET)
+            wrapper.setup(_dataset(task))
         assert _plain(str(excinfo.value)) == _MESSAGE.format(size=2)
 
     @pytest.mark.parametrize("task", sorted(_WRAPPERS))
@@ -249,7 +254,7 @@ class TestSetupRefusesBeforeAnyModelWork:
         _trap_model_work(monkeypatch)
         wrapper = _wrapper(tmp_path, task)
         with pytest.raises(ValueError, match="distributed layer streaming is not supported"):
-            wrapper.setup(_DATASET)
+            wrapper.setup(_dataset(task))
         assert not cache.exists()
         assert not (tmp_path / "out").exists()
         assert not (tmp_path / "never-downloaded-base").exists()
@@ -265,7 +270,7 @@ class TestSetupRefusesBeforeAnyModelWork:
         _trap_model_work(monkeypatch)
         wrapper = _wrapper(tmp_path, task)
         with pytest.raises(_ReachedModelWorkError):
-            wrapper.setup(_DATASET)
+            wrapper.setup(_dataset(task))
 
 
 # ==========================================================================
