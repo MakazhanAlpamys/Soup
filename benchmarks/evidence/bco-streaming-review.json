@@ -1,0 +1,86 @@
+{
+  "review": "https://github.com/MakazhanAlpamys/Soup/pull/2896#issuecomment-6910789783",
+  "base_head": "ef101addaa814f6bbf53cafdad2f36c5c8ba74c2",
+  "changes": [
+    "name BCO in both refusal suggestions with full-message tests",
+    "document shared adapter-off reference, one row, untied-head copy, remaining refusals and measurement limits",
+    "explain ln 2 and separate T4 baseline",
+    "CPU batch-one steps with accumulation one and two",
+    "reject unusable BCO rows before streaming allocation",
+    "give the existing chat-template regression valid BCO rows",
+    "refresh optional module counts and changelog scope"
+  ],
+  "verification": {
+    "current.log": {
+      "passed": 420,
+      "skipped": 22
+    },
+    "floor.log": {
+      "passed": 139,
+      "skipped": 4
+    },
+    "callers-final.log": {
+      "passed": 1002,
+      "skipped": 2
+    },
+    "chat-template-final.log": {
+      "passed": 33,
+      "skipped": 0
+    },
+    "chat-template-floor.log": {
+      "passed": 33,
+      "skipped": 0
+    },
+    "docs-license.log": {
+      "passed": 219,
+      "skipped": 1
+    }
+  },
+  "negative_control": {
+    "pre_review_head": "2 empty/unusable-row cases fail by reaching the forbidden allocation hook; both single-label step cases pass",
+    "mutations": [
+      {
+        "name": "ipo-suggestion",
+        "caught": true,
+        "node": "tests/test_preference_dispatcher.py::TestPreferenceStreaming::test_unported_loss_is_refused_by_name"
+      },
+      {
+        "name": "blend-suggestion",
+        "caught": true,
+        "node": "tests/test_preference_dispatcher.py::TestPreferenceStreaming::test_weighted_losses_are_refused_by_name"
+      },
+      {
+        "name": "row-validation-order",
+        "caught": true,
+        "node": "tests/test_bco_streaming.py::test_unusable_rows_are_rejected_before_stream_allocation",
+        "failed_cases": 2
+      }
+    ]
+  },
+  "initial_caller_run": {
+    "passed": 1001,
+    "failed": 1,
+    "skipped": 2,
+    "reason": "Chat-template fixture used no BCO rows; final run uses one valid pair and passes"
+  },
+  "executable_invariant": {
+    "bco": "AST differs only in placement of the existing train-row assignment/refusal",
+    "stream_setup": "executable AST unchanged; only module documentation changed"
+  },
+  "cuda": {
+    "rerun": false,
+    "recorded_source": "2c57034a35cdd6af43673b7e5f6480bb10ea8655",
+    "reason": "Review changes validation order and diagnostic/doc wording; valid loss/reference/refill/save paths unchanged",
+    "historical_raw_record_unchanged": true
+  },
+  "ruff": "src/ tests/ scripts/ benchmarks/ passed",
+  "reference_structure": "passed",
+  "source_file_sha256": {
+    "src/soup_cli/trainer/bco.py": "a999053a110984c3bda1103d356ea6ba6a25e8193eab8cd1a77fd373b562e36c",
+    "src/soup_cli/config/schema.py": "5412f6bbd56957b7527dc3ab4279a943063dad0bbb2b7fb3c11b1e6a9665ad2c",
+    "src/soup_cli/trainer/stream_setup.py": "731433805cf6c7835758ce50b5f679bfe6bf7d26310f0157c6dd19857a6eda48",
+    "tests/test_bco_streaming.py": "19e599da41a1d0c1b0c5df083f280e2b369ec548abad8a529bfcc285daa80c33",
+    "tests/test_preference_dispatcher.py": "4d3357d1260a9414d83b08ac021efe8ff889c49fb49e8bac74af75b06923a8a2",
+    "tests/test_issue804_chat_template_trainers.py": "e5879d5330dd7d39cd7b69fe73bc255c8d15094515314fdeada9e6719cf3a709"
+  }
+}

@@ -592,17 +592,23 @@ def test_fp8_embeddings_and_head_are_dequantised_into_their_shards(tmp_path):
     _assert_same_cache(str(tmp_path / "a"), str(tmp_path / "b"), mine, theirs)
 
 
-def test_the_router_and_its_bias_keep_their_stored_dtypes(tmp_path):
+@pytest.mark.parametrize("strict_router", [False, True], ids=["legacy", "strict"])
+def test_fp8_shards_follow_installed_router_precision(tmp_path, monkeypatch, strict_router):
     import torch
     from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
 
     from soup_cli.utils.layer_shard import layer_paths
 
+    policy = {"e_score_correction_bias"}
+    if strict_router:
+        policy.add("gate.weight")
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", policy)
     fp8, _ref = _synthetic_pair(tmp_path)
     index = _shard(fp8, tmp_path / "s", dtype="bfloat16")
     tensors = load_file(layer_paths(str(tmp_path / "s"), index)[1])
     assert tensors["mlp.gate.e_score_correction_bias"].dtype == torch.float32
-    assert tensors["mlp.gate.weight"].dtype == torch.bfloat16
+    assert tensors["mlp.gate.weight"].dtype == (torch.float32 if strict_router else torch.bfloat16)
     assert tensors["mlp.experts.gate_up_proj"].dtype == torch.bfloat16
     assert not any(key.endswith("_scale_inv") for key in tensors)
 

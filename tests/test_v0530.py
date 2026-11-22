@@ -576,6 +576,10 @@ class TestNVFP4:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
+        # #2867: the card's own capability decides too; pin one that trains NVFP4.
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision._cuda_capability", lambda: (10, 0)
+        )
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(
             RuntimeError, match="requires torchao"

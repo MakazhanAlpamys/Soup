@@ -20,6 +20,7 @@ from typing import Callable, Optional
 from soup_cli.cans.schema import DeployTarget, Manifest
 from soup_cli.cans.unpack import extract_can, inspect_can, read_config
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.redaction import find_redacted_paths
 
 _RUN_TIMEOUT_SECONDS = 60 * 60 * 24  # 24h max — generous; user kills with ^C
 
@@ -200,7 +201,17 @@ def run_can(
     # The extracted config.yaml is handed to ``soup train``, whose loader has
     # no size or expansion limit of its own; read it through the capped reader
     # first so an oversized or alias-amplified config is refused here.
-    read_config(str(src))
+    config = read_config(str(src))
+    # A value that ``soup can pack`` redacted is not in the can: running it would send the
+    # placeholder to a server. Refuse before anything is extracted, fetched or trained.
+    holes = find_redacted_paths(config)
+    if holes:
+        raise ValueError(
+            "this can holds redacted value(s) at: " + ", ".join(holes[:20])
+            + (" (+more)" if len(holes) > 20 else "")
+            + ". They were removed when the can was packed; supply them in the can's "
+            "config.yaml (a .tar.gz) and run soup train on it instead of soup can run"
+        )
 
     if not yes:
         if confirm_callback is None:

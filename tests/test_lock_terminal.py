@@ -369,3 +369,31 @@ def test_show_preserves_backslashes_in_stored_fields():
                        ("created_at", "Created at:")):
         assert f"{label} {key}\\[unclosed" in _plain(result)
     assert Path(name).read_bytes() == before
+
+
+@pytest.mark.parametrize("command", ["show", "check"])
+def test_lock_directory_is_usage_error(command):
+    path = "run.lock"
+    Path(path).mkdir()
+
+    if command == "show":
+        result = runner.invoke(app, ["lock", command, path])
+    else:
+        result = _check(path)
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    assert "lock path is a directory: 'run.lock'" in _plain(result)
+
+
+def test_write_reports_directory_destination():
+    output = Path("run[archive].lock")
+    output.mkdir()
+    marker = output / "keep.txt"
+    marker.write_text("existing", encoding="utf-8")
+
+    result = _write(*_write_args(), "--output", str(output))
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"Could not write lock file {output}" in _plain(result)
+    assert marker.read_text(encoding="utf-8") == "existing"
+    assert set(Path.cwd().iterdir()) == {Path.cwd() / output}

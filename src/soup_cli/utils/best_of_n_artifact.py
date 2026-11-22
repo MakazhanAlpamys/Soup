@@ -11,6 +11,7 @@ import re
 import stat
 from typing import Any
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 _CANDIDATE_SCHEMA = "soup.best_of_n.candidates.v1"
@@ -268,7 +269,7 @@ def _jsonl(data: bytes, field: str) -> list[dict]:
     except UnicodeDecodeError as exc:
         raise ValueError(f"{field} must be UTF-8") from exc
     rows = []
-    for line_number, raw in enumerate(text.splitlines(), 1):
+    for line_number, raw in enumerate(jsonl_lines(text), 1):
         if not raw.strip():
             continue
         try:

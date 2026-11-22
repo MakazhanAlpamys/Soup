@@ -127,6 +127,21 @@ def test_final_summary_row_records_hugging_face_throughput(clock, tracker):
     assert _recorded_speeds(tracker, run_id)[-1] == 1.818
 
 
+def test_mlx_grpo_validation_row_records_no_speed(tracker):
+    from soup_cli.trainer.mlx_grpo import log_val_reward
+
+    run_id = _start_run(tracker)
+    log_val_reward(tracker, run_id, step=4, epoch=1.0, lr=0.01, val_reward=0.5)
+
+    row = tracker.get_metrics(run_id)[-1]
+    assert row["val_reward"] == 0.5
+    # The held-out row measured no step rate, as it measured no loss (#2830).
+    # A stored 0.0 would count as a measured zero in get_metric_series.
+    assert row["speed"] is None
+    assert row["loss"] is None
+    assert tracker.get_metric_series(run_id, "speed") == []
+
+
 def test_tracker_stores_none_speed_and_keeps_its_zero_default(tracker):
     run_id = _start_run(tracker)
     tracker.log_metrics(run_id, step=1, loss=1.0, speed=None)

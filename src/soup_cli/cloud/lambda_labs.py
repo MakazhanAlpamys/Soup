@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
 import sys
 import types
 from collections.abc import Callable, Mapping
@@ -519,7 +520,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python -I {stub_path}",
+        run_command=f"python -I {shlex.quote(stub_path)}",
     )
 
 

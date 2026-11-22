@@ -1,0 +1,18 @@
+[
+  {
+    "cell": "bco-legacy-none",
+    "status": "pass"
+  },
+  {
+    "cell": "bco-legacy-4bit",
+    "status": "pass"
+  },
+  {
+    "cell": "bco-preference-none",
+    "status": "pass"
+  },
+  {
+    "cell": "bco-preference-4bit",
+    "status": "pass"
+  }
+]
