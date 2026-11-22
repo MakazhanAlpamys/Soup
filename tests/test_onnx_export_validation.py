@@ -129,7 +129,7 @@ def test_legacy_option_conflict_exit_two_is_not_a_numerical_fail(
         args.extend(["--validate-onnx", "--prompts", str(prompts)])
     result = _invoke(tmp_path, args)
     assert result.exit_code == 2, result.output
-    assert "require --format gguf" in " ".join(strip_ansi(result.output).split())
+    assert "requires --format gguf" in " ".join(strip_ansi(result.output).split())
     assert "ONNX Logits Validation" not in result.output
     assert "FAIL" not in result.output
     exporter.assert_not_called()
@@ -174,7 +174,7 @@ def test_merged_reference_lives_until_validation_and_is_cleaned(tmp_path, monkey
     (adapter / "adapter_config.json").write_text('{"base_model_name_or_path": "local-base"}')
     merged = tmp_path / "merged"
     merged.mkdir()
-    monkeypatch.setattr(export, "_merge_dir_for", lambda _: (merged, True))
+    monkeypatch.setattr(export, "_merge_dir_for", lambda _: merged)
     monkeypatch.setattr(export, "_merge_adapter", Mock())
 
     def validate(source, output, prompts, **kwargs):
@@ -450,3 +450,37 @@ def test_overlong_prompt_is_refused_without_truncation(real_export):
     checker = _checker()
     with pytest.raises(checker.OnnxValidationError, match="512"):
         checker.validate_onnx_export(source, output, ["Hello " * 513], atol=1e-4)
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_onnx_jsonl_prompts_read_a_row_holding_the_character_3066(tmp_path, char):
+    from soup_cli.eval.onnx_check import load_validation_prompts
+
+    path = tmp_path / "prompts.jsonl"
+    path.write_bytes(_rows_3066(char).encode("utf-8"))
+
+    assert load_validation_prompts(path) == [f"a{char}b", "next"]
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_onnx_plain_text_prompt_holding_the_character_stays_one_prompt_3066(tmp_path, char):
+    from soup_cli.eval.onnx_check import load_validation_prompts
+
+    path = tmp_path / "prompts.txt"
+    path.write_bytes(f"a{char}b\nnext\n".encode("utf-8"))
+
+    assert load_validation_prompts(path) == [f"a{char}b", "next"]

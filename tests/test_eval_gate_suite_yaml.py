@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Callable
 from unittest.mock import MagicMock
 
-import pydantic
 import pytest
 import yaml
 from rich.console import Console
@@ -110,6 +109,203 @@ def _nonempty_suite(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def test_load_suite_rejects_duplicate_task_key_with_line_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError) as caught:
+        gate.load_suite(str(path))
+
+    assert "duplicate key 'threshold'" in str(caught.value)
+    assert "line 6" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("content", "line"),
+    [
+        (
+            'suite: quoted\ntasks:\n  - type: custom\n    name: math\n'
+            '    threshold: 0.5\n    "threshold": 0.8\n',
+            6,
+        ),
+        (
+            "suite: flow\ntasks:\n  - {type: custom, name: math, threshold: 0.5, threshold: 0.8}\n",
+            3,
+        ),
+        (
+            "suite: later-task\ntasks:\n  - type: custom\n    name: first\n"
+            "  - type: custom\n    name: second\n    threshold: 0.5\n"
+            "    threshold: 0.8\n",
+            8,
+        ),
+        (
+            '{"suite": "json", "tasks": [{"type": "custom", "name": "math", '
+            '"threshold": 0.5, "threshold": 0.8}]}\n',
+            1,
+        ),
+        (
+            "suite: triple\ntasks:\n  - type: custom\n    name: math\n"
+            "    threshold: 0.5\n    threshold: 0.8\n    threshold: 0.9\n",
+            6,
+        ),
+    ],
+    ids=["quoted-key", "flow-mapping", "later-task", "json", "three-occurrences"],
+)
+def test_load_suite_rejects_duplicate_key_spellings_and_reports_second_occurrence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    line: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(tmp_path, content)
+
+    with pytest.raises(gate.MalformedSuiteError) as caught:
+        gate.load_suite(str(path))
+
+    assert "duplicate key 'threshold'" in str(caught.value)
+    assert f"line {line}" in str(caught.value)
+
+
+def test_duplicate_keys_that_differ_only_by_case_are_distinct(
+    tmp_path: Path,
+) -> None:
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, duplicate_keys_in_sequence_mappings
+
+    source = "suite: case\ntasks:\n  - threshold: 0.5\n    Threshold: 0.8\n"
+
+    assert duplicate_keys_in_sequence_mappings(
+        source,
+        "eval-gate suite",
+        sequence_key="tasks",
+        max_bytes=MAX_CONFIG_BYTES,
+    ) == []
+
+
+def test_duplicate_keys_in_unmerged_nested_values_are_ignored() -> None:
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, duplicate_keys_in_sequence_mappings
+
+    source = (
+        "suite: nested\ntasks:\n  - type: custom\n    name: math\n"
+        "    metadata: {threshold: 0.5, threshold: 0.8}\n"
+    )
+
+    assert duplicate_keys_in_sequence_mappings(
+        source,
+        "eval-gate suite",
+        sequence_key="tasks",
+        max_bytes=MAX_CONFIG_BYTES,
+    ) == []
+
+
+def test_load_suite_checks_the_last_repeated_root_tasks_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: repeated-root\ntasks: []\ntasks:\n  - type: custom\n"
+        "    name: math\n    threshold: 0.5\n    threshold: 0.8\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="line 7"):
+        gate.load_suite(str(path))
+
+
+def test_load_suite_rejects_duplicate_key_in_a_merged_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-duplicate\ndefaults: &defaults\n  threshold: 0.5\n"
+        "  threshold: 0.8\ntasks:\n  - <<: *defaults\n    type: custom\n"
+        "    name: math\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 4"):
+        gate.load_suite(str(path))
+
+
+def test_load_suite_rejects_duplicate_key_in_second_sequence_merge_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-sequence\nfirst: &first\n  threshold: 0.5\n"
+        "second: &second\n  threshold: 0.6\n  threshold: 0.7\n"
+        "tasks:\n  - <<: [*first, *second]\n    type: custom\n"
+        "    name: math\n",
+    )
+
+    with pytest.raises(gate.MalformedSuiteError, match="duplicate key 'threshold'.*line 6"):
+        gate.load_suite(str(path))
+
+
+def test_load_suite_keeps_explicit_zero_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: zero\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0\n",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.0
+
+
+def test_load_suite_allows_explicit_override_of_merged_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged\ndefaults: &defaults\n  threshold: 0.5\n"
+        "tasks:\n  - <<: *defaults\n    type: custom\n"
+        "    name: math\n    threshold: 0.8\n",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.8
+
+
+def test_load_suite_allows_multiple_merge_sources_and_explicit_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: merged-sources\ndefaults: &defaults\n  threshold: 0.5\n"
+        "metadata: &metadata\n  scorer: exact\ntasks:\n  - <<: *defaults\n"
+        "    <<: *metadata\n    type: custom\n    name: math\n    tasks: tasks.jsonl\n"
+        "    threshold: 0.8\n",
+    )
+    (tmp_path / "tasks.jsonl").write_text(
+        json.dumps({"prompt": "control", "expected": "gold"}) + "\n",
+        encoding="utf-8",
+    )
+
+    suite = gate.load_suite(str(path))
+
+    assert suite.tasks[0].threshold == 0.8
+    assert suite.tasks[0].scorer == "exact"
+
+
 @pytest.mark.parametrize(
     "content, expected_fragment, _id",
     INVALID_SUITES,
@@ -161,9 +357,46 @@ def test_cli_eval_gate_refuses_invalid_suite_with_usage_error(
     assert factory_calls == []
 
 
+def test_cli_eval_gate_refuses_duplicate_task_key_before_model_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(
+        tmp_path,
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    )
+    factory_calls: list[str] = []
+
+    def factory(model: str) -> Callable[[str], str]:
+        factory_calls.append(model)
+        return lambda prompt: ""
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    result = CliRunner().invoke(
+        app,
+        ["eval", "gate", "--suite", str(path), "--model", "synthetic-model"],
+    )
+    output = " ".join(strip_ansi(result.output).split())
+
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    assert "Cannot load suite:" in output
+    assert "duplicate key 'threshold'" in output
+    assert "line 6" in output
+    assert factory_calls == []
+
+
 @pytest.mark.parametrize(
-    "content", ["suite: [\n", "- suite: bad-root\n  tasks: []\n"],
-    ids=["malformed-yaml", "list-root"],
+    "content",
+    [
+        "suite: [\n",
+        "- suite: bad-root\n  tasks: []\n",
+        "suite: duplicate\ntasks:\n  - type: custom\n    name: math\n"
+        "    threshold: 0.5\n    threshold: 0.8\n",
+    ],
+    ids=["malformed-yaml", "list-root", "duplicate-task-key"],
 )
 def test_training_callback_does_not_silently_disable_a_malformed_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str,
@@ -212,47 +445,98 @@ def test_training_callback_empty_gate_still_warns_and_stays_inert(
     )
 
     assert "eval gate: could not load suite" in caplog.text
-    assert "Field required" in caplog.text
+    assert f"eval-gate suite '{path}' is empty" in caplog.text
+    assert "errors.pydantic.dev" not in caplog.text
     assert callback._gate_suite is None
     callback._build_gate_generate_fn.assert_not_called()
 
 
-def test_cli_control_missing_suite_name_exits_usage_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    path = _write_suite_text(tmp_path, "tasks: []\n")
-    monkeypatch.setattr(eval_command, "console", Console(width=200))
-    result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
-    output = " ".join(strip_ansi(result.output).split())
-    assert result.exit_code == 3, (result.output, repr(result.exception))
-    assert "Cannot load suite:" in output
+# #2295: suffix is the text after ``eval-gate suite '<path>'``.
+SCHEMA_FAILURES = [
+    (
+        "",
+        " is empty: it needs 'suite' (a name) and 'tasks' (a list of tasks)",
+        "empty-file",
+    ),
+    (
+        "{}\n",
+        ": 'suite' is required",
+        "empty-mapping",
+    ),
+    (
+        "tasks: []\n",
+        ": 'suite' is required",
+        "missing-suite",
+    ),
+    (
+        "suite: demo\ntasks:\n  - type: custom\n    name: t\n    tasks: x.jsonl\n"
+        "    scorer: exact\n",
+        ": 'tasks[0].threshold' is required",
+        "missing-task-threshold",
+    ),
+    (
+        "suite: demo\ntasks:\n  - type: custom\n    name: 1\n    threshold: 0.0\n",
+        ": tasks[0].name: Input should be a valid string",
+        "bad-task-field",
+    ),
+    (
+        "suite: 1\ntasks:\n  - type: custom\n    name: 2\n    threshold: nope\n",
+        ": suite: Input should be a valid string; "
+        "tasks[0].name: Input should be a valid string; "
+        "tasks[0].threshold: Input should be a valid number, "
+        "unable to parse string as a number",
+        "several-fields",
+    ),
+]
 
 
-def test_load_suite_empty_file_raises_validation_error(
+def _schema_message(path: Path, suffix: str) -> str:
+    return f"eval-gate suite '{path}'{suffix}"
+
+
+@pytest.mark.parametrize(
+    "content, suffix, _id",
+    SCHEMA_FAILURES,
+    ids=[item[2] for item in SCHEMA_FAILURES],
+)
+def test_load_suite_schema_error_names_file_and_field(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    content: str, suffix: str, _id: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    path = _write_suite_text(tmp_path, "")
-    with pytest.raises(pydantic.ValidationError) as caught:
+    path = _write_suite_text(tmp_path, content)
+    with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
     message = str(caught.value)
-    assert "1 validation error for EvalSuite" in message
-    assert "suite" in message
-    assert "Field required" in message
+    # A subclass would abort training setup; this stays a plain ValueError.
+    assert type(caught.value) is ValueError
+    assert message == _schema_message(path, suffix)
+    assert "errors.pydantic.dev" not in message
 
 
-def test_cli_eval_gate_empty_file_exits_usage_error(
+@pytest.mark.parametrize(
+    "content, suffix, _id",
+    SCHEMA_FAILURES,
+    ids=[item[2] for item in SCHEMA_FAILURES],
+)
+def test_cli_eval_gate_schema_error_exits_usage_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    content: str, suffix: str, _id: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    path = _write_suite_text(tmp_path, "")
-    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    path = _write_suite_text(tmp_path, content)
+    # Height is required: under TERM=dumb Rich ignores width alone and folds
+    # the path, which whitespace-collapse then splits.
+    monkeypatch.setattr(eval_command, "console", Console(width=1000, height=40))
     result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
     output = " ".join(strip_ansi(result.output).split())
+    message = _schema_message(path, suffix)
     assert result.exit_code == 3, (result.output, repr(result.exception))
-    assert "Cannot load suite: 1 validation error for EvalSuite" in output
-    assert "Field required" in output
+    assert f"Cannot load suite: {message}" in output
+    assert "errors.pydantic.dev" not in output
+    assert "validation error for" not in output
+    assert "GATE PASSED" not in output
+    assert "GATE FAILED" not in output
 
 
 def test_cli_control_valid_suite_passes(

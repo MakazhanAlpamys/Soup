@@ -28,9 +28,11 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from soup_cli.utils import final_answer
+from soup_cli.utils.terminal import strip_control as for_terminal
 
 console = Console()
 
@@ -851,7 +853,7 @@ def load_reward_fn(
     if reward_path.exists() and reward_path.suffix == ".py":
         console.print(
             f"[bold yellow]Warning:[/] Loading custom reward function from: "
-            f"[bold]{reward_path.resolve()}[/]\n"
+            f"[bold]{escape(for_terminal(str(reward_path.resolve())))}[/]\n"
             f"[yellow]This will execute arbitrary Python code. "
             f"Only use reward files you trust.[/]"
         )

@@ -188,6 +188,13 @@ def _opt_int(args: dict, key: str, default: int, *, lo: int, hi: int) -> int:
     return val
 
 
+def _opt_bool(args: dict, key: str) -> bool:
+    val = args.get(key, False)
+    if not isinstance(val, bool):
+        raise McpToolError(f"'{key}' must be a boolean")
+    return val
+
+
 def _enforce_data_path(path: str, field: str = "data") -> None:
     try:
         enforce_under_cwd_and_no_symlink(path, field)
@@ -394,15 +401,21 @@ def tool_recipes_show(args: dict) -> dict:
 def tool_runs_list(args: dict) -> dict:
     """`soup runs` — recent experiment runs."""
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.paths import sanitize_run_row
 
     limit = _opt_int(args, "limit", 50, lo=1, hi=500)
-    runs = ExperimentTracker().list_runs(limit=limit)
-    return {"runs": runs, "count": len(runs)}
+    tracker = ExperimentTracker()
+    try:
+        runs = tracker.list_runs(limit=limit)
+    finally:
+        tracker.close()
+    return {"runs": [sanitize_run_row(run) for run in runs], "count": len(runs)}
 
 
 def tool_runs_show(args: dict) -> dict:
     """`soup runs show` — one run's full record."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+    from soup_cli.utils.paths import sanitize_run_row
 
     run_id = _require_str(args, "run_id")
     tracker = ExperimentTracker()
@@ -413,9 +426,9 @@ def tool_runs_show(args: dict) -> dict:
             if tracker.count_run_id_matches(run_id) > 1:
                 raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
             raise McpToolError("run not found")
+        return sanitize_run_row(run)
     finally:
         tracker.close()
-    return run
 
 
 def tool_registry_list(args: dict) -> dict:
@@ -523,6 +536,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
     base = _opt_str(args, "base") or ""
     adapter = _opt_str(args, "adapter") or ""
+    require_all_modes = _opt_bool(args, "require_all_modes")
 
     raw_scores = payload.get("scores", {})
     if not isinstance(raw_scores, dict):
@@ -552,7 +566,12 @@ def tool_diagnose_evidence(args: dict) -> dict:
             raise McpToolError(f"evidence.scores.{mode} is invalid ({type(exc).__name__})") from exc
     try:
         report = build_report(
-            run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
+            run_id=run_id,
+            base=base,
+            adapter=adapter,
+            scores=scores,
+            soup_version=__version__,
+            missing_as_not_run=require_all_modes,
         )
     except (ValueError, TypeError) as exc:
         raise McpToolError(f"diagnose failed ({type(exc).__name__})") from exc
@@ -683,6 +702,9 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
     "eval.ship.general_suite": "read by soup ship, not soup train",
     "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
     "eval.ship.baseline": "read by soup ship, not soup train",
+    "eval.ship.reward_fn": (
+        "a reward name or a .py path read (and executed) by soup ship, not soup train"
+    ),
 }
 
 # ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
@@ -1081,6 +1103,13 @@ def _readonly_specs() -> list[ToolSpec]:
                     },
                     "base": {"type": "string"},
                     "adapter": {"type": "string"},
+                    "require_all_modes": {
+                        "type": "boolean",
+                        "description": (
+                            "A mode missing from the evidence is NOT_RUN instead of a "
+                            "neutral OK (default false)."
+                        ),
+                    },
                 },
                 "required": ["run_id", "evidence"],
                 "additionalProperties": False,

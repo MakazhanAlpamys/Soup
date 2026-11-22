@@ -188,6 +188,79 @@ def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
 
     assert result.exit_code == 2
     text = _plain(result)
-    assert "apply failed: cannot build this value: day is out of range for month" in text
+    assert (
+        'apply failed: cannot build this value: day is out of range for month in "r.yaml"' in text
+    )
     assert line.replace(bidi, "") in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        pytest.param(
+            "r.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser",
+        ),
+        pytest.param(
+            "nested/invalid [red] recipe.yaml",
+            "data:\n\ttrain: []\n",
+            r"while scanning for the next token found character '\t' that cannot start any token "
+            'in "{path}", line 2, column 1: train: [] ^',
+            id="scanner-nested-space-markup",
+        ),
+        pytest.param(
+            f"invalid{_CONTROLS}.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser-bidi",
+        ),
+        pytest.param(
+            "reader.yaml",
+            "data: \x01\n",
+            'unacceptable character #x0001: special characters are not allowed '
+            'in "{path}", position 6',
+            id="reader",
+        ),
+    ],
+)
+def test_apply_reports_recipe_yaml_syntax_error(name, source, expected):
+    recipe = Path(name)
+    recipe.parent.mkdir(exist_ok=True)
+    recipe.write_text(source, encoding="utf-8")
+
+    result = _mix("--apply", name)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert text == "apply failed: " + expected.format(path=_shown(name))
+    assert "Loaded recipe:" not in text
+    assert _not_shown(text)
+
+
+@pytest.mark.parametrize(
+    "probs",
+    ["[0.5, pending]", "0.5", "[" + "9" * 310 + "]"],
+    ids=["nonnumeric-weight", "scalar", "overflow"],
+)
+def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
+    recipe = Path("r.yaml")
+    recipe.write_text(
+        "data:\n  train: [a.jsonl, b.jsonl]\n  interleave:\n"
+        f"    strategy: probs\n    probs: {probs}\n",
+        encoding="utf-8",
+    )
+
+    result = _mix("--apply", recipe.name)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "apply failed: invalid data.interleave.probs in r.yaml" in text
+    assert "Loaded recipe:" not in text
+    assert "\ndata:\n" not in strip_ansi(result.stdout)

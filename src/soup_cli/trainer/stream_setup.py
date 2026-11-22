@@ -1,21 +1,21 @@
 """Shared layer-streaming setup for every trainer wrapper that supports it.
 
-v0.72.4 — extracted verbatim from ``trainer/sft.py`` so that SFT and the four
-preference losses (DPO / ORPO / SimPO / KTO) cannot drift. There is exactly one
+v0.72.4 — extracted verbatim from ``trainer/sft.py`` so that SFT and the supported
+preference losses (DPO / ORPO / SimPO / KTO / BCO / IPO) cannot drift. There is exactly one
 copy of the NF4 pre-flight, the RAM/disk tier decision, the VRAM fit refusal and
-the runtime release; a per-wrapper copy would be five places to fix the next
+the runtime release; a per-wrapper copy would be seven places to fix the next
 time any of them is wrong.
 
 The move is behaviour-preserving for SFT by design, so v0.72.0-.3's
 bit-exactness gates remain valid without being re-run. The ONE addition is
-``_STREAM_ROWS_PER_EXAMPLE``: DPO, ORPO and SimPO build their forward through
+``_STREAM_ROWS_PER_EXAMPLE``: DPO, IPO, ORPO and SimPO build their forward through
 TRL's ``concatenated_inputs`` + ``torch.cat``, so 2 x ``batch_size`` rows reach
 the model in a single tensor. The VRAM estimator is calibrated against named
 hardware and sequence-length grids; it is not a universal upper bound. The
 RTX 3050 grid is now charged for two retained cuBLAS workspaces, but other
 devices and shapes still require measurement.
 
-NO top-level torch: this module is imported by five trainer modules.
+NO top-level torch: this module is imported by seven trainer modules.
 """
 
 import contextlib
@@ -29,7 +29,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
-from soup_cli.utils.paths import quote_path
+from soup_cli.utils.paths import paste_arg, quote_path
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
@@ -752,8 +752,24 @@ def _render_stream_disk_preflight(
         if len(other_slots) > 20:
             lines.append(f"  +{len(other_slots) - 20} more")
         lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
-        cmd = f"soup prune-layer-cache --model {for_terminal(base)} --yes"
-        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        # Use prose when the base model needs shell-specific quoting.
+        spelled = paste_arg(base, windows_separators=os.sep == "\\")
+        if spelled is not None:
+            cmd = f"soup prune-layer-cache --model {for_terminal(spelled)} --yes"
+            lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        else:
+            lines.append("Remove unreferenced slots (opt-in):")
+            if base:
+                lines.extend((
+                    "  For soup prune-layer-cache, use the base model below as --model.",
+                    "  Quote it for your shell and add --yes.",
+                    f"  Base model: {for_terminal(base, single_line=True)}",
+                ))
+            else:
+                lines.append(
+                    "  Set a base model in your configuration before pruning with "
+                    "soup prune-layer-cache."
+                )
         stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
@@ -1259,6 +1275,7 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                     expert_layout=expert_layout,
+                    arch=arch,
                 )
             cached_bytes = None
             if cached is not None:

@@ -16,6 +16,11 @@ its default" is declared but read by nothing: leave it out, or at its default.
 The guides linked from the [docs index](README.md) explain what the settings do
 together; this page is the lookup table.
 
+For fields directly under `training` and under `training.lora`, booleans
+`true` and `false` (including YAML aliases such as `yes` and `no`) are refused
+for scalar `int` and `float` fields. Write an explicit numeric value instead.
+The `training.lora.r` field requires an integer, not `false`.
+
 How to read a table:
 
 - **Key** is the full YAML path: `training.lora.r` is `r:` under `lora:` under
@@ -128,8 +133,9 @@ Sections:
 | `training.load_in_8bit` | `bool \| null` | `null` |  | Friendly alias for quantization='8bit' / 'none'. When True, rewrites quantization to '8bit' if currently 'none'/'4bit'. Conflicts with load_in_16bit. On a task whose trainer never quantises the base (see quantization), true is refused at load (#795). (v0.41.0) |
 | `training.load_in_16bit` | `bool \| null` | `null` |  | Friendly alias: when True, sets quantization='none' (full bf16/fp16 LoRA). Conflicts with load_in_8bit. (v0.41.0) |
 | `training.scheduler` | `str` | `"cosine"` |  | LR scheduler type |
-| `training.save_steps` | `int` | `100` |  | Save checkpoint every N steps |
-| `training.logging_steps` | `int` | `10` |  | Log metrics every N steps |
+| `training.save_steps` | `int` | `100` | `>= 0` | Save checkpoint every N steps |
+| `training.save_strategy` | `str` | `"steps"` | one of `"steps"`, `"epoch"`, `"no"` | When to write intermediate checkpoint-N folders: 'steps' (every save_steps steps, and once more at the last step; the default), 'epoch' (at the end of each epoch) or 'no' (never; the final adapter or model is still saved). Quote it in YAML: an unquoted no is a bool. 'epoch' and 'no' are refused with a non-default save_steps, on backend: mlx and on task: unlearn. 'epoch' is also refused on task: ppo because its trainer does not emit epoch-end callbacks (#2575). |
+| `training.logging_steps` | `int` | `10` | `>= 1` | Log metrics every N steps |
 | `training.eval_steps` | `int \| null` | `null` | `>= 1` | Evaluate the validation split every N optimizer steps (counted after gradient accumulation, like save_steps). Unset = evaluate at the end of every epoch. grpo evaluates only when this is set, because an evaluation there generates completions. (#1223) |
 | `training.dpo_beta` | `float` | `0.1` | `> 0` | DPO beta — KL penalty coefficient |
 | `training.kto_beta` | `float` | `0.1` | `> 0` | KTO beta — KL penalty coefficient |
@@ -142,7 +148,7 @@ Sections:
 | `training.dpo_beta_schedule` | `str \| null` | `null` | one of `"linear"`, `"cosine"`, `"exponential"` | Anneal DPO β over training. None = constant β (default). Requires dpo_beta_end. DPO-family tasks only (dpo, ipo, preference+dpo). |
 | `training.dpo_beta_end` | `float \| null` | `null` | `> 0` | Target β at the end of training when dpo_beta_schedule is set. Must be > 0. The starting β is dpo_beta. |
 | `training.dpo_ref_regen_epochs` | `int \| null` | `null` | `>= 1`, `<= 1000` | Replace the frozen ref adapter with the current active adapter every N epochs. Copies .default. adapter weights into .ref. under torch.no_grad(). Requires LoRA (lora.r >= 1); full fine-tuning is not supported. |
-| `training.preference_loss_weights` | `dict[str, float] \| null` | `null` |  | Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys must be members of {dpo, simpo, orpo, ipo, bco}. Requires task='preference'; mutually exclusive with preference_loss (the scalar form). Capped at 5 components (the supported set). |
+| `training.preference_loss_weights` | `dict[str, float] \| null` | `null` |  | Weighted blend of preference losses, e.g. {'dpo': 0.7, 'simpo': 0.3}. Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys must be members of {dpo, simpo, orpo, ipo, bco}. Requires task='preference'; mutually exclusive with preference_loss (the scalar form). Capped at 5 components (the supported set). A blend that contains bco is refused when the trainer is set up, because the bco trainer splits each row into unpaired completion and label rows. |
 | `training.grpo_beta` | `float` | `0.1` | `>= 0.0`; finite | GRPO beta - KL penalty coefficient (default 0.1). Set to 0 to disable the KL penalty entirely (KL-free recipes like DAPO and Dr. GRPO, #1247). |
 | `training.num_generations` | `int` | `4` | `>= 2` | Number of generations per prompt for GRPO |
 | `training.reward_fn` | `str \| null` | `"accuracy"` |  | Reward function: 'accuracy', 'format', 'verifiable', 'judge_rank' (GRPO only, an LLM judge ranks each prompt's completions; see grpo_judge, #2047), a path to a custom .py file, or a comma-separated ensemble of the above (e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40). |
@@ -201,7 +207,7 @@ Sections:
 | `training.train_on_eot` | `bool` | `false` |  | Include explicit EOT / EOS control tokens in the SFT loss (axolotl ``train_on_eot``). Default False matches HF Trainer convention. Applied by the SFT data formatter; task sft, tts or distill only. (v0.52.0) |
 | `training.kv_cache_type` | `str \| null` | `null` | one of `"q8_0"`, `"bf16"`, `"f16"`, `"fp8"` | KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). Recorded in soup.yaml only: neither soup train nor soup serve reads this key (fp8 is refused with backend: mlx). To apply a type, pass soup serve --kv-cache-type &lt;type> (transformers backend). |
 | `training.fp8_attention` | `bool` | `false` |  | Extend the v0.28.0 FP8 menu to FP8 attention (axolotl-parity flag). Requires quantization_aware='fp8'. DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through the shared advanced-precision setup; the default SFT path does not consume it. |
-| `training.nvfp4` | `bool` | `false` |  | Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through torchao conversion; the default SFT path does not consume it. |
+| `training.nvfp4` | `bool` | `false` |  | NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through torchao conversion; the default SFT path does not consume it. |
 | `training.unsloth_bnb_4bit` | `bool` | `false` |  | Promote Unsloth Dynamic 4-bit from 'inferable' to a native flag. Requires backend='unsloth' and quantization='4bit'. (v0.53.0) |
 | `training.bnb_4bit_use_double_quant` | `bool \| null` | `null` |  | Apply BNB 4-bit double-quantization (LF / Axolotl parity). Unset means the shipped default (on, to match every 4-bit load path); set false to disable it. Only meaningful when quantization='4bit'. (v0.53.0) |
 | `training.llm_int8` | `bool` | `false` |  | Explicit 8-bit LLM.int8 alias for quantization='8bit'. When True, requires quantization='8bit'. (v0.53.0) |
@@ -314,7 +320,7 @@ Sections:
 | `training.lisa_interval_steps` | `int` | `20` | `>= 1`, `<= 1000000` | LISA: re-sample the active decoder layers every N global steps. |
 | `training.lisa_reset_optimizer` | `bool` | `true` |  | Clear optimizer state for decoder layers that LISA re-freezes on each interval (avoids stale Adam moments). Mirrors relora_reset_optimizer. |
 | `training.lisa_train_embeddings` | `bool` | `true` |  | Keep the always-on group (input embeddings + LM head + final norm) trainable every LISA interval. Default true is LISA as published (#267). Set false to freeze that group so only the sampled lisa_num_layers decoder layers train — the always-on set is the majority of LISA's memory, so this is the knob that buys the memory saving (#377). It is a real trade: the always-on set may be load-bearing for quality, so measure both ways. |
-| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. sft + transformers + text + quantization=none only; batch_size 1, no gradient accumulation. Slower than resident training, but these models did not run on the card at all. |
+| `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto, bco and ipo, including task='preference' with a single preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. Weighted preference_loss_weights do not stream yet. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
 | `training.stream_buffers` | `int` | `2` | `>= 2`, `<= 8` | Pre-allocated VRAM layer buffers. 2 = double buffering, which is what lets the next layer load while the current one computes. A single buffer cannot overlap load with compute. |
@@ -395,14 +401,15 @@ Sections:
 | `eval.benchmarks` | `list[str] \| null` | `null` |  | lm-evaluation-harness benchmark names to run |
 | `eval.custom_tasks` | `str \| null` | `null` |  | Path to custom eval JSONL file |
 | `eval.judge` | `dict \| null` | `null` |  | LLM-as-a-judge config: model, rubric, provider |
-| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
+| `eval.ship` | `section \| null` | `null` |  | soup ship verdict defaults (task_eval / task_mode / reward_fn / general_suite / forgetting_threshold / judge_model / baseline / noise_floor). See [`eval.ship`](#evalship). |
 
 ## `eval.ship`
 
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `eval.ship.task_eval` | `str \| null` | `null` |  | JSONL of leg-1 task-win eval tasks |
-| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) |
+| `eval.ship.task_mode` | `str` | `"metric"` | one of `"metric"`, `"judge_score"`, `"pairwise"`, `"reward"` | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate) \| reward (a reward function scores each answer; needs reward_fn or --reward-fn) |
+| `eval.ship.reward_fn` | `str \| null` | `null` |  | Reward function for task_mode reward: accuracy \| format \| verifiable:math \| verifiable:json_schema \| the path of a .py file, which soup ship EXECUTES as Python code (under the working directory, never a symlink): only name a file you trust. Only meaningful with task_mode reward; it is read by soup ship, never by soup train. |
 | `eval.ship.general_suite` | `str \| null` | `null` |  | Comma list of leg-2 benchmarks (default: bundled offline suite) |
 | `eval.ship.forgetting_threshold` | `float` | `0.05` | `>= 0.0`, `<= 1.0` | Max allowed leg-2 drop in absolute points before DON'T SHIP |
 | `eval.ship.judge_model` | `str \| null` | `null` |  | Judge model URL for task_mode judge_score / pairwise |

@@ -22,6 +22,22 @@ console = Console()
 
 _SPACE_HARDWARE_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
+
+def _is_streamlit_sdk_refusal(exc: Exception, sdk: str) -> bool:
+    """Match a Hub error whose server message names the SDK field and a value."""
+    from huggingface_hub.errors import HfHubHTTPError
+
+    if sdk != "streamlit" or not isinstance(exc, HfHubHTTPError):
+        return False
+
+    server_message = (getattr(exc, "server_message", None) or "").casefold()
+    names_sdk_field = "space_sdk" in server_message or re.search(r"\bsdk\b", server_message)
+    names_sdk_value = any(
+        re.search(rf"\b{value}\b", server_message)
+        for value in ("streamlit", "gradio", "docker", "static")
+    )
+    return bool(names_sdk_field and names_sdk_value)
+
 app = typer.Typer(no_args_is_help=True)
 
 
@@ -465,7 +481,11 @@ def hf_space(
         "gradio-chat",
         "--template",
         "-t",
-        help=f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}",
+        help=(
+            f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}. "
+            "Streamlit prints a v0.78.0 deprecation warning; Hugging Face no longer "
+            "creates new Streamlit Spaces. Use gradio-chat."
+        ),
     ),
     template_dir: Optional[str] = typer.Option(
         None,
@@ -491,12 +511,15 @@ def hf_space(
     """Create a HuggingFace Space wrapping a fine-tuned model.
 
     Uploads an app.py, requirements.txt, and README.md rendered from the
-    chosen template. Supports gradio-chat and streamlit-chat.
+    chosen template. Supports gradio-chat and streamlit-chat. Hugging Face no
+    longer creates new Streamlit Spaces; a deprecation warning is printed for
+    Streamlit templates in v0.78.0. Use gradio-chat for new deployments.
     """
     from rich.markup import escape
 
     from soup_cli.utils.hf import (
         get_hf_api,
+        hf_login_command,
         resolve_endpoint,
         resolve_token,
         validate_repo_id,
@@ -541,7 +564,7 @@ def hf_space(
     if token is None:
         console.print(
             "[red]No HuggingFace token found.[/]\n"
-            "Set HF_TOKEN env var or run: [bold]huggingface-cli login[/]"
+            f"Set HF_TOKEN env var or run: [bold]{hf_login_command()}[/]"
         )
         raise typer.Exit(1)
 
@@ -573,6 +596,14 @@ def hf_space(
     except FileNotFoundError as exc:
         console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
+
+    if sdk == "streamlit":
+        console.print(
+            "[yellow]Deprecation warning (v0.78.0):[/] Hugging Face no longer creates "
+            "new Streamlit Spaces. Use the built-in [bold]gradio-chat[/] template or a "
+            "custom Gradio template.",
+            emoji=False,
+        )
 
     template_label = template_dir if template_dir is not None else template
     # The space and the model passed validate_repo_id; the template directory is
@@ -624,7 +655,16 @@ def hf_space(
             commit_message="Soup CLI: deploy Space files",
         )
     except Exception as exc:
-        console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
+        if _is_streamlit_sdk_refusal(exc, sdk):
+            console.print(
+                "[red]Hugging Face no longer creates new Streamlit Spaces.[/] "
+                "Use [bold]--template gradio-chat[/] instead.",
+                emoji=False,
+            )
+            response = getattr(exc, "server_message", None) or exc
+            console.print(f"[dim]Hub response:[/] {for_terminal(response)}", emoji=False)
+        else:
+            console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(
@@ -703,6 +743,7 @@ def autopilot(
     from soup_cli.utils.deploy_autopilot import (
         get_profile,
         list_profiles,
+        validate_output_path,
         write_deploy_script,
         write_recipe,
     )
@@ -740,7 +781,15 @@ def autopilot(
         )
         raise typer.Exit(2) from exc
 
+    _validate_deploy_autopilot_measure_args(
+        measure=measure,
+        tasks_file=tasks_file,
+        measure_candidates=measure_candidates,
+    )
+
     try:
+        validate_output_path(recipe_out, "recipe_path")
+        validate_output_path(script_out, "script_path")
         recipe_path = write_recipe(
             profile, base=base, output_dir=output_dir, recipe_path=recipe_out
         )
@@ -772,11 +821,6 @@ def autopilot(
 
     # v0.53.1 #109 — optional live measurement
     if measure:
-        if not tasks_file:
-            console.print(
-                "[red]--measure requires --tasks <jsonl>.[/]"
-            )
-            raise typer.Exit(2)
         _run_deploy_autopilot_measure(
             profile=profile,
             base=base,
@@ -819,23 +863,22 @@ def _auto_detect_template() -> Optional[str]:
 # --- v0.53.1 #109 — deploy autopilot live measurement -----------------------
 
 
-def _run_deploy_autopilot_measure(
+def _validate_deploy_autopilot_measure_args(
     *,
-    profile: "DeployProfile",
-    base: str,
-    tasks_file: str,
+    measure: bool,
+    tasks_file: Optional[str],
     measure_candidates: Optional[str],
-) -> None:
-    """Lazy-import + invoke the measurement helper from utils.deploy_measure."""
-    import hashlib
+    default_quant: str = "",
+) -> list[str]:
+    """Validate ``--measure`` inputs before writing files and return candidates (#2827)."""
+    if not measure:
+        return []
+    if not tasks_file:
+        console.print("[red]--measure requires --tasks <jsonl>.[/]")
+        raise typer.Exit(2)
 
     from rich.markup import escape
 
-    from soup_cli.utils.deploy_measure import (
-        pick_best,
-        render_measure_table,
-        run_measure,
-    )
     from soup_cli.utils.paths import is_under_cwd
     from soup_cli.utils.terminal import for_terminal
 
@@ -848,7 +891,6 @@ def _run_deploy_autopilot_measure(
         console.print(f"[red]Tasks file not found: {escape(tasks_file)}[/]")
         raise typer.Exit(2)
 
-    # Determine candidate list
     if measure_candidates:
         candidates = [
             c.strip() for c in measure_candidates.split(",") if c.strip()
@@ -856,9 +898,34 @@ def _run_deploy_autopilot_measure(
         if not candidates:
             console.print("[red]--measure-candidates parsed to empty list.[/]")
             raise typer.Exit(2)
-    else:
-        # Default: just the profile's primary quant
-        candidates = [profile.quant]
+        return candidates
+    return [default_quant] if default_quant else []
+
+
+def _run_deploy_autopilot_measure(
+    *,
+    profile: "DeployProfile",
+    base: str,
+    tasks_file: Optional[str],
+    measure_candidates: Optional[str],
+) -> None:
+    """Lazy-import + invoke the measurement helper from utils.deploy_measure."""
+    import hashlib
+
+    from rich.markup import escape
+
+    from soup_cli.utils.deploy_measure import (
+        pick_best,
+        render_measure_table,
+        run_measure,
+    )
+
+    candidates = _validate_deploy_autopilot_measure_args(
+        measure=True,
+        tasks_file=tasks_file,
+        measure_candidates=measure_candidates,
+        default_quant=profile.quant,
+    )
 
     # Build a base sha — local path → realpath; HF repo → name
     base_sha_seed = base if not os.path.isdir(base) else os.path.realpath(base)

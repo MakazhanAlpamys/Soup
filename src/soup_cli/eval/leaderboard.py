@@ -132,6 +132,11 @@ def compare_runs(
         delta = None
         if score_a is not None and score_b is not None:
             delta = score_b - score_a
+            if not math.isfinite(delta):
+                raise ValueError(
+                    f"runs {run_id_1!r} and {run_id_2!r}, benchmark {bench!r}: "
+                    "score delta must be finite"
+                )
             if delta < -0.01:
                 regressions.append(bench)
 
