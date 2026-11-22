@@ -352,23 +352,44 @@ def test_prepare_without_parking_leaves_the_tables_until_park_tables():
 # --- the stock forward keeps working ------------------------------------------------------
 
 
-def test_the_stock_forward_after_prepare_equals_the_stock_forward_before():
+@pytest.mark.parametrize("stock_bf16", [False, True], ids=["stock-fp32", "stock-bf16"])
+def test_the_stock_forward_after_prepare_equals_the_stock_forward_before(stock_bf16):
     """prepare() keeps the tables in the compute dtype; the stock forward then needs the
-    embedding as fp32 (embed_for_stock_forward) to keep its fp32 residual stream."""
+    same embedding dtype to keep its original residual stream."""
     from soup_cli.kernels.packed_lora import model as packed_model
 
     dt = torch.bfloat16
     model = build(dt)
+    causal = packed_model.unwrap(model)
+    norm_weights = [
+        norm.weight
+        for layer in causal.model.layers
+        for norm in (layer.input_layernorm, layer.post_attention_layernorm)
+    ] + [causal.model.norm.weight]
+    if stock_bf16:
+        embedding = model.get_input_embeddings().weight
+        embedding.data = embedding.data.to(dt)
+        assert model.get_output_embeddings().weight.dtype is torch.float32
+        for weight in norm_weights:
+            weight.data = weight.data.to(dt)
     ids, mask, labels = batch()
     with torch.no_grad(), torch.autocast("cuda", dtype=dt):
         before = model(input_ids=ids, attention_mask=mask, labels=labels, use_cache=False).loss
     run = make_run(model, dt, ids)
     try:
-        causal = packed_model.unwrap(model)
-        assert getattr(causal, "_packed_lora_fp32_embeds", False)
+        packed_norms = [
+            norm for layer in run.packed.layers for norm in (layer.ln1, layer.ln2)
+        ] + [run.packed.norm]
+        for live_norm, packed_norm in zip(norm_weights, packed_norms, strict=True):
+            assert live_norm.dtype is (dt if stock_bf16 else torch.float32)
+            assert packed_norm.dtype is torch.float32
+            assert torch.equal(live_norm.float(), packed_norm)
+        assert getattr(causal, "_packed_lora_fp32_embeds", False) is not stock_bf16
+        inputs = {"input_ids": ids} if stock_bf16 else {
+            "inputs_embeds": packed_model.embed_for_stock_forward(causal, ids),
+        }
         with torch.no_grad(), torch.autocast("cuda", dtype=dt):
-            after = model(inputs_embeds=packed_model.embed_for_stock_forward(causal, ids),
-                          attention_mask=mask, labels=labels, use_cache=False).loss
+            after = model(**inputs, attention_mask=mask, labels=labels, use_cache=False).loss
         assert abs(before.item() - after.item()) / abs(before.item()) < 1e-6
     finally:
         run.close()

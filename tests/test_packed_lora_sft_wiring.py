@@ -735,7 +735,7 @@ class TestTheCallSitesInSetupTransformers:
     def test_the_checks_come_before_the_tokenizer_and_the_model_are_loaded(self, source):
         begin = source.index("self._begin_packed_lora(cfg, tcfg)")
         assert begin < source.index("AutoTokenizer.from_pretrained")
-        assert begin < source.index("AutoModelForCausalLM.from_pretrained")
+        assert begin < source.index("self.model = load_resident_model(")
 
     def test_the_kbit_preparation_runs_inside_the_context(self, source):
         context = source.index("with self._packed_lora_kbit_context(compute_dtype):")

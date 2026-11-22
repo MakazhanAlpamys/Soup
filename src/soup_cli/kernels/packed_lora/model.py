@@ -173,8 +173,8 @@ def prepare(model, dt, architectures=OPEN_ARCHITECTURES):
         if len({b is None for b in biases}) != 1 or any(
                 bases[n].bias is not None for n in ("o", "gate", "up", "down")):
             raise UnsupportedError("unexpected biases")
-        if any(n.dtype != torch.float32 for n in norms):
-            raise UnsupportedError("norm weights are not fp32")
+        if any(n.dtype not in (torch.float32, dt) for n in norms):
+            raise UnsupportedError(f"norm weights are not fp32 or {dt}")
         layer = Layer()
         if not nf4.Pack.supported(weights):
             raise UnsupportedError("4-bit weights in a layout the decoder does not handle")
@@ -192,7 +192,8 @@ def prepare(model, dt, architectures=OPEN_ARCHITECTURES):
             layer.qk_norm = (weights_qk[0], weights_qk[1], float(eps))
         layer.qkv_bias = (None if biases[0] is None
                           else torch.cat([b.detach() for b in biases]).to(dt))
-        layer.ln1, layer.ln2 = (n.detach() for n in norms)
+        # Main's k-bit preparation can retain bf16 norms. Use fp32 only in the packed path.
+        layer.ln1, layer.ln2 = (n.detach().float() for n in norms)
         layer.eps = block.input_layernorm.variance_epsilon
         layer.lora = {n: Adapter(found[n][0], found[n][1], found[n][2]) for n in names}
         layer.names = names
@@ -219,7 +220,6 @@ def prepare(model, dt, architectures=OPEN_ARCHITECTURES):
     if embed.weight.requires_grad or head.weight.requires_grad:
         raise UnsupportedError("a trainable embedding or lm_head (the kernels read them as frozen)")
     tied = head.weight is embed.weight
-    converted = False
     for module in (embed,) if tied else (embed, head):
         weight = module.weight
         if weight.dtype == torch.float32 and _exact_in(weight, dt):
@@ -227,11 +227,10 @@ def prepare(model, dt, architectures=OPEN_ARCHITECTURES):
             # upcast it). Keep the same values in `dt` storage: the embedding lookup upcasts them
             # exactly, and the lm_head matmul used their `dt` cast anyway (autocast).
             module.weight = torch.nn.Parameter(weight.detach().to(dt), requires_grad=False)
-            converted = True
+            if module is embed:
+                model._packed_lora_fp32_embeds = True
     if tied:
         head.weight = embed.weight
-    if converted:
-        model._packed_lora_fp32_embeds = True  # the stock forward upcasts its embedding output
     if embed.weight.dtype != dt or head.weight.dtype != dt:
         raise UnsupportedError(f"embedding / lm_head dtype {embed.weight.dtype} / "
                                f"{head.weight.dtype} for compute dtype {dt}")
@@ -253,7 +252,7 @@ def prepare(model, dt, architectures=OPEN_ARCHITECTURES):
     packed.embed = embed.weight
     packed.head = head.weight
     packed.tied = tied
-    packed.norm, packed.norm_eps = inner.norm.weight.detach(), inner.norm.variance_epsilon
+    packed.norm, packed.norm_eps = inner.norm.weight.detach().float(), inner.norm.variance_epsilon
     packed.rotary = inner.rotary_emb
     packed.q_heads, packed.kv_heads, packed.head_dim = q_heads, kv_heads, head_dim
     packed.q_dim, packed.kv_dim = q_heads * head_dim, kv_heads * head_dim
@@ -288,13 +287,10 @@ def keep_tables_in_compute_dtype(model, *, stock_compute_dtype=None):
     @contextlib.contextmanager
     def context():
         tables = []
-        stock_keeps_embedding_dtype = False
+        embedding_weight = None
         if getattr(model, "is_loaded_in_4bit", False):
             embedding = model.get_input_embeddings()
-            stock_keeps_embedding_dtype = (
-                stock_compute_dtype is torch.bfloat16
-                and getattr(getattr(embedding, "weight", None), "dtype", None) is torch.bfloat16
-            )
+            embedding_weight = getattr(embedding, "weight", None)
             for module in (embedding, model.get_output_embeddings()):
                 weight = getattr(module, "weight", None)
                 if (weight is not None and weight.dtype in FP_DTYPES and weight.is_cuda
@@ -308,7 +304,11 @@ def keep_tables_in_compute_dtype(model, *, stock_compute_dtype=None):
         finally:
             for w, data in stored:
                 w.data = data
-            if stored and not stock_keeps_embedding_dtype:
+            if any(
+                w is embedding_weight
+                and not (stock_compute_dtype is torch.bfloat16 and data.dtype is torch.bfloat16)
+                for w, data in stored
+            ):
                 model._packed_lora_fp32_embeds = True
 
     return context()

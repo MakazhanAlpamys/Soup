@@ -19,10 +19,9 @@ The hook leaves each labelled forward's metrics in a
 ``make_chunked_loss_trainer_class`` reads to log TRL's ``entropy`` / ``mean_token_accuracy``
 columns and what the rewind recorder reads for the per-row losses.
 
-Without a run (``run=None``) the hook only does the part of the stock forward that the kernels'
-set-up changed: ``keep_tables_in_compute_dtype`` leaves the embedding in the compute dtype, so
-the stock forward is fed ``inputs_embeds`` upcast to fp32, which is what it would have computed
-from the fp32 table of an ordinary ``prepare_model_for_kbit_training``.
+Without a run (``run=None``) the hook only restores the stock embedding output dtype when the
+kernels' set-up kept the table in the compute dtype and the stock k-bit preparation would have
+left it in fp32.
 
 A step is *stock* when the kernels cannot take it; the run counts those and says why (once).
 """
@@ -31,8 +30,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-#: The causal LM carries this when ``keep_tables_in_compute_dtype`` or ``model.prepare`` left its
-#: embedding in the compute dtype (see ``model.py``).
+#: The causal LM carries this when its table stayed in the compute dtype and the stock forward
+#: needs fp32 embedding output (see ``model.py``).
 FP32_EMBEDS_ATTR = "_packed_lora_fp32_embeds"
 
 
