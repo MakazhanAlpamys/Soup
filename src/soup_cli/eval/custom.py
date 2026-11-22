@@ -226,9 +226,15 @@ def _is_edge(char: str) -> bool:
     return not (char.isalnum() or char == "_" or unicodedata.category(char).startswith("M"))
 
 
+# A minus sign kept in front of a number: ``-4`` and ``4`` are different answers.
+_NUMBER_SIGNS = frozenset({"-", "\u2212"})
+
+
 def _strip_edges(word: str) -> str:
     start, end = 0, len(word)
     while start < end and _is_edge(word[start]):
+        if word[start] in _NUMBER_SIGNS and start + 1 < end and word[start + 1].isdigit():
+            break
         start += 1
     while end > start and _is_edge(word[end - 1]):
         end -= 1
@@ -243,10 +249,16 @@ def _semantic_words(text: str) -> set[str]:
     ``3.14``, ``don't`` and ``e-mail`` are one word each and do not match ``14``,
     ``don`` or ``mail``. A combining mark at the edge of a word is kept (see
     ``_is_edge``), so two words that differ only in a final vowel sign or accent
-    stay two words.
+    stay two words; a word that is only combining marks once its edges are removed
+    (a symbol followed by the variation selector U+FE0F) is dropped. A minus sign
+    (``-`` or U+2212) right before a digit stays, so ``(-4).`` is ``-4``, not ``4``.
     """
     words = (_strip_edges(word) for word in text.lower().split())
-    return {word for word in words if word}
+    return {word for word in words if word and not _only_combining_marks(word)}
+
+
+def _only_combining_marks(word: str) -> bool:
+    return all(unicodedata.category(char).startswith("M") for char in word)
 
 
 def score_semantic(output: str, expected: str) -> float:
