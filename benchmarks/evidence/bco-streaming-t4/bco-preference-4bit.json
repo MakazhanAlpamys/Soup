@@ -1,0 +1,33 @@
+{
+  "loss": "bco",
+  "task": "preference",
+  "quantization": "4bit",
+  "step": 1,
+  "raw_loss": 0.6931471824645996,
+  "grad_norm": 0.09187596291303635,
+  "adapter_max_delta": 1.9999988580821082e-05,
+  "peak_allocated_bytes": 234899456,
+  "layer_reads": 2,
+  "checkpoint_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "final_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "checkpoint_sha256": "d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80",
+  "adapter_reload": true
+}

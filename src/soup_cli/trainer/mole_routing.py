@@ -24,7 +24,9 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -95,7 +97,9 @@ def make_mole_trainer_class(base_cls: type) -> type:
                     target.mole_gate.requires_grad_(True)
                     gate_path = Path(resume_from_checkpoint) / "mole_gate.pt"
                     if gate_path.is_file():
-                        gate_state = torch.load(gate_path, map_location="cpu", weights_only=True)
+                        from soup_cli.utils.mole_routing import load_gate_state
+
+                        gate_state = load_gate_state(str(gate_path))
                         target.mole_gate.load_state_dict(gate_state)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
@@ -450,8 +454,7 @@ class MoleRoutingTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=use_bf16,
             fp16=use_fp16,
             report_to=self.report_to,
@@ -491,7 +494,8 @@ class MoleRoutingTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
         gate_path = output_dir / "mole_gate.pt"
         # #1266: always fp32, whatever the module holds by now (a DeepSpeed bf16/fp16

@@ -1,0 +1,10 @@
+{
+  "devices": [
+    "Tesla T4, 580.178.04, 7.5",
+    "Tesla T4, 580.178.04, 7.5"
+  ],
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "patch_sha256": "bdcbb21bf1e86ce3d838ceaf1fa672cd872ad9fbaf03d1f1794e28140884d8a4",
+  "base_commit": "a6f5e72466991aabbce10b303047c997cedd71bc",
+  "torch_cuda": "2.11.0+cu130 13.0"
+}

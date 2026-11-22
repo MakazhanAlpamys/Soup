@@ -21,10 +21,16 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _print_error(label: str, exc: BaseException) -> None:
+    # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+    console.print(Text.assemble((label, "red"), " ", strip_control(exc)))
 
 app = typer.Typer(
     name="steer",
@@ -118,7 +124,7 @@ def train_steer(
         canonical_name = validate_steering_name(name)
         pairs_path = _validate_pairs_path(pairs)
     except (TypeError, ValueError, typer.BadParameter) as exc:
-        console.print(f"[red]Invalid steer-train input:[/] {escape(str(exc))}")
+        _print_error("Invalid steer-train input:", exc)
         raise typer.Exit(2) from exc
 
     # `--base` accepts arbitrary HF ids / local paths but Typer does not
@@ -164,13 +170,13 @@ def train_steer(
         raise typer.Exit(2)
 
     spec = get_steering_method_spec(canonical_method)
-    panel_body = (
-        f"Base: {escape(base)}\n"
-        f"Method: {escape(canonical_method)}\n"
-        f"Name: {escape(canonical_name)}\n"
-        f"Pairs: {escape(pairs_path)}\n"
+    panel_body = Text(
+        f"Base: {strip_control(base)}\n"
+        f"Method: {canonical_method}\n"
+        f"Name: {canonical_name}\n"
+        f"Pairs: {strip_control(pairs_path)}\n"
         f"Layer: {layer if layer is not None else 'auto (middle)'}\n"
-        f"Description: {escape(spec.description)}"
+        f"Description: {spec.description}"
     )
     console.print(
         Panel(
@@ -199,18 +205,27 @@ def train_steer(
             top_k=top_k,
         )
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Steer-train failed:[/] {escape(str(exc))}")
+        _print_error("Steer-train failed:", exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"[bold]Method:[/] {escape(artifact.method)}\n"
-            f"[bold]Name:[/] {escape(artifact.name)}\n"
-            f"[bold]Layer:[/] {artifact.layer}\n"
-            f"[bold]Intervention:[/] {escape(artifact.intervention_point)}\n"
-            f"[bold]Hidden dim:[/] {artifact.hidden_dim}\n"
-            f"[bold]Pairs:[/] {artifact.num_pairs}\n"
-            f"[bold]Saved:[/] {escape(artifact.output_dir)}",
+            Text.assemble(
+                ("Method:", "bold"),
+                f" {artifact.method}\n",
+                ("Name:", "bold"),
+                f" {artifact.name}\n",
+                ("Layer:", "bold"),
+                f" {artifact.layer}\n",
+                ("Intervention:", "bold"),
+                f" {artifact.intervention_point}\n",
+                ("Hidden dim:", "bold"),
+                f" {artifact.hidden_dim}\n",
+                ("Pairs:", "bold"),
+                f" {artifact.num_pairs}\n",
+                ("Saved:", "bold"),
+                f" {strip_control(artifact.output_dir)}",
+            ),
             title="Steering vector trained",
             border_style="green",
         )
@@ -236,11 +251,20 @@ def _attach_vector(registry_id: str, output_dir: str) -> None:
 
         attach_artifact(registry_id, path=vector_path, kind="steering_vector")
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error:[/] could not attach to registry: {for_terminal(exc)}")
+        console.print(
+            Text.assemble(
+                ("Error:", "red"), " could not attach to registry: ", strip_control(exc)
+            )
+        )
         raise typer.Exit(1) from exc
     console.print(
-        f"[green]Attached[/] steering_vector to registry entry "
-        f"[bold]{for_terminal(registry_id)}[/] [dim]({for_terminal(vector_path)})[/]"
+        Text.assemble(
+            ("Attached", "green"),
+            " steering_vector to registry entry ",
+            (strip_control(registry_id), "bold"),
+            " ",
+            (f"({strip_control(vector_path)})", "dim"),
+        )
     )
 
 
@@ -273,25 +297,34 @@ def apply_steer(
         canonical_name = validate_steering_name(name)
         canonical_strength = validate_steering_strength(strength)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid steer-apply input:[/] {escape(str(exc))}")
+        _print_error("Invalid steer-apply input:", exc)
         raise typer.Exit(2) from exc
 
     try:
         steer_dir = resolve_steering_dir(canonical_name)
         loaded = load_steering_artifact(steer_dir)
     except (TypeError, ValueError, OSError) as exc:
-        console.print(f"[red]Cannot load steering vector:[/] {escape(str(exc))}")
+        _print_error("Cannot load steering vector:", exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"[bold]Vector:[/] {escape(canonical_name)}\n"
-            f"[bold]Method:[/] {escape(loaded.method)}\n"
-            f"[bold]Layer:[/] {loaded.layer}\n"
-            f"[bold]Intervention:[/] {escape(loaded.intervention_point)}\n"
-            f"[bold]Dim:[/] {len(loaded.vector)}\n"
-            f"[bold]Strength:[/] {canonical_strength}\n"
-            f"[bold]Dir:[/] {escape(steer_dir)}",
+            Text.assemble(
+                ("Vector:", "bold"),
+                f" {canonical_name}\n",
+                ("Method:", "bold"),
+                f" {loaded.method}\n",
+                ("Layer:", "bold"),
+                f" {loaded.layer}\n",
+                ("Intervention:", "bold"),
+                f" {loaded.intervention_point}\n",
+                ("Dim:", "bold"),
+                f" {len(loaded.vector)}\n",
+                ("Strength:", "bold"),
+                f" {canonical_strength}\n",
+                ("Dir:", "bold"),
+                f" {strip_control(steer_dir)}",
+            ),
             title="soup steer apply",
             border_style="cyan",
         )
@@ -324,8 +357,8 @@ def list_steers() -> None:
             for art in store.get_artifacts(entry["id"]):
                 if art.get("kind") == "steering_vector":
                     table.add_row(
-                        escape(str(entry.get("name", ""))),
-                        escape(str(art.get("path", ""))),
+                        Text(strip_control(entry.get("name", ""))),
+                        Text(strip_control(art.get("path", ""))),
                     )
                     rows += 1
     if rows == 0:

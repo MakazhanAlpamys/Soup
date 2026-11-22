@@ -1,0 +1,34 @@
+W1111 19:18:06.088000 36268 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+{
+  "command": "compare",
+  "ref": "<OUT>\\qwen3-32b.reload1.safetensors",
+  "ref_producer": "reload_compare.py dump",
+  "ref_device": "cuda",
+  "adapter_sha256": "4aed2c950089bbdbb5daac19232a4c4b9b2d2bd98e433b080144f90ea7621654",
+  "reload_logits_sha256": "302dfa816f3168ced5471212bdf53aecd6e10ae4d0862113f7c6ee63111f2bc3",
+  "ref_logits_sha256": "302dfa816f3168ced5471212bdf53aecd6e10ae4d0862113f7c6ee63111f2bc3",
+  "exact": true,
+  "elements": 19447808,
+  "elements_differing": 0,
+  "nan_in_reload": 0,
+  "max_abs_diff": 0.0,
+  "mean_abs_diff": 0.0,
+  "top1_positions_equal": 128,
+  "positions": 128,
+  "adapter_loaded": true,
+  "build_seconds": 5.7,
+  "forward_seconds": 5.7,
+  "runtime_stats": {
+    "buffer_bytes": 2058929720,
+    "store_bytes": 3363201820,
+    "pinned": true,
+    "pinned_bytes": 4294967296,
+    "tier": "disk",
+    "disk_bytes": 19211011840,
+    "layer_loads": 64,
+    "device": "cuda"
+  },
+  "cuda_max_allocated_MiB": 2073.6,
+  "cuda_max_reserved_MiB": 2122.0
+}
+EXACT RELOAD: PASS

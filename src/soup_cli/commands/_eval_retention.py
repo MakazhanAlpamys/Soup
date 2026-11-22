@@ -36,6 +36,7 @@ from soup_cli.utils.exit_codes import (
     GateCommand,
 )
 from soup_cli.utils.retention_ledger import DEFAULT_LEDGER_PATH, DEFAULT_THRESHOLD
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 from soup_cli.utils.terminal import for_terminal
 
 #: Earlier versions shown as table columns; the JSON report always has all of them.
@@ -215,7 +216,8 @@ def _resolve_numerics(device: Optional[str], quantization: Optional[str], templa
     from soup_cli.utils import retention_ledger as rl
 
     # One helper decides the precision for ship's console line, its verdict and this stamp:
-    # "4bit" / "8bit" when quantized, else bf16 on CUDA (including cuda:0) and fp32 elsewhere.
+    # "4bit" / "8bit" when quantized; otherwise native bf16 on capable CUDA cards,
+    # fp16 on older CUDA cards, and fp32 elsewhere.
     precision = ship._live_eval_numerics(quantization, device)
     family = live_eval.resolve_device(device).split(":")[0].strip().lower()
     return rl.make_numerics(
@@ -412,6 +414,8 @@ def _run(
     # 5. ONE model in memory, scored on every task. A failed generation is not a wrong
     #    answer: the first task with one stops the run, and nothing is recorded.
     from soup_cli.eval.custom import run_eval
+
+    warn_stopped_inputs(model, adapter)
 
     scores: Dict[str, float] = {}
     counts: Dict[str, int] = {}

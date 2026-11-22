@@ -1,8 +1,9 @@
 """Every `tests/test_*.py` that needs the real MLX library runs in the `mlx-smoke` job.
 
 `mlx` is not in `[dev]`, so the 3x3 test matrix cannot import it and every test that
-`importorskip`s `mlx.core` / `mlx_lm` skips there. `mlx-smoke` (macOS, `.[mlx]` and `pytest`
-only) is the one job that can execute them, and it runs an explicit list of files. A new MLX
+`importorskip`s `mlx.core` / `mlx_lm` skips there. `mlx-smoke` (macOS, `.[mlx,serve]`,
+`pytest` and `httpx`) is the one job that can execute them, and it runs an explicit
+list of files. A new MLX
 test file that nobody adds to that list therefore runs on no job at all, and the suite stays
 green whatever its tests would say. That is how the DPO, ORPO and eval-steps files (#1846,
 #2073, #2074) went unexecuted: their loss, gradient and training-loop tests skip wherever MLX
@@ -39,6 +40,11 @@ JOB = "mlx-smoke"
 #: job, with the reason. Adding an entry is a decision a reviewer should see, so it carries a
 #: sentence, not a flag.
 EXEMPT: dict[str, str] = {
+    "test_mlx_cache_reader_native.py": (
+        "The Arrow-cache lifecycle writes and reads its cache with datasets; the mlx-smoke "
+        "job installs only .[mlx] and pytest and fails when datasets is installed, so hosted "
+        "CI cannot run this file."
+    ),
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
         "field, mlx.optimizers.clip_grad_norm exists) as a tripwire for an upstream release; "

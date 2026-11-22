@@ -1,0 +1,112 @@
+{
+  "stage": "untimed-native-census",
+  "written_utc": "2026-10-26T12:19:41.734975+00:00",
+  "shape": [
+    1,
+    4096
+  ],
+  "cap_bytes": 8589934592,
+  "admission": {
+    "uuid": "GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4",
+    "free_bytes": 25769803776,
+    "temperature": 46,
+    "power_limit": 420.0
+  },
+  "allocator_cap_bytes": 8589934592,
+  "cap_binding": {
+    "verified": true,
+    "field": "training.stream_vram_override",
+    "bytes": 8589934592,
+    "native_message_names_override": true
+  },
+  "native": {
+    "measured": true,
+    "full_layer_bytes": 839943168,
+    "full_layer_charge": 952123940,
+    "peak_reserved": 4968153088,
+    "peak_allocated": 4382797312,
+    "cap_bytes": 8589934592,
+    "cap_bound": "override",
+    "budget_bytes": 3621781504,
+    "budget_inputs": {
+      "total_bytes": 25769279488,
+      "free_bytes": 19360907264,
+      "reserved_bytes": 4968153088,
+      "reserved_peak_bytes": 4968153088,
+      "override_bytes": 8589934592,
+      "headroom": 0.85
+    },
+    "k": 3,
+    "retained_indices": [
+      29,
+      30,
+      31
+    ]
+  },
+  "projections": {
+    "retained_indices": [
+      29,
+      30,
+      31
+    ],
+    "recomputed_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ],
+    "selected_indices": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ],
+    "raw_bytes": 671088640,
+    "charged_bytes": 760717616,
+    "residual_bytes": 765409684,
+    "reason": "planned"
+  },
+  "messages": [
+    "[cyan]training.stream_recompute='auto':[/] the last 3 of 32 streamed layers keep their activations, the rest recompute (measured at batch 1 x seq 4096: one layer 839.9 MB retained, charged 952.1 MB at reserved/allocated 1.13; budget 3.62 GB = training.stream_vram_override 8.59 GB minus the reserved peak 4.97 GB)"
+  ],
+  "optimizer_updates": 0,
+  "attention_implementation": "sdpa",
+  "kernel_profiled": false,
+  "deterministic_algorithms": true,
+  "shard_index_sha256": "411bf629b831503d3cd43317fc7df78aba3a6df28594d18345cdc17a7252afc8",
+  "packages": {
+    "torch": "2.14.1+cu130",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "task": "ipo",
+  "mode": "streamed",
+  "quantization": "none",
+  "instrument": "default initial scale",
+  "default_initial_scale": 65536.0,
+  "effective_initial_scale": 65536.0,
+  "attempt_cap": 12,
+  "attempts": [
+    {
+      "step": 1,
+      "scale_before": 65536.0,
+      "scale_after": 32768.0,
+      "optimizer_skipped": true,
+      "adapter_max_delta": 0.0,
+      "loss": 25.0,
+      "grad_norm": "nan"
+    },
+    {
+      "step": 2,
+      "scale_before": 32768.0,
+      "scale_after": 16384.0,
+      "optimizer_skipped": true,
+      "adapter_max_delta": 0.0,
+      "loss": 25.0,
+      "grad_norm": "nan"
+    },
+    {
+      "step": 3,
+      "scale_before": 16384.0,
+      "scale_after": 8192.0,
+      "optimizer_skipped": true,
+      "adapter_max_delta": 0.0,
+      "loss": 25.0,
+      "grad_norm": "nan"
+    },
+    {
+      "step": 4,
+      "scale_before": 8192.0,
+      "scale_after": 4096.0,
+      "optimizer_skipped": true,
+      "adapter_max_delta": 0.0,
+      "loss": 25.0,
+      "grad_norm": "nan"
+    },
+    {
+      "step": 5,
+      "scale_before": 4096.0,
+      "scale_after": 4096.0,
+      "optimizer_skipped": false,
+      "adapter_max_delta": 1.99999976757681e-05,
+      "loss": 25.0,
+      "grad_norm": 15.559629440307617
+    }
+  ],
+  "skipped_steps": 4,
+  "first_applied_step": 5,
+  "fixture_sha256": "d81c1a44a04d2c1a8f539dddfee997db26d460721d8d27362509c6c8f2b37f80",
+  "layer_reads": 2,
+  "default_adapter_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "ref_adapter_keys": [
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.q_proj.lora_B.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_A.weight",
+    "base_model.model.model.layers.1.self_attn.v_proj.lora_B.weight"
+  ],
+  "adapter_reload": true,
+  "peak_allocated_bytes": 234898432
+}

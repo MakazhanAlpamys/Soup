@@ -1,6 +1,8 @@
 """Small shared command-line guards."""
 
+import math
 from collections.abc import Iterable
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -29,3 +31,32 @@ def refuse_output_over_input(
     except ValueError as exc:
         console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(exit_code) from exc
+
+
+def _describe_range(kind: object) -> str:
+    """A Click range as Click words it: ``0.0<=x<=1.0``, or ``x>=1.0`` with one bound (#3006)."""
+    low = getattr(kind, "min", None)
+    high = getattr(kind, "max", None)
+    low_open = getattr(kind, "min_open", False)
+    high_open = getattr(kind, "max_open", False)
+    if high is None:
+        return "x" if low is None else f"x{'>' if low_open else '>='}{low}"
+    if low is None:
+        return f"x{'<' if high_open else '<='}{high}"
+    return f"{low}{'<' if low_open else '<='}x{'<' if high_open else '<='}{high}"
+
+
+def refuse_nan(param: typer.CallbackParam, value: Optional[float]) -> Optional[float]:
+    """Refuse NaN on a ranged float option, as Click refuses ``inf`` (#2906).
+
+    ``typer.Option(min=..., max=...)`` on a float becomes a Click ``FloatRange``,
+    which checks ``value < min`` and ``value > max``; both are false for NaN, and
+    ``float()`` reads ``nan`` in any case and with a sign. Pass it as the option's
+    ``callback``: it runs after Click's conversion, on the number, before the
+    command reads anything, and raises Click's out-of-range usage error, so each
+    command keeps its own usage exit code. ``None`` (an unset ``Optional``)
+    passes through.
+    """
+    if value is None or not math.isnan(value):
+        return value
+    raise typer.BadParameter(f"nan is not in the range {_describe_range(param.type)}.")

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
@@ -39,6 +40,7 @@ from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 if TYPE_CHECKING:
     import torch as _torch_typ
 
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 
@@ -828,8 +830,7 @@ class DistillTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
@@ -1190,7 +1191,8 @@ class DistillTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         if getattr(self, "nonfinite_tracker", None) is not None:
             self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start

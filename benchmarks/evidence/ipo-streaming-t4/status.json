@@ -1,0 +1,42 @@
+[
+  {
+    "cell": "streamed-ipo-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-ipo-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-ipo-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-ipo-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-preference-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-preference-none-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-preference-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-preference-nf4-1024",
+    "status": "pass"
+  },
+  {
+    "cell": "streamed-ipo-none-default",
+    "status": "pass"
+  },
+  {
+    "cell": "resident-ipo-none-default",
+    "status": "pass"
+  }
+]

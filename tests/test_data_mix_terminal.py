@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,22 +10,19 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, an emoji code, and a tag
 # with control characters, so the strip and the escape are pinned separately.
 _FILE_NAMES = [
     "x[red]n.jsonl",
-    pytest.param("n:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.jsonl", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}.jsonl",
 ]
 # Values that are not file names can also carry a closing tag with nothing to close.
@@ -192,6 +188,79 @@ def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
 
     assert result.exit_code == 2
     text = _plain(result)
-    assert "apply failed: cannot build this value: day is out of range for month" in text
+    assert (
+        'apply failed: cannot build this value: day is out of range for month in "r.yaml"' in text
+    )
     assert line.replace(bidi, "") in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        pytest.param(
+            "r.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser",
+        ),
+        pytest.param(
+            "nested/invalid [red] recipe.yaml",
+            "data:\n\ttrain: []\n",
+            r"while scanning for the next token found character '\t' that cannot start any token "
+            'in "{path}", line 2, column 1: train: [] ^',
+            id="scanner-nested-space-markup",
+        ),
+        pytest.param(
+            f"invalid{_CONTROLS}.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser-bidi",
+        ),
+        pytest.param(
+            "reader.yaml",
+            "data: \x01\n",
+            'unacceptable character #x0001: special characters are not allowed '
+            'in "{path}", position 6',
+            id="reader",
+        ),
+    ],
+)
+def test_apply_reports_recipe_yaml_syntax_error(name, source, expected):
+    recipe = Path(name)
+    recipe.parent.mkdir(exist_ok=True)
+    recipe.write_text(source, encoding="utf-8")
+
+    result = _mix("--apply", name)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert text == "apply failed: " + expected.format(path=_shown(name))
+    assert "Loaded recipe:" not in text
+    assert _not_shown(text)
+
+
+@pytest.mark.parametrize(
+    "probs",
+    ["[0.5, pending]", "0.5", "[" + "9" * 310 + "]"],
+    ids=["nonnumeric-weight", "scalar", "overflow"],
+)
+def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
+    recipe = Path("r.yaml")
+    recipe.write_text(
+        "data:\n  train: [a.jsonl, b.jsonl]\n  interleave:\n"
+        f"    strategy: probs\n    probs: {probs}\n",
+        encoding="utf-8",
+    )
+
+    result = _mix("--apply", recipe.name)
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "apply failed: invalid data.interleave.probs in r.yaml" in text
+    assert "Loaded recipe:" not in text
+    assert "\ndata:\n" not in strip_ansi(result.stdout)

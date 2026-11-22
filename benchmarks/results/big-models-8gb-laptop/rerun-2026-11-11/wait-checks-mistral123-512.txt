@@ -1,0 +1,16 @@
+# Scrubbed copy of the operator's wait log (times UTC). Removed: the list of programs using the GPU.
+# 'python of other jobs' counts python processes that belong to other GPU jobs.
+wait start UTC 14:34:52 (budget 20 min, conditions must hold on 2 consecutive checks 30 s apart)
+UTC 14:34:54 | AC=True | GPU used=6568 MiB | free RAM=9,5 GB | python of this work=0 | python of other jobs=1
+UTC 14:35:25 | AC=True | GPU used=6568 MiB | free RAM=9,4 GB | python of this work=0 | python of other jobs=1
+UTC 14:35:57 | AC=True | GPU used=6568 MiB | free RAM=10,3 GB | python of this work=0 | python of other jobs=1
+UTC 14:36:29 | AC=True | GPU used=6580 MiB | free RAM=10,2 GB | python of this work=0 | python of other jobs=1
+UTC 14:37:00 | AC=True | GPU used=6580 MiB | free RAM=10,4 GB | python of this work=0 | python of other jobs=1
+UTC 14:37:32 | AC=True | GPU used=6580 MiB | free RAM=10,1 GB | python of this work=0 | python of other jobs=1
+UTC 14:38:05 | AC=True | GPU used=0 MiB | free RAM=11,9 GB | python of this work=0 | python of other jobs=1
+UTC 14:38:37 | AC=True | GPU used=6132 MiB | free RAM=11,1 GB | python of this work=0 | python of other jobs=1
+UTC 14:39:09 | AC=True | GPU used=0 MiB | free RAM=12,6 GB | python of this work=0 | python of other jobs=0
+UTC 14:39:42 | AC=True | GPU used=0 MiB | free RAM=12,4 GB | python of this work=0 | python of other jobs=0
+final precheck: PRECHECK: OK
+launching UTC 14:39:46
+driver exit: 0

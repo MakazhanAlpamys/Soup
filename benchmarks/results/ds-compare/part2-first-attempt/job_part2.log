@@ -1,0 +1,313 @@
+[job 11:53:58] part2 starts; payload /workspace/payload, output /workspace/out
+[job 11:53:58] shipped results copied into /workspace/out/results: 45 run jsons
+preflight part2: ready (results /workspace/out/results)
+[job 11:53:58] DEADLINE_EPOCH=1794059450 (13:50:50Z); source: /root/vk/deadline (1794060455) - kit reserve 405 s - finish margin 600 s
+[setup 11:53:58] recording the hardware
+[setup 11:53:58] WARNING: ulimit -l is 8192 KB (< 32 GB): the bf16 store (16 GB) may not be pinned and
+[setup 11:53:58]          the streaming arms would then run from pageable memory. Recorded; not raised.
+[setup 11:53:58] python: /opt/conda/bin/python3.11 (Python 3.11.14)
+torch 2.9.1+cu128 cuda 12.8 available True
+[setup 11:54:01] CUDA_HOME=/usr/local/cuda (Build cuda_12.8.r12.8/compiler.35583870_0)
+[setup 11:54:01] creating /workspace/payload/benchmarks/harness/ds_compare/venv_main
+[setup 11:54:07] installing soup-cli [train] at 9ca9819747a624da4cbbff03cc8e1a7d2a81100d
+Collecting soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d (from soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Cloning https://github.com/MakazhanAlpamys/Soup.git (to revision 9ca9819747a624da4cbbff03cc8e1a7d2a81100d) to /tmp/pip-install-27m8bw5g/soup-cli_ff02b259396c429dbe0bf510d78df9fd
+  Running command git clone --filter=blob:none --quiet https://github.com/MakazhanAlpamys/Soup.git /tmp/pip-install-27m8bw5g/soup-cli_ff02b259396c429dbe0bf510d78df9fd
+  Running command git rev-parse -q --verify '9ca9819747a624da4cbbff03cc8e1a7d2a81100d^{commit}'
+  9ca9819747a624da4cbbff03cc8e1a7d2a81100d
+  Running command git checkout -q 9ca9819747a624da4cbbff03cc8e1a7d2a81100d
+  Resolved https://github.com/MakazhanAlpamys/Soup.git to commit 9ca9819747a624da4cbbff03cc8e1a7d2a81100d
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: click<8.5,>=8.0.0 in /opt/conda/lib/python3.11/site-packages (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (8.3.0)
+Collecting huggingface-hub>=0.16.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading huggingface_hub-2.4.0-py3-none-any.whl.metadata (16 kB)
+Requirement already satisfied: packaging>=21.0 in /opt/conda/lib/python3.11/site-packages (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (25.0)
+Collecting plotext>=5.2.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading plotext-6.1.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (7.9 kB)
+Collecting pydantic>=2.0.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading pydantic-2.14.3-py3-none-any.whl.metadata (141 kB)
+Requirement already satisfied: pyyaml>=6.0 in /opt/conda/lib/python3.11/site-packages (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (6.0.3)
+Collecting rich>=13.0.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+Collecting typer<0.28,>=0.15.4 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading typer-0.27.3-py3-none-any.whl.metadata (16 kB)
+Collecting accelerate>=0.27.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading accelerate-1.15.0-py3-none-any.whl.metadata (19 kB)
+Collecting bitsandbytes>=0.41.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading bitsandbytes-0.50.2-py3-none-manylinux_2_24_x86_64.whl.metadata (10 kB)
+Collecting datasets>=2.14.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading datasets-5.1.0-py3-none-any.whl.metadata (24 kB)
+Collecting peft<1.0.0,>=0.20.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading peft-0.21.2-py3-none-any.whl.metadata (15 kB)
+Requirement already satisfied: requests>=2.32.2 in /opt/conda/lib/python3.11/site-packages (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.32.5)
+Requirement already satisfied: torch>=2.6.0 in /opt/conda/lib/python3.11/site-packages (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.9.1+cu128)
+Collecting transformers<6.0.0,>=5.16.1 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading transformers-5.22.2-py3-none-any.whl.metadata (31 kB)
+Collecting trl<1.0.0,>=0.29.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading trl-0.29.1-py3-none-any.whl.metadata (11 kB)
+Requirement already satisfied: numpy>=1.17 in /opt/conda/lib/python3.11/site-packages (from peft<1.0.0,>=0.20.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.3.4)
+Requirement already satisfied: psutil in /opt/conda/lib/python3.11/site-packages (from peft<1.0.0,>=0.20.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (7.1.3)
+Requirement already satisfied: tqdm in /opt/conda/lib/python3.11/site-packages (from peft<1.0.0,>=0.20.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (4.67.1)
+Collecting safetensors (from peft<1.0.0,>=0.20.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.2 kB)
+Collecting regex>=2025.10.22 (from transformers<6.0.0,>=5.16.1->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading regex-2026.11.7-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (40 kB)
+Collecting tokenizers<0.24.0,>=0.23.1 (from transformers<6.0.0,>=5.16.1->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading tokenizers-0.23.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (9.8 kB)
+Collecting click<8.5,>=8.0.0 (from soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading click-8.4.2-py3-none-any.whl.metadata (2.6 kB)
+Requirement already satisfied: filelock>=3.10.0 in /opt/conda/lib/python3.11/site-packages (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.20.0)
+Requirement already satisfied: fsspec>=2023.5.0 in /opt/conda/lib/python3.11/site-packages (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2025.10.0)
+Collecting hf-xet<2.0.0,>=1.6.0 (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading hf_xet-1.8.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (4.9 kB)
+Collecting httpx2<3,>=2.0.0 (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading httpx2-2.16.0-py3-none-any.whl.metadata (10 kB)
+Requirement already satisfied: typing-extensions>=4.1.0 in /opt/conda/lib/python3.11/site-packages (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (4.15.0)
+Collecting anyio>=4.10 (from httpx2<3,>=2.0.0->huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading anyio-4.16.0-py3-none-any.whl.metadata (4.7 kB)
+Collecting httpcore2==2.16.0 (from httpx2<3,>=2.0.0->huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading httpcore2-2.16.0-py3-none-any.whl.metadata (27 kB)
+Collecting idna>=3.18 (from httpx2<3,>=2.0.0->huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+Requirement already satisfied: truststore>=0.10 in /opt/conda/lib/python3.11/site-packages (from httpx2<3,>=2.0.0->huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (0.10.3)
+Collecting h11>=0.16 (from httpcore2==2.16.0->httpx2<3,>=2.0.0->huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting shellingham>=1.3.0 (from typer<0.28,>=0.15.4->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+Collecting annotated-doc>=0.0.2 (from typer<0.28,>=0.15.4->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+Collecting typing-extensions>=4.1.0 (from huggingface-hub>=0.16.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Requirement already satisfied: sympy>=1.13.3 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (1.14.0)
+Requirement already satisfied: networkx>=2.5.1 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.5)
+Requirement already satisfied: jinja2 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.1.6)
+Requirement already satisfied: nvidia-cuda-nvrtc-cu12==12.8.93 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.93)
+Requirement already satisfied: nvidia-cuda-runtime-cu12==12.8.90 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.90)
+Requirement already satisfied: nvidia-cuda-cupti-cu12==12.8.90 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.90)
+Requirement already satisfied: nvidia-cudnn-cu12==9.10.2.21 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (9.10.2.21)
+Requirement already satisfied: nvidia-cublas-cu12==12.8.4.1 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.4.1)
+Requirement already satisfied: nvidia-cufft-cu12==11.3.3.83 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (11.3.3.83)
+Requirement already satisfied: nvidia-curand-cu12==10.3.9.90 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (10.3.9.90)
+Requirement already satisfied: nvidia-cusolver-cu12==11.7.3.90 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (11.7.3.90)
+Requirement already satisfied: nvidia-cusparse-cu12==12.5.8.93 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.5.8.93)
+Requirement already satisfied: nvidia-cusparselt-cu12==0.7.1 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (0.7.1)
+Requirement already satisfied: nvidia-nccl-cu12==2.27.5 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.27.5)
+Requirement already satisfied: nvidia-nvshmem-cu12==3.3.20 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.3.20)
+Requirement already satisfied: nvidia-nvtx-cu12==12.8.90 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.90)
+Requirement already satisfied: nvidia-nvjitlink-cu12==12.8.93 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (12.8.93)
+Requirement already satisfied: nvidia-cufile-cu12==1.13.1.3 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (1.13.1.3)
+Requirement already satisfied: triton==3.5.1 in /opt/conda/lib/python3.11/site-packages (from torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.5.1)
+Collecting pyarrow>=24.0.0 (from datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading pyarrow-26.0.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (3.0 kB)
+Collecting dill<0.4.2,>=0.3.0 (from datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading dill-0.4.1-py3-none-any.whl.metadata (10 kB)
+Collecting pandas (from datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading pandas-3.1.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (16 kB)
+Collecting xxhash (from datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading xxhash-4.0.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (17 kB)
+Collecting multiprocess<0.70.20 (from datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading multiprocess-0.70.19-py311-none-any.whl.metadata (7.5 kB)
+Collecting aiohttp!=4.0.0a0,!=4.0.0a1 (from fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading aiohttp-3.14.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.3 kB)
+Collecting aiohappyeyeballs>=2.5.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl.metadata (5.9 kB)
+Collecting aiosignal>=1.4.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
+Requirement already satisfied: attrs>=17.3.0 in /opt/conda/lib/python3.11/site-packages (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (25.4.0)
+Collecting frozenlist>=1.1.1 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
+Collecting multidict<8.0,>=4.5 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading multidict-7.2.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (6.1 kB)
+Collecting propcache>=0.2.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading propcache-0.5.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (25 kB)
+Collecting yarl<2.0,>=1.25.1 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<=2026.7.0,>=2023.1.0->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading yarl-1.25.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (111 kB)
+Collecting annotated-types>=0.6.0 (from pydantic>=2.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+Collecting pydantic-core==2.50.4 (from pydantic>=2.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading pydantic_core-2.50.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (6.6 kB)
+Collecting typing-inspection>=0.4.4 (from pydantic>=2.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading typing_inspection-0.4.5-py3-none-any.whl.metadata (2.6 kB)
+Requirement already satisfied: charset_normalizer<4,>=2 in /opt/conda/lib/python3.11/site-packages (from requests>=2.32.2->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.4.4)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /opt/conda/lib/python3.11/site-packages (from requests>=2.32.2->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.5.0)
+Requirement already satisfied: certifi>=2017.4.17 in /opt/conda/lib/python3.11/site-packages (from requests>=2.32.2->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2025.10.5)
+Collecting markdown-it-py>=2.2.0 (from rich>=13.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /opt/conda/lib/python3.11/site-packages (from rich>=13.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (2.19.2)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=13.0.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in /opt/conda/lib/python3.11/site-packages (from sympy>=1.13.3->torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (1.3.0)
+Requirement already satisfied: MarkupSafe>=2.0 in /opt/conda/lib/python3.11/site-packages (from jinja2->torch>=2.6.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d) (3.0.3)
+Collecting python-dateutil>=2.9.0 (from pandas->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading python_dateutil-4.0.0-py3-none-any.whl.metadata (7.3 kB)
+Collecting tzdata (from python-dateutil>=2.9.0->pandas->datasets>=2.14.0->soup-cli @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d->soup-cli[train] @ git+https://github.com/MakazhanAlpamys/Soup.git@9ca9819747a624da4cbbff03cc8e1a7d2a81100d)
+  Downloading tzdata-2026.6-py2.py3-none-any.whl.metadata (1.4 kB)
+Downloading peft-0.21.2-py3-none-any.whl (835 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 835.4/835.4 kB 17.0 MB/s  0:00:00
+Downloading transformers-5.22.2-py3-none-any.whl (13.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.1/13.1 MB 106.7 MB/s  0:00:00
+Downloading huggingface_hub-2.4.0-py3-none-any.whl (857 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 857.0/857.0 kB 31.4 MB/s  0:00:00
+Downloading click-8.4.2-py3-none-any.whl (119 kB)
+Downloading hf_xet-1.8.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.3/4.3 MB 70.7 MB/s  0:00:00
+Downloading httpx2-2.16.0-py3-none-any.whl (97 kB)
+Downloading httpcore2-2.16.0-py3-none-any.whl (85 kB)
+Downloading tokenizers-0.23.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 48.4 MB/s  0:00:00
+Downloading trl-0.29.1-py3-none-any.whl (530 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 531.0/531.0 kB 15.7 MB/s  0:00:00
+Downloading typer-0.27.3-py3-none-any.whl (123 kB)
+Downloading accelerate-1.15.0-py3-none-any.whl (394 kB)
+Downloading annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+Downloading anyio-4.16.0-py3-none-any.whl (134 kB)
+Downloading bitsandbytes-0.50.2-py3-none-manylinux_2_24_x86_64.whl (43.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 43.1/43.1 MB 127.7 MB/s  0:00:00
+Downloading datasets-5.1.0-py3-none-any.whl (604 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 604.4/604.4 kB 18.7 MB/s  0:00:00
+Downloading dill-0.4.1-py3-none-any.whl (120 kB)
+Downloading multiprocess-0.70.19-py311-none-any.whl (144 kB)
+Downloading aiohttp-3.14.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.9/1.9 MB 58.1 MB/s  0:00:00
+Downloading multidict-7.2.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (510 kB)
+Downloading yarl-1.25.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (117 kB)
+Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
+Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
+Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Downloading idna-3.20-py3-none-any.whl (69 kB)
+Downloading plotext-6.1.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (475 kB)
+Downloading propcache-0.5.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (235 kB)
+Downloading pyarrow-26.0.1-cp311-cp311-manylinux_2_28_x86_64.whl (55.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 55.0/55.0 MB 138.5 MB/s  0:00:00
+Downloading pydantic-2.14.3-py3-none-any.whl (494 kB)
+Downloading pydantic_core-2.50.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (2.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 64.5 MB/s  0:00:00
+Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+Downloading regex-2026.11.7-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (805 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 805.6/805.6 kB 28.8 MB/s  0:00:00
+Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Downloading safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (516 kB)
+Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading typing_inspection-0.4.5-py3-none-any.whl (14 kB)
+Downloading pandas-3.1.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (12.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.4/12.4 MB 109.8 MB/s  0:00:00
+Downloading python_dateutil-4.0.0-py3-none-any.whl (92 kB)
+Downloading tzdata-2026.6-py2.py3-none-any.whl (348 kB)
+Downloading xxhash-4.0.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (260 kB)
+Building wheels for collected packages: soup-cli
+  Building wheel for soup-cli (pyproject.toml): started
+  Building wheel for soup-cli (pyproject.toml): finished with status 'done'
+  Created wheel for soup-cli: filename=soup_cli-0.77.2-py3-none-any.whl size=3014380 sha256=ac4b78d8b6d00b620e798b6372c58f5edfbe84b2a998a97a7dbea99ecc47bea6
+  Stored in directory: /root/.cache/pip/wheels/62/1c/1b/0b5588a414f1bd8b11eb0d8d60c313ddffab444ea1b4d1b24f
+Successfully built soup-cli
+Installing collected packages: xxhash, tzdata, typing-extensions, shellingham, safetensors, regex, pyarrow, propcache, plotext, multidict, mdurl, idna, hf-xet, h11, frozenlist, dill, click, annotated-types, annotated-doc, aiohappyeyeballs, yarl, typing-inspection, python-dateutil, pydantic-core, multiprocess, markdown-it-py, httpcore2, anyio, aiosignal, rich, pydantic, pandas, httpx2, aiohttp, typer, huggingface-hub, bitsandbytes, tokenizers, soup-cli, datasets, accelerate, transformers, trl, peft
+  Attempting uninstall: typing-extensions
+    Found existing installation: typing_extensions 4.15.0
+    Not uninstalling typing-extensions at /opt/conda/lib/python3.11/site-packages, outside environment /workspace/payload/benchmarks/harness/ds_compare/venv_main
+    Can't uninstall 'typing_extensions'. No files were found to uninstall.
+  Attempting uninstall: idna
+    Found existing installation: idna 3.11
+    Not uninstalling idna at /opt/conda/lib/python3.11/site-packages, outside environment /workspace/payload/benchmarks/harness/ds_compare/venv_main
+    Can't uninstall 'idna'. No files were found to uninstall.
+  Attempting uninstall: click
+    Found existing installation: click 8.3.0
+    Not uninstalling click at /opt/conda/lib/python3.11/site-packages, outside environment /workspace/payload/benchmarks/harness/ds_compare/venv_main
+    Can't uninstall 'click'. No files were found to uninstall.
+
+Successfully installed accelerate-1.15.0 aiohappyeyeballs-2.7.1 aiohttp-3.14.5 aiosignal-1.4.0 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.16.0 bitsandbytes-0.50.2 click-8.4.2 datasets-5.1.0 dill-0.4.1 frozenlist-1.8.0 h11-0.16.0 hf-xet-1.8.0 httpcore2-2.16.0 httpx2-2.16.0 huggingface-hub-2.4.0 idna-3.20 markdown-it-py-4.2.0 mdurl-0.1.2 multidict-7.2.1 multiprocess-0.70.19 pandas-3.1.1 peft-0.21.2 plotext-6.1.0 propcache-0.5.4 pyarrow-26.0.1 pydantic-2.14.3 pydantic-core-2.50.4 python-dateutil-4.0.0 regex-2026.11.7 rich-15.0.0 safetensors-0.8.0 shellingham-1.5.4 soup-cli-0.77.2 tokenizers-0.23.3 transformers-5.22.2 trl-0.29.1 typer-0.27.3 typing-extensions-4.16.0 typing-inspection-0.4.5 tzdata-2026.6 xxhash-4.0.2 yarl-1.25.1
+soup-cli 0.77.2 9ca9819747a624da4cbbff03cc8e1a7d2a81100d
+[setup 11:54:35] building deepspeed with DS_BUILD_CPU_ADAM=1 (log: /workspace/out/results/setup_part2/deepspeed_build.log)
+deepspeed 0.19.9 cpu_adam OK
+[setup 11:55:40] SKIP_S0=1: the S0 venv is not built (arm S0 is not in the plan)
+[setup 11:55:40] downloading NousResearch/Meta-Llama-3.1-8B-Instruct @ d10aef7999a2 to /workspace/payload/benchmarks/harness/ds_compare/model
+
+Fetching 10 files:   0%|          | 0/10 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 10 files:  10%|█         | 1/10 [00:00<00:01,  7.17it/s]
+Fetching 10 files:  50%|█████     | 5/10 [00:00<00:00, 16.97it/s]
+Fetching 10 files:  70%|███████   | 7/10 [00:06<00:03,  1.25s/it]
+Fetching 10 files:  80%|████████  | 8/10 [00:12<00:04,  2.19s/it]
+Fetching 10 files:  90%|█████████ | 9/10 [00:18<00:03,  3.13s/it]
+Fetching 10 files: 100%|██████████| 10/10 [00:18<00:00,  2.38s/it]
+Fetching 10 files: 100%|██████████| 10/10 [00:18<00:00,  1.88s/it]
+downloaded NousResearch/Meta-Llama-3.1-8B-Instruct d10aef7999a2b5ba950ab3974312feeedbfe0b77
+[setup 11:56:44] model_hashes.txt written (/workspace/out/results/setup_part2)
+[setup 11:56:44] checking the three dataset files against the model's tokenizer
+shape A: ds_compare_rows_a.jsonl rows=64 tokens min=32 max=32 target=32 -> OK
+shape B: ds_compare_rows_b.jsonl rows=64 tokens min=512 max=512 target=512 -> OK
+shape C: ds_compare_rows_c.jsonl rows=64 tokens min=2048 max=2048 target=2048 -> OK
+cuda smoke OK on NVIDIA H100 80GB HBM3 True
+[setup 11:56:56] setup done in 178 s; next: bash run_all.sh --part part2
+[11:56:56] RUN B/80GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape B --workdir /workspace/out/results/B/80/SB/rep1.work --out /workspace/out/results/B/80/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/B/80/SB/rep1.overrides.json
+[11:58:35] DONE B/80GB/SB/rep1: ok tok/s 935.106443696136 peak 6693.0 MiB wall 99 s
+[11:58:35] RUN B/80GB/S1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape B --workdir /workspace/out/results/B/80/S1/rep1.work --out /workspace/out/results/B/80/S1/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1
+[12:00:05] DONE B/80GB/S1/rep1: ok tok/s 979.1152166540423 peak 3861.0 MiB wall 90 s
+[12:00:05] D-best (fastest DeepSpeed arm, Shape A, 80 GB): D3
+[12:00:05] RUN B/80GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29502 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D3 --shape B --rep 1 --out /workspace/out/results/B/80/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[12:00:37] DONE B/80GB/D3/rep1: ok tok/s 4520.285276792981 peak 20807.0 MiB wall 32 s
+[12:00:37] RUN B/80GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29503 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 1 --out /workspace/out/results/B/80/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[12:03:15] DONE B/80GB/D1/rep1: ok tok/s 630.4047957552333 peak 9333.0 MiB wall 158 s
+[12:03:15] RUN B/80GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm R1 --shape B --rep 1 --out /workspace/out/results/B/80/R1/rep1.raw.json --deepspeed none
+[12:03:34] DONE B/80GB/R1/rep1: ok tok/s 6343.318975947345 peak 19885.0 MiB wall 20 s
+[12:03:34] RUN C/80GB/SB/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape C --workdir /workspace/out/results/C/80/SB/rep1.work --out /workspace/out/results/C/80/SB/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1 --overrides-json /workspace/out/results/C/80/SB/rep1.overrides.json
+[12:04:33] DONE C/80GB/SB/rep1: ok tok/s 3892.21805828587 peak 17083.0 MiB wall 58 s
+[12:04:33] RUN C/80GB/S1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape C --workdir /workspace/out/results/C/80/S1/rep1.work --out /workspace/out/results/C/80/S1/rep1.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 1
+[12:05:35] DONE C/80GB/S1/rep1: ok tok/s 3737.780464713062 peak 6921.0 MiB wall 62 s
+[12:05:35] RUN C/80GB/D3/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29507 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D3 --shape C --rep 1 --out /workspace/out/results/C/80/D3/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[12:06:07] DONE C/80GB/D3/rep1: ok tok/s 9376.216092480256 peak 30969.0 MiB wall 32 s
+[12:06:07] RUN C/80GB/D1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29508 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D1 --shape C --rep 1 --out /workspace/out/results/C/80/D1/rep1.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[12:07:32] DONE C/80GB/D1/rep1: ok tok/s 2485.422754345678 peak 22353.0 MiB wall 85 s
+[12:07:32] RUN C/80GB/R1/rep1 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm R1 --shape C --rep 1 --out /workspace/out/results/C/80/R1/rep1.raw.json --deepspeed none
+[12:07:54] DONE C/80GB/R1/rep1: ok tok/s 10731.46768409504 peak 30061.0 MiB wall 22 s
+[12:07:54] RUN B/80GB/R1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm R1 --shape B --rep 2 --out /workspace/out/results/B/80/R1/rep2.raw.json --deepspeed none
+[12:08:14] DONE B/80GB/R1/rep2: ok tok/s 6290.7111797963125 peak 19885.0 MiB wall 20 s
+[12:08:14] RUN B/80GB/D1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29511 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 2 --out /workspace/out/results/B/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[12:10:30] DONE B/80GB/D1/rep2: ok tok/s 631.3223996339378 peak 9333.0 MiB wall 136 s
+[12:10:30] RUN B/80GB/D3/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29512 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D3 --shape B --rep 2 --out /workspace/out/results/B/80/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[12:11:02] DONE B/80GB/D3/rep2: ok tok/s 4490.951078949352 peak 20807.0 MiB wall 32 s
+[12:11:02] RUN B/80GB/S1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape B --workdir /workspace/out/results/B/80/S1/rep2.work --out /workspace/out/results/B/80/S1/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2
+[12:12:32] DONE B/80GB/S1/rep2: ok tok/s 979.9819662742411 peak 3861.0 MiB wall 91 s
+[12:12:32] RUN B/80GB/SB/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape B --workdir /workspace/out/results/B/80/SB/rep2.work --out /workspace/out/results/B/80/SB/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2 --overrides-json /workspace/out/results/B/80/SB/rep2.overrides.json
+[12:14:02] DONE B/80GB/SB/rep2: ok tok/s 1017.2053858988787 peak 6693.0 MiB wall 89 s
+[12:14:02] RUN C/80GB/R1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm R1 --shape C --rep 2 --out /workspace/out/results/C/80/R1/rep2.raw.json --deepspeed none
+[12:14:24] DONE C/80GB/R1/rep2: ok tok/s 10723.039416201711 peak 30061.0 MiB wall 22 s
+[12:14:24] RUN C/80GB/D1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29516 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D1 --shape C --rep 2 --out /workspace/out/results/C/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[12:15:50] DONE C/80GB/D1/rep2: ok tok/s 2474.788956042815 peak 22353.0 MiB wall 85 s
+[12:15:50] RUN C/80GB/D3/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/deepspeed --num_gpus 1 --master_port 29517 /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D3 --shape C --rep 2 --out /workspace/out/results/C/80/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[12:16:21] DONE C/80GB/D3/rep2: ok tok/s 9380.510706515517 peak 30969.0 MiB wall 31 s
+[12:16:21] RUN C/80GB/S1/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm S1 --shape C --workdir /workspace/out/results/C/80/S1/rep2.work --out /workspace/out/results/C/80/S1/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2
+[12:17:20] DONE C/80GB/S1/rep2: ok tok/s 3739.5186944551433 peak 6921.0 MiB wall 59 s
+[12:17:20] RUN C/80GB/SB/rep2 attempt 1: /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python /workspace/payload/benchmarks/harness/ds_compare/soup_arm.py --arm SB --shape C --workdir /workspace/out/results/C/80/SB/rep2.work --out /workspace/out/results/C/80/SB/rep2.raw.json --model /workspace/payload/benchmarks/harness/ds_compare/model --soup-bin soup --rep 2 --overrides-json /workspace/out/results/C/80/SB/rep2.overrides.json
+[12:18:18] DONE C/80GB/SB/rep2: ok tok/s 3902.404168217343 peak 17083.0 MiB wall 58 s
+[12:18:18] computing gates
+[12:18:18]
+G1  S1/D1 = 1.56  threshold 2.64  LOWER   S0/D1 = n/a
+    S1 61.99 tok/s  D1 39.79 tok/s
+G2  80 GB  SB/DS-best = 0.23  (SB 64.36 tok/s, best DeepSpeed D3 280.72 tok/s, peak VRAM MiB 3487 / 17515; with prefetch variants 0.23)
+G2  24 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G2  16 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G3  R1/SB = 6.32  (peak VRAM MiB 16529 / 3487)
+G3  R2/SB = 3.45  (peak VRAM MiB 16383 / 3487)
+G4  shape B  SB/D-best(D3) = 0.22  SB/D1 = 1.55  R1/SB = 6.47  REVERSED
+    peak VRAM MiB: {'SB': '6693', 'D_best': '20807', 'D1': '9333', 'R1': '19885'}
+G4  shape C  SB/D-best(D3) = 0.42  SB/D1 = 1.57  R1/SB = 2.75  REVERSED
+    peak VRAM MiB: {'SB': '17083', 'D_best': '30969', 'D1': '22353', 'R1': '30061'}
+Ablation vs S1 (61.99 tok/s, spread 0.7%)
+    S2: 0.8%  faster
+    S3: 0.8%  faster
+    S4: -65.6%  slower
+    S5: -1.2%  slower
+    S6: 2.5%  faster
+    S7: -0.0%  no measurable effect
+    S8: -0.0%  no measurable effect [informational]
+SM clock session median 1980 MHz; valid runs more than 5% below it: 0
+[job 12:18:18] part2 finished

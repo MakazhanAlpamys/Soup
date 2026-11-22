@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from soup_cli.cli import app
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
 from soup_cli.utils.paths import quote_path
 from soup_cli.utils.soup_lock import SoupLock, compute_lock_closure
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -23,16 +23,12 @@ _CONTROLS = "\x9b\u202e"
 _DASH = chr(0x2014)
 _BASE_SHA, _DATA_SHA, _ENV_HASH = "a" * 64, "b" * 64, "c" * 64
 
-# A colon is not a legal file-name character on Windows, and "n:" there is a drive.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 
 # One spelling per way the old code went wrong: a tag, an emoji code, and a tag
 # with control characters, so the strip and the escape are pinned separately.
 _NAMES = [
     "x[red]n.lock",
-    pytest.param("n:warning:.lock", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:.lock", marks=skip_colon_on_windows, id="emoji-code"),
     f"x[bold]n{_CONTROLS}.lock",
 ]
 # Values that are not file names can also carry a closing tag with nothing to close.
@@ -373,3 +369,31 @@ def test_show_preserves_backslashes_in_stored_fields():
                        ("created_at", "Created at:")):
         assert f"{label} {key}\\[unclosed" in _plain(result)
     assert Path(name).read_bytes() == before
+
+
+@pytest.mark.parametrize("command", ["show", "check"])
+def test_lock_directory_is_usage_error(command):
+    path = "run.lock"
+    Path(path).mkdir()
+
+    if command == "show":
+        result = runner.invoke(app, ["lock", command, path])
+    else:
+        result = _check(path)
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    assert "lock path is a directory: 'run.lock'" in _plain(result)
+
+
+def test_write_reports_directory_destination():
+    output = Path("run[archive].lock")
+    output.mkdir()
+    marker = output / "keep.txt"
+    marker.write_text("existing", encoding="utf-8")
+
+    result = _write(*_write_args(), "--output", str(output))
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"Could not write lock file {output}" in _plain(result)
+    assert marker.read_text(encoding="utf-8") == "existing"
+    assert set(Path.cwd().iterdir()) == {Path.cwd() / output}

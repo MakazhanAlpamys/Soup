@@ -1,0 +1,14 @@
+╭──────────────────────────────── Export Plan ─────────────────────────────────╮
+│ Model:  lab/compat-fixtures/gpt2  │
+│ Format: ONNX                                                                 │
+│ Output: lab/pr121-gpt2            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Warning: ONNX export may execute custom model code if the model uses 
+trust_remote_code.
+Exporting to ONNX...
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Loading weights:   0%|          | 0/16 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 16/16 [00:00<00:00, 6128.10it/s]
+ONNX export failed: sdpa_mask_without_vmap() missing 1 required positional 
+argument: 'cache_position'
