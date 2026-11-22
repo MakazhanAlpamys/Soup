@@ -1705,12 +1705,13 @@ def _print_gate_result(result) -> None:
             f"{row.score:.3f}" if row.score is not None
             else "[red]ERROR[/]"
         )
-        verdict = (
-            "[green]PASS[/]" if row.passed
-            else (f"[red]FAIL ({for_terminal(row.error)})[/]" if row.error else "[red]FAIL[/]")
-        )
+        if row.passed:
+            verdict = Text("PASS", style="green")
+        else:
+            detail = f"FAIL ({row.error})" if row.error else "FAIL"
+            verdict = terminal_text(detail, style="red")
         table.add_row(
-            for_terminal(row.name),
+            terminal_text(row.name),
             score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",

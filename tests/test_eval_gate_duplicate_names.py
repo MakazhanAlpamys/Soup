@@ -194,11 +194,11 @@ def test_cli_gate_displays_distinct_task_names_literally(
     }
 
 
-def test_cli_gate_displays_an_unmatched_tag_in_a_task_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("name", ["[/x]", ":warning:"], ids=["closing-tag", "emoji-shortcode"])
+def test_cli_gate_displays_special_task_names_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    name = "[/x]"
     suite = _suite(tmp_path, (name,))
     monkeypatch.setattr(quant_check, "make_model_generator", lambda _model: lambda _prompt: "gold")
     monkeypatch.setattr(eval_command, "console", Console(width=200))
@@ -215,12 +215,15 @@ def test_cli_gate_displays_an_unmatched_tag_in_a_task_name(
     assert json.loads(baseline.read_text(encoding="utf-8"))["scores"] == {name: 1.0}
 
 
+@pytest.mark.parametrize(
+    "message", ["[bold]dataset unavailable[/bold]", "dataset unavailable :x:"],
+    ids=["markup", "emoji-shortcode"],
+)
 def test_cli_gate_displays_task_error_text_literally(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     suite = _suite(tmp_path, ("broken",))
-    message = "[bold]dataset unavailable[/bold]"
 
     def generate(_prompt: str) -> str:
         raise RuntimeError(message)
