@@ -29,7 +29,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
-from soup_cli.utils.paths import quote_path
+from soup_cli.utils.paths import paste_arg, quote_path
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
@@ -752,8 +752,24 @@ def _render_stream_disk_preflight(
         if len(other_slots) > 20:
             lines.append(f"  +{len(other_slots) - 20} more")
         lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
-        cmd = f"soup prune-layer-cache --model {for_terminal(base)} --yes"
-        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        # Use prose when the base model needs shell-specific quoting.
+        spelled = paste_arg(base, windows_separators=os.sep == "\\")
+        if spelled is not None:
+            cmd = f"soup prune-layer-cache --model {for_terminal(spelled)} --yes"
+            lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        else:
+            lines.append("Remove unreferenced slots (opt-in):")
+            if base:
+                lines.extend((
+                    "  For soup prune-layer-cache, use the base model below as --model.",
+                    "  Quote it for your shell and add --yes.",
+                    f"  Base model: {for_terminal(base, single_line=True)}",
+                ))
+            else:
+                lines.append(
+                    "  Set a base model in your configuration before pruning with "
+                    "soup prune-layer-cache."
+                )
         stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]

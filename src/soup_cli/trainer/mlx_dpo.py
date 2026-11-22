@@ -43,6 +43,7 @@ from soup_cli.trainer.mlx_sft import (
     _clipping_optimizer,
     build_mlx_adapter_config,
 )
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -651,7 +652,9 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         data_seed = seed if tcfg.data_seed is None else int(tcfg.data_seed)
         mx.random.seed(seed)
 
-        output_dir = Path(cfg.output)
+        output_dir = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        ))
         output_dir.mkdir(parents=True, exist_ok=True)
         batch_size = self._resolve_batch_size()
         accum = max(1, int(tcfg.gradient_accumulation_steps))

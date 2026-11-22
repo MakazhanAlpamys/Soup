@@ -12,6 +12,17 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.78.1] - 2026-11-22
+
+### Security
+
+- Modal download retries, training follow-ups, and layer-streaming cache pruning print copyable commands when their arguments can be quoted portably. Paths with spaces or punctuation are double-quoted when supported, and Windows path separators are written as forward slashes. Values that require shell-specific quoting get prose instructions and a separate display that escapes newlines, carriage returns, and tabs. The `soup train --cloud` run command also quotes its stub file name. (#3184)
+
+- `soup can run` now refuses a can whose trainer output directory (the config's `output`, with its `experiment_name` appended by the trainers that use it, and a leading `~` read as the home directory) resolves outside the working directory (an absolute path elsewhere, `..`, a symlink that leads out, a network share or a device). Such a can used to run and write its checkpoints and logs there; it now stops with exit 1 and a message that names the value. To run it, start `soup can run` from a directory that contains both the can and the output path, or take `config.yaml` out of the can, set `output` to a path under your working directory and run `soup train` on it. The confirmation panel lists the can's `output` and `data.train`, with a warning line on a local data path outside the working directory. (#3185)
+- Every command that reads a can (`soup can inspect`, `verify`, `run`, `fork`, `publish` and `soup loop replay --extract`) now refuses, with a message that names the members, an archive that holds one name twice (in any spelling), a link, a device, a member below a file or more than 10,000 members (exit 1; exit 2 for `soup loop replay --extract`). Such an archive used to be read. `soup can pack` and `soup can fork` never write one, so a can made by Soup is unaffected: rebuild any other can with one member per name (`soup can pack`, or `soup can fork` on a good copy). (#3185)
+
+- The code-execution sandbox (the RLVR `code_exec` scorer, the `soup serve` python and bash tools, the agent-eval and recipe runners) now ends the processes the checked code started, not only the direct child, when the run times out, floods its output or exits: a process group on Linux and macOS, a job object on Windows that the child starts inside (an interpreter started through a virtual environment's launcher is covered too). A sandbox directory that cannot be removed no longer aborts the caller. Results and exit codes of runs that finish normally are unchanged. The sandbox stays best-effort and is not a security boundary: a process that deliberately leaves its process group is not reached on Linux and macOS, and a Windows host that refuses job objects ends only the direct child. (#3186)
+
 ## [0.78.0] - 2026-11-18
 
 ### Upgrade notes

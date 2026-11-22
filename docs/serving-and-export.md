@@ -1392,7 +1392,10 @@ Three POST routes are now available on `soup serve`:
   Returns the real stdout, stderr, exit code, and timeout state. A timeout returns
   `timed_out: true` and `exit_code: 124`; an output overflow returns
   `timed_out: false` and `exit_code: 1`. Other process failures retain their exit
-  code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB.
+  code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB. When a
+  run times out, overflows or ends, every process it started that is still in its process
+  group (Linux, macOS) or its job (Windows) is ended with it; a Windows host that does not
+  allow job objects ends the direct child only.
   The code is compiled under the file name `<code>`, so a traceback gives the caller's
   own line numbers (`File "<code>", line 2` for an error on the second line). Tool
   authentication failures return HTTP 401 with `WWW-Authenticate: Bearer`.
