@@ -415,7 +415,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 training_params["warmup_ratio"] = kwargs["warmup_ratio"]
             if "save_strategy" in kwargs:
                 strategy = save_strategy_setting(
-                    kwargs["save_strategy"], "save_strategy", warnings
+                    kwargs["save_strategy"], "save_strategy", warnings, task=task
                 )
                 if strategy is not None:
                     training_params["save_strategy"] = strategy

@@ -201,7 +201,9 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     if "warmup_ratio" in raw:
         training["warmup_ratio"] = raw["warmup_ratio"]
     if "save_strategy" in raw:
-        strategy = save_strategy_setting(raw["save_strategy"], "save_strategy", warnings)
+        strategy = save_strategy_setting(
+            raw["save_strategy"], "save_strategy", warnings, task=task
+        )
         if strategy is not None:
             training["save_strategy"] = strategy
 

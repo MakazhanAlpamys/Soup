@@ -224,6 +224,18 @@ class TestTasksAndBackendsThatCannotHonourIt:
         assert cfg.training.save_strategy == "steps"
 
 
+    def test_ppo_refuses_epoch_checkpoints(self):
+        with pytest.raises(ValueError, match=r"training.save_strategy='epoch'.*task: ppo"):
+            load_config_from_string(_yaml('  save_strategy: "epoch"\n', task="ppo"))
+
+    @pytest.mark.parametrize("strategy", ["steps", "no"])
+    def test_ppo_keeps_steps_and_no(self, strategy):
+        cfg = load_config_from_string(
+            _yaml(f'  save_strategy: "{strategy}"\n', task="ppo")
+        )
+
+        assert cfg.training.save_strategy == strategy
+
 # --------------------------------------------------------------------------- helper
 
 
@@ -681,15 +693,15 @@ _AX = (
 )
 
 
-def _unsloth_notebook(args: str) -> dict:
+def _unsloth_notebook(args: str, trainer: str = "SFTTrainer") -> dict:
     source = (
         "from unsloth import FastLanguageModel\n"
         "model, tokenizer = FastLanguageModel.from_pretrained("
         "model_name='unsloth/Meta-Llama-3.1-8B-bnb-4bit', max_seq_length=2048, "
         "load_in_4bit=True)\n"
         "model = FastLanguageModel.get_peft_model(model, r=16, lora_alpha=16)\n"
-        "from trl import SFTTrainer\nfrom transformers import TrainingArguments\n"
-        f"trainer = SFTTrainer(model=model, args=TrainingArguments({args}))\n"
+        f"from trl import {trainer}\nfrom transformers import TrainingArguments\n"
+        f"trainer = {trainer}(model=model, args=TrainingArguments({args}))\n"
     )
     return {
         "cells": [{"cell_type": "code", "source": source, "metadata": {}, "outputs": []}],
@@ -735,6 +747,28 @@ _MIGRATORS = {
 
 
 class TestMigrateMapsTheStrategy:
+    @pytest.mark.parametrize("tool", ["llamafactory", "unsloth"])
+    def test_ppo_epoch_is_reported_and_omitted(self, tmp_path, tool):
+        from soup_cli.migrate.common import config_to_yaml
+        from soup_cli.migrate.llamafactory import migrate_llamafactory
+        from soup_cli.migrate.unsloth import migrate_unsloth
+
+        if tool == "llamafactory":
+            path = tmp_path / "lf.yaml"
+            path.write_text(_LF + 'stage: ppo\nsave_strategy: "epoch"\n', encoding="utf-8")
+            result = migrate_llamafactory(path)
+        else:
+            path = tmp_path / "nb.ipynb"
+            notebook = _unsloth_notebook("save_strategy='epoch'", trainer="PPOTrainer")
+            path.write_text(json.dumps(notebook), encoding="utf-8")
+            result = migrate_unsloth(path)
+
+        cfg = load_config_from_string(config_to_yaml(result))
+        assert cfg.task == "ppo"
+        assert cfg.training.save_strategy == "steps"
+        assert "save_strategy" not in result["training"]
+        assert any("save_strategy" in w and "PPO" in w for w in result["_warnings"])
+
     @pytest.mark.parametrize("tool", list(_MIGRATORS))
     @pytest.mark.parametrize("value", ["steps", "epoch", "no"])
     def test_a_quoted_strategy_is_carried_over(self, tmp_path, tool, value):

@@ -285,12 +285,12 @@ training:
 - **Quote the value.** YAML reads an unquoted `no` as a boolean, so `save_strategy: no` is
   refused with a message that says to write `save_strategy: "no"`.
 - **`save_steps` and `save_strategy` go together.** `save_steps` only counts under
-  `save_strategy: steps`; an explicit `save_steps` beside `epoch` or `no` is refused at load
+  `save_strategy: steps`. A non-default `save_steps` beside `epoch` or `no` is refused at load
   rather than ignored.
 - **Not on every combination.** `backend: mlx` writes its own numbered adapter files every
   `save_steps` iterations and has no epoch or off setting, and `task: unlearn` trains in its
-  own loop and writes no checkpoint, so `epoch` and `no` are refused on both. The default
-  is accepted everywhere.
+  own loop and writes no checkpoint, so `epoch` and `no` are refused on both. PPO accepts
+  `steps` and `no` because its trainer does not emit epoch-end callbacks.
 
 ## Rewind — which row spiked the loss (`soup rewind`)
 

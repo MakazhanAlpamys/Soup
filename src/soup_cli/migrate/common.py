@@ -79,7 +79,9 @@ def validation_split(value: Any, key: str, warnings: List[str]) -> Optional[floa
 _SAVE_STRATEGIES = ("steps", "epoch", "no")
 
 
-def save_strategy_setting(value: Any, key: str, warnings: List[str]) -> Optional[str]:
+def save_strategy_setting(
+    value: Any, key: str, warnings: List[str], *, task: Optional[str] = None
+) -> Optional[str]:
     """Map a source tool's ``save_strategy`` to ``training.save_strategy`` (#2575).
 
     axolotl, LLaMA-Factory and the Hugging Face ``TrainingArguments`` an Unsloth
@@ -93,6 +95,12 @@ def save_strategy_setting(value: Any, key: str, warnings: List[str]) -> Optional
     if value is False:
         return "no"
     if isinstance(value, str) and value in _SAVE_STRATEGIES:
+        if task == "ppo" and value == "epoch":
+            warnings.append(
+                f"{key}: 'epoch' has no Soup equivalent for PPO, which does not emit "
+                "epoch-end callbacks. Soup's default 'steps' applies until you set it."
+            )
+            return None
         return value
     warnings.append(
         f"{key}: {value!r} has no Soup equivalent (training.save_strategy takes "

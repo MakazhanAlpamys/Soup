@@ -1598,8 +1598,9 @@ class TrainingConfig(BaseModel):
             "steps, and once more at the last step; the default), 'epoch' (at the end of "
             "each epoch) or 'no' (never; the final adapter or model is still saved). "
             "Quote it in YAML: an unquoted no is a bool. 'epoch' and 'no' are refused "
-            "together with an explicit save_steps, on backend: mlx and on task: unlearn "
-            "(#2575)."
+            "with a non-default save_steps, on backend: mlx and on task: unlearn. "
+            "'epoch' is also refused on task: ppo because its trainer does not emit "
+            "epoch-end callbacks (#2575)."
         ),
     )
     logging_steps: int = Field(default=10, ge=1, description="Log metrics every N steps")
@@ -9451,6 +9452,8 @@ class SoupConfig(BaseModel):
           Silicon is a separate change; until then it is refused rather than ignored.
         * ``task: unlearn`` trains in its own loop and writes only the final model, so
           there is no checkpoint for a strategy to control.
+        * TRL's PPO loop does not emit epoch-end callbacks, so only steps and no
+          are available for PPO.
 
         Defined after :meth:`_validate_mlx_task_support`, so a task MLX cannot run is
         refused for that reason first and "use backend: transformers" leads to a config
@@ -9471,6 +9474,12 @@ class SoupConfig(BaseModel):
                 f"Refused: training.save_strategy={strategy!r} has nothing to control on "
                 "task: unlearn, which trains in its own loop and writes no checkpoint, "
                 "only the final model. Remove training.save_strategy."
+            )
+        if self.task == "ppo" and strategy == "epoch":
+            raise ValueError(
+                "Refused: training.save_strategy='epoch' is not implemented on task: ppo "
+                "(the PPO trainer does not emit epoch-end callbacks). "
+                'Use save_strategy: steps or save_strategy: "no".'
             )
         return self
 
