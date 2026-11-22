@@ -1,5 +1,13 @@
 # Packed-LoRA kernels through `soup train`: end-to-end runs on an RTX 5070 Laptop, 2026-11-08
 
+> These measurements used the original #2650 branch based on `3af840ce4`, before #2609 / #2683.
+> Current Soup keeps eligible non-quantized weights and the residual stream in bf16 for stock
+> 4-bit SFT when the embedding loads in bf16 and the run computes in bf16. This reduced stock
+> step time and peak GPU memory in the
+> [#2609 measurements](gate-2609-kbit-fp32-ab.md). The speed, numerical agreement, and stock
+> memory-fit results below apply to the historical baseline. The rebased branch still needs a GPU
+> comparison against current main.
+
 What [`packed-lora-gpu-tests-2026-11-08.md`](packed-lora-gpu-tests-2026-11-08.md) could not show:
 the kernels inside a whole training run, started the way a user starts it. `training.packed_lora`
 is switched on in `soup.yaml`, `soup train` checks the run, loads the model, trains, evaluates and
@@ -19,11 +27,9 @@ apart from the run (nvidia-smi read 0 MiB before each). The recipe is the harnes
 (840 of them, sha256 `eba8a5bc6074eced5adb255f3f8872d942779978171421e13f9c670494479c8`), `max_length`
 512, LoRA r 16 / alpha 32 / dropout 0 on all seven projections, lr 2e-4 constant, `adamw_torch`,
 clipping 1.0, 4-bit NF4, `gradient_checkpointing: true`, seed 3407. `--batch B --accum A` reads the
-same B x A rows per optimizer step in the same order. Code: `soup_cli` of branch
-#2650 on top of `3af840ce4` (main with #2623): the runs of the tables below were
-made with `src/` as it is in #2650, except that the checks of `soup train` did not yet refuse
-`--fsdp` / `--deepspeed` (they run before anything is loaded and touch no training code); the GPU
-tests in `gpu-test-runs.md` ran on `src/` as it is in #2650.
+same B x A rows per optimizer step in the same order. The training runs used `src/` from the
+original #2650 branch based on `3af840ce4`, before its `soup train` checks refused `--fsdp` and
+`--deepspeed`. The recorded GPU tests used the original #2650 sources with those checks in place.
 
 ```
 python benchmarks/harness/packed_lora_compare.py --out plain  --model Qwen/Qwen2.5-1.5B-Instruct --data rows.jsonl --batch 2 --accum 4 --steps 105
@@ -34,7 +40,7 @@ python benchmarks/harness/packed_lora_compare.py --out packed7b --model Qwen/Qwe
 Tokens per second are the non-pad tokens TRL counts, over the optimizer steps after step 5, divided
 by their wall time (CUDA synchronised at both ends of each step).
 
-## Qwen2.5-1.5B-Instruct, 105 steps
+## Historical Qwen2.5-1.5B-Instruct comparison, 105 steps
 
 Plain Soup runs 2 x 4 rows (a plain batch of 8 does not fit the card); the packed run reads the same
 8 rows as one micro-batch.
@@ -71,7 +77,7 @@ stock step to a cosine of 0.9992 to 0.9994 (exact mode) and 0.9941 to 0.9949 (de
 whatever its gradient, so a small difference in direction shows at step 2. This record does not show
 more than that.
 
-## Qwen2.5-7B-Instruct, a budget that fits the 8 GB card
+## Historical Qwen2.5-7B-Instruct comparison, 8 GB card
 
 Plain `soup train` does not take this run. Its hardware-fit gate predicts 11.0 GB of peak VRAM
 against 8.5 GB available and exits; with `--allow-oom-attempt` it runs, with torch's peak allocated
@@ -108,7 +114,7 @@ same test on the 1.5B (two runs): exact 0.9992 to 0.9994, parked 0.9994, default
 loss difference 0.045 % to 0.25 %. The test's bars are a loss within 0.5 % and a cosine above
 0.998 (exact) and 0.99 (default).
 
-## Tiny-model end-to-end tests
+## Historical tiny-model end-to-end tests
 
 `tests/test_packed_lora_e2e_gpu.py` (11 tests, `pytest -m gpu`) trains a random 4-bit Qwen2
 (hidden 256, 2 layers) for 20 steps through the real `SFTTrainerWrapper`, as plain Soup and with
@@ -122,7 +128,7 @@ counted (`steps_stock`).
 
 - One run per row; the 1.5B plain-against-packed comparison is one seed. The 105-step mean loss
   difference (+0.035 %) is a single-run figure, not an interval.
-- 7B beyond step 3 against plain Soup: the plain run cannot be taken on this card in a useful time.
+- 7B against the historical stock baseline beyond two optimizer steps.
 - Speed on any other card. The 5070 Laptop's link to the host read 1.7 GB/s in the 1.5B run, which
   is below the planner's threshold for moving activations, so that run kept them on the GPU.
 - Qwen3, fp16 on a T4, several GPUs: out of scope (see the docs section).
