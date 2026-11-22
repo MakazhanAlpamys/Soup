@@ -5,6 +5,7 @@ Covers: Liger Kernel, FlashAttention, FSDP2, Ring FlashAttention, long-context (
 
 from __future__ import annotations
 
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -73,18 +74,22 @@ class TestLigerDetection:
         from soup_cli.utils.liger import check_liger_available
 
         with patch.dict("sys.modules", {"liger_kernel": None}):
-            # When import fails, should return False
-            result = check_liger_available()
-            # Result depends on actual environment; just verify it's bool
-            assert isinstance(result, bool)
+            assert check_liger_available() is False
 
     def test_get_liger_version_not_installed(self):
         from soup_cli.utils.liger import get_liger_version
 
-        with patch("soup_cli.utils.liger.check_liger_available", return_value=False):
-            # get_liger_version does its own import attempt
-            result = get_liger_version()
-            assert result is None or isinstance(result, str)
+        with patch.dict("sys.modules", {"liger_kernel": None}):
+            assert get_liger_version() is None
+
+    def test_liger_detection_when_installed(self):
+        from soup_cli.utils.liger import check_liger_available, get_liger_version
+
+        package = ModuleType("liger_kernel")
+        package.__version__ = "0.8.1"
+        with patch.dict("sys.modules", {"liger_kernel": package}):
+            assert check_liger_available() is True
+            assert get_liger_version() == "0.8.1"
 
     def test_apply_liger_kernel_not_available(self):
         from soup_cli.utils.liger import apply_liger_kernel
