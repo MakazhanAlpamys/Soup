@@ -855,6 +855,22 @@ class TestAsrInfer:
         # rows with no 'audio' are dropped -> empty
         assert rows == []
 
+    def test_read_asr_rows_names_file_for_utf16_manifest(self, tmp_path, capsys):
+        import json
+
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        p = tmp_path / "manifest.jsonl"
+        p.write_text(json.dumps({"audio": "clip.wav"}) + "\n", encoding="utf-16")
+        with pytest.raises(typer.Exit) as exc_info:
+            infer_mod._read_asr_rows(p)
+        assert exc_info.value.exit_code == 1
+        out = capsys.readouterr().out
+        assert "manifest.jsonl" in out
+        assert "UTF-8" in out
+
     def test_resolve_asr_audio_rejects_traversal(self, tmp_path):
         import soup_cli.commands.infer as infer_mod
 
