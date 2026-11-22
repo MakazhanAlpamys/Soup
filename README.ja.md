@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,39 +92,38 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.1 — パッチリリース：`soup data` が入力を守り、`soup plan` が `soup train` と同じ判断をし、
-GRPO が Apple Silicon で学習できるようになりました。** v0.77.0 で入ったものは何も取り消されていません。v0.77.0 は
-v0.76 が警告した設定や無視した設定を拒否するため、v0.76 で読み込めた設定が読み込めなくなることがあります。
-0.76.x から移行する場合は、まず `soup doctor --config soup.yaml` を実行し、
-[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
+**v0.78.0 — v0.77.2 以降の `main` をそのまま切り出したリリース：プルリクエスト 271 件、うち 218 件は
+メンテナー以外の 48 人によるものです。** 新機能と、v0.77.2 が受け入れていた入力を拒否する規則を
+いくつか含みます。設定やスクリプトをアップグレードする前に
+[v0.78.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **`soup data` のコマンドが入力を上書きしなくなりました。** そのうち十八個（`dedup`、`filter`、
-  `convert`、`merge`、`sample`、`pii`、`toxicity` など）は、どのような書き方であっても入力と同じファイルを
-  指す `--output` を、何も読み込む前に拒否します。入力がすでに使っている既定の出力名も拒否されます。
-  代わりに新しいファイルへ書き出してください。
-- **`soup plan` と `soup apply` は、`soup train` が拒否する設定を**同じメッセージで拒否し、プランを
-  書き込みません。
-- **GRPO が Apple Silicon でネイティブに学習できます。** `backend: mlx` の `task: grpo` は、
-  transformers 経路が学習するのと同じ目的関数で Soup 独自の MLX ループを実行し、組み込みの `accuracy`
-  または `format` 報酬を使います。`soup infer --backend mlx` は、MLX のベースモデルとネイティブの
-  テキスト LoRA アダプターから Torch なしで生成します。
-- **ピーク VRAM の推定がひとつになりました。** `soup train` の事前チェック、`soup profile`、`soup plan` が
-  同じ推定を使い、39 回の実測で較正されています（[記録](benchmarks/gate-2049-resident-vram.md)）。
-  推定が較正された範囲、つまり約 3.5B パラメータまでの dense モデルでは、事前チェックはこれまで通していた
-  長いシーケンス・大きな語彙の実行の一部を拒否するようになりました。`--allow-oom-attempt` を付ければ
-  引き続き起動できます。その範囲外（より大きなモデルや mixture-of-experts モデル、`medium` または
-  `selective` のチェックポイント、`use_liger` / `use_cut_ce`、`backend: unsloth`）では、収まらない実行に
-  ついて推定を警告として表示し、実行を開始します。ただし、重み、CUDA コンテキスト、学習するパラメータの
-  勾配とオプティマイザ状態だけでカードの容量を超える実行（80 GB での 7B のフルファインチューニング、
-  24 GB での 4-bit の Llama-3.1-70B）は、範囲外でも拒否されます。LoRA の実行や一部のパラメータだけを
-  学習する実行（Spectrum、LISA、凍結）は、より少ない項目で判定されます。`--allow-oom-attempt` を
-  付ければ、拒否された実行も起動できます。
-- **外部プログラムは `PATH` 上で見つかった絶対パスで起動されます。** カレントディレクトリと相対的な
-  `PATH` エントリは検索されなくなりました。そこにしかないツールは、そのディレクトリを `PATH` に
-  加えてください。
-- **その他の新機能。** `soup ship --progress jsonl`、他のライブラリの名前で書かれた未知の設定キーに
-  対応する Soup のフィールドの提案（`learning_rate` には `lr`）、そして下の Docker の例が、v0.77.0 以降の
-  非対話的な `soup train` に必要な `--yes` を渡すようになりました。
+- **継続学習ループ。** `soup serve` はすべての回答に ID を付け、それに対するフィードバック
+  （高評価・評価点・修正）を受け取ります。`soup loop` はそのフィードバックから候補を学習し、
+  `soup ship --gate loop-v2` で判定し、カナリアとして動かし、自動でロールバックします。
+- **`soup ship` が数値の内訳を示します。** タスクごとの改善/悪化/変化なしの件数、行ごとの監査ファイル、
+  自分で用意した関数で採点する `--task-mode reward --reward-fn`（`.py` ファイルが実行されます）、
+  アダプターがベースをどれだけ変えるか、2 つのアダプターを比べる `--base-adapter`。
+- **新しいコマンド。** `soup eval retention`（モデルのバージョン間の忘却）、`soup data leakage`
+  （学習と評価の重複）、`soup docs search`（オフライン）、`soup prune-layer-cache`、
+  `soup eval quant-check --performance`。
+- **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
+  前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
+- **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
+  取り込み、ストリーミングしたベースでの BCO、IPO、単一の損失を指定した `task: preference` の学習。
+- **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
+  チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
+  表示します。
+- **新しいレシピ 8 件**（合計 181 件）と、Qwen2 QLoRA SFT 向けの Triton カーネルライブラリ（設定キーなし）。
+- **テキストを入力どおりに表示。** さらに数十のコマンドが、パスと名前を、角括弧と `:name:` のテキストを
+  保ったまま、端末制御文字を取り除いて表示します。
+
+**知っておくべき挙動の変更。** `training` の数値フィールドへの真偽値は拒否されます。`--push-as` は
+リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
+`moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
+`soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
+変わることがあります。`soup ship` が書き出す証拠ファイルは、行ごと・関数採点・judge の新しい詳細を含む場合にバージョン 2
+となり、v0.77.x はそれを拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -289,6 +288,7 @@ soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon 上のネイティブな密モデル / LoRA
 soup ui                               # ローカルのブラウザダッシュボード
 soup merge  --adapter ./output        # LoRA をベースモデルにマージ
 soup export --model ./output --format gguf           # デプロイ用にエクスポート

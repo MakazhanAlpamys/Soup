@@ -124,6 +124,42 @@ class TestQuantizeRefusesRemovedFormats:
         output = _plain(result.output)
         assert "--to must be one of" in output
 
+    @pytest.mark.parametrize("typed", ["awq", "gptq", "AWQ", "GPTQ", "Gptq", " awq "])
+    def test_quantize_refusal_names_the_removal_release(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        refusal = f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+        removed_in = deprecation.EXPORT_FORMATS_REMOVED_IN
+        removal = f"--to {typed.strip().lower()} was removed in v{removed_in}."
+        assert refusal in output
+        assert removal in output
+        assert output.index(refusal) < output.index(removal)
+
+    @pytest.mark.parametrize("typed", ["bogus", "", "a\x1bb"])
+    def test_quantize_unknown_format_does_not_mention_removal(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        assert (
+            f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+            in output
+        )
+        assert "removed" not in output
+
+    @pytest.mark.parametrize("typed", ["[/]", "[bold]x[/bold]"])
+    def test_quantize_shows_a_markup_value_as_typed(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        assert (
+            f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+            in output
+        )
+
     def test_quantize_help_omits_removed_formats(self) -> None:
         result = CliRunner().invoke(app, ["quantize", "--help"])
         assert result.exit_code == 0

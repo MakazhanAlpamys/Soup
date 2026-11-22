@@ -17,6 +17,7 @@ is in ``tests/test_stream_recompute_config.py``.
 from __future__ import annotations
 
 import io
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -958,9 +959,60 @@ class TestPlanStreamRecomputeAutoFallbacks:
         assert memory.events[-1] == "release"
         assert "keeps the recompute" not in _plain(buffer.getvalue())
 
-    def test_the_measurement_raised(self, tmp_path):
-        k, model, said = self._run(tmp_path, _FakeMemory(readings=None))
-        self._assert_kept(k, model, said, "the measurement raised RuntimeError: boom")
+    @pytest.mark.parametrize(
+        "value, shown",
+        [
+            pytest.param("boom", "boom", id="control"),
+            pytest.param("allocator :warning:", "allocator :warning:", id="emoji"),
+            pytest.param("x[red]name[/red]", "x[red]name[/red]", id="markup"),
+            pytest.param(r"x\[red]name", r"x\[red]name", id="backslash"),
+            pytest.param("x\x1b\x07\x9b\u202ename", "xname", id="controls"),
+        ],
+    )
+    def test_the_measurement_raised(self, tmp_path, value: str, shown: str) -> None:
+        from rich.console import Console
+
+        from soup_cli.utils.layer_stream_runtime import plan_stream_recompute_auto
+
+        class BrokenMemory(_FakeMemory):
+            def allocated(self) -> int:
+                raise RuntimeError(value)
+
+        model, runtime = _stream(tmp_path, "none")
+        output = io.StringIO()
+        console = Console(
+            file=output, width=240, force_terminal=True,
+            color_system="standard", no_color=False, highlight=False,
+        )
+        messages: list[str] = []
+
+        def notify(message: str) -> None:
+            messages.append(message)
+            console.print(message)
+
+        try:
+            k = plan_stream_recompute_auto(
+                model, rows=_ROWS, seq_len=_SEQ, vocab_size=64,
+                notify=notify, memory=BrokenMemory(),
+            )
+            rendered = output.getvalue()
+            said = _plain(rendered)
+            why = f"the measurement raised RuntimeError: {shown}"
+            self._assert_kept(k, model, said, why)
+            label = "training.stream_recompute='auto' keeps the recompute on all 4 streamed layers:"
+            assert said == f"{label} {why}"
+            assert f"\x1b[33m{label}\x1b[0m {why}" in rendered
+            assert not any(char in said for char in ("\x1b", "\x07", "\x9b", "\u202e"))
+            # The benchmark harness stores the notification strings directly in JSON.
+            recorded = json.loads(json.dumps(messages))
+            assert len(recorded) == 1
+            assert recorded[0].startswith(
+                f"[yellow]{label}[/] the measurement raised RuntimeError:"
+            )
+            if value == "boom":
+                assert recorded == [f"[yellow]{label}[/] {why}"]
+        finally:
+            runtime.close()
 
     def test_a_layer_measured_at_or_below_zero(self, tmp_path):
         k, model, said = self._run(tmp_path, _FakeMemory(readings=(1_000, 1_000)))

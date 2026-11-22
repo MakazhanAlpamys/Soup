@@ -59,6 +59,9 @@ def inside_the_calibrated_range(monkeypatch):
 
 @pytest.fixture
 def console(monkeypatch):
+    # Offline, so the line printed before a Hub request (#2306) is not among the
+    # panels counted here.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     fake = _Console()
     monkeypatch.setattr(train_mod, "console", fake)
     return fake

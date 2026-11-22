@@ -1,0 +1,115 @@
+W1111 19:39:58.251000 6188 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+Loading config from kit\mistral123-512.soup.yaml...
++------------------------------ Training Setup -------------------------------+
+| Device:  NVIDIA GeForce RTX 5070 Laptop GPU                                 |
+| Memory:  7.9 GB                                                             |
+| Model:                                                                      |
+| <ASSETS>/mistral123-nf4-a76e109f       |
+| Task:    sft                                                                |
+| Backend: transformers                                                       |
+| LoRA:    r=8, alpha=16                                                      |
+| Quant:   4bit                                                               |
+| Seed:    1234                                                               |
++-----------------------------------------------------------------------------+
+Loading dataset...
+Loaded: 3 train samples
+Run ID: run_20261111_193959_7a555ea8
+Setting up model + trainer...
+Loading tokenizer:
+<ASSETS>/mistral123-nf4-a76e109f
+Pre-quantised bitsandbytes NF4 base: imported byte for byte, not re-quantised
++---------------------- Layer streaming disk pre-flight ----------------------+
+| HF/local source: 64.45 GB                                                   |
+| Soup materialized copy: 0.00 GB (no write required)                         |
+| Layer-shard cache: 64.45 GB (reusable)                                      |
+| Projected total on disk: 128.90 GB                                          |
+| Additional writes before training: 0.00 GB                                  |
++-----------------------------------------------------------------------------+
+Preparing layer shards ->
+<CACHE>\<ASSETS>__mistr
+al123-nf4-a76e109f
++-------------------------- training.stream_layers ---------------------------+
+| Layer streaming BETA - arch mistral, tier disk                              |
+|   base         streamed from disk across 88 layers, staged by an async      |
+| reader (no resident copy)                                                   |
+|   host staging read_ahead 1 -> 2325 MB (page-locked when the box allows)    |
+|   VRAM buffers 2 x 714 MB + 1 x 805 MB large-layer slot = 2233 MB           |
+|   resident     0 MB extras + adapters                                       |
+|   peak VRAM    ~6.97 GB at batch 1 x seq 512 (logits 0.23 GB)               |
+|   free VRAM    7.32 GB                                                      |
+|   forecast     40-59 tok/s - a compute-bound bound, not a promise           |
+|                (from 43.60 TFLOPS measured on this card now using bfloat16  |
+| @ 1485 MHz)                                                                 |
+|   ! base does not fit in RAM - streaming from the NVMe disk tier instead.   |
+| An async reader stages training.stream_read_ahead layers in host RAM        |
+| (page-locked where the box allows) rather than holding the base resident.   |
+| It is slower than the RAM tier - measured 1.9-2.3x its step time with the   |
+| store fully cached, on one box (benchmarks/gate-971-async-nvme-source.md);  |
+| a store larger than RAM has no RAM-tier comparison, which is what makes     |
+| this a fallback. Set stream_source='ram' to refuse rather than fall back.   |
++-----------------------------------------------------------------------------+
+Layer streaming is BETA: slower than resident training, but this model may not
+run resident on this card at all.
+expandable_segments allocator hint not enabled: Windows ignores it - torch
+warns and carries on
+Layer streaming ready: 88 layers, streamed from DISK (64.45 GB on an NVMe
+volume) by an async reader, read_ahead=1, 2325 MB pinned host staging (3.22 GB
+page-locked), 2 x 714 MB decoder buffers + 1 x 805 MB large-layer slot
+LoRA applied: 26,673,152 trainable / 122,610,069,504 total (0.02%)
+
+Map:   0%|          | 0/3 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+
+Map: 100%|##########| 3/3 [00:00<00:00, 45.57 examples/s]
+
+Map:   0%|          | 0/3 [00:00<?, ? examples/s]
+Map: 100%|##########| 3/3 [00:00<00:00, 600.04 examples/s]
+
+Truncating train dataset:   0%|          | 0/3 [00:00<?, ? examples/s]
+Truncating train dataset: 100%|##########| 3/3 [00:00<00:00, 600.07 examples/s]
+Rewind log: <OUT>\mistral123-512\rewind.jsonl
+Base revision: unknown (existing loading behavior preserved)
+Training started!
+
+
+  0%|          | 0/3 [00:00<?, ?it/s]
+ 33%|####      | 1/3 [00:38<01:17, 38.72s/it]
+
+
+ 33%|####      | 1/3 [00:38<01:17, 38.72s/it]
+ 67%|#######   | 2/3 [01:10<00:34, 34.59s/it]
+
+
+ 67%|#######   | 2/3 [01:10<00:34, 34.59s/it]
+100%|##########| 3/3 [01:41<00:00, 33.13s/it]
+
+
+100%|##########| 3/3 [01:41<00:00, 33.13s/it]
+
+
+100%|##########| 3/3 [01:42<00:00, 33.13s/it]
+100%|##########| 3/3 [01:42<00:00, 34.04s/it]
+{'loss': '1.498', 'grad_norm': '1.445', 'learning_rate': '0.0002', 'entropy': '1.385', 'num_tokens': '512', 'mean_token_accuracy': '0.6748', 'epoch': '0.3333'}
+{'loss': '1.421', 'grad_norm': '1.32', 'learning_rate': '0.0002', 'entropy': '1.265', 'num_tokens': '1024', 'mean_token_accuracy': '0.6957', 'epoch': '0.6667'}
+{'loss': '1.432', 'grad_norm': '1.508', 'learning_rate': '0.0002', 'entropy': '1.448', 'num_tokens': '1536', 'mean_token_accuracy': '0.6918', 'epoch': '1'}
+{'train_runtime': '102.1', 'train_samples_per_second': '0.029', 'train_steps_per_second': '0.029', 'train_loss': '1.45', 'epoch': '1'}
+[train_dump] capture start 2026/11/11 19:41:53
+[train_dump] capture end 2026/11/11 19:42:12: live logits (1, 128, 32768) torch.float32 -> <OUT>\mistral123-512.live.safetensors (19.0 s, sha256 ba26465395dde668...)
++----------------------- Soup Training: mistral123-512 -----------------------+
+| Epoch 1.0/1   100%                                                          |
+| Step:  3/3                                                                  |
+| Loss:  1.4317    LR: 2.00e-04                                               |
+| Speed: 0.03 it/s                                                            |
+| GPU peak: 6.2/7.9 GB                                                        |
+| Grad:  1.5078                                                               |
++-------------------- NVIDIA GeForce RTX 5070 Laptop GPU ---------------------++---------------------------- Training Complete! -----------------------------+
+| Loss: 1.4976 -> 1.4317                                                      |
+| Duration: 2m                                                                |
+| Output: <OUT>\mistral123-512                                               |
+| Run ID: run_20261111_193959_7a555ea8                                        |
+|                                                                             |
+| Quick test:  soup chat --model <OUT>\mistral123-512                        |
+| Push to HF:  soup push --model <OUT>\mistral123-512                        |
+| Merge LoRA:  soup merge --adapter <OUT>\mistral123-512                     |
+| Export GGUF: soup export --model <OUT>\mistral123-512                      |
+| Run details: soup runs show run_20261111_193959_7a555ea8                    |
++-----------------------------------------------------------------------------+

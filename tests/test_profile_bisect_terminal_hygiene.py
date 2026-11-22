@@ -64,19 +64,26 @@ class TestProfileTargetModules:
 
 
 class TestBisectCheckpointIds:
-    def _run(self, *ids: str):
+    def _run(self, monkeypatch, *ids: str):
+        import subprocess
+        import sys
+
+        def timed_out(*args, **kwargs):
+            raise subprocess.TimeoutExpired("eval", timeout=3600)
+
+        monkeypatch.setattr(subprocess, "run", timed_out)
         result = CliRunner().invoke(
-            app, ["adapters", "bisect", *ids, "--eval-command", "{ckpt}"]
+            app, ["adapters", "bisect", *ids, "--eval-command", f'"{sys.executable}" {{ckpt}}']
         )
         result.plain = strip_ansi(result.output)  # Rich's colour codes out, the rest as printed
         return result
 
-    def test_a_failed_probe_names_the_checkpoint_without_control_characters(self):
-        result = self._run(f"ckpt{ESC}]0;t{BIDI}-1", "ckpt-2")
+    def test_a_failed_probe_names_the_checkpoint_without_control_characters(self, monkeypatch):
+        result = self._run(monkeypatch, f"ckpt{ESC}]0;t{BIDI}-1", "ckpt-2")
         assert "Eval failed for" in result.plain, (result.output, repr(result.exception))
         assert ESC not in result.plain
         assert BIDI not in result.plain
 
-    def test_the_checkpoint_name_is_still_shown(self):
-        result = self._run(f"ckpt{ESC}-1", "ckpt-2")
+    def test_the_checkpoint_name_is_still_shown(self, monkeypatch):
+        result = self._run(monkeypatch, f"ckpt{ESC}-1", "ckpt-2")
         assert "Eval failed for ckpt-1" in " ".join(result.plain.split())

@@ -243,6 +243,22 @@ def test_a_small_or_non_cpu_request_is_left_as_it_is():
     assert into is target and not target.is_meta and bool((target == 0).all())
 
 
+def test_a_large_cuda_request_is_not_redirected_to_meta():
+    from soup_cli.utils.layer_stream_runtime import _large_cpu_requests_on_meta
+
+    def allocate():
+        try:
+            tensor = torch.empty(LARGE, dtype=torch.float32, device="cuda")
+        except (RuntimeError, AssertionError) as error:
+            return type(error), str(error)
+        return tensor.device, tensor.shape, tensor.dtype
+
+    outside = allocate()
+    with _large_cpu_requests_on_meta(LARGE):
+        inside = allocate()
+    assert inside == outside
+
+
 def test_the_streamed_model_builds_and_steps_on_the_twin(twin, tmp_path):
     from peft import LoraConfig, TaskType
 

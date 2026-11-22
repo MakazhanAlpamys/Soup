@@ -61,7 +61,7 @@ def test_a_readable_model_gets_the_pre_flight_s_number(workdir):
     ("config", "reason"),
     [
         (_config("someone/unreadable-7B"), "config.json"),
-        (_config("TINY", batch_size="auto"), "batch_size auto"),
+        (_config("TINY", batch_size="auto"), "training.batch_size is auto"),
         (_config("TINY", stream_layers=True), "layer streaming"),
         ({**_config("TINY"), "backend": "mlx"}, "backend mlx: no CUDA estimate"),
     ],

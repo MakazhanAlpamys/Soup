@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -91,31 +91,33 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 
 ## 最新动态
 
-**v0.77.1——补丁版本：`soup data` 不再覆盖输入，`soup plan` 与 `soup train` 的判断一致，GRPO 可在
-Apple Silicon 上训练。** v0.77.0 的内容没有任何撤回。该版本会拒绝 v0.76 警告过或忽略的设置，因此在
-v0.76 上能加载的配置可能无法加载：从 0.76.x 升级时，请先运行 `soup doctor --config soup.yaml`，并阅读
-[v0.77.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)。
+**v0.78.0——基于 v0.77.2 之后 `main` 的一次发布：271 个拉取请求，其中 218 个来自维护者之外的 48 位
+贡献者。** 它新增了功能，以及若干条会拒绝 v0.77.2 所接受输入的规则，因此在升级配置或脚本之前，
+请先阅读 [v0.78.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)。从 0.76.x 升级时，请先运行
+`soup doctor --config soup.yaml`，并阅读 [v0.77.0 发布说明](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)。
 
-- **`soup data` 命令不再覆盖自己的输入。** 其中十八个命令（`dedup`、`filter`、`convert`、`merge`、
-  `sample`、`pii`、`toxicity` 等）会在读取任何内容之前，拒绝与某个输入为同一文件的 `--output`，无论
-  写法如何；输入已经使用的默认输出名同样会被拒绝。请改为写入新文件。
-- **`soup plan` 和 `soup apply` 会拒绝 `soup train` 拒绝的配置**，给出相同的信息，并且不写入计划。
-- **GRPO 可在 Apple Silicon 上原生训练。** `task: grpo` 搭配 `backend: mlx` 时，Soup 自己的 MLX 循环
-  按 transformers 路径训练的同一目标进行训练，使用内置的 `accuracy` 或 `format` 奖励。
-  `soup infer --backend mlx` 可在不依赖 Torch 的情况下，从 MLX 基础模型和原生文本 LoRA 适配器生成。
-- **统一的峰值显存估算：** `soup train` 的预检、`soup profile` 和 `soup plan` 使用同一个估算，并在 39 次
-  实测运行上完成校准（[记录](benchmarks/gate-2049-resident-vram.md)）。在估算的校准范围内（约 3.5B
-  参数及以下的稠密模型），预检现在会拒绝一部分以前放行的长序列、大词表运行，`--allow-oom-attempt`
-  仍可启动它们；超出该范围（更大的模型或混合专家模型、`medium` 或 `selective` 检查点、
-  `use_liger` / `use_cut_ce`、`backend: unsloth`）时，放不下的运行会得到一条估算警告并照常启动；但如果
-  权重、CUDA 上下文以及所训练参数的梯度和优化器状态就超过显卡容量（80 GB 上的 7B 全量微调、24 GB 上的
-  4-bit Llama-3.1-70B），该运行在范围外同样会被拒绝。LoRA 运行以及只训练部分参数的运行（Spectrum、LISA、
-  冻结）按更少的项来判断；`--allow-oom-attempt` 仍可启动被拒绝的运行。
-- **外部程序通过在 `PATH` 上找到的绝对路径启动。** 不再搜索当前目录和相对的 `PATH` 条目：只存在于
-  那里的工具，需要把所在目录加入 `PATH`。
-- **其他新内容。** `soup ship --progress jsonl`；按其他库的命名方式写的未知配置键，会提示对应的 Soup
-  字段（`learning_rate` 提示 `lr`）；下方的 Docker 示例会传入 `--yes`，这是自 v0.77.0 起非交互式
-  `soup train` 所需要的。
+- **持续学习循环。** `soup serve` 为每个回答分配一个 ID 并接收对它的反馈（点赞、评分、修改）；
+  `soup loop` 用这些反馈训练候选模型，用 `soup ship --gate loop-v2` 评判，作为金丝雀（canary）运行，
+  并自动回滚。
+- **`soup ship` 展示其数字的构成。** 每个任务的更好/更差/不变计数、逐行审计文件、用你提供的函数打分的
+  `--task-mode reward --reward-fn`（会执行一个 `.py` 文件）、适配器对基座的改动幅度，以及用于比较
+  两个适配器的 `--base-adapter`。
+- **新命令。** `soup eval retention`（跨模型版本的遗忘）、`soup data leakage`（训练与评估的重叠）、
+  `soup docs search`（离线）、`soup prune-layer-cache` 以及 `soup eval quant-check --performance`。
+- **Apple Silicon 上支持更多。** 原生 MLX 对话、合并、选择性损失掩码、预处理缓存、词表扩展、
+  RoPE 扩展和稠密 Llama SFT。
+- **分层流式能做更多。** 仅前向的推理模式、预量化 NF4 的导入，以及在流式基座上的 BCO、IPO 和
+  单一损失的 `task: preference` 训练。
+- **更贴合短行的 VRAM 估算。** 带填充的 SFT 运行按其最长一行估算，计入 8 位的检查点、cuBLAS 工作区和
+  蒸馏教师模型，预检还会说明为什么没有检查是否放得下。
+- **8 个新配方**（共 181 个），以及用于 Qwen2 QLoRA SFT 的 Triton 内核库（没有配置键）。
+- **文本按输入原样显示。** 又有数十个命令在显示路径和名称时保留方括号和 `:name:` 文本，并移除终端控制字符。
+
+**需要了解的行为变化。** `training` 的数值字段中的布尔值会被拒绝。`--push-as` 创建的仓库默认为私有
+（用 `--push-public` 改变）。在 MLX、`prm`、`unlearn` 或 `moe_lora_routing` 上启用 eval gate 会被拒绝。
+`soup serve --max-tokens` 上限为 16384。`soup adapters merge` 的权重和 `tool_call_args_subset` 的得分
+发生了变化，因此合并和 ship 的结论可能不同。`soup ship` 写出的证据文件在包含新的逐行、函数打分或 judge 细节时为第 2 版，v0.77.x 会拒绝这类
+文件。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 
@@ -278,6 +280,7 @@ soup train  --config soup.yaml        # 训练（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # 批量推理
 soup chat   --model ./output          # 交互式对话
 soup serve  --model ./output          # OpenAI 兼容 API 服务
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon 原生稠密文本模型 / LoRA
 soup ui                               # 本地浏览器仪表盘
 soup merge  --adapter ./output        # 把 LoRA 合进基座模型
 soup export --model ./output --format gguf           # 导出用于部署

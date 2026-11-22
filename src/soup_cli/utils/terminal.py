@@ -21,7 +21,11 @@ terminal" in the tree.
 
 from __future__ import annotations
 
+from typing import Optional, Union
+
 from rich.markup import escape as _escape_markup
+from rich.style import Style
+from rich.text import Text
 
 #: Every C0 control character except TAB / LF / CR, plus DEL, plus the C1
 #: range U+0080-U+009F.
@@ -48,15 +52,23 @@ _INVISIBLE_FORMAT_CODES = (
 )
 _CONTROL_STRIP_TABLE.update(dict.fromkeys(_INVISIBLE_FORMAT_CODES))
 
+_SINGLE_LINE_TABLE = _CONTROL_STRIP_TABLE | {0x09: r"\t", 0x0A: r"\n", 0x0D: r"\r"}
 
-def strip_control(text: object) -> str:
+
+def strip_control(text: object, *, single_line: bool = False) -> str:
     """Strip C0 (except TAB/LF/CR), DEL, C1 and bidi/invisible format characters.
 
+    With ``single_line=True``, show TAB, LF and CR as printable escape sequences.
     ZWJ and ZWNJ are kept. Rich markup is left alone.
     """
-    return str(text).translate(_CONTROL_STRIP_TABLE)
+    return str(text).translate(_SINGLE_LINE_TABLE if single_line else _CONTROL_STRIP_TABLE)
 
 
-def for_terminal(text: object) -> str:
-    """Strip control characters, then escape Rich markup, in that order."""
-    return _escape_markup(strip_control(text))
+def for_terminal(text: object, *, single_line: bool = False) -> str:
+    """Apply :func:`strip_control`, then escape Rich markup."""
+    return _escape_markup(strip_control(text, single_line=single_line))
+
+
+def terminal_text(value: object, style: Optional[Union[str, Style]] = None) -> Text:
+    """Return control-stripped text as a :class:`rich.text.Text` (never parsed as markup)."""
+    return Text(strip_control(value), style="" if style is None else style)

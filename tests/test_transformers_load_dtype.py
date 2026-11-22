@@ -1,4 +1,11 @@
-"""Actual local model loads must not emit Transformers' deprecated dtype warning."""
+"""Actual local model loads must not emit Transformers' deprecated dtype warning.
+
+The check is scoped to that one warning. Turning every Python warning into an
+error made the macOS cells fail on an unrelated one: torch's MPS probe on
+GitHub's virtualised Apple runners warns "Skipping device Apple Paravirtual
+device that does not support Metal 2.0" when Transformers imports its SDPA
+integration.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +16,29 @@ import sys
 import pytest
 
 
+def _tiny_gpt2_with_valid_special_tokens(out_dir) -> str:
+    """The shared tiny GPT-2 keeps GPT2Config's default bos/eos id 50256, outside
+    its 300-token vocabulary, which Transformers logs a config warning for on
+    every load. This copy points them at the tokenizer's own token."""
+    from tests._tiny_hf_models import build_gpt2, build_tokenizer
+
+    tokenizer = build_tokenizer()
+    model = build_gpt2(tokenizer)
+    for config in (model.config, model.generation_config):
+        config.bos_token_id = tokenizer.bos_token_id
+        config.eos_token_id = tokenizer.eos_token_id
+        config.pad_token_id = tokenizer.pad_token_id
+    model.save_pretrained(out_dir)
+    tokenizer.save_pretrained(out_dir)
+    return str(out_dir)
+
+
 @pytest.mark.parametrize("mode", ["from_pretrained", "from_config"])
-def test_tiny_local_cpu_model_load_has_no_deprecated_dtype_warning(mode):
+def test_tiny_local_cpu_model_load_has_no_deprecated_dtype_warning(mode, tmp_path):
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from tests._tiny_hf_models import tiny_model_dir
 
-    model_dir = tiny_model_dir("gpt2")
+    model_dir = _tiny_gpt2_with_valid_special_tokens(tmp_path / "tiny-gpt2")
     script = r"""
 import logging
 import sys
@@ -32,7 +55,9 @@ class RejectDeprecatedDtype(logging.Handler):
 
 logging.getLogger("transformers").addHandler(RejectDeprecatedDtype())
 with warnings.catch_warnings():
-    warnings.simplefilter("error")
+    # Only a warning that names torch_dtype is fatal; a platform probe or an
+    # unrelated upstream deprecation must not decide this test.
+    warnings.filterwarnings("error", message=r".*torch_dtype")
     if sys.argv[2] == "from_pretrained":
         from soup_cli.utils.live_eval import load_model_and_tokenizer
         model, tokenizer, device = load_model_and_tokenizer(
@@ -50,7 +75,14 @@ with warnings.catch_warnings():
 """
     result = subprocess.run(
         [sys.executable, "-c", script, model_dir, mode],
-        env={**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"},
+        env={
+            **os.environ,
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            # The deprecation is logged at WARNING level; an inherited
+            # TRANSFORMERS_VERBOSITY=error would hide it from the handler.
+            "TRANSFORMERS_VERBOSITY": "warning",
+        },
         capture_output=True,
         text=True,
         timeout=90,

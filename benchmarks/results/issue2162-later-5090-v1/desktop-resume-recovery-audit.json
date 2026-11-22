@@ -1,0 +1,18 @@
+{
+  "verified": true,
+  "retained_completed_processes": 21,
+  "repeated_completed_processes": 0,
+  "restarted_incomplete_processes": 1,
+  "retried_pre_model_processes": 1,
+  "failed_pre_model_updates": 0,
+  "admitted_but_unstarted_workers": 1,
+  "profile_changed_by_user": true,
+  "temperature_admission_ceiling_removed": true,
+  "previous_partial_updates_unknown": true,
+  "manifest_sha256": "2a4de9060e5484fa8bc0cb5607affc627082a54471b122fa0346e76651b76f5a",
+  "preserved_attempt_archive_sha256": "271ff89b70581dfb52582f00855f40fc33bf5db0543f63ccb56551a02ee4d316",
+  "all_retained_files_bit_exact": true,
+  "desktop_baseline_unchanged": true,
+  "source_and_statistical_criteria_unchanged": true,
+  "amendment_published": false
+}

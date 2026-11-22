@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,36 +92,36 @@ soup train
 
 ## ما الجديد
 
-**v0.77.1 — إصدار تصحيحي: `soup data` يحافظ على مدخلاته، و`soup plan` يتفق مع `soup train`، وGRPO
-يتدرّب على Apple Silicon.** لا يتراجع هذا الإصدار عن أي شيء في v0.77.0. ذلك الإصدار يرفض الإعدادات التي حذّر منها
-v0.76 أو تجاهلها، لذا قد يتوقف تحميل إعداد كان يُحمَّل على v0.76: إن كنت قادمًا من 0.76.x فشغّل
-`soup doctor --config soup.yaml` أولًا واقرأ
-[ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
+**v0.78.0 — قطع من `main` بعد v0.77.2: 271 طلب سحب (pull request)، منها 218 من 48 شخصًا من خارج
+المشرف.** يضيف ميزات وعدة قواعد ترفض مدخلات كان v0.77.2 يقبلها، لذا اقرأ
+[ملاحظات إصدار v0.78.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) قبل ترقية إعداد أو نص برمجي. إن كنت قادمًا من 0.76.x
+فشغّل `soup doctor --config soup.yaml` أولًا واقرأ [ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **لم تعد أوامر `soup data` تكتب فوق مدخلاتها.** ثمانية عشر منها (`dedup` و`filter` و`convert`
-  و`merge` و`sample` و`pii` و`toxicity` وغيرها) ترفض، قبل أن تقرأ أي شيء، قيمةَ `--output` تشير إلى
-  الملف نفسه الذي هو أحد المدخلات، بأي كتابة جاءت، ويُرفَض أيضًا اسم إخراج افتراضي يحمله المُدخل أصلًا.
-  اكتب إلى ملف جديد بدلًا من ذلك.
-- **يرفض `soup plan` و`soup apply` الإعدادات التي يرفضها `soup train`** بالرسالة نفسها، ولا يكتبان
-  خطة.
-- **يتدرّب GRPO أصليًا على Apple Silicon.** يشغّل `task: grpo` مع `backend: mlx` حلقة MLX الخاصة
-  بـ Soup على الهدف نفسه الذي يدرّبه مسار transformers، مع المكافأة المدمجة `accuracy` أو `format`.
-  ويولّد `soup infer --backend mlx` من نماذج MLX الأساسية ومحوّلات LoRA النصية الأصلية دون Torch.
-- **تقدير واحد لذروة VRAM:** يستخدم الفحص المسبق في `soup train` و`soup profile` و`soup plan` التقدير
-  نفسه، وهو معايَر على 39 تشغيلًا مقيسًا ([السجل](benchmarks/gate-2049-resident-vram.md)). وفي النطاق
-  الذي عويِر عليه، أي النماذج الكثيفة حتى نحو 3.5B معامل، صار الفحص المسبق يرفض بعض التشغيلات طويلة
-  التسلسل كبيرة المفردات التي كان يمرّرها، وما زال `--allow-oom-attempt` يطلقها. أما خارج هذا النطاق
-  (نموذج أكبر أو نموذج mixture-of-experts، أو نقاط حفظ `medium` أو `selective`، أو
-  `use_liger` / `use_cut_ce`، أو `backend: unsloth`) فيطبع التقدير تحذيرًا للتشغيل الذي لا يتسع له
-  ويبدأه، إلا إذا كانت الأوزان وسياق CUDA والتدرّجات وحالة المُحسِّن للمعاملات التي يدرّبها أكبر مما
-  تتسع له البطاقة (ضبط دقيق كامل لنموذج 7B على 80 GB، أو Llama-3.1-70B بدقة 4-bit على 24 GB): فعندئذ
-  يُرفَض التشغيل هناك أيضًا. وتُقيَّم تشغيلات LoRA والتشغيلات التي تدرّب جزءًا من المعاملات (Spectrum
-  وLISA والتجميد) على حدود أقل، وما زال `--allow-oom-attempt` يطلق التشغيل المرفوض.
-- **تُشغَّل البرامج الخارجية بمسار مطلق موجود على `PATH`.** لم يعد يُبحث في المجلد الحالي ولا في
-  مدخلات `PATH` النسبية: أضف إلى `PATH` مجلد أي أداة لا توجد إلا هناك.
-- **وجديد أيضًا.** `soup ship --progress jsonl`؛ ومفاتيح الإعداد المجهولة المكتوبة بالطريقة التي
-  تسمّيها بها مكتبة أخرى صارت تقترح حقل Soup المقابل (`learning_rate` يقترح `lr`)؛ ومثال Docker أدناه
-  يمرّر `--yes`، الذي يحتاجه `soup train` غير التفاعلي منذ v0.77.0.
+- **حلقة تعلّم مستمر.** يمنح `soup serve` كل إجابة معرّفًا ويستقبل عليها ملاحظات (إعجاب، تقييم، تصحيح)؛
+  ويدرّب `soup loop` مرشّحًا من هذه الملاحظات، ويحكم عليه عبر `soup ship --gate loop-v2`، ويشغّله
+  كنسخة canary ويتراجع عنه تلقائيًا.
+- **`soup ship` يُظهر مم يتكوّن رقمه.** أعداد الأفضل/الأسوأ/المتساوي لكل مهمة، وملف تدقيق لكل صف،
+  و`--task-mode reward --reward-fn` للتقييم بدالة تقدّمها أنت (يُنفَّذ ملف `.py`)، ومقدار ما يغيّره
+  المحوّل في النموذج الأساسي، و`--base-adapter` للمقارنة بين محوّلين.
+- **أوامر جديدة.** `soup eval retention` (النسيان عبر إصدارات النموذج)، و`soup data leakage`
+  (التداخل بين التدريب والتقييم)، و`soup docs search` (دون اتصال)، و`soup prune-layer-cache`،
+  و`soup eval quant-check --performance`.
+- **مزيد على Apple Silicon.** محادثة MLX أصلية، والدمج، وأقنعة الخسارة الانتقائية، وذاكرات المعالجة
+  المسبقة، وتوسيع المفردات، وتمديد RoPE، وSFT كثيف لـ Llama.
+- **بثّ الطبقات يفعل أكثر.** وضع استدلال للأمام فقط، واستيراد NF4 مُكمَّم مسبقًا، وتدريب BCO وIPO
+  و`task: preference` بخسارة واحدة على قاعدة مبثوثة.
+- **تقديرات VRAM تناسب الصفوف القصيرة.** يُسعَّر تشغيل SFT المحشوّ بحسب أطول صف فيه، ويُحتسب
+  gradient checkpointing بـ 8 بت ومساحات عمل cuBLAS ومعلّم التقطير، ويقول الفحص المسبق لماذا لم
+  يُفحص الاتّساع.
+- **8 وصفات جديدة** (181 في المجموع)، ومكتبة نوى Triton لـ SFT بـ QLoRA لنموذج Qwen2 (بلا مفتاح إعداد).
+- **النص يُعرض كما كُتب.** عشرات الأوامر الأخرى تطبع المسارات والأسماء مع الإبقاء على الأقواس ونص
+  `:name:` وإزالة محارف التحكم في الطرفية.
+
+**تغييرات في السلوك يجب أن تعرفها.** تُرفض القيمة المنطقية في حقل رقمي ضمن `training`. وينشئ `--push-as`
+المستودع خاصًا (و`--push-public` لتغيير ذلك). ويُرفض تفعيل eval gate على MLX أو `prm` أو `unlearn`
+أو `moe_lora_routing`. ويتوقف `soup serve --max-tokens` عند 16384. وتغيّرت أوزان `soup adapters merge`
+ودرجة `tool_call_args_subset`، فقد تختلف نتائج الدمج وأحكام ship. وملفات الأدلة التي يكتبها `soup ship`
+من الإصدار 2 حين تحمل التفاصيل الجديدة لكل صف أو للتقييم بدالة أو للـ judge، ويرفضها v0.77.x.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -287,6 +287,7 @@ soup train  --config soup.yaml        # درّب (SFT/DPO/GRPO/PPO/KTO/ORPO/SimP
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # استدلال دُفعي
 soup chat   --model ./output          # دردشة تفاعلية
 soup serve  --model ./output          # خادم API متوافق مع OpenAI
+soup serve  --backend mlx --model ./mlx-output  # نموذج نصي كثيف أصلي / LoRA على Apple Silicon
 soup ui                               # لوحة متصفح محلية
 soup merge  --adapter ./output        # ادمج LoRA في النموذج الأساسي
 soup export --model ./output --format gguf           # صدِّر للنشر

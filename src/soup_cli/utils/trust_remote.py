@@ -50,8 +50,17 @@ KNOWN_SAFE_PREFIXES: tuple[str, ...] = (
 
 
 def is_known_safe(model_name: Any) -> bool:
-    """Return True if ``model_name`` starts with a known-safe org prefix."""
+    """Return True if ``model_name`` is a Hub repo id under a known-safe org prefix.
+
+    The allowlist answers for Hub repo ids only. A name that exists on disk,
+    relative to the working directory, is a local path: that is how
+    ``from_pretrained`` reads it, so an existing path wins over a Hub id of the
+    same spelling. A local directory such as ``Qwen/my-merge`` is therefore
+    never known-safe, and ``--trust-remote-code`` keeps its warning panel.
+    """
     if not isinstance(model_name, str) or not model_name:
+        return False
+    if os.path.exists(model_name):
         return False
     return any(model_name.startswith(prefix) for prefix in KNOWN_SAFE_PREFIXES)
 
@@ -127,15 +136,19 @@ def resolve_trust_remote_code(
         # Lazy import — keeps `import soup_cli.utils.trust_remote` cheap
         # in environments that don't otherwise pull in rich.
         from rich.panel import Panel
+        from rich.text import Text
 
-        from soup_cli.utils.terminal import for_terminal
+        from soup_cli.utils.terminal import strip_control
 
         console.print(
             Panel.fit(
-                f"[yellow]--trust-remote-code is enabled for[/] "
-                f"[bold]{for_terminal(model_name)}[/]\n"
-                f"This will execute Python code shipped in the model repo. "
-                f"Only proceed if you trust the source.",
+                Text.assemble(
+                    ("--trust-remote-code is enabled for", "yellow"),
+                    " ",
+                    (strip_control(model_name), "bold"),
+                    "\nThis will execute Python code shipped in the model repo. "
+                    "Only proceed if you trust the source.",
+                ),
                 title="[red]REMOTE CODE WARNING[/]",
                 border_style="red",
             )

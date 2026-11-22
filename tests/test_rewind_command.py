@@ -259,6 +259,57 @@ def test_step_and_json_name_the_poisoned_row(tmp_path, plain_console, monkeypatc
     assert payload["spikes"][0]["step"] == 41
 
 
+def test_json_is_strict_json_for_non_finite_values(tmp_path, plain_console, monkeypatch):
+    """#1818: a run whose loss went non-finite still writes parseable JSON."""
+    monkeypatch.chdir(tmp_path)
+    _build(tmp_path / RewindLog.FILENAME, _run_entries(nan_step=50))
+    _patch_tracker(
+        monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
+    )
+    out = tmp_path / "out.json"
+    result = _invoke(["rewind", "--json", str(out)])
+    assert result.exit_code == 0, result.output
+
+    def _reject(token):
+        raise AssertionError(f"non-standard JSON constant {token!r}")
+
+    payload = json.loads(out.read_text(encoding="utf-8"), parse_constant=_reject)
+
+    row = payload["rows"][0]
+    assert row["row"] == 50
+    assert row["loss"] is None
+    assert row["tokens"] == 10
+    assert row["share"] == 0.0
+    assert row["non_finite"] is True
+
+    critical = payload["spikes"][0]
+    assert critical["step"] == 50
+    assert critical["severity"] == "critical"
+    assert critical["loss"] is None
+    assert critical["ratio"] is None  # the NaN step's ratio is math.inf
+    assert critical["baseline"] == pytest.approx(1.0)
+    assert critical["non_finite"] is True
+
+    # A finite spike keeps its numbers and carries no flag.
+    warning = payload["spikes"][1]
+    assert warning["step"] == 41
+    assert warning["ratio"] == pytest.approx(24300 / 3300)
+    assert "non_finite" not in warning
+
+
+def test_json_record_maps_every_non_finite_to_null():
+    from soup_cli.commands.rewind import _json_record
+
+    assert _json_record({"loss": math.inf, "ratio": math.nan, "tokens": 10}) == {
+        "loss": None,
+        "ratio": None,
+        "tokens": 10,
+        "non_finite": True,
+    }
+    assert _json_record({"loss": 1.5}) == {"loss": 1.5}
+
+
+
 def test_default_details_the_worst_spike(tmp_path, plain_console, monkeypatch):
     # --json is written under the current directory only (v0.76.0 release review).
     monkeypatch.chdir(tmp_path)

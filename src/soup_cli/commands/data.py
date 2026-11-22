@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -30,25 +31,6 @@ from soup_cli.utils.terminal import for_terminal
 console = Console()
 
 app = typer.Typer(no_args_is_help=True)
-
-
-def _refuse_output_over_input(
-    inputs: list[tuple[str, str]],
-    outputs: list[tuple[str, Optional[str]]],
-    *,
-    exit_code: int = 1,
-) -> None:
-    """Exit before anything is read when an output names an input file (#2226).
-
-    ``ensure_distinct_paths`` catches every spelling of the same file (``./x``,
-    ``sub/../x``, the absolute path, a case variant on Windows, a hard link, a
-    symlink), so the write can never replace the data the command reads.
-    """
-    try:
-        ensure_distinct_paths(inputs, [(name, path) for name, path in outputs if path])
-    except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
-        raise typer.Exit(exit_code) from exc
 
 
 @app.command()
@@ -115,13 +97,14 @@ def validate(
         "--min-valid-fraction",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
 ):
     """Validate a dataset, returning exit 3 for input errors and 2 for unusable data."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
     if fmt != "auto":
@@ -129,7 +112,7 @@ def validate(
 
         if fmt not in VALID_FORMATS:
             console.print(
-                f"[red]Unknown --format: {fmt!r}[/]\n"
+                f"[red]Unknown --format: {for_terminal(repr(fmt))}[/]\n"
                 f"Accepted: auto, {', '.join(VALID_FORMATS)}"
             )
             raise typer.Exit(EXIT_USAGE_ERROR)
@@ -212,13 +195,18 @@ def convert(
 
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if to not in CONVERTIBLE_FORMATS:
         console.print(
-            f"[red]Invalid target format: {to}[/]\n"
+            f"[red]Invalid target format: {for_terminal(to)}[/]\n"
             f"Supported: {', '.join(CONVERTIBLE_FORMATS)}"
         )
         raise typer.Exit(1)
@@ -229,10 +217,13 @@ def convert(
         raise typer.Exit(1)
 
     src_fmt = detect_format(data)
-    console.print(f"[dim]Detected source format: {src_fmt}[/]")
+    console.print(f"[dim]Detected source format: {for_terminal(src_fmt)}[/]")
 
     if src_fmt == to:
-        console.print(f"[yellow]Source and target format are both '{to}'. Nothing to convert.[/]")
+        console.print(
+            f"[yellow]Source and target format are both '{for_terminal(to)}'. "
+            "Nothing to convert.[/]"
+        )
         raise typer.Exit()
 
     if src_fmt == "dpo":
@@ -261,12 +252,18 @@ def convert(
     if output is None:
         output = str(file_path.stem) + f"_{to}.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
 
     _write_jsonl(out_path, converted)
 
     console.print(
-        f"[green]Converted {len(converted)} rows:[/] {src_fmt} -> {to}\n"
-        f"Output: [bold]{out_path}[/]"
+        f"[green]Converted {len(converted)} rows:[/] "
+        f"{for_terminal(src_fmt)} -> {for_terminal(to)}\n"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
     if failed > 0:
         console.print(f"[yellow]{failed} rows failed to convert.[/]")
@@ -282,18 +279,25 @@ def merge(
     shuffle: bool = typer.Option(False, "--shuffle", help="Shuffle after merging"),
 ):
     """Merge multiple datasets into a single file."""
-    _refuse_output_over_input(
-        [("the input", file_str) for file_str in files], [("--output", output)]
+    refuse_output_over_input(
+        [("the input", file_str) for file_str in files],
+        [("--output", output)],
+        console=console,
     )
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
     all_data: list[dict] = []
 
     for file_str in files:
         file_path = Path(file_str)
         if not file_path.exists():
-            console.print(f"[red]File not found: {file_path}[/]")
+            console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
             raise typer.Exit(1)
         data = load_raw_data(file_path)
-        console.print(f"[dim]Loaded {len(data)} rows from {file_path}[/]")
+        console.print(f"[dim]Loaded {len(data)} rows from {for_terminal(file_path)}[/]")
         all_data.extend(data)
 
     if not all_data:
@@ -304,11 +308,17 @@ def merge(
         random.shuffle(all_data)
 
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
+
     _write_jsonl(out_path, all_data)
 
     console.print(
         f"[green]Merged {len(all_data)} rows from {len(files)} files.[/]\n"
-        f"Output: [bold]{out_path}[/]"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
 
 
@@ -362,7 +372,7 @@ def _semantic_dedup(
     console.print(
         f"[green]Semantic dedup complete:[/] {len(data)} -> {len(unique)} rows "
         f"([red]-{len(report.dropped)}[/] near-duplicates)\n"
-        f"Output: [bold]{out_path}[/]"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
     return report
 
@@ -403,13 +413,21 @@ def dedup(
     """
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    if field and not any(field in row for row in data):
+        console.print(
+            f"--field {field!r} is absent from every row; "
+            "choose a field present in the dataset.",
+            markup=False, highlight=False, emoji=False,
+        )
         raise typer.Exit(1)
 
     # Output resolution + containment is shared by BOTH backends.
@@ -418,14 +436,14 @@ def dedup(
     out_path = Path(output)
     if not is_under_cwd(out_path):
         console.print(
-            f"[red]Output path is outside the working directory: {out_path}[/]"
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
         )
         raise typer.Exit(1)
 
     if semantic:
         console.print(
             f"[dim]Semantic dedup of {len(data)} rows "
-            f"(threshold={threshold}, model={embed_model})...[/]"
+            f"(threshold={threshold}, model={for_terminal(embed_model)})...[/]"
         )
         _semantic_dedup(
             data, threshold=threshold, field=field,
@@ -492,7 +510,7 @@ def dedup(
     console.print(
         f"[green]Dedup complete:[/] {len(data)} -> {len(unique_data)} rows "
         f"([red]-{removed}[/] duplicates)\n"
-        f"Output: [bold]{out_path}[/]"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
 
 
@@ -527,9 +545,14 @@ def filter_data(
     """Filter dataset by quality: perplexity and/or coherence scoring."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if perplexity is None and coherence is None and not score_only:
         console.print(
@@ -563,15 +586,16 @@ def filter_data(
         try:
             from soup_cli.utils.quality import compute_perplexity_scores
 
-            console.print(f"[dim]Computing perplexity with {perplexity_model}...[/]")
+            console.print(f"[dim]Computing perplexity with {for_terminal(perplexity_model)}...[/]")
             perplexity_scores = compute_perplexity_scores(
                 texts, model_name=perplexity_model,
             )
         except ImportError:
             console.print(
-                "[yellow]torch/transformers not available for perplexity scoring. "
-                "Skipping perplexity.[/]"
+                r'[red]Perplexity scoring requires torch and transformers.[/] '
+                r'Install with: pip install "soup-cli\[train]"'
             )
+            raise typer.Exit(1) from None
 
     if score_only:
         # Add scores to each row and write output
@@ -586,10 +610,15 @@ def filter_data(
         if output is None:
             output = str(file_path.stem) + "_scored.jsonl"
         out_path = Path(output)
+        if not is_under_cwd(out_path):
+            console.print(
+                f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+            )
+            raise typer.Exit(1)
         _write_jsonl(out_path, scored_data)
         console.print(
             f"[green]Scored {len(scored_data)} rows.[/]\n"
-            f"Output: [bold]{out_path}[/]"
+            f"Output: [bold]{for_terminal(out_path)}[/]"
         )
         return
 
@@ -612,12 +641,17 @@ def filter_data(
     if output is None:
         output = str(file_path.stem) + "_filtered.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
     _write_jsonl(out_path, kept)
 
     console.print(
         f"[green]Filter complete:[/] {len(data)} -> {len(kept)} rows "
         f"([red]-{len(removed)}[/] removed)\n"
-        f"Output: [bold]{out_path}[/]"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
     if perplexity is not None and perplexity_scores is not None:
         avg_ppl = sum(perplexity_scores) / len(perplexity_scores)
@@ -636,7 +670,7 @@ def stats(
 
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
 
     data = load_raw_data(file_path)
@@ -647,7 +681,7 @@ def stats(
     ext_stats = extended_stats(data)
 
     # Basic info table
-    info_table = Table(title=f"Extended Stats: {file_path.name}")
+    info_table = Table(title=f"Extended Stats: {for_terminal(file_path.name)}")
     info_table.add_column("Metric", style="bold")
     info_table.add_column("Value", justify="right")
     info_table.add_row("Total samples", str(ext_stats["total"]))
@@ -726,16 +760,11 @@ def stats(
 
 def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
     """Show image statistics if dataset contains image fields."""
-    if not data:
+    if not any("image" in row for row in data):
         return
 
     if image_dir is None:
         image_dir = Path.cwd()
-
-    # Check if this is a vision dataset
-    sample = data[0]
-    if "image" not in sample:
-        return
 
     total = len(data)
     has_image = sum(1 for row in data if row.get("image"))
@@ -791,6 +820,8 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
     """Random sampling without replacement."""
+    if num <= 0:
+        return []
     rng = random.Random(seed)
     num = min(num, len(data))
     return rng.sample(data, num)
@@ -803,6 +834,8 @@ def _sample_diverse(
 
     Falls back to random sampling if sklearn is not available.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -873,6 +906,8 @@ def _sample_hard(data: list[dict], num: int) -> list[dict]:
 
     Longer texts tend to be more complex / challenging.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -897,11 +932,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
@@ -915,17 +950,28 @@ def sample_data(
     """Sample a subset of a dataset using various strategies."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
         raise typer.Exit(1)
 
+    if num is not None and num <= 0:
+        console.print("[red]--n must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if pct is not None:
+        import math as _math
+
+        if not _math.isfinite(pct) or not (0.0 < pct <= 100.0):
+            console.print("[red]--pct must be a finite number in (0, 100].[/]")
+            raise typer.Exit(1)
+
     if strategy not in ("random", "diverse", "hard"):
         console.print(
-            f"[red]Unknown strategy: {strategy}[/]\n"
+            f"[red]Unknown strategy: {for_terminal(strategy)}[/]\n"
             "Supported: [bold]random[/], [bold]diverse[/], [bold]hard[/]"
         )
         raise typer.Exit(1)
@@ -971,8 +1017,8 @@ def sample_data(
 
     console.print(
         f"[green]Sampled {len(sampled)} rows[/] from {len(data)} "
-        f"(strategy: {strategy})\n"
-        f"Output: [bold]{out_path}[/]"
+        f"(strategy: {for_terminal(strategy)})\n"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
 
 
@@ -1021,7 +1067,7 @@ def split_data(
     """Split dataset into train/val/test files."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
 
     if val is None and test is None:
@@ -1033,6 +1079,14 @@ def split_data(
     # train — a silently inverted split).
     if (val is not None and val < 0) or (test is not None and test < 0):
         console.print("[red]--val and --test must be non-negative.[/]")
+        raise typer.Exit(1)
+
+    if (val or 0) == 0 and (test or 0) == 0:
+        console.print("[red]Specify at least one positive split (--val or --test).[/]")
+        raise typer.Exit(1)
+
+    if not absolute and ((val or 0) + (test or 0) >= 100):
+        console.print("[red]Split percentages must sum to less than 100.[/]")
         raise typer.Exit(1)
 
     if stratify and stratify_semantic:
@@ -1099,18 +1153,18 @@ def split_data(
 
     output_msg = (
         f"[green]Split {total} rows:[/]\n"
-        f"  Train: {len(train_data)} -> [bold]{train_path}[/]"
+        f"  Train: {len(train_data)} -> [bold]{for_terminal(train_path)}[/]"
     )
 
     if val_data:
         val_path = parent / f"{stem}_val.jsonl"
         _write_jsonl(val_path, val_data)
-        output_msg += f"\n  Val:   {len(val_data)} -> [bold]{val_path}[/]"
+        output_msg += f"\n  Val:   {len(val_data)} -> [bold]{for_terminal(val_path)}[/]"
 
     if test_data:
         test_path = parent / f"{stem}_test.jsonl"
         _write_jsonl(test_path, test_data)
-        output_msg += f"\n  Test:  {len(test_data)} -> [bold]{test_path}[/]"
+        output_msg += f"\n  Test:  {len(test_data)} -> [bold]{for_terminal(test_path)}[/]"
 
     console.print(output_msg)
 
@@ -1173,7 +1227,7 @@ def _get_semantic_labels(
         tfidf_matrix = vectorizer.fit_transform(texts)
     except ValueError as exc:
         console.print(
-            f"[red]Semantic stratified splitting failed: {exc}[/]\n"
+            f"[red]Semantic stratified splitting failed: {for_terminal(exc)}[/]\n"
             "Check that your dataset contains vectorizable words (not just stop words)."
         )
         raise typer.Exit(1)
@@ -1193,7 +1247,13 @@ def _stratified_split(
     data: list, val_count: int, test_count: int,
     stratify_keys: str | list[str], seed: int | None = None,
 ) -> tuple:
-    """Stratified split preserving category distribution."""
+    """Stratified split preserving category distribution.
+
+    A separate ``random.Random(seed)`` supplies the tie ranks for both passes.
+    With an explicit seed it shares the start of the stream used to shuffle
+    the first group, but does not advance the row RNG, so the shuffle within
+    each group matches v0.78.0. With ``seed=None``, both RNGs stay unseeded.
+    """
     # Group by stratify keys
     groups: dict[str, list[int]] = {}
     for idx, row in enumerate(data):
@@ -1204,23 +1264,24 @@ def _stratified_split(
         groups.setdefault(key, []).append(idx)
 
     rng = random.Random(seed)
-    total = len(data)
+    group_keys = list(groups)
+    group_capacities = [len(groups[key]) for key in group_keys]
+    tie_rank = list(range(len(group_keys)))
+    random.Random(seed).shuffle(tie_rank)
+    holdout_counts = _largest_remainder_allocation(
+        val_count + test_count, group_capacities, tie_rank
+    )
+    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts, tie_rank)
 
     train_indices = []
     val_indices = []
     test_indices = []
 
-    for key, indices in groups.items():
+    for group_index, key in enumerate(group_keys):
+        indices = groups[key]
         rng.shuffle(indices)
-        group_size = len(indices)
-        group_frac = group_size / total
-
-        group_val = round(val_count * group_frac) if val_count else 0
-        group_test = round(test_count * group_frac) if test_count else 0
-
-        # Ensure we don't take more than available
-        group_val = min(group_val, group_size)
-        group_test = min(group_test, group_size - group_val)
+        group_test = group_test_counts[group_index]
+        group_val = holdout_counts[group_index] - group_test
 
         test_indices.extend(indices[:group_test])
         val_indices.extend(indices[group_test:group_test + group_val])
@@ -1231,6 +1292,42 @@ def _stratified_split(
     test_data = [data[idx] for idx in test_indices]
 
     return train_data, val_data, test_data
+
+
+def _largest_remainder_allocation(
+    count: int, capacities: list[int], tie_rank: list[int]
+) -> list[int]:
+    """Allocate ``count`` proportionally, using ``tie_rank`` only for equal remainders."""
+    allocation = [0] * len(capacities)
+    total_capacity = sum(capacities)
+    target = min(max(count, 0), total_capacity)
+    if target == 0 or total_capacity == 0:
+        return allocation
+
+    numerators = [target * capacity for capacity in capacities]
+    allocation = [
+        min(numerator // total_capacity, capacity)
+        for numerator, capacity in zip(numerators, capacities, strict=True)
+    ]
+    remaining = target - sum(allocation)
+    remainders = [numerator % total_capacity for numerator in numerators]
+    remainder_order = sorted(
+        range(len(capacities)),
+        key=lambda index: (-remainders[index], tie_rank[index]),
+    )
+    while remaining:
+        progressed = False
+        for index in remainder_order:
+            if allocation[index] < capacities[index]:
+                allocation[index] += 1
+                remaining -= 1
+                progressed = True
+                if remaining == 0:
+                    break
+        if not progressed:
+            break
+
+    return allocation
 
 
 # ---------------------------------------------------------------------------
@@ -1376,7 +1473,7 @@ def search_datasets(
     valid_sorts = {"downloads", "likes", "lastModified", "trending", "createdAt"}
     if sort not in valid_sorts:
         console.print(
-            f"[red]Invalid sort: {sort}[/]\n"
+            f"[red]Invalid sort: {for_terminal(sort)}[/]\n"
             f"Valid options: {', '.join(sorted(valid_sorts))}"
         )
         raise typer.Exit(1)
@@ -1390,14 +1487,14 @@ def search_datasets(
         )
         raise typer.Exit(1)
     except Exception as exc:
-        console.print(f"[red]Search failed: {exc}[/]")
+        console.print(f"[red]Search failed: {for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     if not datasets:
-        console.print(f"[yellow]No datasets found for '{query}'.[/]")
+        console.print(f"[yellow]No datasets found for '{for_terminal(query)}'.[/]")
         return
 
-    table = Table(title=f"HuggingFace Datasets: '{query}'")
+    table = Table(title=f"HuggingFace Datasets: '{for_terminal(query)}'")
     table.add_column("Dataset", style="bold cyan", max_width=45)
     table.add_column("Downloads", justify="right")
     table.add_column("Likes", justify="right")
@@ -1433,7 +1530,7 @@ def preview_dataset(
     try:
         info = _hf_dataset_info(dataset_id)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
     except ImportError:
         console.print(
@@ -1525,7 +1622,7 @@ def download_dataset(
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(code=2) from exc
     # v0.53.10 #153 — non-HF hub live dataset download. ModelScope uses
     # the ``MsDataset`` API (different shape from snapshot_download), so
@@ -1549,7 +1646,7 @@ def download_dataset(
                     dataset_id, split=split
                 )
                 console.print(
-                    f"[dim]ModelScope dataset {dataset_id} loaded; "
+                    f"[dim]ModelScope dataset {for_terminal(dataset_id)} loaded; "
                     "use soup_cli.utils.hubs.download_repo for raw "
                     "snapshot download.[/]"
                 )
@@ -1564,14 +1661,14 @@ def download_dataset(
                         repo_type="dataset",
                     )
                 except ImportError as exc:
-                    console.print(f"[red]{exc}[/]")
+                    console.print(f"[red]{for_terminal(exc)}[/]")
                     raise typer.Exit(1) from exc
                 console.print(
-                    f"[green]Downloaded {dataset_id} from {hub_canonical} → "
-                    f"{out_dir}[/]"
+                    f"[green]Downloaded {for_terminal(dataset_id)} "
+                    f"from {for_terminal(hub_canonical)} → {for_terminal(out_dir)}[/]"
                 )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]")
             raise typer.Exit(2) from exc
         return
     max_download_samples = 1_000_000
@@ -1626,7 +1723,10 @@ def download_dataset(
             title="Remote Code Warning",
             border_style="yellow",
         ))
-    console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
+    console.print(
+        f"[dim]Downloading {for_terminal(dataset_id)} "
+        f"(split={for_terminal(split)})...[/]"
+    )
 
     try:
         data = _hf_download_dataset(
@@ -1634,7 +1734,7 @@ def download_dataset(
             trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
     except ImportError:
         console.print(
@@ -1658,7 +1758,7 @@ def download_dataset(
 
         if fmt not in CONVERTIBLE_FORMATS:
             console.print(
-                f"[red]Invalid format: {fmt}[/]\n"
+                f"[red]Invalid format: {for_terminal(fmt)}[/]\n"
                 f"Supported: {', '.join(CONVERTIBLE_FORMATS)}"
             )
             raise typer.Exit(1)
@@ -1676,10 +1776,18 @@ def download_dataset(
                     result = messages_to_format(messages, fmt)
                     if result is not None:
                         converted.append(result)
-            if converted:
-                data = converted
+            if not converted:
+                console.print("[red]All rows failed to convert.[/]")
+                raise typer.Exit(1)
+            left_out = len(data) - len(converted)
+            data = converted
+            console.print(
+                f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+            )
+            if left_out:
                 console.print(
-                    f"[dim]Converted {len(data)} rows to {fmt} format.[/]"
+                    f"[yellow]{left_out} rows were left out because they do "
+                    f"not convert to {for_terminal(fmt)}.[/]"
                 )
 
     # Apply samples limit if data came from non-streaming path
@@ -1689,7 +1797,7 @@ def download_dataset(
     _write_jsonl(out_path, data)
     console.print(
         f"[green]Downloaded {len(data)} rows.[/]\n"
-        f"Output: [bold]{out_path}[/]"
+        f"Output: [bold]{for_terminal(out_path)}[/]"
     )
 
 
@@ -1748,7 +1856,7 @@ def augment_data(
 
     if strategy not in STRATEGIES:
         console.print(
-            f"[red]Unknown strategy: {strategy}. "
+            f"[red]Unknown strategy: {for_terminal(strategy)}. "
             f"Options: {', '.join(STRATEGIES.keys())}[/]"
         )
         raise typer.Exit(1)
@@ -1761,22 +1869,25 @@ def augment_data(
     try:
         enforce_under_cwd_and_no_symlink(input_path, "--input")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
     if not os.path.lexists(input_path):
-        console.print(f"[red]Input file not found: {input_path}[/]")
+        console.print(f"[red]Input file not found: {for_terminal(input_path)}[/]")
         raise typer.Exit(1)
     input_resolved = Path(os.path.realpath(input_path))
 
     # Before the --output symlink check, so a symlink to the input is reported
     # as the input; the default --output (augmented.jsonl) can be the input too.
-    _refuse_output_over_input(
-        [("--input", input_path)], [("--output", output_path)], exit_code=2
+    refuse_output_over_input(
+        [("--input", input_path)],
+        [("--output", output_path)],
+        exit_code=2,
+        console=console,
     )
     try:
         enforce_under_cwd_and_no_symlink(output_path, "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     # Load data
@@ -1786,7 +1897,7 @@ def augment_data(
         raise typer.Exit(1)
 
     console.print(
-        f"[dim]Loaded {len(data)} examples from {input_resolved.name}[/]"
+        f"[dim]Loaded {len(data)} examples from {for_terminal(input_resolved.name)}[/]"
     )
 
     # Load provider
@@ -1795,7 +1906,7 @@ def augment_data(
             provider, requests_per_minute, model=model, base_url=base_url
         )
     except (TypeError, ValueError, ImportError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     from soup_cli.utils.data_forge import ForgeJudgeStats
@@ -1838,7 +1949,7 @@ def augment_data(
                 data, provider=provider_instance, count=count, stats=stats,
             )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     failure_summary = ""
@@ -1886,15 +1997,16 @@ def augment_data(
 
         console.print(
             f"[yellow]Augmentation complete with provider failures:[/] "
-            f"{len(data)} → {len(final_rows)} ({strategy} via {provider})\n"
-            f"  Output: {written}"
+            f"{len(data)} → {len(final_rows)} "
+            f"({for_terminal(strategy)} via {for_terminal(provider)})\n"
+            f"  Output: {for_terminal(written)}"
         )
         console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
     else:
         console.print(
             f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
-            f"({strategy} via {provider})\n"
-            f"  Output: {written}"
+            f"({for_terminal(strategy)} via {for_terminal(provider)})\n"
+            f"  Output: {for_terminal(written)}"
         )
 
 
@@ -2011,13 +2123,13 @@ def register_data(
     try:
         register_dataset(final_name, str(resolved), fmt, registry_path=registry_path)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     console.print(
-        f"[green]Registered dataset '[bold]{final_name}[/bold]'[/]\n"
-        f"  Path: {final_path}\n"
-        f"  Format: {fmt}"
+        f"[green]Registered dataset '[bold]{for_terminal(final_name)}[/bold]'[/]\n"
+        f"  Path: {for_terminal(final_path)}\n"
+        f"  Format: {for_terminal(fmt)}"
     )
 
 
@@ -2051,9 +2163,9 @@ def unregister_data(
     removed = unregister_dataset(final_name, registry_path=registry_path)
 
     if removed:
-        console.print(f"[green]Removed dataset '{final_name}' from registry.[/]")
+        console.print(f"[green]Removed dataset '{for_terminal(final_name)}' from registry.[/]")
     else:
-        console.print(f"[red]Dataset '{final_name}' not found in registry.[/]")
+        console.print(f"[red]Dataset '{for_terminal(final_name)}' not found in registry.[/]")
         raise typer.Exit(1)
 
 
@@ -2121,23 +2233,23 @@ def from_traces_cmd(
 
     if format not in SUPPORTED_FORMATS:
         console.print(
-            f"[red]Unknown format '{format}'. "
+            f"[red]Unknown format '{for_terminal(format)}'. "
             f"Supported: {', '.join(SUPPORTED_FORMATS)}[/]"
         )
         raise typer.Exit(1)
     if signal not in SUPPORTED_SIGNALS:
         console.print(
-            f"[red]Unknown signal '{signal}'. "
+            f"[red]Unknown signal '{for_terminal(signal)}'. "
             f"Supported: {', '.join(SUPPORTED_SIGNALS)}[/]"
         )
         raise typer.Exit(1)
 
     logs_path = Path(logs)
     if not _under_cwd(logs_path):
-        console.print(f"[red]--logs '{logs}' is outside cwd - refusing[/]")
+        console.print(f"[red]--logs '{for_terminal(logs)}' is outside cwd - refusing[/]")
         raise typer.Exit(1)
     if not logs_path.exists():
-        console.print(f"[red]--logs not found: {logs}[/]")
+        console.print(f"[red]--logs not found: {for_terminal(logs)}[/]")
         raise typer.Exit(1)
     if format == "soup-serve" and not logs_path.is_dir():
         # #1530: the soup-serve reader walks a directory of *.jsonl logs (one
@@ -2157,10 +2269,10 @@ def from_traces_cmd(
 
     output_path = Path(output)
     if not _under_cwd(output_path):
-        console.print(f"[red]--output '{output}' is outside cwd - refusing[/]")
+        console.print(f"[red]--output '{for_terminal(output)}' is outside cwd - refusing[/]")
         raise typer.Exit(1)
     # The default --output (prefs.jsonl) is also a plausible --logs file.
-    _refuse_output_over_input([("--logs", logs)], [("--output", output)])
+    refuse_output_over_input([("--logs", logs)], [("--output", output)], console=console)
 
     console.print(Panel(
         "[yellow]Traces may contain sensitive user data.[/]\n"
@@ -2215,7 +2327,7 @@ def from_traces_cmd(
             reason = f"no line parsed as {article} {format} record"
         console.print(
             f"[yellow]Read 0 trace(s) from --logs '{_escape(logs)}' as format "
-            f"{format}: {reason}. The output file will be empty.[/]"
+            f"{for_terminal(format)}: {for_terminal(reason)}. The output file will be empty.[/]"
         )
     if not pairs and trace_list:
         # #1440: reading traces that match no pair mode used to print a normal
@@ -2224,9 +2336,9 @@ def from_traces_cmd(
         signals = sorted({t.signal for t in trace_list if t.signal != "none"})
         console.print(
             f"[yellow]Read {len(trace_list)} trace(s) but built no pairs for "
-            f"--signal {signal}. "
+            f"--signal {for_terminal(signal)}. "
             + (
-                f"Signals present: {', '.join(signals)}. "
+                f"Signals present: {for_terminal(', '.join(signals))}. "
                 if signals
                 else "No trace carried a signal. "
             )
@@ -2318,7 +2430,7 @@ def review_cmd(
     sample = max(1, min(int(sample), 100))
     path = Path(input_file)
     if not path.exists():
-        console.print(f"[red]File not found:[/] {input_file}")
+        console.print(f"[red]File not found:[/] {for_terminal(input_file)}")
         raise typer.Exit(1)
 
     shown = 0
@@ -2421,6 +2533,7 @@ def push_dataset_cmd(
     """Upload a local JSONL dataset to a model hub as a dataset repo."""
     from soup_cli.utils.hf import (
         get_hf_api,
+        hf_login_command,
         resolve_endpoint,
         resolve_token,
         validate_repo_id,
@@ -2431,15 +2544,15 @@ def push_dataset_cmd(
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     file_path = Path(input_path)
     if not file_path.exists():
-        console.print(f"[red]Dataset file not found: {file_path}[/]")
+        console.print(f"[red]Dataset file not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     if not file_path.is_file():
-        console.print(f"[red]Expected a file, got a directory: {file_path}[/]")
+        console.print(f"[red]Expected a file, got a directory: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     if not is_under_cwd(file_path):
         console.print(
@@ -2450,7 +2563,10 @@ def push_dataset_cmd(
     try:
         validate_repo_id(hf_dataset)
     except ValueError as exc:
-        console.print(f"[red]Invalid --{hub_canonical}-dataset repo id:[/] {exc}")
+        console.print(
+            f"[red]Invalid --{for_terminal(hub_canonical)}-dataset repo id:[/] "
+            f"{for_terminal(exc)}"
+        )
         raise typer.Exit(1) from exc
 
     # v0.71.5 #157 — non-HF hubs route through the shared upload_repo adapter.
@@ -2466,20 +2582,20 @@ def push_dataset_cmd(
     if token is None:
         console.print(
             "[red]No HuggingFace token found.[/]\n"
-            "Set HF_TOKEN env var or run: [bold]huggingface-cli login[/]"
+            f"Set HF_TOKEN env var or run: [bold]{hf_login_command()}[/]"
         )
         raise typer.Exit(1)
 
     try:
         endpoint = resolve_endpoint()
     except ValueError as exc:
-        console.print(f"[red]HF_ENDPOINT invalid:[/] {exc}")
+        console.print(f"[red]HF_ENDPOINT invalid:[/] {for_terminal(exc)}")
         raise typer.Exit(1) from exc
 
     try:
         api = get_hf_api(token=token, endpoint=endpoint)
     except ImportError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
 
     # Sanitise commit message to a single short line — prevents multi-line
@@ -2498,11 +2614,11 @@ def push_dataset_cmd(
             commit_message=safe_commit,
         )
     except Exception as exc:
-        console.print(f"[red]Upload failed:[/] {exc}")
+        console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
         raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Uploaded to[/] https://huggingface.co/datasets/{hf_dataset}"
+        f"[green]Uploaded to[/] https://huggingface.co/datasets/{for_terminal(hf_dataset)}"
     )
 
 
@@ -2536,13 +2652,13 @@ def _push_dataset_non_hf(
                 repo_type="dataset",
             )
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]")
             raise typer.Exit(1) from exc
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Upload failed:[/] {exc}")
+            console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
             raise typer.Exit(1) from exc
         except Exception as exc:  # noqa: BLE001 — surface SDK errors generically
-            console.print(f"[red]Upload failed:[/] {exc}")
+            console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
             raise typer.Exit(1) from exc
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -2679,18 +2795,18 @@ def preprocess_dataset(
     cfg_real = os.path.realpath(config_path)
     if not is_under_cwd(cfg_real):
         console.print(
-            f"[red]--config must stay under cwd[/] (got {config_path!r})"
+            f"[red]--config must stay under cwd[/] (got {for_terminal(repr(config_path))})"
         )
         raise typer.Exit(1)
     if not Path(cfg_real).is_file():
-        console.print(f"[red]Config not found:[/] {config_path}")
+        console.print(f"[red]Config not found:[/] {for_terminal(config_path)}")
         raise typer.Exit(1)
 
     cfg = load_config(cfg_real)
     out_real = os.path.realpath(output_dir)
     if not is_under_cwd(out_real):
         console.print(
-            f"[red]--output must stay under cwd[/] (got {output_dir!r})"
+            f"[red]--output must stay under cwd[/] (got {for_terminal(repr(output_dir))})"
         )
         raise typer.Exit(1)
 
@@ -2715,16 +2831,16 @@ def preprocess_dataset(
         task=cfg.task,
     )
     target = Path(out_real) / cache_key
-    console.print(f"[cyan]Dataset:[/] {train_display}")
-    console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
+    console.print(f"[cyan]Dataset:[/] {for_terminal(train_display)}")
+    console.print(f"[cyan]Tokenizer:[/] {for_terminal(cfg.base)}")
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
     console.print(f"[cyan]Loss mask:[/] {mask_mode}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")
-    console.print(f"[cyan]Target:[/] {target}")
+    console.print(f"[cyan]Target:[/] {for_terminal(target)}")
 
     if target.exists() and not yes:
         console.print(
-            f"[yellow]Target already exists:[/] {target}\n"
+            f"[yellow]Target already exists:[/] {for_terminal(target)}\n"
             "[dim]Re-run with --yes to overwrite.[/]"
         )
         raise typer.Exit(0)
@@ -2758,7 +2874,7 @@ def preprocess_dataset(
     try:
         dataset = load_dataset(cfg.data)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Failed to load dataset:[/] {exc}")
+        console.print(f"[red]Failed to load dataset:[/] {for_terminal(exc)}")
         raise typer.Exit(1) from exc
 
     raw_rows = dataset.get("train", []) if isinstance(dataset, dict) else []
@@ -2950,10 +3066,10 @@ def preprocess_dataset(
         _json.dump(metadata, f, indent=2)
 
     console.print(
-        f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {target}"
+        f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
     )
     console.print(
-        f"[dim]Set data.tokenized_path={target} + data.format=pre_tokenized "
+        f"[dim]Set data.tokenized_path={for_terminal(target)} + data.format=pre_tokenized "
         "in your soup.yaml to short-circuit tokenization on subsequent runs.[/]"
     )
 
@@ -2987,20 +3103,20 @@ def ingest_document(
     try:
         lst = os.lstat(file)
     except OSError as exc:
-        console.print(f"[red]File not found:[/] {file}")
+        console.print(f"[red]File not found:[/] {for_terminal(file)}")
         raise typer.Exit(1) from exc
     if stat.S_ISLNK(lst.st_mode):
         console.print(
-            f"[red]Input file must not be a symlink[/] (got {file!r})"
+            f"[red]Input file must not be a symlink[/] (got {for_terminal(repr(file))})"
         )
         raise typer.Exit(1)
 
     in_real = os.path.realpath(file)
     if not is_under_cwd(in_real):
-        console.print(f"[red]Input must stay under cwd[/] (got {file!r})")
+        console.print(f"[red]Input must stay under cwd[/] (got {for_terminal(repr(file))})")
         raise typer.Exit(1)
     if not Path(in_real).is_file():
-        console.print(f"[red]File not found:[/] {file}")
+        console.print(f"[red]File not found:[/] {for_terminal(file)}")
         raise typer.Exit(1)
 
     out_real = os.path.realpath(output)
@@ -3008,10 +3124,12 @@ def ingest_document(
         console.print("[red]--output must stay under cwd[/]")
         raise typer.Exit(1)
 
+    refuse_output_over_input([("the input", file)], [("--output", output)], console=console)
+
     try:
         kind = detect_ingest_format(file)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
 
     rows: list[dict] = []
@@ -3089,7 +3207,7 @@ def ingest_document(
     with open(out_real, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    console.print(f"[green]Wrote {len(rows)} rows to[/] {output}")
+    console.print(f"[green]Wrote {len(rows)} rows to[/] {for_terminal(output)}")
 
 
 @app.command(name="demo")
@@ -3150,7 +3268,7 @@ def demo_bundle(
         console.print(f"[red]{_esc(str(exc))}[/]")
         raise typer.Exit(1) from exc
     console.print(
-        f"[green]Copied bundle '{bundle.name}' to[/] {_esc(written)}"
+        f"[green]Copied bundle '{for_terminal(bundle.name)}' to[/] {_esc(written)}"
     )
 
 
@@ -3197,6 +3315,8 @@ def recipe(
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
 
+    if execute and output is not None:
+        refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
     try:
         dag = load_recipe_yaml(path)
     except FileNotFoundError as exc:
@@ -3231,13 +3351,24 @@ def recipe(
         # cwd-contained, and we never want the live runner to be the
         # first/only enforcement point.
         from soup_cli.utils.paths import is_under_cwd
-        from soup_cli.utils.recipe_run import run_recipe
+        from soup_cli.utils.recipe_run import _recipe_write_paths, run_recipe
 
         if not output or not is_under_cwd(output):
             console.print(
                 "[red]--output must be a non-empty path under the current directory[/]"
             )
             raise typer.Exit(2)
+
+        inputs = [("the input", path)] + [
+            (f"seed {node.name}.path", node.config["path"])
+            for node in dag.nodes
+            if node.kind == "seed" and isinstance(node.config.get("path"), str)
+        ]
+        refuse_output_over_input(
+            inputs,
+            [("--output", target) for target in _recipe_write_paths(dag, output)],
+            console=console,
+        )
 
         if provider is not None and offline:
             console.print("[red]--provider and --offline cannot be used together.[/]")
@@ -3343,7 +3474,13 @@ def gen_magpie(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
-    from soup_cli.utils.magpie import build_magpie_config, run_magpie
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+    from soup_cli.utils.magpie import (
+        MagpieProviderError,
+        build_magpie_config,
+        magpie_failure_summary,
+        run_magpie,
+    )
 
     try:
         cfg = build_magpie_config(
@@ -3361,7 +3498,7 @@ def gen_magpie(
             f"Base model:     [bold]{_escape(cfg.base_model)}[/]\n"
             f"Provider:       [bold]{_escape(cfg.provider)}[/]\n"
             f"Target rows:    [bold]{cfg.target_rows}[/]\n"
-            f"Quality filter: [bold]{cfg.quality_filter}[/]",
+            f"Quality filter: [bold]{for_terminal(cfg.quality_filter)}[/]",
             title="soup data gen-magpie — plan",
         )
     )
@@ -3373,13 +3510,18 @@ def gen_magpie(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
+    stats = ForgeJudgeStats()
     try:
         result = run_magpie(
             cfg,
             output_path=output,
             base_url=base_url or None,
             max_tokens=max_tokens,
+            stats=stats,
         )
+    except MagpieProviderError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
     except (TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -3394,6 +3536,11 @@ def gen_magpie(
             title="soup data gen-magpie — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, cfg.provider, base_url or None))
+        )
     if result.rows_kept == 0:
         console.print(
             "[yellow]Warning:[/] 0 rows generated — is the provider reachable "
@@ -3581,7 +3728,6 @@ def best_of_n(
     from soup_cli.utils.magpie import make_magpie_generate_fn
     from soup_cli.utils.paths import (
         enforce_under_cwd_and_no_symlink,
-        ensure_distinct_paths,
     )
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
@@ -4209,30 +4355,39 @@ def evolve(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
     from soup_cli.utils.evolve import STRATEGIES, run_evolve
-    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.magpie import magpie_failure_summary, make_magpie_generate_fn
     from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
     if strategy not in STRATEGIES:
         console.print(
-            f"[red]--strategy must be one of {', '.join(STRATEGIES)}; got {strategy!r}[/]"
+            f"[red]--strategy must be one of {', '.join(STRATEGIES)}; "
+            f"got {for_terminal(repr(strategy))}[/]"
         )
         raise typer.Exit(2)
     if not isinstance(rounds, int) or isinstance(rounds, bool) or not (1 <= rounds <= 5):
         console.print("[red]--rounds must be in [1, 5][/]")
         raise typer.Exit(2)
 
-    _refuse_output_over_input([("--input", input_path)], [("--output", output)], exit_code=2)
+    refuse_output_over_input(
+        [("--input", input_path)],
+        [("--output", output)],
+        exit_code=2,
+        console=console,
+    )
     try:
         seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
+        stats = ForgeJudgeStats()
         generate_fn = make_magpie_generate_fn(
             provider,
             model=model,
             base_url=base_url or None,
             temperature=temperature,
             max_tokens=max_tokens,
+            stats=stats,
         )
     except (FileNotFoundError, TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
@@ -4257,6 +4412,12 @@ def evolve(
         raise typer.Exit(2)
 
     evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
+    if not evolved_rows and stats.failures:
+        console.print(
+            "[red]No usable rows produced:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
+        raise typer.Exit(1)
     out_lines = [
         json.dumps(
             {
@@ -4286,6 +4447,11 @@ def evolve(
             title="soup data evolve — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
     if not evolved_rows:
         console.print(
             "[yellow]Warning:[/] 0 rows — is the provider reachable and the "
@@ -4313,6 +4479,13 @@ def persona_mix(
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
     ``--personas`` / ``--styles`` are omitted the bundled diversity set is used.
     """
+    inputs = [("--prompts", prompts)]
+    if personas:
+        inputs.append(("--personas", personas))
+    if styles:
+        inputs.append(("--styles", styles))
+    refuse_output_over_input(inputs, [("--output", output)], console=console)
+
     import os
     import tempfile
 
@@ -4549,3 +4722,47 @@ def brain_rot_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{_escape(str(exc))}[/]")
             raise typer.Exit(3) from exc
+
+
+@app.command(name="leakage", cls=GateCommand)
+def leakage(
+    train: str = typer.Option(..., "--train", help="Training JSONL under cwd."),
+    evaluation: str = typer.Option(..., "--eval", help="Evaluation JSONL under cwd."),
+    samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
+    as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
+):
+    """Check input-text overlap without writing datasets.
+
+    Exit 0 when clean, 2 on overlap and 3 on unusable input.
+    """
+    from soup_cli.utils.data_leakage import check_leakage
+    from soup_cli.utils.data_score import load_jsonl_rows
+
+    try:
+        report = check_leakage(
+            load_jsonl_rows(train, strict=True),
+            load_jsonl_rows(evaluation, strict=True),
+            samples=samples,
+        )
+    except (TypeError, ValueError, OSError) as error:
+        console.print(f"[red]Leakage input error: {for_terminal(error)}[/]", emoji=False)
+        raise typer.Exit(EXIT_USAGE_ERROR) from error
+
+    if as_json:
+        typer.echo(json.dumps(report, ensure_ascii=False))
+    else:
+        table = Table(title="Train/eval input-text overlap")
+        table.add_column("Metric")
+        table.add_column("Value")
+        table.add_row("Train records", str(report["train_rows"]))
+        table.add_row("Eval records", str(report["eval_rows"]))
+        table.add_row("Matched eval records", str(report["overlap_eval_rows"]))
+        table.add_row("Overlap", f"{report['overlap_percent']:.2f}%")
+        console.print(table)
+        for pair in report["samples"]:
+            console.print(
+                f"Train record {pair['train_row']} / eval record {pair['eval_row']}: "
+                f"{for_terminal(pair['prompt_preview'])}", emoji=False,
+            )
+    if report["overlap_eval_rows"]:
+        raise typer.Exit(EXIT_GATE_FAILED)

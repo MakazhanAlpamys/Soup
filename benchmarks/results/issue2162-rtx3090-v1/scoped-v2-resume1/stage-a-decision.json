@@ -1,0 +1,90 @@
+{
+  "complete": true,
+  "confirmation_eligible": false,
+  "comparisons": {
+    "scoped_vs_native": {
+      "median_reduction_percent": 1.9979418106243414,
+      "ordinary_95": [
+        1.6850695968379927,
+        2.3774082552660545
+      ],
+      "family_adjusted_ci": [
+        1.437838567780921,
+        2.594953720227821
+      ],
+      "adjusted_quantiles": [
+        0.008333333333333333,
+        0.9916666666666667
+      ],
+      "block_reductions_percent": [
+        1.9323006258950646,
+        2.1598627903042886,
+        1.437838567780921,
+        2.0474112037361945,
+        1.9484724175124883,
+        2.594953720227821
+      ],
+      "passes_rule": false,
+      "n_blocks": 6,
+      "resamples": 10000,
+      "seed": 42,
+      "correction_family_contrasts": 3
+    },
+    "scoped_vs_legacy": {
+      "median_reduction_percent": 0.045540941448486486,
+      "ordinary_95": [
+        -0.7333072678133027,
+        0.2441849921052965
+      ],
+      "family_adjusted_ci": [
+        -0.7333072678133027,
+        0.2441849921052965
+      ],
+      "adjusted_quantiles": [
+        0.008333333333333333,
+        0.9916666666666667
+      ],
+      "block_reductions_percent": [
+        -1.264484336393814,
+        0.3420974674898889,
+        0.014967199855941492,
+        -0.20213019923279124,
+        0.14627251672070413,
+        0.07611468304103149
+      ],
+      "passes_rule": false,
+      "n_blocks": 6,
+      "resamples": 10000,
+      "seed": 42,
+      "correction_family_contrasts": 3
+    },
+    "legacy_vs_native": {
+      "median_reduction_percent": 2.0345043855897904,
+      "ordinary_95": [
+        1.6139621246604676,
+        2.8388122895276964
+      ],
+      "family_adjusted_ci": [
+        1.4230843638058288,
+        2.8388122895276964
+      ],
+      "adjusted_quantiles": [
+        0.008333333333333333,
+        0.9916666666666667
+      ],
+      "block_reductions_percent": [
+        3.1568668751320295,
+        1.8240051984050274,
+        1.4230843638058288,
+        2.245003572774553,
+        1.8048398855151062,
+        2.5207577039233633
+      ],
+      "passes_rule": true,
+      "n_blocks": 6,
+      "resamples": 10000,
+      "seed": 42,
+      "correction_family_contrasts": 3
+    }
+  }
+}

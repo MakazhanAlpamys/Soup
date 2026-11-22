@@ -188,6 +188,13 @@ def _opt_int(args: dict, key: str, default: int, *, lo: int, hi: int) -> int:
     return val
 
 
+def _opt_bool(args: dict, key: str) -> bool:
+    val = args.get(key, False)
+    if not isinstance(val, bool):
+        raise McpToolError(f"'{key}' must be a boolean")
+    return val
+
+
 def _enforce_data_path(path: str, field: str = "data") -> None:
     try:
         enforce_under_cwd_and_no_symlink(path, field)
@@ -394,20 +401,34 @@ def tool_recipes_show(args: dict) -> dict:
 def tool_runs_list(args: dict) -> dict:
     """`soup runs` — recent experiment runs."""
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.paths import sanitize_run_row
 
     limit = _opt_int(args, "limit", 50, lo=1, hi=500)
-    runs = ExperimentTracker().list_runs(limit=limit)
-    return {"runs": runs, "count": len(runs)}
+    tracker = ExperimentTracker()
+    try:
+        runs = tracker.list_runs(limit=limit)
+    finally:
+        tracker.close()
+    return {"runs": [sanitize_run_row(run) for run in runs], "count": len(runs)}
 
 
 def tool_runs_show(args: dict) -> dict:
     """`soup runs show` — one run's full record."""
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+    from soup_cli.utils.paths import sanitize_run_row
 
-    run = ExperimentTracker().get_run(_require_str(args, "run_id"))
-    if run is None:
-        raise McpToolError("run not found")
-    return run
+    run_id = _require_str(args, "run_id")
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            # get_run answers None for an ambiguous prefix too (#2470).
+            if tracker.count_run_id_matches(run_id) > 1:
+                raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
+            raise McpToolError("run not found")
+        return sanitize_run_row(run)
+    finally:
+        tracker.close()
 
 
 def tool_registry_list(args: dict) -> dict:
@@ -447,23 +468,14 @@ def tool_registry_show(args: dict) -> dict:
 def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
     """GPU memory in GB and its source, from a flag or auto-detection (non-Typer
     mirror of ``commands/profile.py::_resolve_gpu_memory``)."""
-    from soup_cli.utils.profiler import ASSUMED_GPU_MEMORY_GB, GPU_MEMORY, normalize_gpu_key
+    from soup_cli.utils.profiler import GPU_MEMORY, detected_gpu_memory, normalize_gpu_key
 
     if gpu is not None:
         gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
             raise _unknown_choice("gpu", gpu, GPU_MEMORY)
         return float(GPU_MEMORY[gpu_key]), "flag"
-    try:
-        from soup_cli.utils.gpu import get_gpu_info
-
-        info = get_gpu_info()
-        mem_bytes = info.get("memory_total_bytes", 0)
-        if mem_bytes > 0:
-            return mem_bytes / (1024**3), "detected"
-    except (ImportError, RuntimeError, OSError):
-        pass
-    return ASSUMED_GPU_MEMORY_GB, "assumed"
+    return detected_gpu_memory()
 
 
 def _load_config_under_cwd(config: str) -> SoupConfig:
@@ -483,13 +495,7 @@ def _load_config_under_cwd(config: str) -> SoupConfig:
 
 def tool_profile(args: dict) -> dict:
     """`soup profile` — memory / speed / GPU estimate from a soup.yaml (no model load)."""
-    from soup_cli.utils.profiler import (
-        estimate_speed,
-        profile_from_config,
-        recommend_batch_size,
-        recommend_gpu,
-    )
-    from soup_cli.utils.vram_estimate import fit_verdict
+    from soup_cli.utils.profiler import finish_profile, profile_from_config
 
     cfg = _load_config_under_cwd(_require_str(args, "config"))
     gpu = _opt_str(args, "gpu")
@@ -504,25 +510,15 @@ def tool_profile(args: dict) -> dict:
         allow_network=False,
         gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
     )
-    if result is None:
-        raise McpToolError(
-            "batch_size, max_length or the model's size (over 1,000B parameters) is "
-            "outside the estimate's range"
-        )
-    batch_size = result["batch_size"]
-    tokens_per_sec = estimate_speed(
-        result["model_params_b"], cfg.training.quantization, batch_size
+    if not isinstance(result, dict):
+        # The reason names a field and a limit, never a value from the config (#2306).
+        raise McpToolError(result.reason)
+    return finish_profile(
+        result,
+        seq_len=cfg.data.max_length,
+        gpu_memory_gb=gpu_memory_gb,
+        gpu_memory_source=gpu_memory_source,
     )
-    result["tokens_per_sec"] = round(tokens_per_sec, 1)
-    result["samples_per_sec"] = round(tokens_per_sec / max(cfg.data.max_length, 1), 2)
-    result["recommended_batch_size"] = recommend_batch_size(
-        result["total_memory_gb"], gpu_memory_gb
-    )
-    result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
-    result["gpu_memory_gb"] = gpu_memory_gb
-    result["gpu_memory_source"] = gpu_memory_source
-    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
-    return result
 
 
 def tool_diagnose_evidence(args: dict) -> dict:
@@ -540,6 +536,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
     base = _opt_str(args, "base") or ""
     adapter = _opt_str(args, "adapter") or ""
+    require_all_modes = _opt_bool(args, "require_all_modes")
 
     raw_scores = payload.get("scores", {})
     if not isinstance(raw_scores, dict):
@@ -569,7 +566,12 @@ def tool_diagnose_evidence(args: dict) -> dict:
             raise McpToolError(f"evidence.scores.{mode} is invalid ({type(exc).__name__})") from exc
     try:
         report = build_report(
-            run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
+            run_id=run_id,
+            base=base,
+            adapter=adapter,
+            scores=scores,
+            soup_version=__version__,
+            missing_as_not_run=require_all_modes,
         )
     except (ValueError, TypeError) as exc:
         raise McpToolError(f"diagnose failed ({type(exc).__name__})") from exc
@@ -700,6 +702,9 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
     "eval.ship.general_suite": "read by soup ship, not soup train",
     "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
     "eval.ship.baseline": "read by soup ship, not soup train",
+    "eval.ship.reward_fn": (
+        "a reward name or a .py path read (and executed) by soup ship, not soup train"
+    ),
 }
 
 # ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
@@ -1098,6 +1103,13 @@ def _readonly_specs() -> list[ToolSpec]:
                     },
                     "base": {"type": "string"},
                     "adapter": {"type": "string"},
+                    "require_all_modes": {
+                        "type": "boolean",
+                        "description": (
+                            "A mode missing from the evidence is NOT_RUN instead of a "
+                            "neutral OK (default false)."
+                        ),
+                    },
                 },
                 "required": ["run_id", "evidence"],
                 "additionalProperties": False,

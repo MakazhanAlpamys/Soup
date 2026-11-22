@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests._windows_ci import skip_on_windows_ci
-
 CUDA = pytest.mark.gpu(reason="NF4 dequantisation needs bitsandbytes on CUDA")
 #: ``StreamedExperts.two_reads``: off is the default node layout; on puts the routing
 #: multiply inside the expert's autograd node so a checkpoint recompute reads nothing.
@@ -155,19 +153,20 @@ def test_streamed_experts_routing_weight_gradient_when_the_input_needs_none(tmp_
 
 
 # The bf16 case runs a CPU bf16 matmul under autocast, and part of GitHub's windows-latest
-# fleet dies on it with 0xc000001d (illegal instruction) in the eager reference module's
-# forward; the crash kills the xdist worker and the cell later times out (#382, #1314).
-# Only that case is skipped, and only on a Windows CI runner: the fp32 control, a developer's
-# Windows box, ubuntu and macos all still run it.
+# fleet died on it with 0xc000001d (illegal instruction) in the eager reference module's
+# forward (run 40003126970; #382, #1314). The test requests aten_half_matmuls, which keeps
+# those matmuls off oneDNN and MKL, so the case runs on every cell (#2307).
 @TWO_READS
 @pytest.mark.parametrize(
     "autocast",
     [
         pytest.param(False, id="fp32-control"),
-        pytest.param(True, id="cpu-bf16-autocast", marks=skip_on_windows_ci),
+        pytest.param(True, id="cpu-bf16-autocast"),
     ],
 )
-def test_streamed_experts_backward_preserves_forward_autocast(tmp_path, autocast, two_reads):
+def test_streamed_experts_backward_preserves_forward_autocast(
+    tmp_path, autocast, two_reads, aten_half_matmuls
+):
     """Recomputation must differentiate the forward precision after its AMP region exits."""
     import torch
 
@@ -764,6 +763,167 @@ def test_per_expert_layout_moves_routed_experts_out_of_the_layer_file(tmp_path):
     assert set(expert_paths(str(tmp_path / "shards"), index)) == {1, 2}
 
 
+@pytest.mark.parametrize("dtype", ["bfloat16", "float16"])
+@pytest.mark.parametrize("legacy", [None, {"e_score_correction_bias"}], ids=["none", "bias"])
+def test_deepseek_shards_follow_the_router_precision_policy(
+    tmp_path, monkeypatch, dtype, legacy,
+):
+    import json
+    from pathlib import Path
+
+    import torch
+    from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    from soup_cli.utils.layer_shard import (
+        estimate_shard_cache_bytes,
+        inspect_shard_cache,
+        layer_paths,
+        read_shard_index,
+    )
+    from soup_cli.utils.safetensors_reader import read_header
+
+    gate = "mlp.gate.weight"
+    bias = "mlp.gate.e_score_correction_bias"
+    weights, source = _tiny_deepseek_v3(tmp_path)
+    source_gate = source.model.layers[1].mlp.gate.weight.detach()
+    shard_dir = str(tmp_path / "shards")
+    model_files = list(Path(weights).glob("*.safetensors"))
+    strict = {"e_score_correction_bias", "model.layers.*.mlp.gate.weight"}
+
+    def estimate():
+        result = estimate_shard_cache_bytes(model_files, arch="deepseek_v3", dtype=dtype)
+        assert result is not None
+        return result
+
+    def check_cache(index):
+        return inspect_shard_cache(
+            shard_dir, dtype, index.source_fingerprint, index.source_files, "none", False, ""
+        )
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", legacy)
+    old_estimate = estimate()
+    old = _shard(tmp_path, weights, dtype)
+    old_state = load_file(layer_paths(shard_dir, old)[1])
+    assert torch.equal(old_state[gate], source_gate.to(getattr(torch, dtype)))
+    assert old_state[gate].dtype == getattr(torch, dtype)
+    assert old_state[bias].dtype == torch.float32
+
+    # Existing indexes from before the policy marker used the stream dtype for the router.
+    index_path = Path(shard_dir) / "index.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload.pop("fp32_router_weights", None)
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert check_cache(old)[0] is not None
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", strict)
+    current_estimate = estimate()
+    miss, reason = check_cache(old)
+    assert miss is None
+    assert reason == f"router weight precision changed ({dtype} -> float32)"
+    current = _shard(tmp_path, weights, dtype)
+    assert read_shard_index(shard_dir) == current
+    assert check_cache(current)[0] == current
+    path = layer_paths(shard_dir, current)[1]
+    state = load_file(path)
+    assert state[gate].dtype == torch.float32
+    assert torch.equal(state[gate], source_gate)
+    assert not torch.equal(state[gate], old_state[gate].float())
+    assert torch.equal(state[bias], old_state[bias])
+    payload_bytes = sum(entry.nbytes for entry in read_header(path).values())
+    assert current_estimate.layer_bytes[1] == payload_bytes
+    assert current_estimate.layer_bytes[1] - old_estimate.layer_bytes[1] == source_gate.numel() * 2
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", legacy)
+    miss, reason = check_cache(current)
+    assert miss is None
+    assert reason == f"router weight precision changed (float32 -> {dtype})"
+    rewritten = _shard(tmp_path, weights, dtype)
+    assert check_cache(rewritten)[0] == rewritten
+    assert load_file(layer_paths(shard_dir, rewritten)[1])[gate].dtype == getattr(torch, dtype)
+
+
+def test_float32_deepseek_cache_is_reusable_under_the_strict_policy(tmp_path, monkeypatch):
+    import torch
+    from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    from soup_cli.utils.layer_shard import inspect_shard_cache, layer_paths
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", None)
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    shard_dir = str(tmp_path / "shards")
+    index = _shard(tmp_path, weights, "float32")
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", {"gate.weight"})
+    cached, reason = inspect_shard_cache(
+        shard_dir, "float32", index.source_fingerprint, index.source_files, "none", False, ""
+    )
+
+    assert cached == index
+    assert reason == "cache is reusable"
+    assert cached.fp32_router_weights is False
+    assert load_file(layer_paths(shard_dir, cached)[1])["mlp.gate.weight"].dtype == torch.float32
+
+
+def test_shard_index_refuses_a_non_boolean_router_precision_marker(tmp_path):
+    import json
+    from pathlib import Path
+
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    _shard(tmp_path, weights, "float32")
+    shard_dir = str(tmp_path / "shards")
+    index_path = Path(shard_dir) / "index.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["fp32_router_weights"] = 1
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="^fp32_router_weights must be a boolean$"):
+        read_shard_index(shard_dir)
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["cache-miss", "forced"])
+def test_an_interrupted_router_precision_rewrite_invalidates_the_old_index(
+    tmp_path, monkeypatch, force
+):
+    import torch
+    from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    from soup_cli.utils import layer_shard
+
+    shard_dir = str(tmp_path / "shards")
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    legacy = {"e_score_correction_bias"}
+    strict = legacy | {"gate.weight"}
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", strict)
+    index = _shard(tmp_path, weights, "bfloat16")
+
+    def interrupt_before_commit(*_args):
+        raise RuntimeError("interrupted before index commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", legacy)
+        patch.setattr(layer_shard, "_atomic_write_index", interrupt_before_commit)
+        with pytest.raises(RuntimeError, match="interrupted before index commit"):
+            _shard(tmp_path, weights, "bfloat16", force=force)
+
+    stale_layer = layer_shard.layer_paths(shard_dir, index)[1]
+    assert load_file(stale_layer)["mlp.gate.weight"].dtype == torch.bfloat16
+    cached, reason = layer_shard.inspect_shard_cache(
+        shard_dir, "bfloat16", index.source_fingerprint, index.source_files, "none", False, ""
+    )
+    assert cached is None
+    assert "previous re-shard did not finish" in reason
+
+    repaired = _shard(tmp_path, weights, "bfloat16")
+    layer = layer_shard.layer_paths(shard_dir, repaired)[1]
+    assert repaired.fp32_router_weights
+    assert load_file(layer)["mlp.gate.weight"].dtype == torch.float32
+
+
 def test_streamed_per_expert_forward_matches_resident_eager_bit_exactly(tmp_path):
     import torch
 
@@ -830,7 +990,7 @@ def _three_way(tmp_path, dtype):
 
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
-    weights, _ = _tiny_deepseek_v3(tmp_path)
+    weights, source = _tiny_deepseek_v3(tmp_path)
     index = _shard(tmp_path, weights, dtype, expert_layout="per_expert")
     streamed = []
     for two_read_experts in (False, True):
@@ -847,6 +1007,17 @@ def _three_way(tmp_path, dtype):
         streamed.append((model.eval(), runtime))
     resident = DeepseekV3ForCausalLM.from_pretrained(weights, dtype=getattr(torch, dtype))
     resident.set_experts_implementation("eager")
+    router_key = "mlp.gate.weight"
+    for idx, layer in enumerate(resident.model.layers[1:], start=1):
+        native_gate = layer.mlp.gate.weight
+        source_gate = source.model.layers[idx].mlp.gate.weight
+        assert torch.equal(native_gate, source_gate.to(native_gate.dtype))
+        for _, runtime in streamed:
+            runtime.pool.load_async(idx, runtime.source)
+            buffers = runtime.pool.wait(idx)
+            assert buffers[router_key].dtype == native_gate.dtype
+            assert torch.equal(buffers[router_key], native_gate)
+            assert "mlp.gate.e_score_correction_bias" not in buffers
     ref = get_peft_model(resident, _lora()).eval()
     adapters = [
         {k.replace(".inner.", "."): v for k, v in model.state_dict().items() if "lora_" in k}
@@ -953,11 +1124,13 @@ def _step_capturing(net, ids, autocast=False):
     "cell",
     [
         pytest.param("fp32", id="fp32"),
-        pytest.param("bf16", id="bf16", marks=skip_on_windows_ci),
-        pytest.param("bf16-autocast", id="bf16-autocast", marks=skip_on_windows_ci),
+        pytest.param("bf16", id="bf16"),
+        pytest.param("bf16-autocast", id="bf16-autocast"),
     ],
 )
-def test_two_read_experts_equal_the_resident_model_and_the_default_path(tmp_path, cell):
+def test_two_read_experts_equal_the_resident_model_and_the_default_path(
+    tmp_path, cell, aten_half_matmuls
+):
     """Logits, loss, dX, the router-output gradients, the router weight's gradient and
     every LoRA gradient of the resident eager model, the default streamed path and two
     reads, bit for bit. The bf16-autocast cell runs the forward under CPU autocast and

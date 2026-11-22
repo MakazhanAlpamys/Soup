@@ -1,0 +1,148 @@
+[2026-11-07 13:26:57,202] [WARNING] [runner.py:214:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+Detected VISIBLE_DEVICES=0 but ignoring it because one or several of --include/--exclude/--num_gpus/--num_nodes cl args were used. If you want to use CUDA_VISIBLE_DEVICES don't pass any of these arguments to deepspeed.
+[2026-11-07 13:26:57,203] [INFO] [runner.py:618:main] cmd = /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMF19 --master_addr=127.0.0.1 --master_port=29511 --enable_each_rank_log=None --log_level=info /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl --max-length 512 --epochs 2 --arm D1 --shape B --rep 2 --out /workspace/out/results/B/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.25.1-1+cuda12.8
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NCCL_VERSION=2.25.1-1
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE=libnccl2=2.25.1-1+cuda12.8
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_NAME=libnccl2
+[2026-11-07 13:26:58,483] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:26:58,483] [INFO] [launch.py:152:main] WORLD INFO DICT: {'localhost': [0]}
+[2026-11-07 13:26:58,483] [INFO] [launch.py:158:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-11-07 13:26:58,483] [INFO] [launch.py:169:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-11-07 13:26:58,483] [INFO] [launch.py:170:main] dist_world_size=1
+[2026-11-07 13:26:58,483] [INFO] [launch.py:174:main] Setting CUDA_VISIBLE_DEVICES=0
+[2026-11-07 13:26:58,484] [INFO] [launch.py:245:main] process 7859 spawned with command: ['/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python', '-u', '/workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py', '--local_rank=0', '--model', '/workspace/payload/benchmarks/harness/ds_compare/model', '--rows', '/workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl', '--max-length', '512', '--epochs', '2', '--arm', 'D1', '--shape', 'B', '--rep', '2', '--out', '/workspace/out/results/B/80/D1/rep2.raw.json', '--deepspeed', '/workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json']
+/opt/conda/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  warnings.warn(  # warn only once
+{'loss': '6.182', 'grad_norm': '1.535', 'learning_rate': '0.0002', 'epoch': '0.01562'}
+{'loss': '6.231', 'grad_norm': '0.622', 'learning_rate': '0.0002', 'epoch': '0.03125'}
+{'loss': '6.177', 'grad_norm': '0.6125', 'learning_rate': '0.0002', 'epoch': '0.04688'}
+{'loss': '6.116', 'grad_norm': '0.7015', 'learning_rate': '0.0002', 'epoch': '0.0625'}
+{'loss': '6.08', 'grad_norm': '1.105', 'learning_rate': '0.0002', 'epoch': '0.07812'}
+{'loss': '6.007', 'grad_norm': '1.043', 'learning_rate': '0.0002', 'epoch': '0.09375'}
+{'loss': '6.034', 'grad_norm': '1.227', 'learning_rate': '0.0002', 'epoch': '0.1094'}
+{'loss': '5.985', 'grad_norm': '1.144', 'learning_rate': '0.0002', 'epoch': '0.125'}
+{'loss': '5.899', 'grad_norm': '1.381', 'learning_rate': '0.0002', 'epoch': '0.1406'}
+{'loss': '5.854', 'grad_norm': '1.417', 'learning_rate': '0.0002', 'epoch': '0.1562'}
+{'loss': '5.793', 'grad_norm': '1.35', 'learning_rate': '0.0002', 'epoch': '0.1719'}
+{'loss': '5.758', 'grad_norm': '1.387', 'learning_rate': '0.0002', 'epoch': '0.1875'}
+{'loss': '5.752', 'grad_norm': '1.533', 'learning_rate': '0.0002', 'epoch': '0.2031'}
+{'loss': '5.815', 'grad_norm': '1.847', 'learning_rate': '0.0002', 'epoch': '0.2188'}
+{'loss': '5.706', 'grad_norm': '2.392', 'learning_rate': '0.0002', 'epoch': '0.2344'}
+{'loss': '5.697', 'grad_norm': '1.826', 'learning_rate': '0.0002', 'epoch': '0.25'}
+{'loss': '5.635', 'grad_norm': '2.036', 'learning_rate': '0.0002', 'epoch': '0.2656'}
+{'loss': '5.602', 'grad_norm': '2.228', 'learning_rate': '0.0002', 'epoch': '0.2812'}
+{'loss': '5.653', 'grad_norm': '1.972', 'learning_rate': '0.0002', 'epoch': '0.2969'}
+{'loss': '5.613', 'grad_norm': '2.275', 'learning_rate': '0.0002', 'epoch': '0.3125'}
+{'loss': '5.572', 'grad_norm': '2.287', 'learning_rate': '0.0002', 'epoch': '0.3281'}
+{'loss': '5.487', 'grad_norm': '2.824', 'learning_rate': '0.0002', 'epoch': '0.3438'}
+{'loss': '5.539', 'grad_norm': '2.394', 'learning_rate': '0.0002', 'epoch': '0.3594'}
+{'loss': '5.458', 'grad_norm': '2.223', 'learning_rate': '0.0002', 'epoch': '0.375'}
+{'loss': '5.483', 'grad_norm': '2.405', 'learning_rate': '0.0002', 'epoch': '0.3906'}
+{'loss': '5.429', 'grad_norm': '2.552', 'learning_rate': '0.0002', 'epoch': '0.4062'}
+{'loss': '5.412', 'grad_norm': '2.719', 'learning_rate': '0.0002', 'epoch': '0.4219'}
+{'loss': '5.371', 'grad_norm': '2.75', 'learning_rate': '0.0002', 'epoch': '0.4375'}
+{'loss': '5.378', 'grad_norm': '2.977', 'learning_rate': '0.0002', 'epoch': '0.4531'}
+{'loss': '5.379', 'grad_norm': '2.991', 'learning_rate': '0.0002', 'epoch': '0.4688'}
+{'loss': '5.391', 'grad_norm': '3.222', 'learning_rate': '0.0002', 'epoch': '0.4844'}
+{'loss': '5.346', 'grad_norm': '2.839', 'learning_rate': '0.0002', 'epoch': '0.5'}
+{'loss': '5.4', 'grad_norm': '2.914', 'learning_rate': '0.0002', 'epoch': '0.5156'}
+{'loss': '5.347', 'grad_norm': '3.191', 'learning_rate': '0.0002', 'epoch': '0.5312'}
+{'loss': '5.366', 'grad_norm': '3.255', 'learning_rate': '0.0002', 'epoch': '0.5469'}
+{'loss': '5.301', 'grad_norm': '2.932', 'learning_rate': '0.0002', 'epoch': '0.5625'}
+{'loss': '5.321', 'grad_norm': '2.931', 'learning_rate': '0.0002', 'epoch': '0.5781'}
+{'loss': '5.292', 'grad_norm': '2.845', 'learning_rate': '0.0002', 'epoch': '0.5938'}
+{'loss': '5.315', 'grad_norm': '2.463', 'learning_rate': '0.0002', 'epoch': '0.6094'}
+{'loss': '5.35', 'grad_norm': '2.734', 'learning_rate': '0.0002', 'epoch': '0.625'}
+{'loss': '5.328', 'grad_norm': '3.11', 'learning_rate': '0.0002', 'epoch': '0.6406'}
+{'loss': '5.293', 'grad_norm': '2.898', 'learning_rate': '0.0002', 'epoch': '0.6562'}
+{'loss': '5.29', 'grad_norm': '2.815', 'learning_rate': '0.0002', 'epoch': '0.6719'}
+{'loss': '5.273', 'grad_norm': '3.178', 'learning_rate': '0.0002', 'epoch': '0.6875'}
+{'loss': '5.283', 'grad_norm': '3.153', 'learning_rate': '0.0002', 'epoch': '0.7031'}
+{'loss': '5.334', 'grad_norm': '3.269', 'learning_rate': '0.0002', 'epoch': '0.7188'}
+{'loss': '5.29', 'grad_norm': '2.763', 'learning_rate': '0.0002', 'epoch': '0.7344'}
+{'loss': '5.281', 'grad_norm': '3.066', 'learning_rate': '0.0002', 'epoch': '0.75'}
+{'loss': '5.272', 'grad_norm': '2.858', 'learning_rate': '0.0002', 'epoch': '0.7656'}
+{'loss': '5.235', 'grad_norm': '3.057', 'learning_rate': '0.0002', 'epoch': '0.7812'}
+{'loss': '5.29', 'grad_norm': '3.162', 'learning_rate': '0.0002', 'epoch': '0.7969'}
+{'loss': '5.32', 'grad_norm': '3.053', 'learning_rate': '0.0002', 'epoch': '0.8125'}
+{'loss': '5.284', 'grad_norm': '2.721', 'learning_rate': '0.0002', 'epoch': '0.8281'}
+{'loss': '5.291', 'grad_norm': '2.776', 'learning_rate': '0.0002', 'epoch': '0.8438'}
+{'loss': '5.281', 'grad_norm': '2.628', 'learning_rate': '0.0002', 'epoch': '0.8594'}
+{'loss': '5.236', 'grad_norm': '3.198', 'learning_rate': '0.0002', 'epoch': '0.875'}
+{'loss': '5.25', 'grad_norm': '2.582', 'learning_rate': '0.0002', 'epoch': '0.8906'}
+{'loss': '5.26', 'grad_norm': '3.073', 'learning_rate': '0.0002', 'epoch': '0.9062'}
+{'loss': '5.282', 'grad_norm': '3.277', 'learning_rate': '0.0002', 'epoch': '0.9219'}
+{'loss': '5.227', 'grad_norm': '2.627', 'learning_rate': '0.0002', 'epoch': '0.9375'}
+{'loss': '5.258', 'grad_norm': '2.624', 'learning_rate': '0.0002', 'epoch': '0.9531'}
+{'loss': '5.241', 'grad_norm': '2.781', 'learning_rate': '0.0002', 'epoch': '0.9688'}
+{'loss': '5.243', 'grad_norm': '2.936', 'learning_rate': '0.0002', 'epoch': '0.9844'}
+{'loss': '5.28', 'grad_norm': '2.606', 'learning_rate': '0.0002', 'epoch': '1'}
+{'loss': '5.244', 'grad_norm': '2.769', 'learning_rate': '0.0002', 'epoch': '1.016'}
+{'loss': '5.245', 'grad_norm': '2.992', 'learning_rate': '0.0002', 'epoch': '1.031'}
+{'loss': '5.234', 'grad_norm': '2.952', 'learning_rate': '0.0002', 'epoch': '1.047'}
+{'loss': '5.256', 'grad_norm': '2.637', 'learning_rate': '0.0002', 'epoch': '1.062'}
+{'loss': '5.258', 'grad_norm': '2.875', 'learning_rate': '0.0002', 'epoch': '1.078'}
+{'loss': '5.231', 'grad_norm': '2.68', 'learning_rate': '0.0002', 'epoch': '1.094'}
+{'loss': '5.216', 'grad_norm': '3.131', 'learning_rate': '0.0002', 'epoch': '1.109'}
+{'loss': '5.256', 'grad_norm': '2.594', 'learning_rate': '0.0002', 'epoch': '1.125'}
+{'loss': '5.206', 'grad_norm': '2.756', 'learning_rate': '0.0002', 'epoch': '1.141'}
+{'loss': '5.209', 'grad_norm': '2.567', 'learning_rate': '0.0002', 'epoch': '1.156'}
+{'loss': '5.248', 'grad_norm': '2.754', 'learning_rate': '0.0002', 'epoch': '1.172'}
+{'loss': '5.243', 'grad_norm': '2.885', 'learning_rate': '0.0002', 'epoch': '1.188'}
+{'loss': '5.225', 'grad_norm': '2.796', 'learning_rate': '0.0002', 'epoch': '1.203'}
+{'loss': '5.296', 'grad_norm': '3.173', 'learning_rate': '0.0002', 'epoch': '1.219'}
+{'loss': '5.216', 'grad_norm': '2.512', 'learning_rate': '0.0002', 'epoch': '1.234'}
+{'loss': '5.197', 'grad_norm': '2.872', 'learning_rate': '0.0002', 'epoch': '1.25'}
+{'loss': '5.243', 'grad_norm': '2.811', 'learning_rate': '0.0002', 'epoch': '1.266'}
+{'loss': '5.223', 'grad_norm': '2.437', 'learning_rate': '0.0002', 'epoch': '1.281'}
+{'loss': '5.235', 'grad_norm': '2.615', 'learning_rate': '0.0002', 'epoch': '1.297'}
+{'loss': '5.246', 'grad_norm': '2.98', 'learning_rate': '0.0002', 'epoch': '1.312'}
+{'loss': '5.244', 'grad_norm': '2.822', 'learning_rate': '0.0002', 'epoch': '1.328'}
+{'loss': '5.248', 'grad_norm': '3.038', 'learning_rate': '0.0002', 'epoch': '1.344'}
+{'loss': '5.247', 'grad_norm': '3.212', 'learning_rate': '0.0002', 'epoch': '1.359'}
+{'loss': '5.207', 'grad_norm': '2.434', 'learning_rate': '0.0002', 'epoch': '1.375'}
+{'loss': '5.22', 'grad_norm': '2.983', 'learning_rate': '0.0002', 'epoch': '1.391'}
+{'loss': '5.28', 'grad_norm': '3.075', 'learning_rate': '0.0002', 'epoch': '1.406'}
+{'loss': '5.249', 'grad_norm': '3.122', 'learning_rate': '0.0002', 'epoch': '1.422'}
+{'loss': '5.251', 'grad_norm': '2.749', 'learning_rate': '0.0002', 'epoch': '1.438'}
+{'loss': '5.234', 'grad_norm': '2.642', 'learning_rate': '0.0002', 'epoch': '1.453'}
+{'loss': '5.216', 'grad_norm': '2.75', 'learning_rate': '0.0002', 'epoch': '1.469'}
+{'loss': '5.238', 'grad_norm': '2.583', 'learning_rate': '0.0002', 'epoch': '1.484'}
+{'loss': '5.226', 'grad_norm': '2.596', 'learning_rate': '0.0002', 'epoch': '1.5'}
+{'loss': '5.204', 'grad_norm': '2.43', 'learning_rate': '0.0002', 'epoch': '1.516'}
+{'loss': '5.21', 'grad_norm': '2.645', 'learning_rate': '0.0002', 'epoch': '1.531'}
+{'loss': '5.243', 'grad_norm': '2.96', 'learning_rate': '0.0002', 'epoch': '1.547'}
+{'loss': '5.206', 'grad_norm': '2.338', 'learning_rate': '0.0002', 'epoch': '1.562'}
+{'loss': '5.233', 'grad_norm': '2.542', 'learning_rate': '0.0002', 'epoch': '1.578'}
+{'loss': '5.257', 'grad_norm': '2.563', 'learning_rate': '0.0002', 'epoch': '1.594'}
+{'loss': '5.237', 'grad_norm': '2.443', 'learning_rate': '0.0002', 'epoch': '1.609'}
+{'loss': '5.172', 'grad_norm': '2.419', 'learning_rate': '0.0002', 'epoch': '1.625'}
+{'loss': '5.227', 'grad_norm': '2.675', 'learning_rate': '0.0002', 'epoch': '1.641'}
+{'loss': '5.181', 'grad_norm': '2.654', 'learning_rate': '0.0002', 'epoch': '1.656'}
+{'loss': '5.244', 'grad_norm': '2.646', 'learning_rate': '0.0002', 'epoch': '1.672'}
+{'loss': '5.24', 'grad_norm': '2.642', 'learning_rate': '0.0002', 'epoch': '1.688'}
+{'loss': '5.226', 'grad_norm': '2.352', 'learning_rate': '0.0002', 'epoch': '1.703'}
+{'loss': '5.197', 'grad_norm': '2.573', 'learning_rate': '0.0002', 'epoch': '1.719'}
+{'loss': '5.215', 'grad_norm': '2.699', 'learning_rate': '0.0002', 'epoch': '1.734'}
+{'loss': '5.181', 'grad_norm': '2.792', 'learning_rate': '0.0002', 'epoch': '1.75'}
+{'loss': '5.225', 'grad_norm': '2.683', 'learning_rate': '0.0002', 'epoch': '1.766'}
+{'loss': '5.229', 'grad_norm': '2.82', 'learning_rate': '0.0002', 'epoch': '1.781'}
+{'loss': '5.252', 'grad_norm': '3.08', 'learning_rate': '0.0002', 'epoch': '1.797'}
+{'loss': '5.242', 'grad_norm': '2.563', 'learning_rate': '0.0002', 'epoch': '1.812'}
+{'loss': '5.219', 'grad_norm': '2.747', 'learning_rate': '0.0002', 'epoch': '1.828'}
+{'loss': '5.218', 'grad_norm': '2.734', 'learning_rate': '0.0002', 'epoch': '1.844'}
+{'loss': '5.231', 'grad_norm': '2.905', 'learning_rate': '0.0002', 'epoch': '1.859'}
+{'loss': '5.234', 'grad_norm': '2.808', 'learning_rate': '0.0002', 'epoch': '1.875'}
+{'loss': '5.228', 'grad_norm': '2.371', 'learning_rate': '0.0002', 'epoch': '1.891'}
+{'loss': '5.185', 'grad_norm': '2.639', 'learning_rate': '0.0002', 'epoch': '1.906'}
+{'loss': '5.225', 'grad_norm': '2.518', 'learning_rate': '0.0002', 'epoch': '1.922'}
+{'loss': '5.196', 'grad_norm': '2.515', 'learning_rate': '0.0002', 'epoch': '1.938'}
+{'loss': '5.217', 'grad_norm': '2.476', 'learning_rate': '0.0002', 'epoch': '1.953'}
+{'loss': '5.247', 'grad_norm': '2.487', 'learning_rate': '0.0002', 'epoch': '1.969'}
+{'loss': '5.191', 'grad_norm': '2.473', 'learning_rate': '0.0002', 'epoch': '1.984'}
+{'loss': '5.233', 'grad_norm': '2.631', 'learning_rate': '0.0002', 'epoch': '2'}
+{'train_runtime': '103.3', 'train_samples_per_second': '1.24', 'train_steps_per_second': '1.24', 'train_loss': '5.365', 'epoch': '2'}
+[2026-11-07 13:29:09,504] [INFO] [launch.py:285:main] Process 7859 exits successfully.

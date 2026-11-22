@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 _SOUP_YAML = (
     "base: hf-internal-testing/tiny-random-gpt2\n"
     "task: sft\n"
@@ -121,15 +123,21 @@ def _install_fake_modal(monkeypatch, volume: _FakeVolume) -> None:
     monkeypatch.setitem(sys.modules, "modal.volume", volume_mod)
 
 
-def _render(tmp_path: Path, vol_root: Path) -> str:
+def _render(
+    tmp_path: Path,
+    vol_root: Path,
+    output_dir: str | None = None,
+    windows_separators: bool = False,
+) -> str:
     from soup_cli.cloud.modal import render_modal_stub
 
     stub = render_modal_stub(
         _SOUP_YAML,
         gpu="a100",
-        output_dir=str(tmp_path / "local-out"),
+        output_dir=str(tmp_path / "local-out") if output_dir is None else output_dir,
         soup_version="0.75.0",
         run_name=_RUN,
+        windows_separators=windows_separators,
     )
     # Test-only relocation of the container paths onto the temp volume root.
     for old, new in (
@@ -217,13 +225,13 @@ def test_generated_app_downloads_outputs(tmp_path, monkeypatch, capsys, leading_
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    namespace = _exec_stub(_render(tmp_path, vol_root))
+    local = tmp_path / "local-out"
+    namespace = _exec_stub(_render(tmp_path, vol_root, local.as_posix()))
     assert volume.from_name_kwargs == {"name": "soup-outputs", "create_if_missing": True}
     assert namespace["train"].kwargs["volumes"] == {str(vol_root): volume}
 
     namespace["main"]()
 
-    local = tmp_path / "local-out"
     assert (local / "output" / "adapter_model.safetensors").read_bytes() == b"adapter-bytes"
     assert (local / "output" / "checkpoint-5" / "optimizer.pt").read_bytes() == (
         b"optimizer-bytes"
@@ -319,3 +327,195 @@ def test_download_refuses_escaping_entry(tmp_path, monkeypatch):
 
     assert not (tmp_path / "evil.txt").exists()
     assert not list(tmp_path.rglob("evil.txt"))
+
+
+# --- the retry hint is a command a person pastes: the output name is repeated as a name
+
+
+def _run_stub_and_capture(
+    tmp_path, monkeypatch, capsys, output_dir: str, windows_separators: bool = False
+) -> str:
+    """Run the rendered app against the fake volume (no files) and return its stdout."""
+    vol_root = tmp_path / "volume"
+    vol_root.mkdir(exist_ok=True)
+    volume = _FakeVolume(vol_root, leading_slash=False)
+    _install_fake_modal(monkeypatch, volume)
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, check, cwd: subprocess.CompletedProcess(argv, 0)
+    )
+    monkeypatch.chdir(tmp_path)
+    namespace = _exec_stub(_render(tmp_path, vol_root, output_dir, windows_separators))
+    namespace["main"]()
+    return strip_ansi(capsys.readouterr().out)
+
+
+def _retry_command_lines(out: str) -> list[str]:
+    return [line for line in out.splitlines() if "modal volume get" in line]
+
+
+@pytest.mark.parametrize(
+    ("output_dir", "pasted"),
+    [
+        ("./out", "./out"),
+        ("results/run 1", '"results/run 1"'),
+        ("out (v2)", '"out (v2)"'),
+        ("out;cmd", '"out;cmd"'),
+        ("out&next", '"out&next"'),
+        ("out|next", '"out|next"'),
+        ("out>X", '"out>X"'),
+        ("~/out", '"~/out"'),
+        ("-rf", "./-rf"),
+        ("--force", "./--force"),
+        ("результаты", "результаты"),
+        ("out$(cmd)", None),
+        ("out$HOME", None),
+        ("out`cmd`", None),
+        ('out"x', None),
+        ("out'; cmd; echo '", '"out\'; cmd; echo \'"'),
+        ('out"; cmd; echo "', None),
+        ("out%COMSPEC%", None),
+        ("out!x", None),
+        ("out\\dir", None),
+        ("out\x1b[2Jx", None),
+        ("out\u201cx", None),
+        ("out\u2013force", None),
+    ],
+)
+def test_retry_command_repeats_the_output_name_as_one_argument(
+    tmp_path, monkeypatch, capsys, output_dir, pasted
+):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, output_dir)
+
+    lines = _retry_command_lines(out)
+    if pasted is None:
+        assert not lines, out
+    else:
+        assert lines == [f"  modal volume get soup-outputs /{_RUN} {pasted} --force"]
+    # No raw escape character reaches the terminal, whatever the name holds.
+    assert "\x1b" not in out
+
+
+@pytest.mark.parametrize("output_dir", ["out$(cmd)", "out`cmd`", "out%COMSPEC%"])
+def test_a_name_left_out_of_the_command_is_shown_only_as_quoted_text(
+    tmp_path, monkeypatch, capsys, output_dir
+):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, output_dir)
+
+    shown = [line for line in out.splitlines() if output_dir in line]
+    assert shown, out
+    for line in shown:
+        assert "modal volume get" not in line, line
+        # The shown path is wrapped in single quotes (utils.paths.quote_path).
+        assert f"'{output_dir}" in line, line
+
+
+def test_retry_for_an_output_with_a_tab_is_prose(tmp_path, monkeypatch, capsys):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out\tweek 1")
+
+    assert not _retry_command_lines(out)
+    assert "volume get subcommand" in out
+    assert f"volume soup-outputs, remote path /{_RUN}" in out
+    assert "the local output path shown above" in out
+    assert "include --force" in out
+    assert "<local output directory>" not in out
+    assert "Retry the download with:" not in out
+
+
+def test_retry_paths_show_tabs_escaped(tmp_path, monkeypatch, capsys):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out\tweek 1")
+
+    assert r"to 'out\tweek 1'" in out
+    assert fr"The files land under 'out\tweek 1/{_RUN}'" in out
+
+
+def test_plain_name_prints_no_prose_note(tmp_path, monkeypatch, capsys):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "./out")
+
+    assert "volume get subcommand" not in out
+    assert "<local output directory>" not in out
+
+
+def test_download_still_writes_into_an_output_name_with_a_space(
+    tmp_path, monkeypatch, capsys
+):
+    vol_root = tmp_path / "volume"
+    vol_root.mkdir()
+    volume = _FakeVolume(vol_root, leading_slash=False)
+    _install_fake_modal(monkeypatch, volume)
+
+    def fake_run(argv, check, cwd):
+        out_dir = Path(cwd) / "output"
+        out_dir.mkdir(parents=True)
+        (out_dir / "adapter_model.safetensors").write_bytes(b"adapter-bytes")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    local = tmp_path / "my outputs"
+    namespace = _exec_stub(_render(tmp_path, vol_root, str(local)))
+
+    namespace["main"]()
+
+    assert (local / "output" / "adapter_model.safetensors").read_bytes() == b"adapter-bytes"
+    assert "Downloaded 1 file(s)" in strip_ansi(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize(
+    "output_dir",
+    [
+        "x'); marker_one(); ('",
+        'x"); marker_one(); ("',
+        "x' + marker_two() + '",
+        "x\\' ; marker_three = 1 ; '",
+    ],
+)
+def test_the_output_name_stays_data_in_the_rendered_source(output_dir):
+    from soup_cli.cloud.modal import render_modal_stub
+
+    stub = render_modal_stub(
+        _SOUP_YAML, gpu="a100", output_dir=output_dir, soup_version="0.75.0"
+    )
+    tree = ast.parse(stub)
+
+    # Whatever the name holds, it is one string literal in the source: no name taken
+    # from it is looked up, called or assigned.
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert not {name for name in names if name.startswith("marker_")}
+    (local_output,) = [
+        ast.literal_eval(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_LOCAL_OUTPUT"
+                for target in node.targets)
+    ]
+    assert local_output == output_dir
+
+
+@pytest.mark.parametrize(
+    ("output_dir", "windows_separators", "pasted"),
+    [
+        ("runs\\x", True, "runs/x"),
+        ("runs\\my x", True, '"runs/my x"'),
+        ("runs\\x", False, None),
+        ("runs\\$x", True, None),
+    ],
+)
+def test_a_backslash_path_is_repeated_with_forward_slashes_only_on_a_windows_host(
+    tmp_path, monkeypatch, capsys, output_dir, windows_separators, pasted
+):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, output_dir, windows_separators)
+
+    lines = _retry_command_lines(out)
+    if pasted is None:
+        assert not lines, out
+    else:
+        assert lines == [f"  modal volume get soup-outputs /{_RUN} {pasted} --force"]
+
+
+def test_the_shown_path_has_no_invisible_or_reordering_characters(
+    tmp_path, monkeypatch, capsys
+):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out\u202ex\u200by")
+
+    assert "\u202e" not in out
+    assert "\u200b" not in out
+    assert "'outxy'" in out

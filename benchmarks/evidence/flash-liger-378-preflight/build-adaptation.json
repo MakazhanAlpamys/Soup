@@ -1,0 +1,7 @@
+{
+  "reason": "Torch 2.14 headers require C++20 (std::strong_ordering); FlashAttention 2.8.3.post2 setup hardcodes C++17",
+  "sdist_sha256": "d0f9f0b08a986cdeadbffcf5ec8b3a8f514366c68ad1853d3ab061bc83cc340b",
+  "original_setup_sha256": "152570de3092218ebbb0969281b6e0f58fea62ec65fd6029c7a20ea6589aacf4",
+  "patched_setup_sha256": "8582c79a835e3ee501d017eedfe5a6fc2fa8f463194b27def0f7ddb58993c1e0",
+  "changes": "Only four -std=c++17 compiler arguments replaced by -std=c++20; kernel sources unchanged"
+}

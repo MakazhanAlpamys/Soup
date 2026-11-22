@@ -1,0 +1,41 @@
+{
+ "layers": {
+  "0": {
+   "equal": 26,
+   "different": [
+    "self_attn.o_proj.weight::absmax",
+    "self_attn.o_proj.weight::nested_absmax",
+    "self_attn.o_proj.weight::nested_offset",
+    "self_attn.q_proj.weight::absmax",
+    "self_attn.q_proj.weight::nested_absmax",
+    "self_attn.q_proj.weight::nested_offset"
+   ],
+   "missing": []
+  },
+  "31": {
+   "equal": 26,
+   "different": [
+    "mlp.gate_proj.weight::nested_absmax",
+    "mlp.gate_proj.weight::nested_offset",
+    "mlp.up_proj.weight::nested_absmax",
+    "mlp.up_proj.weight::nested_offset",
+    "self_attn.q_proj.weight::nested_absmax",
+    "self_attn.q_proj.weight::nested_offset"
+   ],
+   "missing": []
+  },
+  "63": {
+   "equal": 30,
+   "different": [
+    "self_attn.v_proj.weight::nested_absmax",
+    "self_attn.v_proj.weight::nested_offset"
+   ],
+   "missing": []
+  }
+ },
+ "all_equal": false,
+ "tensors_compared": 90,
+ "__nf4_code_equal": true,
+ "__nf4_nested_code_equal": true,
+ "final_norm_equal": true
+}

@@ -533,10 +533,14 @@ class RegistryStore:
         Returns ``None`` on miss. Raises :class:`AmbiguousRefError` when a
         prefix or a ``name:tag`` matches more than one entry.
         """
-        if not ref:
-            return None
-        if ref.startswith("registry://"):
+        if ref and ref.startswith("registry://"):
             ref = ref[len("registry://"):]
+        # Checked after the scheme is stripped: a bare ``registry://`` would
+        # otherwise reach the prefix lookup as "" and match every entry, so
+        # ``soup registry delete registry:// --yes`` deleted a lone entry (#2723).
+        # A whitespace-only remainder names nothing either.
+        if not ref or not ref.strip():
+            return None
 
         conn = self._get_conn()
 
@@ -660,7 +664,8 @@ class RegistryStore:
 
         Rejects self-references and indirect cycles (e.g. A→B→A) so BFS
         walks in :meth:`get_ancestors` and :meth:`get_descendants` always
-        terminate on a DAG.
+        terminate on a DAG. The reachability check and insert hold SQLite's
+        write lock, so a concurrent caller may wait up to SQLite's busy timeout.
         """
         if relation not in _VALID_RELATIONS:
             raise ValueError(
@@ -669,29 +674,34 @@ class RegistryStore:
             )
         if child_id == parent_id:
             raise ValueError("lineage cannot reference self")
-        if self.get(child_id) is None:
-            raise ValueError(f"child entry not found: {child_id}")
-        if self.get(parent_id) is None:
-            raise ValueError(f"parent entry not found: {parent_id}")
-        # Cycle check: if parent already has child as an ancestor, adding this
-        # edge would close a loop. Use an UNBOUNDED reachability walk — the old
-        # code walked get_ancestors(parent_id) whose max_depth=10 cap silently
-        # accepted a cycle-closing edge >10 hops away (the `soup loop watch`
-        # daemon builds long chains), corrupting the DAG.
-        if self._reaches_ancestor(parent_id, child_id):
-            raise ValueError(
-                "lineage would introduce a cycle "
-                f"({child_id} -> {parent_id} -> ... -> {child_id})"
-            )
-        now = datetime.now().isoformat()
         conn = self._get_conn()
-        conn.execute(
-            """INSERT OR IGNORE INTO registry_lineage
-               (child_id, parent_id, relation, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (child_id, parent_id, relation, now),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if self.get(child_id) is None:
+                raise ValueError(f"child entry not found: {child_id}")
+            if self.get(parent_id) is None:
+                raise ValueError(f"parent entry not found: {parent_id}")
+            # Cycle check: if parent already has child as an ancestor, adding this
+            # edge would close a loop. Use an UNBOUNDED reachability walk — the old
+            # code walked get_ancestors(parent_id) whose max_depth=10 cap silently
+            # accepted a cycle-closing edge >10 hops away (the `soup loop watch`
+            # daemon builds long chains), corrupting the DAG.
+            if self._reaches_ancestor(parent_id, child_id):
+                raise ValueError(
+                    "lineage would introduce a cycle "
+                    f"({child_id} -> {parent_id} -> ... -> {child_id})"
+                )
+            now = datetime.now().isoformat()
+            conn.execute(
+                """INSERT OR IGNORE INTO registry_lineage
+                   (child_id, parent_id, relation, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (child_id, parent_id, relation, now),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def get_ancestors(self, entry_id: str, *, max_depth: int = 10) -> list[dict]:
         """BFS walk upwards from entry_id across lineage parents."""
@@ -818,9 +828,13 @@ class RegistryStore:
             raise ValueError(f"run not found: {run_id}")
         status = run.get("status")
         if status != "completed":
-            raise ValueError(
-                f"run {run_id} has status {status!r}; only a completed run can be registered"
-            )
+            message = f"run {run_id} has status {status!r}; only a completed run can be registered"
+            if status == "stopped":
+                message += (
+                    ". Resume with soup train --resume <checkpoint> where supported "
+                    "(otherwise start a new run), then push the completed run ID."
+                )
+            raise ValueError(message)
 
         import json as _json
 

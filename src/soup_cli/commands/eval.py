@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -18,7 +19,8 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.run_provenance import warn_stopped_inputs
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -49,6 +51,29 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 
 
 # ─── soup eval benchmark ───
+
+
+def _resolve_run_id(run_id: Optional[str]) -> Optional[str]:
+    """Return the full id of the run ``run_id`` names, or ``None`` if it names none.
+
+    The tracker stores a row under the id it is given, so a prefix, or an id
+    that names no run at all, has to be resolved before the row is written
+    (#2742).  A missing or ambiguous run is refused with the wording the other
+    run-lookup commands use.
+    """
+    if not run_id:
+        return None
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+
+    tracker = ExperimentTracker()
+    try:
+        run = tracker.get_run(run_id)
+        if run is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
+            raise typer.Exit(1)
+        return run["run_id"]
+    finally:
+        tracker.close()
 
 
 @app.command()
@@ -87,6 +112,10 @@ def benchmark(
     ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     model_path = Path(model)
     if not model_path.exists():
         console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
@@ -108,6 +137,17 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
+            from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            if revision_kwargs:
+                revision = revision_kwargs["revision"]
+                model_arg = f"{model_arg},revision={revision}"
+                console.print(f"[dim]Base revision: {revision} (recorded run)[/]")
+            else:
+                console.print(
+                    "[dim]Base revision: unknown (legacy, local source or base override)[/]"
+                )
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
@@ -115,6 +155,7 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+    warn_stopped_inputs(model_path)
 
     if trust_remote_code:
         # Appended only from the resolved --trust-remote-code flag, never
@@ -150,7 +191,7 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, resolved_run_id)
     if not saved:
         console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
         raise typer.Exit(1)
@@ -207,9 +248,11 @@ def aider(
     from soup_cli.eval.aider_polyglot import (
         AiderEvalError,
         build_docker_command,
+        new_container_name,
         parse_aider_results,
         preflight_docker,
         prepare_output_dir,
+        remove_container,
         validate_exercises_dir,
         write_soup_result,
     )
@@ -217,19 +260,22 @@ def aider(
 
     tracker = None
     if run_id:
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
-        if tracker.get_run(run_id) is None:
-            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+        run_data = tracker.get_run(run_id)
+        if run_data is None:
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
             tracker.close()
             raise typer.Exit(1)
+        run_id = run_data["run_id"]
 
     try:
         output_dir = prepare_output_dir(output)
         corpus_dir = validate_exercises_dir(exercises_dir)
         corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
+        container_name = new_container_name()
         command = build_docker_command(
             docker=docker,
             image=image,
@@ -239,6 +285,7 @@ def aider(
             threads=threads,
             num_tests=num_tests,
             allow_host_services=allow_host_services,
+            container_name=container_name,
         )
     except AiderEvalError as exc:
         if tracker is not None:
@@ -280,7 +327,21 @@ def aider(
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
         raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
+        raise
     except OSError as exc:
         if tracker is not None:
             tracker.close()
@@ -367,6 +428,10 @@ def custom(
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
 
+    # Resolve the run before anything is loaded: a bad --run-id must not cost
+    # a model load (#2742).
+    resolved_run_id = _resolve_run_id(run_id)
+
     tasks_path = Path(tasks)
     model_path = Path(model)
 
@@ -405,6 +470,7 @@ def custom(
     results_list = []
     from soup_cli.eval.custom import _create_default_generator, score_task
 
+    warn_stopped_inputs(model_path)
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
         str(model_path), trust_remote_code=trust_remote_code,
@@ -432,7 +498,7 @@ def custom(
     _display_custom_results(eval_results)
 
     # Save to tracker
-    _save_custom_results(eval_results, str(model_path), run_id)
+    _save_custom_results(eval_results, str(model_path), resolved_run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
     # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
@@ -569,7 +635,8 @@ def judge(
             api_base=api_base,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        message = f"Cannot use rubric {rubric!r}: {exc}" if rubric else str(exc)
+        console.print(f"[red]{for_terminal(message)}[/]")
         raise typer.Exit(1)
 
     from rich.progress import (
@@ -801,18 +868,23 @@ def compare(
 ):
     """Compare eval results between two training runs."""
     from soup_cli.eval.leaderboard import compare_runs
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
 
-    # Verify runs exist
-    for rid in [run1, run2]:
+    resolved_ids: list[str] = []
+    for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]Run not found: {rid}[/]")
+            console.print(terminal_text(run_lookup_failure(tracker, rid, markup=False), "red"))
             raise typer.Exit(1)
+        resolved_ids.append(run_data["run_id"])
 
-    comparison = compare_runs(tracker, run1, run2)
+    try:
+        comparison = compare_runs(tracker, *resolved_ids)
+    except ValueError as exc:
+        console.print(terminal_text(exc, "red"))
+        raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
         console.print("[yellow]No eval results found for these runs.[/]")
@@ -820,7 +892,9 @@ def compare(
         raise typer.Exit(1)
 
     # Display comparison table
-    table = Table(title=f"Eval Comparison: {run1} vs {run2}")
+    table = Table(title=Text.assemble(
+        "Eval Comparison: ", terminal_text(run1), " vs ", terminal_text(run2),
+    ))
     table.add_column("Benchmark", style="bold")
     table.add_column("Run 1", justify="right")
     table.add_column("Run 2", justify="right")
@@ -846,15 +920,15 @@ def compare(
         else:
             delta_str = "-"
 
-        table.add_row(comp["benchmark"], score_a, score_b, delta_str)
+        table.add_row(terminal_text(comp["benchmark"]), score_a, score_b, delta_str)
 
     console.print(table)
 
     if comparison["has_regressions"]:
-        console.print(
-            f"\n[red bold]Regressions detected:[/] "
-            f"{', '.join(comparison['regressions'])}"
-        )
+        console.print(Text.assemble(
+            "\n", ("Regressions detected:", "red bold"), " ",
+            terminal_text(", ".join(comparison["regressions"])),
+        ))
 
 
 # ─── soup eval leaderboard ───
@@ -879,7 +953,11 @@ def leaderboard(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    lb = build_leaderboard_from_tracker(tracker)
+    try:
+        lb = build_leaderboard_from_tracker(tracker)
+    except ValueError as exc:
+        console.print(terminal_text(exc, "red"))
+        raise typer.Exit(1) from None
 
     if not lb.entries:
         console.print("[yellow]No eval results found.[/]")
@@ -909,11 +987,13 @@ def leaderboard(
     table.add_column("#", style="dim", width=3)
     table.add_column("Model", style="bold")
     for bench in benchmarks:
-        table.add_column(bench, justify="right")
+        table.add_column(terminal_text(bench), justify="right")
     table.add_column("Avg", justify="right", style="green")
 
     for rank, (model_name, scores, avg) in enumerate(sorted_models, 1):
-        row = [str(rank), _short_model_name(model_name)]
+        row: list[str | Text] = [
+            str(rank), terminal_text(_short_model_name(model_name, markup=False)),
+        ]
         for bench in benchmarks:
             if bench in scores:
                 row.append(f"{scores[bench]:.4f}")
@@ -959,20 +1039,23 @@ def human(
     try:
         prompts = load_prompts(Path(prompts_file))
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
+            console.print(terminal_text(f"Model not found: {mpath}", "red"))
             raise typer.Exit(1)
 
+    warn_stopped_inputs(model_a, model_b)
+
     console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {for_terminal(model_a)}\n"
-        f"Model B: {for_terminal(model_b)}",
+        Text.assemble(
+            ("Human Evaluation", "bold"),
+            f"\nPrompts: {len(prompts)}\nModel A: ", terminal_text(model_a),
+            "\nModel B: ", terminal_text(model_b),
+        ),
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -992,10 +1075,14 @@ def human(
         resp_b = gen_b(prompt_text)
 
         # Display for human judgment
-        console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
-        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
-        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
+        heading = console.render_str(
+            f"--- Prompt {idx + 1}/{len(prompts)} ---", markup=False, emoji=False,
+        )
+        heading.stylize_before("bold")
+        console.print(Text.assemble("\n", heading))
+        console.print(Panel(terminal_text(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(terminal_text(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(terminal_text(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1026,7 +1113,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
+    console.print(Text.assemble("\n", terminal_text(f"Results saved to {output}", "green")))
 
 
 # ─── Helper functions ───
@@ -1162,17 +1249,20 @@ def _save_custom_results(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    tracker.save_eval_result(
-        model_path=model_path,
-        benchmark=TASK_NAME,
-        score=eval_results.accuracy,
-        details={
-            "total": eval_results.total,
-            "correct": eval_results.correct,
-            "category_scores": eval_results.category_scores,
-        },
-        run_id=run_id,
-    )
+    try:
+        tracker.save_eval_result(
+            model_path=model_path,
+            benchmark=TASK_NAME,
+            score=eval_results.accuracy,
+            details={
+                "total": eval_results.total,
+                "correct": eval_results.correct,
+                "category_scores": eval_results.category_scores,
+            },
+            run_id=run_id,
+        )
+    finally:
+        tracker.close()
 
 
 def _display_judge_results(results: object) -> None:
@@ -1220,7 +1310,7 @@ def _display_elo_ratings(results: object) -> None:
         reverse=True,
     ):
         table.add_row(
-            _short_model_name(name),
+            terminal_text(_short_model_name(name, markup=False)),
             f"{rating.rating:.0f}",
             str(rating.wins),
             str(rating.losses),
@@ -1230,12 +1320,11 @@ def _display_elo_ratings(results: object) -> None:
     console.print(table)
 
 
-def _short_model_name(path: str) -> str:
-    """Shorten model path for display."""
+def _short_model_name(path: str, *, markup: bool = True) -> str:
+    """Shorten model path, optionally preparing it for Rich markup."""
     parts = Path(path).parts
-    if len(parts) > 2:
-        return for_terminal("/".join(parts[-2:]))
-    return for_terminal(path)
+    name = "/".join(parts[-2:]) if len(parts) > 2 else path
+    return for_terminal(name) if markup else name
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
@@ -1292,13 +1381,37 @@ def gate_cmd(
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    if write_baseline:
+        from soup_cli.utils.paths import check_report_output_path, quote_path, same_directory_entry
+
+        try:
+            check_report_output_path(write_baseline, "--write-baseline")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write --write-baseline:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
+
+        inputs = [("--suite", suite)]
+        for task in eval_suite.tasks:
+            if task.type == "custom" and task.tasks:
+                inputs.append((f"task {task.name!r} --tasks", task.tasks))
+            elif task.type == "judge" and task.prompts:
+                inputs.append((f"task {task.name!r} --prompts", task.prompts))
+        for field, input_path in inputs:
+            if same_directory_entry(write_baseline, input_path):
+                message = (
+                    f"--write-baseline {quote_path(write_baseline)} aliases "
+                    f"{field} {quote_path(input_path)}; choose a different --write-baseline"
+                )
+                console.print(f"[red]{for_terminal(message)}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR)
+
     try:
         baseline_scores = resolve_baseline(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot resolve baseline:[/] {exc}")
+        console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
@@ -1317,6 +1430,7 @@ def gate_cmd(
     else:
         from soup_cli.eval.quant_check import make_model_generator
 
+        warn_stopped_inputs(model)
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
@@ -1355,6 +1469,7 @@ def gate_cmd(
 
 @app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
+    ctx: typer.Context,
     before: str = typer.Option(
         ..., "--before",
         help="Before-quantization model path or registry://<id>",
@@ -1374,6 +1489,22 @@ def quant_check_cmd(
     allow_stub: bool = typer.Option(
         False, "--allow-stub",
         help="Allow deterministic stub generators if live model loading fails.",
+    ),
+    performance: bool = typer.Option(
+        False, "--performance",
+        help="Also measure generation latency, tokens/s and CUDA memory sequentially.",
+    ),
+    performance_warmup: int = typer.Option(
+        1, "--performance-warmup", min=0,
+        help="Unscored first-prompt warm-ups per model (requires --performance).",
+    ),
+    performance_repeats: int = typer.Option(
+        3, "--performance-repeats", min=1,
+        help="Measured greedy generations per task (requires --performance).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="Device for --performance: auto (default), cpu, cuda, cuda:<index> or mps.",
     ),
 ) -> None:
     """Compare accuracy before vs after quantization on the same eval suite.
@@ -1397,6 +1528,19 @@ def quant_check_cmd(
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    if performance and allow_stub:
+        console.print("[red]--performance cannot measure deterministic --allow-stub generators.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    from soup_cli.utils.typer_compat import ParameterSource
+
+    performance_options_supplied = any(
+        ctx.get_parameter_source(name) not in (None, ParameterSource.DEFAULT)
+        for name in ("device", "performance_warmup", "performance_repeats")
+    )
+    if not performance and performance_options_supplied:
+        console.print("[red]--device and performance budgets require --performance.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     resolved: dict[str, Optional[str]] = {}
     for label, ref in (("--before", before), ("--after", after)):
@@ -1463,50 +1607,74 @@ def quant_check_cmd(
         )
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    warn_stopped_inputs(before_path, after_path)
+
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
 
-    is_stub = False
+    if performance:
+        from soup_cli.eval.quant_check import run_performance_quant_check
+        from soup_cli.eval.quant_performance import resolve_performance_device
 
-    try:
-        before_gen = make_model_generator(resolved_before)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --before model ({resolved_before}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
+        try:
+            measured_device = resolve_performance_device(device or "auto")
+        except (ValueError, ImportError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        try:
+            result = run_performance_quant_check(
+                before_factory=lambda: make_model_generator(
+                    resolved_before, device=measured_device,
+                ),
+                after_factory=lambda: make_model_generator(resolved_after, device=measured_device),
+                tasks=pre_tasks, device=measured_device,
+                warmup=performance_warmup, repeats=performance_repeats,
             )
+        except (OSError, ValueError, ImportError, RuntimeError) as exc:
+            console.print(f"[red]Performance comparison failed: {for_terminal(str(exc))}[/]")
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
-            )
-        before_gen = stub_generator("before")
-        is_stub = True
+    else:
+        is_stub = False
 
-    try:
-        after_gen = make_model_generator(resolved_after)
-    except (OSError, ValueError, ImportError) as exc:
-        if not allow_stub:
-            console.print(
-                f"[red]Failed to load --after model ({resolved_after}): {exc} "
-                "(pass --allow-stub to score with deterministic stubs instead)[/]"
-            )
-            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        if fmt != "json":
-            console.print(
-                f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
-            )
-        after_gen = stub_generator("after")
-        is_stub = True
+        try:
+            before_gen = make_model_generator(resolved_before)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --before model ({resolved_before}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
+                )
+            before_gen = stub_generator("before")
+            is_stub = True
 
-    result = run_quant_check(
-        before_gen=before_gen,
-        after_gen=after_gen,
-        tasks=pre_tasks,
-        stub=is_stub,
-    )
+        try:
+            after_gen = make_model_generator(resolved_after)
+        except (OSError, ValueError, ImportError) as exc:
+            if not allow_stub:
+                console.print(
+                    f"[red]Failed to load --after model ({resolved_after}): {exc} "
+                    "(pass --allow-stub to score with deterministic stubs instead)[/]"
+                )
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+            if fmt != "json":
+                console.print(
+                    f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
+                )
+            after_gen = stub_generator("after")
+            is_stub = True
+
+        result = run_quant_check(
+            before_gen=before_gen,
+            after_gen=after_gen,
+            tasks=pre_tasks,
+            stub=is_stub,
+        )
     rendered = render(result, fmt=fmt)
     if fmt == "table":
         console.print(rendered)
@@ -1514,7 +1682,10 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags, and disable
         # highlighting so JSON output is not polluted with ANSI escape codes.
-        console.print(rendered, markup=False, highlight=False)
+        if performance:
+            console.print(rendered, markup=False, highlight=False, soft_wrap=True)
+        else:
+            console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
@@ -1572,3 +1743,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register the retention-ledger subcommand (eval retention)
+from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
+
+_register_retention(app, console)

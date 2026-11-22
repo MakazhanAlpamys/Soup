@@ -239,9 +239,13 @@ def _drive_unlearn():
 
     config = _config_with("unlearn", data={"forget_set": "forget.jsonl"}, unlearn_method="simnpo")
     wrapper = UnlearnTrainerWrapper(config, device="cpu")
-    with patch(
-        "soup_cli.utils.live_eval.load_model_and_tokenizer",
-        return_value=(_model(), _tokenizer(), "cpu"),
+    with (
+        patch(
+            "soup_cli.utils.live_eval.load_model_and_tokenizer",
+            return_value=(_model(), _tokenizer(), "cpu"),
+        ),
+        # #2574: setup() reads the rows before any model loads.
+        patch("soup_cli.trainer.unlearn._load_unlearn_rows", return_value=[("p", "t")]),
     ):
         wrapper.setup()
 

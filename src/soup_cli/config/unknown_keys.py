@@ -93,6 +93,13 @@ _MAX_REPORTED_UNKNOWN_KEYS = 100
 _MAX_KEY_LEN = 256
 _MAX_SUGGESTIONS = 2
 
+#: Next step for an unknown key with no close field name to suggest.
+NO_SUGGESTION_REMEDY = (
+    "Check the spelling against the docs or a `soup init` template; a key from a newer "
+    "Soup needs an upgrade (`pip install -U soup-cli`)."
+)
+
+
 #: A key says "use X" for an alias only when it is a typo of that alias: one edit away
 #: as a whole string and word by word. Anything fuzzier is left to the "did you mean"
 #: ranking over the declared fields, because a near-looking name is often another
@@ -300,8 +307,9 @@ def format_unknown_keys(
     # the trailing sentence and the per-key verdict word.
     suffix = "Not applied." if include_deadline else "Refused."
     overflow = len(unknown) > _MAX_REPORTED_UNKNOWN_KEYS
+    reported = unknown[:_MAX_REPORTED_UNKNOWN_KEYS]
     lines = []
-    for item in unknown[:_MAX_REPORTED_UNKNOWN_KEYS]:
+    for item in reported:
         if item.note:
             lines.append(f"unknown config key '{item.path}' - {item.note} {suffix}")
         elif item.alias:
@@ -318,6 +326,10 @@ def format_unknown_keys(
             f"(report capped at {_MAX_REPORTED_UNKNOWN_KEYS} unknown keys; "
             "fix these and load again)"
         )
+    # A key with a note, an alias or a suggestion already says what to do; one
+    # without has only a verdict, so name the next step once for all of them.
+    if any(not (item.note or item.alias or item.suggestions) for item in reported):
+        lines.append(NO_SUGGESTION_REMEDY)
     if include_deadline and lines:
         lines.append(deadline_notice())
     return "\n".join(lines)

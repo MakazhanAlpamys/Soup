@@ -1,12 +1,15 @@
 """Tests for soup cost command."""
 
 import json
+import sys
+from types import ModuleType, SimpleNamespace
 
-from typer.testing import CliRunner
+import pytest
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner, strip_ansi
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 
 def test_cost_with_config_file(tmp_path):
@@ -48,7 +51,7 @@ def test_cost_json_output(tmp_path):
     )
     result = runner.invoke(app, ["cost", "--config", str(config_file), "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert isinstance(data, list)
     assert len(data) > 0
     assert "total_cost" in data[0]
@@ -116,6 +119,60 @@ def test_cost_warns_when_dataset_unreadable(tmp_path):
     result = runner.invoke(app, ["cost", "--config", str(config_file)])
     assert result.exit_code == 0
     assert "Could not read training dataset" in result.output
+
+
+@pytest.mark.parametrize("num_examples", [None, 100], ids=["missing-splits", "known-split"])
+@pytest.mark.parametrize("dataset_id", ["example/training-data", "teknium/OpenHermes-2.5"])
+def test_cost_with_hub_split_metadata(tmp_path, monkeypatch, num_examples, dataset_id):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLUMNS", "100")
+    config_file = tmp_path / "soup.yaml"
+    config_file.write_text(f"base: tiny\ndata:\n  train: {dataset_id}\n", encoding="utf-8")
+    splits = None if num_examples is None else {"train": SimpleNamespace(num_examples=num_examples)}
+
+    requested = []
+
+    def load_dataset_builder(path):
+        requested.append(path)
+        return SimpleNamespace(info=SimpleNamespace(splits=splits))
+
+    datasets = ModuleType("datasets")
+    datasets.load_dataset_builder = load_dataset_builder
+    monkeypatch.setitem(sys.modules, "datasets", datasets)
+
+    result = runner.invoke(app, ["cost", "--config", str(config_file), "--gpu", "H100"])
+
+    assert result.exit_code == 0, result.exception
+    assert requested == [dataset_id]
+    text = " ".join(strip_ansi(result.stdout).split())
+    assert "Training Cost Estimate" in text
+    assert ("using default of 10,000 examples" in text) == (num_examples is None)
+
+
+@pytest.mark.parametrize(
+    "path, exists",
+    [("missing.CSV", False), ("present.tsv", True), ("s3://bucket/dataset", False)],
+)
+def test_cost_does_not_query_hub_for_non_hub_inputs(tmp_path, monkeypatch, path, exists):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLUMNS", "100")
+    if exists:
+        (tmp_path / path).write_text("text\texample\n", encoding="utf-8")
+    config_file = tmp_path / "soup.yaml"
+    config_file.write_text(f"base: tiny\ndata:\n  train: {path}\n", encoding="utf-8")
+
+    def unexpected_hub_lookup(path):
+        pytest.fail(f"non-Hub input reached the Hub loader: {path}")
+
+    datasets = ModuleType("datasets")
+    datasets.load_dataset_builder = unexpected_hub_lookup
+    monkeypatch.setitem(sys.modules, "datasets", datasets)
+
+    result = runner.invoke(app, ["cost", "--config", str(config_file)])
+
+    assert result.exit_code == 0, result.exception
+    text = " ".join(strip_ansi(result.stdout).split())
+    assert "using default of 10,000 examples" in text
 
 
 def test_cost_shows_variance_disclaimer(tmp_path):

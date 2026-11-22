@@ -8,6 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from soup_cli.config.schema import MLX_TASKS
+
 TRAIN_EXTRA_ROOTS = (
     "torch",
     "datasets",
@@ -18,7 +22,10 @@ TRAIN_EXTRA_ROOTS = (
 )
 
 
-def test_mlx_cli_route_does_not_touch_transformers_training_stack(tmp_path: Path) -> None:
+@pytest.mark.parametrize("task", sorted(MLX_TASKS))
+def test_mlx_cli_route_does_not_touch_transformers_training_stack(
+    tmp_path: Path, task: str
+) -> None:
     """The real CLI must reach the MLX wrapper without importing ``[train]``.
 
     The two handled torch probes in ``utils.gpu`` are tracked separately by #423.
@@ -27,31 +34,34 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(tmp_path: Path
     without attempting datasets, TRL, PEFT, accelerate, or bitsandbytes.
     """
     data_path = tmp_path / "train.jsonl"
-    data_path.write_text(
-        json.dumps(
-            {
-                "messages": [
-                    {"role": "user", "content": "Say hi"},
-                    {"role": "assistant", "content": "Hi"},
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    if task in {"dpo", "orpo", "simpo"}:
+        row = {"prompt": "Say hi", "chosen": "Hi", "rejected": "Bye"}
+        data_format = "dpo"
+    elif task == "kto":
+        row = {"prompt": "Say hi", "completion": "Hi", "label": True}
+        data_format = "kto"
+    else:
+        row = {
+            "messages": [
+                {"role": "user", "content": "Say hi"},
+                {"role": "assistant", "content": "Hi"},
+            ]
+        }
+        data_format = "chatml"
+    data_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
     config_path = tmp_path / "soup.yaml"
     config_path.write_text(
         "base: mlx-community/tiny\n"
-        "task: sft\n"
+        f"task: {task}\n"
         "backend: mlx\n"
         "data:\n"
         f"  train: {json.dumps(str(data_path))}\n"
-        "  format: chatml\n"
+        f"  format: {data_format}\n"
         "  val_split: 0\n"
         "training:\n"
         "  epochs: 1\n"
         "  lr: 0.0002\n"
-        "  batch_size: 1\n"
+        f"  batch_size: {2 if task == 'kto' else 1}\n"
         "  quantization: none\n"
         f"output: {json.dumps(str(tmp_path / 'out'))}\n",
         encoding="utf-8",
@@ -66,6 +76,7 @@ from unittest.mock import patch
 
 blocked = []
 blocked_roots = {TRAIN_EXTRA_ROOTS!r}
+task = {task!r}
 
 class BlockTrainingStack(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -88,8 +99,16 @@ with patch('pathlib.Path.home', return_value=Path({str(tmp_path)!r})):
 payload = {{
     'exit_code': result.exit_code,
     'exception': str(result.exception) if result.exception else '',
+    'output': result.output,
     'blocked': blocked,
-    'sft_loaded': 'soup_cli.trainer.sft' in sys.modules,
+    'mlx_wrapper_loaded': f'soup_cli.trainer.mlx_{{task}}' in sys.modules,
+    'transformers_trainers_loaded': sorted(
+        name for name in sys.modules
+        if name in {{
+            'soup_cli.trainer.sft', 'soup_cli.trainer.dpo', 'soup_cli.trainer.orpo',
+            'soup_cli.trainer.simpo', 'soup_cli.trainer.kto', 'soup_cli.trainer.grpo',
+        }}
+    ),
 }}
 print('SOUP394|' + json.dumps(payload, sort_keys=True))
 """
@@ -110,7 +129,7 @@ print('SOUP394|' + json.dumps(payload, sort_keys=True))
     assert len(marked) == 1, (proc.stdout, proc.stderr)
     payload = json.loads(marked[0].removeprefix("SOUP394|"))
     assert payload["exit_code"] == 1
-    assert "MLX backend requires" in payload["exception"]
     assert set(payload["blocked"]) <= {"torch", "mlx"}
-    assert "mlx" in payload["blocked"]
-    assert payload["sft_loaded"] is False
+    assert "mlx" in payload["blocked"], payload["output"]
+    assert payload["mlx_wrapper_loaded"] is True, task
+    assert payload["transformers_trainers_loaded"] == [], task

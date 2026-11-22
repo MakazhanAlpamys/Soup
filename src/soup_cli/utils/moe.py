@@ -306,10 +306,13 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
 
 
 def _peft_config_converter():
-    """peft's private v4->v5 conversion, as ``(model, targets, excluded) -> parameters``.
+    """peft's private v4->v5 conversion, as ``(model, targets, excluded) -> targets``.
 
-    ``None`` where peft or that private path is not importable. The probe config is a
-    throwaway, so the conversion's in-place rewrite touches nothing the caller owns.
+    The answer is ``(parameters, modules)``: the ``target_parameters`` the conversion
+    made, and the module names it kept as module targets (it resolves a string to
+    leaf names first, so those are leaves). ``None`` where peft or that private
+    path is not importable. The probe config is a throwaway, so the conversion's
+    in-place rewrite touches nothing the caller owns.
     """
     try:
         from peft import LoraConfig
@@ -324,7 +327,12 @@ def _peft_config_converter():
             r=8, target_modules=target_modules, exclude_modules=list(exclude_modules) or None
         )
         convert_peft_config_for_transformers(probe, model, None)
-        return set(getattr(probe, "target_parameters", None) or ())
+        parameters = set(getattr(probe, "target_parameters", None) or ())
+        resolved = probe.target_modules
+        # A string the conversion left alone means it did not apply: there are no
+        # module targets to check. Anything else is the leaf-name set it kept.
+        modules = set(resolved) if isinstance(resolved, (set, list)) else set()
+        return parameters, modules
 
     return convert
 
@@ -347,17 +355,19 @@ def _peft_all_linear_expander():
     return expand
 
 
-def _peft_converted_parameters(model, target_modules, exclude_modules=()) -> Optional[set]:
-    """The ``target_parameters`` peft's v4->v5 conversion makes of these targets.
+def _peft_converted_targets(model, target_modules, exclude_modules=()) -> Optional[tuple]:
+    """What peft's v4->v5 conversion makes of these targets, as ``(parameters, modules)``.
 
-    Empty when the model has no plain-string ``model_type`` (a stub answers every
-    attribute, so peft's lookup would succeed against nothing real). ``None`` when
-    the answer is unknown: peft, or its private conversion, is not importable, or
-    the conversion raises.
+    ``parameters`` is the resulting ``target_parameters``; ``modules`` the module
+    names the conversion kept as module targets (leaf names; a regex or
+    ``all-linear`` it resolved). Empty sets when the model has no plain-string
+    ``model_type`` (a stub answers every attribute, so peft's lookup would succeed
+    against nothing real). ``None`` when the answer is unknown: peft, or its private
+    conversion, is not importable, or the conversion raises.
     """
     model_type = getattr(getattr(model, "config", None), "model_type", None)
     if not isinstance(model_type, str):
-        return set()
+        return set(), set()
     convert = _peft_config_converter()
     if convert is None:
         return None
@@ -371,6 +381,12 @@ def _peft_converted_parameters(model, target_modules, exclude_modules=()) -> Opt
         return convert(model, target_modules, exclude_modules)
     except Exception:  # noqa: BLE001 - a probe must never break the run
         return None
+
+
+def _peft_converted_parameters(model, target_modules, exclude_modules=()) -> Optional[set]:
+    """The ``target_parameters`` half of :func:`_peft_converted_targets`."""
+    converted = _peft_converted_targets(model, target_modules, exclude_modules)
+    return None if converted is None else converted[0]
 
 
 def _named_children(module) -> dict:
@@ -535,6 +551,20 @@ def _lands_on(produced, parameter_keys) -> bool:
     """
     return any(
         key == name or key.endswith(f".{name}") for key in parameter_keys for name in produced
+    )
+
+
+def _reaches_a_gate(kept_modules, gates) -> bool:
+    """Would these module targets, as peft matches them, adapt any of these gates?
+
+    peft's conversion can keep a target as a module name it then matches too
+    broadly (its own source carries a TODO about it): a leaf name such as ``gate``
+    reaches every module whose name ends with it, the routers included, and the
+    conversion's say-so overrides ``exclude_modules``. The same match peft makes
+    for a list entry: the name, or a ``.<name>`` suffix of it.
+    """
+    return any(
+        gate == name or gate.endswith(f".{name}") for gate in gates for name in kept_modules
     )
 
 
@@ -773,11 +803,13 @@ def _string_targets(model, tcfg, kind, target_modules, moe_targets):
     applied. On the families peft converts from the transformers-4 layout
     (qwen3_moe, deepseek_v3, ...) peft adds the router's v4 name to ``all-linear``
     whatever is excluded, and adapts the router weight as a ``target_parameters``
-    entry, which ``exclude_modules`` does not reach; a regex it resolves module by
-    module, skipping what is excluded, so a regex stays a string unless it reaches a
-    non-router whose leaf name is the router's (``gate``). With VeRA, whose
-    ``VeraConfig`` has no ``exclude_modules``, any exclusion means a list. So does
-    an unanswered question (peft's private helpers missing): fail closed.
+    entry, which ``exclude_modules`` does not reach; a peft that instead keeps the
+    router's v4 name as a module target (0.22+) matches it too broadly, so that
+    also means a list. A regex it resolves module by module, skipping what is
+    excluded, so a regex stays a string unless it reaches a non-router whose leaf
+    name is the router's (``gate``). With VeRA, whose ``VeraConfig`` has no
+    ``exclude_modules``, any exclusion means a list. So does an unanswered
+    question (peft's private helpers missing): fail closed.
     """
     if kind == "all-linear":
         kept = target_modules
@@ -799,8 +831,10 @@ def _string_targets(model, tcfg, kind, target_modules, moe_targets):
         if excluded:
             return _materialise(model, kind, target_modules, gates, moe_targets), gates, [], True
         return kept, gates, [], False
-    produced = _peft_converted_parameters(model, kept, excluded)
-    if produced is None or _lands_on(produced, _gate_parameter_keys(model, gates)):
+    converted = _peft_converted_targets(model, kept, excluded)
+    if converted is None or _lands_on(
+        converted[0], _gate_parameter_keys(model, gates)
+    ) or _reaches_a_gate(converted[1], gates):
         return _materialise(model, kind, target_modules, gates, moe_targets), gates, [], True
     return kept, gates, excluded, False
 
