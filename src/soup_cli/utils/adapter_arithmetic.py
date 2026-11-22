@@ -411,6 +411,27 @@ def _truncated_factors(delta: Any, rank: int) -> tuple[Any, Any]:
     return u[:, :k] * s[:k], vt[:k, :]
 
 
+def _truncated_lora_factors(lora_b: Any, lora_a: Any, rank: int) -> tuple[Any, Any]:
+    """:func:`_truncated_factors` of ``lora_b @ lora_a``, without forming that product.
+
+    ``lora_b`` is ``(out, r)`` and ``lora_a`` is ``(r, in)``, so their product has
+    rank at most ``r`` and its SVD can be read from the factors. With the reduced
+    QR ``lora_b = Qb Rb`` and ``lora_a.T = Qa Ra``, the delta is
+    ``Qb (Rb Ra^T) Qa^T``, and ``Qb`` and ``Qa`` have orthonormal columns. So the
+    SVD of the small core ``Rb Ra^T`` (at most ``r x r``) gives that of the delta:
+    ``B = Qb U_k S_k`` and ``A = V_k^T Qa^T``. The result is the same best
+    rank-``rank`` approximation (``A`` still has orthonormal rows), but memory
+    grows with ``(out + in) * r`` instead of ``out * in``: a wide projection is
+    never made dense.
+    """
+    import numpy as np
+
+    q_b, r_b = np.linalg.qr(lora_b)
+    q_a, r_a = np.linalg.qr(lora_a.T)
+    core_b, core_a = _truncated_factors(r_b @ r_a.T, rank)
+    return q_b @ core_b, core_a @ q_a.T
+
+
 def _detect_lora_rank(weights: Mapping[str, Any]) -> int | None:
     """Infer the LoRA rank of an adapter from its first ``lora_A`` tensor.
 
