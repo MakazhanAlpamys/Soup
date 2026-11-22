@@ -1769,7 +1769,9 @@ class TestInit:
         result, _ = _init(cwd)
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert not (cwd / ".soup-loops").exists()
+        # A plain init writes no version log, but it does create the adapters
+        # directory the loop deploys through (#3034): that is the only entry.
+        assert os.listdir(cwd / ".soup-loops") == ["adapters"]
         assert read_state().version_log_started is False
 
     def test_a_log_that_cannot_be_written_is_a_warning_and_the_loop_is_still_initialised(
