@@ -10,6 +10,7 @@ from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.formats import split_embedding_negatives
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -197,8 +198,7 @@ class EmbeddingTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             "bf16": _bf16,
             "fp16": _fp16,
             "report_to": self.report_to,
