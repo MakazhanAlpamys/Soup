@@ -690,6 +690,68 @@ class TestTheDirectoryTheRunWritesTo:
         assert targets.output_problem is not None
         assert _REFUSAL in targets.output_problem
 
+    @staticmethod
+    def _set_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"output": "~/models"},
+            {"output": "~", "experiment_name": "pilot"},
+            {"output": "~/models", "backend": "mlx"},
+        ],
+    )
+    def test_a_home_relative_output_is_judged_where_the_trainer_expands_it(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch, overrides: dict,
+    ) -> None:
+        self._set_home(monkeypatch, env.root / "home")
+        can = env.can(_config(**overrides))
+
+        with pytest.raises(ValueError, match=_REFUSAL) as excinfo:
+            run_can(can, yes=True)
+
+        assert "once a leading ~ is read as the home directory" in str(excinfo.value)
+        assert env.calls == []
+        assert env.leftovers() == []
+
+    def test_a_home_relative_output_is_refused_before_extraction(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._set_home(monkeypatch, env.root / "home")
+
+        def unexpected_extraction(*args: object, **kwargs: object) -> None:
+            pytest.fail("the output must be rejected before extraction")
+
+        monkeypatch.setattr(can_run, "extract_can", unexpected_extraction)
+        can = env.can(_config(output="~/models"))
+
+        with pytest.raises(ValueError, match=_REFUSAL):
+            run_can(can, yes=True)
+
+    def test_a_home_inside_the_working_directory_is_accepted(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._set_home(monkeypatch, env.work / "home")
+        can = env.can(_config(output="~/models"))
+
+        result = run_can(can, yes=True)
+
+        assert result.train_returncode == 0
+        assert len(env.calls) == 1
+
+    def test_preview_flags_a_home_relative_output(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._set_home(monkeypatch, env.root / "home")
+
+        targets = describe_can_targets({"output": "~/models"})
+
+        assert targets.output_problem is not None
+        assert _REFUSAL in targets.output_problem
+
 
 def _classify_output_outside(monkeypatch: pytest.MonkeyPatch, outside: Path) -> None:
     actual_is_under_cwd = can_run.is_under_cwd

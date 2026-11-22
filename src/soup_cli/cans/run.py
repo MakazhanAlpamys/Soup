@@ -130,16 +130,24 @@ def _output_problem(config: Mapping[str, Any]) -> Optional[str]:
         backend=config.get("backend", SoupConfig.model_fields["backend"].default),
         task=config.get("task", SoupConfig.model_fields["task"].default),
     )
-    if is_network_or_device_path(output) or is_network_or_device_path(directory):
+    # Transformers reads a leading "~" of the directory it is given as the home directory,
+    # so a trainer built on it writes its checkpoints there while Soup creates the literal
+    # name: both spellings have to stay under the working directory.
+    expanded = os.path.expanduser(directory)
+    destinations = (directory,) if expanded == directory else (directory, expanded)
+    if is_network_or_device_path(output) or any(
+        is_network_or_device_path(item) for item in destinations
+    ):
         return (
             f"this can's config sets {named}, which names a network share or a device, "
             f"and soup can run does not write training output there. {_OUTPUT_ADVICE}"
         )
-    if is_under_cwd(directory):
+    if all(is_under_cwd(item) for item in destinations):
         return None
+    home = "" if expanded == directory else " once a leading ~ is read as the home directory"
     return (
         f"this can's config sets {named}, which resolves outside the working directory "
-        f"({quote_path(os.getcwd())}), and soup can run does not write training output "
+        f"({quote_path(os.getcwd())}){home}, and soup can run does not write training output "
         f"there. {_OUTPUT_ADVICE}"
     )
 
