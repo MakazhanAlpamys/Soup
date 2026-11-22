@@ -507,7 +507,7 @@ soup data generate --prompt "..." --provider ollama --model llama3.1
 soup data generate --prompt "..." --ollama-model llama3.1  # shorthand
 
 # Generate via Anthropic Claude API (set ANTHROPIC_API_KEY env var)
-soup data generate --prompt "..." --provider anthropic --model claude-3-haiku-20240307
+soup data generate --prompt "..." --provider anthropic --model claude-haiku-5-5
 
 # Generate via local vLLM server
 soup data generate --prompt "..." --provider vllm --model meta-llama/Llama-3.1-8B-Instruct
