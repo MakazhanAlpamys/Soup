@@ -135,6 +135,19 @@ def test_delete_of_an_unknown_id_is_404_with_the_detail_of_get(db_path):
     assert _rows(db_path, "runs", _FIRST) == 1
 
 
+def test_delete_that_finds_the_run_but_removes_no_row_is_404(db_path, monkeypatch):
+    """A run that another request removes between the lookup and the delete."""
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    _add_run(db_path, _FIRST)
+    monkeypatch.setattr(ExperimentTracker, "delete_run", lambda self, run_id: False)
+
+    response = _client().delete(f"/api/runs/{_FIRST}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
