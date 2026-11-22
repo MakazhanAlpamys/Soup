@@ -94,7 +94,6 @@ def test_helper_refuses_invalid_category_before_generation(
     assert calls == {"generate": [], "judge": []}
 
 
-
 @pytest.mark.parametrize("row,field,kind", INVALID, ids=IDS)
 def test_helper_refuses_invalid_row_before_generation(
     row: object, field: str, kind: str, calls: dict[str, list],
