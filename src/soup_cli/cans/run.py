@@ -22,6 +22,7 @@ from soup_cli.cans.schema import DeployTarget, Manifest
 from soup_cli.cans.unpack import extract_can, inspect_can, read_config
 from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd, quote_path
 from soup_cli.utils.redaction import find_redacted_paths
+from soup_cli.utils.training_output import training_output_dir
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 _RUN_TIMEOUT_SECONDS = 60 * 60 * 24  # 24h max — generous; user kills with ^C
@@ -85,13 +86,12 @@ def _experiment_of(config: Mapping[str, Any]) -> object:
     return config.get("experiment_name")
 
 
-def _output_problem(output: object, experiment: object = None) -> Optional[str]:
+def _output_problem(config: Mapping[str, Any]) -> Optional[str]:
     """Why ``soup can run`` refuses this ``output``, or ``None`` when it accepts it.
 
-    ``soup train`` writes the checkpoints, logs and final model to ``output`` joined with
-    ``experiment_name`` (when the config sets one), resolved against the directory
-    ``soup can run`` was started in. A can runs inside the working directory: a run
-    directory that resolves outside it (an absolute path, ``..`` in either value, a
+    The trainer's output directory is resolved against the directory ``soup can run``
+    was started in. A can runs inside the working directory: a training directory
+    that resolves outside it (an absolute path, ``..`` in either value, a
     symlink, a Windows drive-relative spelling, a network share or a device) is refused.
     A network share or device path is judged as text, without being resolved: resolving it
     would already reach the host it names. Otherwise ``is_under_cwd`` resolves symlinks
@@ -99,6 +99,10 @@ def _output_problem(output: object, experiment: object = None) -> Optional[str]:
     config loader accepts a YAML ``!!binary`` value as text, so the value is judged here
     rather than left to the loader.
     """
+    from soup_cli.config.schema import SoupConfig
+
+    output = _output_of(config)
+    experiment = _experiment_of(config)
     if not isinstance(output, str):
         return (
             "this can's config sets output to a value that is not a text path "
@@ -120,7 +124,12 @@ def _output_problem(output: object, experiment: object = None) -> Optional[str]:
             f"this can's config sets {named}, which contains a NUL byte; soup can run "
             "needs a plain path under the working directory"
         )
-    directory = os.path.join(output, experiment) if experiment else output
+    directory = training_output_dir(
+        output,
+        experiment,
+        backend=config.get("backend", SoupConfig.model_fields["backend"].default),
+        task=config.get("task", SoupConfig.model_fields["task"].default),
+    )
     if is_network_or_device_path(output) or is_network_or_device_path(directory):
         return (
             f"this can's config sets {named}, which names a network share or a device, "
@@ -148,11 +157,11 @@ def _refuse_redacted(config: Mapping[str, Any]) -> None:
 
 
 def check_can_output(config: Mapping[str, Any]) -> None:
-    """Refuse a can whose config ``output`` resolves outside the working directory.
+    """Refuse a can whose training output resolves outside the working directory.
 
     Raises ``ValueError`` naming the value; see :func:`_output_problem`.
     """
-    problem = _output_problem(_output_of(config), _experiment_of(config))
+    problem = _output_problem(config)
     if problem is not None:
         raise ValueError(problem)
 
@@ -182,7 +191,7 @@ def describe_can_targets(config: Mapping[str, Any]) -> CanTargets:
         shown.append((_clip(text), outside))
     return CanTargets(
         output=_clip(output if isinstance(output, str) else repr(output)),
-        output_problem=_output_problem(output, experiment),
+        output_problem=_output_problem(config),
         data_train=tuple(shown),
         data_train_more=max(0, len(entries) - _MAX_SHOWN_DATA_ENTRIES),
         experiment=(

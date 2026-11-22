@@ -1,8 +1,7 @@
 """``soup can run`` keeps a can's training output under the working directory.
 
-``soup can run`` hands a can's ``config.yaml`` to ``soup train``, which writes its
-checkpoints, logs and final model to ``output`` (joined with ``experiment_name``), resolved
-against the directory the command was started in.
+``soup can run`` hands a can's ``config.yaml`` to ``soup train``, which resolves its
+trainer's output directory against the directory the command was started in.
 
 The contract: a can whose run directory resolves outside the working directory is refused
 with a named message; the confirmation panel shows ``output`` and ``data.train``;
@@ -525,9 +524,7 @@ class TestCommand:
 
 
 class TestTheDirectoryTheRunWritesTo:
-    """``soup train`` writes to ``output`` joined with ``experiment_name`` (every trainer
-    does ``Path(output) / experiment_name``), so that is the directory that has to stay
-    under the working directory."""
+    """The trainer's output directory must stay under the working directory."""
 
     @pytest.mark.parametrize(
         ("output", "experiment"),
@@ -608,6 +605,83 @@ class TestTheDirectoryTheRunWritesTo:
 
         assert env.calls == []
         assert env.leftovers() == []
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            {"backend": "mlx"},
+            {"backend": "mlx", "task": "preference", "training": {"preference_loss": "dpo"}},
+            {
+                "task": "unlearn",
+                "data": {"train": "data.jsonl", "forget_set": "forget.jsonl"},
+                "training": {"unlearn_method": "simnpo"},
+            },
+        ],
+    )
+    def test_root_writers_check_their_output_before_extraction(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch, route: dict[str, object],
+    ) -> None:
+        # Simulate a filesystem that classifies the two destinations differently.
+        _classify_output_outside(monkeypatch, Path("models"))
+
+        def unexpected_extraction(*args: object, **kwargs: object) -> None:
+            pytest.fail("the output must be rejected before extraction")
+
+        monkeypatch.setattr(can_run, "extract_can", unexpected_extraction)
+        can = env.can(_config(output="models", experiment_name="pilot", **route))
+
+        with pytest.raises(ValueError, match=_REFUSAL):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+        assert env.leftovers() == []
+
+    def test_root_writer_checks_the_extracted_config(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        can = env.can(_config(output="inside"))
+        _extract_with_config(
+            monkeypatch, _config(output="models", experiment_name="pilot", backend="mlx")
+        )
+        _classify_output_outside(monkeypatch, Path("models"))
+
+        with pytest.raises(ValueError, match=_REFUSAL):
+            run_can(can, yes=True)
+
+        assert env.calls == []
+        assert env.leftovers() == []
+
+    def test_root_writer_does_not_check_an_unused_experiment_directory(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _classify_output_outside(monkeypatch, Path("models") / "pilot")
+        can = env.can(_config(output="models", experiment_name="pilot", backend="mlx"))
+
+        result = run_can(can, yes=True)
+
+        assert result.train_returncode == 0
+        assert len(env.calls) == 1
+
+    def test_preview_checks_the_same_root_as_the_writer(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _classify_output_outside(monkeypatch, Path("models"))
+
+        targets = describe_can_targets({
+            "output": "models", "experiment_name": "pilot", "backend": "mlx",
+        })
+
+        assert targets.output_problem is not None
+        assert _REFUSAL in targets.output_problem
+
+
+def _classify_output_outside(monkeypatch: pytest.MonkeyPatch, outside: Path) -> None:
+    actual_is_under_cwd = can_run.is_under_cwd
+
+    def is_under_cwd(path: str | Path) -> bool:
+        return Path(path) != outside and actual_is_under_cwd(path)
+
+    monkeypatch.setattr(can_run, "is_under_cwd", is_under_cwd)
 
 
 class TestNetworkAndDevicePathsAreNotResolved:

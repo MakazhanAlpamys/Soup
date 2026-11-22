@@ -10,6 +10,7 @@ from soup_cli.utils.csm import validate_csm_config, validate_csm_dataset, valida
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 
 class CSMDataCollator:
@@ -200,9 +201,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
         self._batch_size = 1 if tcfg.batch_size == "auto" else tcfg.batch_size
         if tcfg.batch_size == "auto":
             console.print("[dim]Native CSM: batch_size=auto uses a conservative batch of 1.[/]")
-        output = Path(cfg.output)
-        if cfg.experiment_name:
-            output /= cfg.experiment_name
+        output = Path(training_output_dir(cfg.output, cfg.experiment_name))
         self._output_dir = str(output)
         # MPS evidence/limits: docs/training.md#native-sesame-csm (one tiny-model LoRA step).
         bf16, fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
