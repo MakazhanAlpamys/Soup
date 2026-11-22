@@ -1,0 +1,68 @@
+[
+  {
+    "arm": "dense",
+    "reference": "run-01-dense",
+    "repeat": "run-04-dense",
+    "first_step_gradients": {
+      "max_absolute_error": 0.000244140625,
+      "relative_l2_error": 0.004308626329152657,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.0033927067953528588
+  },
+  {
+    "arm": "dense",
+    "reference": "run-01-dense",
+    "repeat": "run-06-dense",
+    "first_step_gradients": {
+      "max_absolute_error": 0.0003204345703125,
+      "relative_l2_error": 0.004206151358809576,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.002299314538857733
+  },
+  {
+    "arm": "dense",
+    "reference": "run-01-dense",
+    "repeat": "run-07-dense",
+    "first_step_gradients": {
+      "max_absolute_error": 0.000244140625,
+      "relative_l2_error": 0.003983732589887887,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.003035137581481893
+  },
+  {
+    "arm": "chunked",
+    "reference": "run-02-chunked",
+    "repeat": "run-03-chunked",
+    "first_step_gradients": {
+      "max_absolute_error": 0.000244140625,
+      "relative_l2_error": 0.00340228669565838,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.0023498426468777926
+  },
+  {
+    "arm": "chunked",
+    "reference": "run-02-chunked",
+    "repeat": "run-05-chunked",
+    "first_step_gradients": {
+      "max_absolute_error": 0.0002593994140625,
+      "relative_l2_error": 0.003298152722159545,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.0026516069919426326
+  },
+  {
+    "arm": "chunked",
+    "reference": "run-02-chunked",
+    "repeat": "run-08-chunked",
+    "first_step_gradients": {
+      "max_absolute_error": 0.000244140625,
+      "relative_l2_error": 0.0036037929334271743,
+      "elements": 540672
+    },
+    "max_relative_loss_difference": 0.0028175914981330196
+  }
+]

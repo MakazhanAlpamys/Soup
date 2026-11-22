@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
 import sys
 import types
 from collections.abc import Callable, Mapping
@@ -482,13 +483,21 @@ def plan_lambda_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_lambda_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
-    """Build a Lambda controller plan from a cwd-contained config."""
+    """Build a Lambda controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed. The caller passes the *effective*
+    config (the loaded object with every CLI override applied), not the file's
+    text, so the remote run trains what the local run said it would (#1430).
+    Reading ``config_path`` remains the fallback for a direct caller.
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_LAMBDA_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_LAMBDA_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
@@ -511,7 +520,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python -I {stub_path}",
+        run_command=f"python -I {shlex.quote(stub_path)}",
     )
 
 

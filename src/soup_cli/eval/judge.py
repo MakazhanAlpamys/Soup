@@ -9,9 +9,20 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Protocol
+from statistics import mean
+from typing import TYPE_CHECKING, Optional, Protocol, Sequence
 from urllib.parse import urlparse
+
+from soup_cli.eval.judge_templates import (
+    JUDGE_SCORE_PREFERENCE,
+    JUDGE_SCORE_REFERENCE,
+    PAIRWISE_PREFERENCE,
+    PAIRWISE_REFERENCE,
+    reference_fence,
+)
+from soup_cli.utils.redaction import redact_url
 
 if TYPE_CHECKING:
     from trl import BasePairwiseJudge
@@ -30,15 +41,8 @@ _sleep = time.sleep  # patched by tests
 
 def _redact_url(url: str) -> str:
     """``url`` without userinfo, query or fragment, safe to print and log."""
-    from urllib.parse import urlsplit, urlunsplit
-
     try:
-        parts = urlsplit(str(url))
-        host = parts.hostname or ""
-        if ":" in host:
-            host = f"[{host}]"
-        netloc = host + (f":{parts.port}" if parts.port else "")
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+        return redact_url(url)
     except ValueError:
         return "<unparseable judge url>"
 
@@ -132,6 +136,24 @@ class JudgeScore:
     category: str = "default"
 
 
+def _finite_mean(values: list[float]) -> float:
+    """Return a finite mean, raising ValueError for an unrepresentable result."""
+    try:
+        result = sum(values) / len(values)
+    except OverflowError:
+        result = math.inf
+    if math.isfinite(result):
+        return result
+
+    try:
+        result = float(mean(values))
+    except OverflowError:
+        raise ValueError("Judge average must be finite") from None
+    if not math.isfinite(result):
+        raise ValueError("Judge average must be finite")
+    return result
+
+
 @dataclass
 class JudgeResults:
     """Aggregated results from judge evaluation."""
@@ -147,16 +169,14 @@ class JudgeResults:
             return
 
         # Overall average
-        self.overall_score = (
-            sum(s.weighted_score for s in self.scores) / len(self.scores)
-        )
+        overall_score = _finite_mean([s.weighted_score for s in self.scores])
 
         # Per-category averages
         cats: dict[str, list[float]] = {}
         for score in self.scores:
             cats.setdefault(score.category, []).append(score.weighted_score)
-        self.category_scores = {
-            cat: sum(vals) / len(vals) for cat, vals in sorted(cats.items())
+        category_scores = {
+            cat: _finite_mean(vals) for cat, vals in sorted(cats.items())
         }
 
         # Per-criteria averages
@@ -164,10 +184,13 @@ class JudgeResults:
         for score in self.scores:
             for crit, val in score.scores.items():
                 all_criteria.setdefault(crit, []).append(val)
-        self.criteria_averages = {
-            crit: sum(vals) / len(vals)
+        criteria_averages = {
+            crit: _finite_mean(vals)
             for crit, vals in sorted(all_criteria.items())
         }
+        self.overall_score = overall_score
+        self.category_scores = category_scores
+        self.criteria_averages = criteria_averages
 
 
 def load_rubric(path: Path) -> dict:
@@ -190,6 +213,7 @@ def load_rubric(path: Path) -> dict:
     if not isinstance(rubric["criteria"], list) or not rubric["criteria"]:
         raise ValueError("Rubric 'criteria' must be a non-empty list")
 
+    seen_names: dict[str, int] = {}
     for idx, crit in enumerate(rubric["criteria"]):
         if not isinstance(crit, dict):
             raise ValueError(f"Criterion {idx} must be a mapping")
@@ -197,6 +221,11 @@ def load_rubric(path: Path) -> dict:
             raise ValueError(
                 f"Criterion {idx} must have 'name' and 'description'"
             )
+        name = crit["name"]
+        key = str(name).strip().lower()
+        if key in seen_names:
+            raise ValueError(f"Criterion {idx} ({name!r}) duplicates criterion {seen_names[key]}")
+        seen_names[key] = idx
 
     return rubric
 
@@ -236,8 +265,14 @@ def _build_judge_prompt(
     prompt: str,
     response: str,
     rubric: dict,
+    reference: Optional[str] = None,
 ) -> str:
-    """Build the judge evaluation prompt."""
+    """Build the judge evaluation prompt.
+
+    Without ``reference`` this is the ``judge_score.preference`` template, the
+    pre-#2520 prompt byte for byte. With one it is ``judge_score.reference``,
+    which shows the task's expected answer to the judge as fenced data.
+    """
     criteria_text = "\n".join(
         f"- **{c['name']}**: {c['description']}"
         for c in rubric["criteria"]
@@ -247,18 +282,17 @@ def _build_judge_prompt(
     scale_min = scale.get("min", 1)
     scale_max = scale.get("max", 5)
 
-    return (
-        "You are an expert evaluator. Score the following response based on "
-        "the criteria below.\n\n"
-        f"## Criteria\n{criteria_text}\n\n"
-        f"## Scale\nScore each criterion from {scale_min} to {scale_max}.\n\n"
-        f"## Prompt\n{prompt}\n\n"
-        f"## Response\n{response}\n\n"
-        "## Instructions\n"
-        "Return a JSON object with:\n"
-        '- "scores": {criterion_name: score, ...}\n'
-        '- "reasoning": brief explanation\n\n'
-        "Return ONLY the JSON object, no other text."
+    fields: dict[str, object] = {
+        "criteria": criteria_text,
+        "scale_min": scale_min,
+        "scale_max": scale_max,
+        "prompt": prompt,
+        "response": response,
+    }
+    if reference is None:
+        return JUDGE_SCORE_PREFERENCE.render(**fields)
+    return JUDGE_SCORE_REFERENCE.render(
+        **fields, reference=reference, fence=reference_fence(reference)
     )
 
 
@@ -364,16 +398,59 @@ def _parse_judge_response(
     return validated_scores, reasoning
 
 
+def _require_finite_weights(rubric: dict) -> None:
+    """Reject invalid weights before the weighted evaluator sends a request."""
+    for index, criterion in enumerate(rubric["criteria"]):
+        weight = criterion.get("weight", 1.0)
+        # Integers stay finite even when conversion to a float would overflow.
+        if isinstance(weight, int):
+            continue
+        try:
+            finite = math.isfinite(weight)
+        except (TypeError, ValueError, OverflowError):
+            finite = False
+        if not finite:
+            raise ValueError(
+                f"Criterion {index} ({criterion.get('name')!r}) weight {weight!r} "
+                "is not a finite number. Use a number such as 1.0."
+            )
+
+
 def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
     """Compute weighted average score from criteria scores."""
+    _require_finite_weights(rubric)
+    inputs = [
+        (scores.get(crit["name"], 0.0), crit.get("weight", 1.0))
+        for crit in rubric["criteria"]
+    ]
+    for val, _ in inputs:
+        if not isinstance(val, int) and not math.isfinite(val):
+            raise ValueError("Weighted judge score must be finite")
     total_weight = 0.0
     weighted_sum = 0.0
-    for crit in rubric["criteria"]:
-        weight = crit.get("weight", 1.0)
-        val = scores.get(crit["name"], 0.0)
-        weighted_sum += val * weight
-        total_weight += weight
-    return weighted_sum / total_weight if total_weight > 0 else 0.0
+    try:
+        for val, weight in inputs:
+            weighted_sum += val * weight
+            total_weight += weight
+        result = weighted_sum / total_weight if total_weight > 0 else 0.0
+    except OverflowError:
+        result = math.nan
+    if (math.isfinite(weighted_sum) and math.isfinite(total_weight)
+            and math.isfinite(result)):
+        return result
+
+    # Preserve ordinary rounding; exact arithmetic is only the overflow fallback.
+    try:
+        weights = [Fraction(weight) for _, weight in inputs]
+        exact_total = sum(weights)
+        if exact_total <= 0:
+            return 0.0
+        exact_sum = sum(
+            Fraction(val) * weight for (val, _), weight in zip(inputs, weights)
+        )
+        return float(exact_sum / exact_total)
+    except OverflowError:
+        raise ValueError("Weighted judge score must be finite") from None
 
 
 class JudgeEvaluator:
@@ -399,6 +476,7 @@ class JudgeEvaluator:
         validate_judge_api_base(api_base)
 
         self.rubric = rubric or DEFAULT_RUBRIC
+        _require_finite_weights(self.rubric)
         self.provider = provider
         self.model = model
         self.api_base = api_base
@@ -413,9 +491,17 @@ class JudgeEvaluator:
         prompt: str,
         response: str,
         category: str = "default",
+        reference: Optional[str] = None,
     ) -> JudgeScore:
-        """Evaluate a single prompt-response pair."""
-        judge_prompt = _build_judge_prompt(prompt, response, self.rubric)
+        """Evaluate a single prompt-response pair.
+
+        ``reference`` (``soup ship --judge-reference``, #2520) is the task's
+        expected answer, shown to the judge; ``None`` keeps today's prompt.
+        """
+        _require_finite_weights(self.rubric)
+        judge_prompt = _build_judge_prompt(
+            prompt, response, self.rubric, reference=reference
+        )
         judge_response = self._call_llm(judge_prompt)
 
         scores, reasoning = _parse_judge_response(judge_response, self.rubric)
@@ -437,7 +523,8 @@ class JudgeEvaluator:
         """Evaluate a batch of prompt-response pairs.
 
         Args:
-            items: List of dicts with 'prompt', 'response', optional 'category'.
+            items: List of dicts with 'prompt', 'response', optional 'category'
+                and optional 'reference' (the expected answer, #2520).
 
         Returns:
             JudgeResults with aggregated scores.
@@ -446,10 +533,15 @@ class JudgeEvaluator:
         from soup_cli.utils.ship_progress import track
 
         for item in track(items, len(items)):
+            # ``reference=`` only when the item carries one, so an ``evaluate``
+            # override without that parameter keeps working (#2520).
+            reference = item.get("reference")
+            extra = {} if reference is None else {"reference": reference}
             score = self.evaluate(
                 prompt=item["prompt"],
                 response=item["response"],
                 category=item.get("category", "default"),
+                **extra,
             )
             judge_scores.append(score)
 
@@ -457,16 +549,31 @@ class JudgeEvaluator:
         results.compute()
         return results
 
-    def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int:
+    def compare_pair(
+        self,
+        prompt: str,
+        resp_a: str,
+        resp_b: str,
+        reference: Optional[str] = None,
+    ) -> int:
         """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / unparseable reply).
 
         A judge that cannot be reached raises :class:`JudgeUnavailableError`
         (#1447). A failed call is not a tie: scoring it as one turned a dead
         judge into a measured 0.5 win-rate and a DON'T SHIP verdict.
+
+        ``reference`` (#2520) selects the ``pairwise.reference`` template, which
+        shows the task's expected answer; ``None`` keeps ``pairwise.preference``.
         """
-        judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
-            prompt=prompt, resp_a=resp_a, resp_b=resp_b
-        )
+        if reference is None:
+            judge_prompt = PAIRWISE_PREFERENCE.render(
+                prompt=prompt, resp_a=resp_a, resp_b=resp_b
+            )
+        else:
+            judge_prompt = PAIRWISE_REFERENCE.render(
+                prompt=prompt, resp_a=resp_a, resp_b=resp_b,
+                reference=reference, fence=reference_fence(reference),
+            )
         return _parse_pairwise(self._call_llm(judge_prompt))
 
     def _call_llm(self, prompt: str, max_tokens: int = 1024) -> str:
@@ -600,18 +707,9 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
 # ---------------------------------------------------------------------------
 # Pairwise judging (v0.71.31) — shared by online-DPO + `soup ship --task-mode
 # pairwise`. `compare_pair` (above) issues one A/B judgment; the free functions
-# add swap-debiasing and a win-rate reduction.
+# add swap-debiasing and a win-rate reduction. The prompt texts live in
+# ``eval/judge_templates.py`` (#2520).
 # ---------------------------------------------------------------------------
-
-_PAIRWISE_INSTRUCTIONS = (
-    "You are comparing two AI responses to the same prompt.\n\n"
-    "## Prompt\n{prompt}\n\n"
-    "## Response A\n{resp_a}\n\n"
-    "## Response B\n{resp_b}\n\n"
-    "## Task\nWhich response is better overall (helpfulness, accuracy, "
-    "safety)? Reply with a JSON object: {{\"winner\": \"A\"}} or "
-    "{{\"winner\": \"B\"}}. Return ONLY the JSON object."
-)
 
 
 def _parse_pairwise(text: str) -> int:
@@ -643,6 +741,7 @@ def pairwise_compare(
     evaluator: "PairwiseJudge",
     *,
     swap: bool = True,
+    reference: Optional[str] = None,
 ) -> int:
     """Return 0 (A preferred), 1 (B preferred), or -1 (tie / disagreement).
 
@@ -653,11 +752,17 @@ def pairwise_compare(
     never trusted; a judge that cannot be reached raises instead (#1447). This
     doubles the judge calls per pair vs a one-shot random-flip; the stronger
     guarantee is intentional.
+
+    ``reference`` (#2520) is the task's expected answer. Both orders receive
+    the same one: only the two responses swap. It is passed as ``reference=``
+    only when set, so a ``compare_pair(prompt, resp_a, resp_b)`` judge keeps
+    working without it.
     """
-    first = evaluator.compare_pair(prompt, resp_a, resp_b)
+    extra = {} if reference is None else {"reference": reference}
+    first = evaluator.compare_pair(prompt, resp_a, resp_b, **extra)
     if not swap:
         return first
-    swapped = evaluator.compare_pair(prompt, resp_b, resp_a)
+    swapped = evaluator.compare_pair(prompt, resp_b, resp_a, **extra)
     # Translate the swapped verdict back into A/B space: 0 -> B(1), 1 -> A(0).
     if swapped == 0:
         second = 1
@@ -672,21 +777,36 @@ def pairwise_compare(
 
 
 def pairwise_winrate(
-    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+    pairs: "list[tuple[str, str, str]]",
+    evaluator: "PairwiseJudge",
+    *,
+    references: Optional[Sequence[str]] = None,
 ) -> float:
     """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
 
     Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
     (-1) scores 0.5, a loss (0) scores 0.0. Empty input -> 0.5 (no evidence).
+
+    ``references`` (#2520), when given, holds one expected answer per pair, in
+    the same order; ``references[i]`` goes with ``pairs[i]`` in both swap
+    orders. A list of another length is refused rather than misaligned.
     """
+    if references is not None and len(references) != len(pairs):
+        raise ValueError(
+            f"pairwise references: got {len(references)} for {len(pairs)} pairs; "
+            "each pair needs exactly one reference"
+        )
     if not pairs:
         return 0.5
     total = 0.0
     from soup_cli.utils.ship_progress import track
 
     for index, (prompt, base_resp, tuned_resp) in enumerate(track(pairs, len(pairs))):
+        reference = None if references is None else references[index]
         try:
-            verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+            verdict = pairwise_compare(
+                prompt, base_resp, tuned_resp, evaluator, swap=True, reference=reference
+            )
         except JudgeUnavailableError as exc:
             raise exc.for_rows(len(pairs) - index, len(pairs), "pairs") from exc
         if verdict == 1:

@@ -828,11 +828,12 @@ class TestGRPOCPUMinNewTokens:
 
 
 class TestPPOResumeCheckpoint:
-    """Test PPO _train_builtin skips resume_from_checkpoint for experimental API."""
+    """Test PPO _train_builtin and resume_from_checkpoint for the experimental API."""
 
-    def test_train_builtin_skips_resume_when_unsupported(self):
-        """_train_builtin should call train() without resume_from_checkpoint
-        when the trainer's .train() method doesn't accept it."""
+    def test_train_builtin_refuses_resume_when_unsupported(self):
+        """_train_builtin must refuse, not restart from scratch, when the trainer's
+        .train() method doesn't accept resume_from_checkpoint (it used to warn and
+        train again over the old progress; `tests/test_ppo_resume_refusal.py`)."""
         from unittest.mock import MagicMock
 
         from soup_cli.trainer.ppo import PPOTrainerWrapper
@@ -860,14 +861,16 @@ class TestPPOResumeCheckpoint:
         wrapper.trainer = mock_trainer
         wrapper.tokenizer = MagicMock()
 
-        result = wrapper._train_builtin(
-            display=None, tracker=None, run_id="",
-            resume_from_checkpoint="/tmp/ckpt",
-        )
+        from soup_cli.trainer.ppo import RESUME_REFUSAL
 
-        # Should call train() without resume_from_checkpoint
-        assert call_log == ["called"]
-        assert result["total_steps"] == 10
+        with pytest.raises(ValueError) as excinfo:
+            wrapper._train_builtin(
+                display=None, tracker=None, run_id="",
+                resume_from_checkpoint="/tmp/ckpt",
+            )
+
+        assert str(excinfo.value) == RESUME_REFUSAL
+        assert call_log == []
 
     def test_train_builtin_passes_resume_when_supported(self):
         """_train_builtin should pass resume_from_checkpoint when supported."""

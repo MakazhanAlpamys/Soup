@@ -185,6 +185,21 @@ def merge(
         )
         raise typer.Exit(1)
 
+    if (adapter_path / "added_tokens.safetensors").exists():
+        console.print(
+            "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+        )
+        raise typer.Exit(1)
+    try:
+        cfg_data = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+        if isinstance(cfg_data, dict) and cfg_data.get("vocab_expansion"):
+            console.print(
+                "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+            )
+            raise typer.Exit(1)
+    except (OSError, ValueError):
+        pass
+
     # --- Resolve base model ---
     if not base:
         base = _detect_base_model(adapter_config_path)
@@ -244,6 +259,15 @@ def merge(
             requires_remote_code=requires,
         )
 
+        # The merged checkpoint takes its tokenizer from the adapter directory.
+        # Load it before the base model and before anything is written, so an
+        # adapter directory without usable tokenizer files fails here instead of
+        # leaving merged weights with no tokenizer in --output.
+        console.print("[dim]Loading tokenizer from the adapter...[/]")
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(adapter_path), trust_remote_code=trc
+        )
+
         console.print(f"[dim]Loading base model: {for_terminal(base)}...[/]")
         from soup_cli.utils.run_provenance import recorded_base_kwargs
 
@@ -272,9 +296,6 @@ def merge(
             model.save_pretrained(str(output_path))
 
             console.print("[dim]Saving tokenizer...[/]")
-            tokenizer = AutoTokenizer.from_pretrained(
-                str(adapter_path), trust_remote_code=trc
-            )
             tokenizer.save_pretrained(str(output_path))
         else:
             # v0.53.1 #142 — 4bit / 4bit_forced merged checkpoint.
@@ -292,9 +313,6 @@ def merge(
                     f"[dim]Staging fp16 merge in {staged_path.name}...[/]"
                 )
                 model.save_pretrained(str(staged_path))
-                tokenizer = AutoTokenizer.from_pretrained(
-                    str(adapter_path), trust_remote_code=trc
-                )
                 tokenizer.save_pretrained(str(staged_path))
 
                 # Free the in-memory fp16 model before reloading 4bit
@@ -331,9 +349,14 @@ def _merge_low_memory(
     trust_remote_code: bool,
 ) -> None:
     try:
+        from soup_cli.utils.lowmem_merge import (  # noqa: I001
+            LowMemoryMergeError,
+            hub_snapshot_revision,
+            hub_support_patterns,
+            hub_weight_patterns,
+            merge_low_memory,
+        )
         from transformers import AutoTokenizer
-
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
@@ -360,14 +383,28 @@ def _merge_low_memory(
             from soup_cli.utils.hubs import snapshot_download
 
             console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
+            # #2856: the index and support files first, then the weights the local
+            # rule reads from them, both from one commit.
+            support = hub_support_patterns(trc)
+            revision = revision_kwargs.get("revision")
             base_dir = Path(
                 snapshot_download(
-                    base,
-                    cache_dir=None,
-                    allow_patterns=["*.safetensors", "*.json"],
-                    revision=revision_kwargs.get("revision"),
+                    base, cache_dir=None, allow_patterns=support, revision=revision
                 )
             )
+            revision = revision or hub_snapshot_revision(base_dir)
+            weights = hub_weight_patterns(base_dir)
+            if weights is not None:
+                allow_patterns, ignore_patterns = weights
+                base_dir = Path(
+                    snapshot_download(
+                        base,
+                        cache_dir=None,
+                        allow_patterns=[*allow_patterns, *support],
+                        ignore_patterns=ignore_patterns or None,
+                        revision=revision,
+                    )
+                )
 
         def save_tokenizer(staging: Path) -> None:
             console.print("[dim]Saving tokenizer...[/]")

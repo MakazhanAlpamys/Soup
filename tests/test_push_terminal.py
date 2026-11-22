@@ -1,6 +1,5 @@
 """soup push prints paths, repo ids and Hub errors as typed, not as Rich markup."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils import hf as hf_utils
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -23,7 +23,7 @@ def _wide_console(monkeypatch):
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
     ":warning:",
-    marks=pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name"),
+    marks=skip_colon_on_windows,
 )
 
 
@@ -170,9 +170,7 @@ def test_push_collection_failure_is_shown_as_typed(model_dir, monkeypatch):
         ("[bold]model\x9b\u202e", "[bold]model"),
         pytest.param(
             "model:warning:", "model:warning:",
-            marks=pytest.mark.skipif(
-                sys.platform == "win32", reason="':' is not valid in a Windows name"
-            ),
+            marks=skip_colon_on_windows,
         ),
     ],
 )

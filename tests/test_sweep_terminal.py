@@ -1,7 +1,6 @@
 """soup sweep prints config paths, parameters and run names as typed, not as Rich markup."""
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -32,7 +32,7 @@ output: ./o
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
     "demo:warning:",
-    marks=pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name"),
+    marks=skip_colon_on_windows,
 )
 NAMES = ["[red]cfg", "[/]cfg", COLON_NAME]
 

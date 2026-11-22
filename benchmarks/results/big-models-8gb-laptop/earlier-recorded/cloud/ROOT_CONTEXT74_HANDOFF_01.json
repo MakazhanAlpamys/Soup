@@ -1,0 +1,111 @@
+{
+  "schema": "root-context74-handoff-v1",
+  "recorded_at": "2026-11-06T01:03:45.943605+05:00",
+  "status": "passed",
+  "parent": {
+    "path": "ROOT_CONTEXT73_HANDOFF_01.json",
+    "sha256": "09966fa93a24008db3739a87aa1688d0bafdc70e2001d433b2055dbe3614f1b9"
+  },
+  "failed_prior": {
+    "path": "results/modal-l40s-strict-full88-sft-8192-01/verified-timeout.json",
+    "sha256": "35c5f5217813cad3ed89fb8094a97e589687ff4d761e67b46d90f19f231d05ee"
+  },
+  "launch": {
+    "path": "ROOT_CONTEXT74_RETRY_LAUNCH_02.json",
+    "sha256": "48651b98faba6fc76bcd278917ffde66d4b5d23ea6e4a1c905466d4c21b4a38c"
+  },
+  "verification": {
+    "path": "results/modal-l40s-strict-full88-sft-8192-02/verification.json",
+    "sha256": "291f5b5e0e4107dc772728b6832b22f63472a5e1f7017df0a07212ae3d9bd8ed"
+  },
+  "sources": [
+    {
+      "path": "decoder_sft74_v2.py",
+      "sha256": "480324d3522efc0769d29054b6511a95f86b7ad7416b7aae8871e1da86cc2fa4"
+    },
+    {
+      "path": "decoder_restore74_v2.py",
+      "sha256": "3eed389afdd5631e899ed200a11db7bf948985a9a6916f473a91352bb746fdc0"
+    },
+    {
+      "path": "modal_decoder74_v3.py",
+      "sha256": "1ff8010d4dbf68e8d990a644bd4b667e8cd094413172c299ee810c7697c0f388"
+    },
+    {
+      "path": "verify_context74.py",
+      "sha256": "601e277396178d7f64dd72cd5a85309f5caaf0f3b9e3f38ad537506d8e100597"
+    }
+  ],
+  "evidence_dir": "results/modal-l40s-strict-full88-sft-8192-02/evidence",
+  "result": {
+    "schema": "root-context74-independent-verification-v1",
+    "status": "passed",
+    "verified_at": "2026-11-06T01:03:31.459084+05:00",
+    "run_id": "l40s-strict-full88-sft8192-20261106-02",
+    "app": {
+      "app_id": "ap-<redacted>",
+      "description": "soup-stage74-full88-sft8192-v3",
+      "state": "stopped",
+      "tasks": "0",
+      "created_at": "2026-11-06 00:13:34+05:00",
+      "stopped_at": "2026-11-06 01:01:33+05:00"
+    },
+    "sequence": 8192,
+    "supervised_tokens": 124,
+    "forward_layers": 88,
+    "reverse_layers": 88,
+    "trainable_parameters": 26673152,
+    "loss": 0.8814825415611267,
+    "adamw_steps": 1,
+    "checkpoint": {
+      "state_bytes": 320486997,
+      "adapters_exact": 352,
+      "moments_exact": 704,
+      "steps_exact": 352,
+      "rng_exact": {
+        "cpu": true,
+        "cuda": true
+      }
+    },
+    "pids": {
+      "update": 1956,
+      "fresh_restore": 6629
+    },
+    "allocator": {
+      "cap_bytes": 6710886400,
+      "train": {
+        "peak_allocated": 3489752064,
+        "peak_reserved": 3902799872
+      },
+      "restore": {
+        "allocated": 0,
+        "reserved": 320864256,
+        "peak_allocated": 320077824,
+        "peak_reserved": 320864256
+      }
+    },
+    "device_samples": {
+      "count": 3050,
+      "peak_used_mib": 4323
+    },
+    "seconds": {
+      "source": 729.012633287,
+      "worker": 2128.523295229,
+      "restore": 6.560686078999879
+    },
+    "sha256": {
+      "summary.json": "8e522808d1fcb4d5ac98fff70ef290b8d52b2f6ac002759fc09330df63f15b28",
+      "source.log": "77ea69b8c9ff40b2fbcbebd03b8b2a8c748da4bf6e879eb00fa3f1d4c4241706",
+      "worker.log": "6814916bc028762bee739d31eb441b9da877db70b3b2986b458cacd6039ca15f",
+      "result.json": "1d2305a551ffead4b0ef321a17d3774165b2db31c1da680ba4cb98389b817e47",
+      "progress.jsonl": "6c7e7d3eea67cdfba6f5a5a9ebfd6da3573d0ec2e39102217ddf3eb5847e07f6",
+      "checkpoint-001/manifest.json": "a3988b6c13ea2c1dc46a022473efd4748aff9eec1393a77c94368b6b1fb95768",
+      "checkpoint-001/state.pt": "c54e6408892f6b2f3067f86a36260e531c36f9f8893e69dfe1687916c4600512",
+      "restore.log": "e009fffe991535ac5ac758774bb2f05186272c3f61e6a16381bef082c389d84e",
+      "restore-result.json": "e009fffe991535ac5ac758774bb2f05186272c3f61e6a16381bef082c389d84e",
+      "retrieval.json": "b1ec7c34424e18844145099431c80715f1aa4cd7e31fadef44ded8846650f551"
+    }
+  },
+  "scope_limit": "One AdamW LoRA update, training fixture only; no quality campaign or local laptop reproduction measured in this run.",
+  "next_experiment": "Verify exact continuation through a second full-depth update, then measure multi-step quality and runtime using an independently frozen public evaluation set."
+}

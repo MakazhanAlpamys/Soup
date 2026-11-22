@@ -109,10 +109,12 @@ def test_ambiguous_create_still_recovers_only_owned_pod(credentials, monkeypatch
                 if failure == "incomplete":
                     raise http.client.IncompleteRead(b"provider-secret")
                 return io.BytesIO(b"invalid json: provider-secret")
-            if path == "/pods":
-                return io.BytesIO(json.dumps([
-                    {"id": "owned", "name": run_name}, {"id": "other", "name": "other"},
-                ]).encode())
+            if path.startswith("/pods?"):
+                return io.BytesIO(json.dumps({
+                    "pods": [{"id": "owned", "name": run_name},
+                             {"id": "other", "name": "other"}],
+                    "pagination": {"nextCursor": None, "hasNextPage": False},
+                }).encode())
             if request.method == "DELETE":
                 return io.BytesIO(b"")
             raise urllib.error.HTTPError(request.full_url, 404, "absent", {}, None)
@@ -120,7 +122,7 @@ def test_ambiguous_create_still_recovers_only_owned_pod(credentials, monkeypatch
     monkeypatch.setattr(ns["urllib"].request, "build_opener", lambda *handlers: Opener())
     ns["_notice"] = notices.append
     assert ns["main"]() == 1
-    assert calls == [("POST", "/pods"), ("GET", "/pods"),
+    assert calls == [("POST", "/pods"), ("GET", "/pods?limit=100"),
                      ("DELETE", "/pods/owned"), ("GET", "/pods/owned")]
     assert "RunPod termination verified." in notices
     assert "provider-secret" not in str(notices)
@@ -287,7 +289,7 @@ def test_supported_public_keys_launch_secure_cloud(credentials, kind):
     ns["_train_and_copy"] = lambda *args: None
     assert ns["main"]() == 0
     assert len(payloads) == 1
-    assert payloads[0]["cloudType"] == "SECURE"
+    assert payloads[0]["cloud"] == "SECURE"
     assert payloads[0]["env"] == {"PUBLIC_KEY": f"ssh-{kind} AAAATEST fixture"}
 
 

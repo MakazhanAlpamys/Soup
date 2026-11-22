@@ -11,8 +11,6 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.terminal import for_terminal
-
 console = Console()
 
 _SEVERITY_COLOR = {"critical": "red", "warning": "yellow", "info": "cyan"}
@@ -29,7 +27,7 @@ def why(
     Heuristic — looks at the SQLite-stored metric series and config and
     surfaces common pathologies (NaN loss, plateaus, divergence, bad LR).
     """
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.why import diagnose
 
     tracker = ExperimentTracker()
@@ -42,7 +40,7 @@ def why(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
 
     metrics = tracker.get_metrics(target["run_id"])

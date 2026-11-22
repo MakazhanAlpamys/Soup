@@ -36,6 +36,7 @@ from rich.table import Table
 from rich.text import Text
 
 from soup_cli import __version__
+from soup_cli.commands._common import refuse_nan
 from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
 from soup_cli.utils.draft import (
     DRAFT_K_MAX,
@@ -704,7 +705,7 @@ def distill(
             )
         )
         # The YAML already quotes its scalars. Rich must not reinterpret those bytes.
-        console.print(yaml_text, markup=False, emoji=False)
+        console.print(yaml_text, markup=False, emoji=False, soft_wrap=True)
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
@@ -796,6 +797,7 @@ def measure(
         "--min-acceptance",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 if the acceptance rate falls below this (for CI gating).",
     ),
     trust_remote_code: bool = typer.Option(

@@ -140,7 +140,8 @@ GUARDED_TESTS: dict[str, tuple[str, ...]] = {
 }
 
 #: Every test that runs a real CPU bf16/fp16 step and requests
-#: ``aten_half_matmuls`` instead of the skip (#1314, #1359). Dropping the fixture
+#: ``aten_half_matmuls`` instead of the skip (#1314, #1359), and the Fast-LoRA Q/K/V
+#: harness tests that run a bf16 cell, which never had the skip (#2562). Dropping the fixture
 #: from one of them sends its matmuls back to oneDNN / MKL, which is the path that
 #: crashes part of the windows-latest fleet, so each must keep requesting it.
 #: ``test_rewind_wiring.py`` is not here: its run trains fp32 and never needed it.
@@ -172,6 +173,16 @@ FIXTURE_TESTS: dict[str, tuple[str, ...]] = {
         "test_row_losses_failure_disables_recorder_without_stopping_training",
         "test_resumed_run_disables_the_recorder",
         "test_packing_is_refused_and_unpacked_control_records",
+    ),
+    "test_fast_lora_qkv_bench_harness.py": (
+        "test_the_self_test_passes",
+        "test_a_cell_takes_the_fast_path_on_every_iteration",
+        "test_a_patch_that_applies_nothing_voids_the_process",
+        "test_a_patch_count_that_lies_voids_the_process",
+        "test_a_patched_module_in_the_plain_arm_voids_the_process",
+        "test_arms_that_disagree_before_timing_void_the_process",
+        "test_one_fast_iteration_off_the_path_voids_the_process",
+        "test_arms_that_disagree_only_on_a_lora_gradient_void_the_process",
     ),
 }
 
@@ -330,6 +341,46 @@ class TestEveryBf16CaseOfTheLossChunkTestsRequestsTheFixture:
         assert strays == 0, (
             f"{self.FILE}: {strays} torch.bfloat16 outside a parametrize is not seen by "
             f"the fixture check; parametrize it and request aten_half_matmuls"
+        )
+
+
+class TestEveryCellOfTheQkvHarnessTestsRequestsTheFixture:
+    """Jobs 127767630159 and 127867175811 lost a worker in the self-test's bf16 cell (#2562).
+
+    Every cell this file measures is bf16, so a test that calls ``harness.measure`` or
+    ``harness.run_self_test`` runs a CPU bf16 matmul. ``FIXTURE_TESTS`` pins the ones that
+    do today; this reads the file the other way round, so that a new one cannot arrive
+    without the fixture and bring the Windows cell down again.
+    """
+
+    FILE = "test_fast_lora_qkv_bench_harness.py"
+    RUNS_A_CELL = ("measure", "run_self_test")
+
+    def _tests_that_run_a_cell(self) -> set:
+        tree = ast.parse((_TESTS_DIR / self.FILE).read_text(encoding="utf-8"))
+        return {
+            func.name
+            for func in ast.walk(tree)
+            if isinstance(func, ast.FunctionDef)
+            and func.name.startswith("test_")
+            and any(_is_call_to(node, name) for node in ast.walk(func) for name in self.RUNS_A_CELL)
+        }
+
+    def test_each_test_that_runs_a_cell_requests_the_fixture(self):
+        missing = sorted(
+            name
+            for name in self._tests_that_run_a_cell()
+            if "aten_half_matmuls" not in _param_names(_find_test(self.FILE, name))
+        )
+        assert not missing, (
+            f"{self.FILE}: {missing} run a bf16 cell without requesting aten_half_matmuls, "
+            f"so their CPU bf16 matmul reaches oneDNN on part of the Windows CI fleet (#2562)"
+        )
+
+    def test_exactly_the_pinned_tests_run_a_cell(self):
+        assert self._tests_that_run_a_cell() == set(FIXTURE_TESTS[self.FILE]), (
+            f"{self.FILE}: the tests that run a cell differ from the pinned "
+            f"{sorted(FIXTURE_TESTS[self.FILE])}; add the new one to FIXTURE_TESTS"
         )
 
 

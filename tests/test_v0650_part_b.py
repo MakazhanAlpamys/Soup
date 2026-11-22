@@ -396,3 +396,32 @@ class TestBehaviorCli:
             "--evidence", str(outside),
         ])
         assert result.exit_code != 0
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_battery_fixture_keeps_a_row_holding_the_character_3066(tmp_path, monkeypatch, char):
+    """Through a temporary resource standing in for the bundled ``xstest.jsonl``."""
+    import importlib.resources
+
+    from soup_cli.utils.behavior_battery import load_battery_probes
+
+    fixture = tmp_path / "data" / "_fixtures" / "behavior" / "xstest.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes(_rows_3066(char).encode("utf-8"))
+    monkeypatch.setattr(importlib.resources, "files", lambda package: tmp_path)
+
+    assert load_battery_probes("xstest") == ({"prompt": f"a{char}b"}, {"prompt": "next"})

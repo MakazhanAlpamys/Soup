@@ -1,13 +1,13 @@
 """Dataset-cleaning paths and failures remain literal without changing stored data."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from soup_cli.cli import app
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
@@ -15,9 +15,7 @@ VALUES = ["plain", "x[red]n", "x\\[n", "n\\\\", "x\x9b\u202en"]
 NAMES = VALUES + [
     pytest.param(
         "n:warning:",
-        marks=pytest.mark.skipif(
-            sys.platform == "win32", reason="colon is not valid in a Windows filename"
-        ),
+        marks=skip_colon_on_windows,
     )
 ]
 ROW = {"instruction": "Say hi", "output": "Hello"}

@@ -244,6 +244,7 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
 
 _TRANSFORMERS_SFT_MODULES = (
     "soup_cli/trainer/sft.py",
+    "soup_cli/trainer/save_args.py",
     "soup_cli/trainer/loss_summary.py",
     "soup_cli/trainer/stream_setup.py",
     "soup_cli/trainer/rewind_hf.py",
@@ -261,8 +262,10 @@ _TRANSFORMERS_SFT_MODULES = (
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_full.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
+        "soup_cli/trainer/mlx_pretokenized.py",
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),

@@ -1,0 +1,292 @@
+{
+  "source": {
+    "repo_id": "moonshotai/Kimi-K2-Base",
+    "revision": "ce72df012259dcc55d945e890f815fe7ef69159c",
+    "url": "https://huggingface.co/moonshotai/Kimi-K2-Base/resolve/ce72df012259dcc55d945e890f815fe7ef69159c/model.safetensors.index.json",
+    "index_sha256": "c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc",
+    "fetched": "2026-11-12",
+    "note": "weight_map keys of model.safetensors.index.json, sorted and deduplicated"
+  },
+  "name_count": 139644,
+  "full_list_sha256": "52ae0793dc4ab8484b98f197b36b658e4d65b6ddc0068791924fe35ba513a554",
+  "patterns": [
+    {
+      "pattern": "lm_head.weight"
+    },
+    {
+      "pattern": "model.embed_tokens.weight"
+    },
+    {
+      "pattern": "model.layers.{layer}.input_layernorm.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.down_proj.weight",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.down_proj.weight_scale_inv",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.down_proj.weight",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.down_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.gate_proj.weight",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.gate_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.up_proj.weight",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.experts.{expert}.up_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ],
+      "experts": [
+        0,
+        383
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.gate.e_score_correction_bias",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.gate.weight",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.gate_proj.weight",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.gate_proj.weight_scale_inv",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.down_proj.weight",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.down_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.gate_proj.weight",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.gate_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.up_proj.weight",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.shared_experts.up_proj.weight_scale_inv",
+      "layers": [
+        1,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.up_proj.weight",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.mlp.up_proj.weight_scale_inv",
+      "layers": [
+        0,
+        0
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.post_attention_layernorm.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.kv_a_layernorm.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.kv_a_proj_with_mqa.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.kv_a_proj_with_mqa.weight_scale_inv",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.kv_b_proj.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.kv_b_proj.weight_scale_inv",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.o_proj.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.o_proj.weight_scale_inv",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.q_a_layernorm.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.q_a_proj.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.q_a_proj.weight_scale_inv",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.q_b_proj.weight",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.q_b_proj.weight_scale_inv",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.layers.{layer}.self_attn.rotary_emb.inv_freq",
+      "layers": [
+        0,
+        60
+      ]
+    },
+    {
+      "pattern": "model.norm.weight"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[driver] mistral123-128 start UTC 2026-11-11 14:27:57
+[driver] free RAM GB before: 11,5
+[driver] nvidia-smi before: 0 MiB
+[driver] train exit code: 0
+[driver] train start UTC 2026-11-11 14:27:57 ; end UTC 2026-11-11 14:30:26
+wall seconds: 149
+capture-start stamp: 2026/11/11 19:30:09
+whole-GPU peak MiB (training window): 4388
+whole-GPU peak MiB (whole run incl. the capture forward): 4388
+[driver] nvidia-smi after: 0 MiB
+[driver] free RAM GB after: 11,5
+[driver] DONE exit=0

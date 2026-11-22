@@ -445,6 +445,35 @@ class TestValidateJudgeApiBase:
 
 
 class TestLoadRubric:
+    @pytest.mark.parametrize("duplicate", ["quality", "Quality", " quality "])
+    def test_judge_rejects_duplicate_rubric_criteria_before_request(
+        self, tmp_path, monkeypatch, duplicate
+    ):
+        target_path = tmp_path / "responses.jsonl"
+        target_path.write_text('{"prompt":"question","response":"answer"}\n', encoding="utf-8")
+        rubric_path = tmp_path / "rubric.yaml"
+        rubric_path.write_text(
+            "criteria:\n"
+            "  - name: quality\n"
+            "    description: response quality\n"
+            "  - name: clarity\n"
+            "    description: response clarity\n"
+            f"  - name: {json.dumps(duplicate)}\n"
+            "    description: a separate quality criterion\n"
+            "    weight: 3\n",
+            encoding="utf-8",
+        )
+        reply = MagicMock(return_value='{"scores":{"quality":5,"clarity":1}}')
+        monkeypatch.setattr(JudgeEvaluator, "_call_llm", reply)
+
+        result = runner.invoke(app, [
+            "eval", "judge", "--target", str(target_path), "--rubric", str(rubric_path),
+        ])
+
+        assert result.exit_code == 1, result.output
+        assert "duplicates criterion" in _strip_ansi(result.output)
+        reply.assert_not_called()
+
     def test_valid_rubric(self, tmp_path):
         rubric_path = tmp_path / "rubric.yaml"
         rubric_path.write_text(

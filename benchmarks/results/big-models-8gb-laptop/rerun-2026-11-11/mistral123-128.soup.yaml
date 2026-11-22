@@ -1,0 +1,36 @@
+# Config of the run mistral123-128 (LoRA r=8 on q_proj+v_proj, streamed NF4 base, disk tier, 3 steps).
+# Paths are shortened in this copy: <ASSETS> is the folder of the published checkpoints,
+# <OUT> the output folder; the data file is three alpaca rows of about 900 tokens each.
+base: <ASSETS>/mistral123-nf4-a76e109f
+task: sft
+backend: transformers
+modality: text
+
+data:
+  train: kit/data/alpaca_long.jsonl   # 3 alpaca rows, ~900 tokens each, so max_length truncates every row to exactly 128 tokens
+  format: alpaca
+  val_split: 0.0                            # all 3 rows train: epochs 1 x 3 rows / batch 1 = 3 optimizer steps
+  max_length: 128
+
+training:
+  epochs: 1
+  lr: 2.0e-4
+  scheduler: constant
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  seed: 1234
+  logging_steps: 1
+  quantization: 4bit                        # pre-quantised bnb NF4 base: imported byte for byte
+  stream_layers: true
+  stream_source: disk
+  stream_read_ahead: 1
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.0
+    target_modules: [q_proj, v_proj]
+
+output: <OUT>                            # the adapter lands in <output>/<experiment_name>
+experiment_name: mistral123-128

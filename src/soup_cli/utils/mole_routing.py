@@ -33,11 +33,12 @@ import math
 import os
 import stat
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, quote_path
 
 # torch is imported lazily inside every function that needs it (CLI-startup hot
 # path stays torch-free); tensor params/returns are left unannotated to keep the
@@ -294,6 +295,26 @@ _GATE_FILENAME = "mole_gate.pt"
 _MAX_MANIFEST_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the manifest file
 
 
+def load_gate_state(path: str) -> dict:
+    """Read a MoLE ``mole_gate.pt`` with ``weights_only=True``, or refuse it by name.
+
+    Shared by ``load_mole_for_serve`` and the MoLE trainer's resume. A file the strict
+    loader cannot read (truncated, corrupt, or needing more than tensors and plain
+    containers to load) raises ``ValueError`` naming the file and what to do, instead of
+    a raw pickle / torch traceback. Never retries with a less strict load.
+    """
+    import torch
+
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:  # noqa: BLE001 — any loader failure becomes a named refusal
+        raise ValueError(
+            f"mole gate {quote_path(str(path))} was refused: it is truncated or corrupt, or "
+            f"holds more than tensors and plain containers ({type(exc).__name__}). Delete "
+            "this file, or restore a gate written by soup; nothing was loaded from it."
+        ) from exc
+
+
 @dataclass(frozen=True)
 class MoleServeManifest:
     """Self-describing MoLE deployment manifest written next to ``mole_gate.pt``.
@@ -526,6 +547,7 @@ class LoadedMole:
         if len(self.adapter_names) < MIN_TASK_ADAPTERS:
             raise ValueError("LoadedMole needs >= 2 task adapters")
         self.device = device
+        self._lock = threading.Lock()
 
     def _blended_last_logits(self, input_ids, attention_mask):
         """Per-token blend, last token only — returns ``[B, V]``."""
@@ -657,21 +679,22 @@ class LoadedMole:
         do_sample = isinstance(temperature, (int, float)) and not isinstance(
             temperature, bool
         ) and float(temperature) > 0.0
-        state = _MoleKvState() if _model_supports_cache(self.model) else None
-        for _ in range(int(max_new_tokens)):
-            if state is not None and state.enabled:
-                logits = self._blended_last_logits_cached(seq, attn, state)
-            else:
-                logits = self._blended_last_logits(seq, attn)  # [B, V]
-            if do_sample:
-                next_id = _sample_next(logits, float(temperature), float(top_p))
-            else:
-                next_id = logits.argmax(dim=-1, keepdim=True)  # [B, 1]
-            seq = torch.cat([seq, next_id], dim=1)
-            attn = torch.cat([attn, torch.ones_like(next_id)], dim=1)
-            if eos_token_id is not None and int(next_id[0, 0]) == int(eos_token_id):
-                break
-        return seq
+        with self._lock:
+            state = _MoleKvState() if _model_supports_cache(self.model) else None
+            for _ in range(int(max_new_tokens)):
+                if state is not None and state.enabled:
+                    logits = self._blended_last_logits_cached(seq, attn, state)
+                else:
+                    logits = self._blended_last_logits(seq, attn)  # [B, V]
+                if do_sample:
+                    next_id = _sample_next(logits, float(temperature), float(top_p))
+                else:
+                    next_id = logits.argmax(dim=-1, keepdim=True)  # [B, 1]
+                seq = torch.cat([seq, next_id], dim=1)
+                attn = torch.cat([attn, torch.ones_like(next_id)], dim=1)
+                if eos_token_id is not None and int(next_id[0, 0]) == int(eos_token_id):
+                    break
+            return seq
 
     def generate_text(
         self,
@@ -811,7 +834,7 @@ def load_mole_for_serve(
             top_k=manifest.top_k,
         )
     )
-    state = torch.load(real_gate, map_location="cpu", weights_only=True)
+    state = load_gate_state(real_gate)
     gate.load_state_dict(state)
     gate.eval()
     if device == "cuda":

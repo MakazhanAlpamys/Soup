@@ -1,0 +1,39 @@
+{
+  "captured": "2026-11-03T16:11:03.2620850+05:00",
+  "cpu": [
+    {
+      "Name": "Intel(R) Core(TM) i9-14900HX",
+      "NumberOfCores": 24,
+      "NumberOfLogicalProcessors": 32
+    }
+  ],
+  "memory": [
+    {
+      "TotalVisibleMemorySize": 33271672,
+      "FreePhysicalMemory": 10558948,
+      "TotalVirtualMemorySize": 53194616,
+      "FreeVirtualMemory": 14174272
+    }
+  ],
+  "disks": [
+    {
+      "FriendlyName": "SAMSUNG MZAL81T0HFLB-00BL2",
+      "MediaType": "SSD",
+      "BusType": "NVMe",
+      "Size": 1024209543168,
+      "HealthStatus": "Healthy"
+    },
+    {
+      "FriendlyName": "SAMSUNG MZAL81T0HFLB-00BL2",
+      "MediaType": "SSD",
+      "BusType": "NVMe",
+      "Size": 1024209543168,
+      "HealthStatus": "Healthy"
+    }
+  ],
+  "disk_free": {
+    "Used": 633888956416,
+    "Free": 390197547008
+  },
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU, 8151 MiB, 616.92"
+}

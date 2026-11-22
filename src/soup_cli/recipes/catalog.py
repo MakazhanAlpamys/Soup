@@ -1,9 +1,15 @@
 """Recipe catalog — ready-made configs for popular models."""
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+from soup_cli.utils.kimi import (
+    KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
+    resident_kimi_k2_quantization_refusal,
+)
+
+_SIZE_TOKEN_PATTERN = re.compile(r"^\d+(?:\.\d+)?[bmtk]$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -34,13 +40,25 @@ def search_recipes(
     task: Optional[str] = None,
     size: Optional[str] = None,
 ) -> List[RecipeMeta]:
-    """Search recipes by keyword, task, or model."""
+    """Search recipes by keyword, task, size, or model."""
     results = []
+    size_token = size.strip() if size else None
+    is_size_token = bool(size_token and _SIZE_TOKEN_PATTERN.match(size_token))
     for name, recipe in RECIPES.items():
         if task and recipe.task != task:
             continue
-        if size and size.lower() not in name.lower() and size.lower() not in recipe.model.lower():
-            continue
+        if size_token:
+            if is_size_token:
+                if recipe.size.strip().lower() != size_token.lower():
+                    continue
+            else:
+                s_lower = size_token.lower()
+                if (
+                    s_lower not in name.lower()
+                    and s_lower not in recipe.model.lower()
+                    and s_lower not in recipe.description.lower()
+                ):
+                    continue
         if query:
             searchable = f"{name} {recipe.model} {recipe.task} {recipe.description} "
             searchable += " ".join(recipe.tags)
@@ -51,7 +69,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (175 recipes)
+# Recipe catalog (183 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2813,7 +2831,7 @@ output: ./output
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
-        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
+        unavailable_reason=resident_kimi_k2_quantization_refusal("4bit"),
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -3719,6 +3737,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-0.8b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-0.8B-Base",
+        task="pretrain",
+        size="0.8B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 0.8B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-0.8B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
     "qwen3.5-2b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-2B",
         task="sft",
@@ -3808,6 +3856,36 @@ training:
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
+
+output: ./output
+""",
+    ),
+    "qwen3.5-2b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-2B-Base",
+        task="pretrain",
+        size="2B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 2B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
 
 output: ./output
 """,
@@ -4028,6 +4106,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-9b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-9B-Base",
+        task="pretrain",
+        size="9B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain"),
+        description="Qwen 3.5 9B Base continued pre-training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
     "qwen3.5-27b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-27B",
         task="sft",
@@ -4234,6 +4342,40 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-35b-a3b-pretrain": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B-Base",
+        task="pretrain",
+        size="35B",
+        tags=("qwen", "qwen3.5", "pretrain", "continued", "domain", "moe", "mixture-of-experts"),
+        description=(
+            "Qwen 3.5 35B-A3B Base MoE continued pre-training (Apache-2.0, 3B active)"
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B-Base
+task: pretrain
+modality: text
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+
+output: ./output
+""",
+    ),
     "qwen3.5-122b-a10b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-122B-A10B",
         task="sft",
@@ -4271,6 +4413,84 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-122b-a10b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="dpo",
+        size="122B",
+        tags=(
+            "qwen", "qwen3.5", "dpo", "alignment", "preference", "moe", "large", "multi-gpu",
+        ),
+        description=(
+            "Qwen 3.5 122B-A10B MoE DPO alignment (Apache-2.0, 10B active). "
+            "Inherited starting settings; multi-GPU memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-122b-a10b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="grpo",
+        size="122B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 122B-A10B text MoE GRPO (Apache-2.0, 10B active). "
+            "Untuned multi-GPU starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "qwen3.5-397b-a17b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-397B-A17B",
         task="sft",
@@ -4303,6 +4523,45 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-397b-a17b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-397B-A17B",
+        task="grpo",
+        size="397B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 397B-A17B text MoE GRPO (Apache-2.0, 17B active). "
+            "Untuned multi-node starting configuration; memory fit is unverified."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-397B-A17B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
   gradient_checkpointing: true
 
 output: ./output
@@ -5134,6 +5393,48 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "minimax-m3-dpo": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M3",
+        task="dpo",
+        size="428B",
+        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
+            "- commercial use requires a separate agreement. Multi-GPU recommended. "
+            "Loads through the vision path, whose processor is custom code: run "
+            "soup train --trust-remote-code."
+        ),
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M3
+task: dpo
+# A vision-language checkpoint (minimax_m3_vl): DPO builds it through the
+# image-text class since #1393. target_modules: auto attaches to the language
+# tower alone (#1102), so the preference tune stays textual: rows are text-only
+# prompt / chosen / rejected, tokenized through the processor.
+modality: vision
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # as minimax-m3-sft; no moe_lora, the minimax experts take none (#1145)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
   gradient_checkpointing: true
 
 output: ./output

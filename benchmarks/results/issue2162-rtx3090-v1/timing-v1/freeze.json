@@ -1,0 +1,177 @@
+{
+  "at": "2026-10-26T12:39:51.346420+00:00",
+  "source_commit": "8fdb2466",
+  "archive_sha256": "c75e1b2ee8b6456b31f487e3226ba75539a70cc0d771623271f8c7ea401c0f7e",
+  "roster": [
+    {
+      "seq": 2048,
+      "pair": 1,
+      "arm": "auto"
+    },
+    {
+      "seq": 2048,
+      "pair": 1,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 2048,
+      "pair": 2,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 2048,
+      "pair": 2,
+      "arm": "auto"
+    },
+    {
+      "seq": 2048,
+      "pair": 3,
+      "arm": "auto"
+    },
+    {
+      "seq": 2048,
+      "pair": 3,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 2048,
+      "pair": 4,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 2048,
+      "pair": 4,
+      "arm": "auto"
+    },
+    {
+      "seq": 2048,
+      "pair": 5,
+      "arm": "auto"
+    },
+    {
+      "seq": 2048,
+      "pair": 5,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 4096,
+      "pair": 1,
+      "arm": "auto"
+    },
+    {
+      "seq": 4096,
+      "pair": 1,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 4096,
+      "pair": 2,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 4096,
+      "pair": 2,
+      "arm": "auto"
+    },
+    {
+      "seq": 4096,
+      "pair": 3,
+      "arm": "auto"
+    },
+    {
+      "seq": 4096,
+      "pair": 3,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 4096,
+      "pair": 4,
+      "arm": "qkvo"
+    },
+    {
+      "seq": 4096,
+      "pair": 4,
+      "arm": "auto"
+    },
+    {
+      "seq": 4096,
+      "pair": 5,
+      "arm": "auto"
+    },
+    {
+      "seq": 4096,
+      "pair": 5,
+      "arm": "qkvo"
+    }
+  ],
+  "gpu_uuid": "GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4",
+  "power_limit_w": 420,
+  "cap_bytes": 8589934592,
+  "warmup_updates": 10,
+  "measured_updates": 50,
+  "initial_exact_updates_within_warmup": 2,
+  "primary_sequence": 2048,
+  "secondary_sequence": 4096,
+  "recipe": {
+    "model": "unsloth/mistral-7b-instruct-v0.3",
+    "revision": "60b99dcbc7f853b7cd18472a607e8d045b96f03e",
+    "dtype": "bfloat16",
+    "quant": "nf4",
+    "buffers": 2,
+    "tier": "pinned RAM",
+    "batch": 1,
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "lora_targets": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "seed": 42,
+    "B_seed": 7,
+    "input_seed": 1234,
+    "optimizer": "PagedAdamW8bit",
+    "lr": 0.0002,
+    "omp_threads": 1,
+    "mkl_threads": 1,
+    "deterministic": true,
+    "tf32": false,
+    "attention": "default selected SDPA efficient"
+  },
+  "statistic": "median of five 100*(median(auto_steps)-median(qkvo_steps))/median(auto_steps)",
+  "bootstrap": {
+    "n": 10000,
+    "seed": 42,
+    "unit": "whole pair",
+    "rng": "numpy.default_rng",
+    "quantile": "linear",
+    "ordinary": [
+      0.025,
+      0.975
+    ],
+    "family_adjusted": [
+      0.0125,
+      0.9875
+    ],
+    "family_cells": 2
+  },
+  "decision": "median >= 2 percent and both lower bounds > 0, all exactness/memory/resource gates; secondary never replaces primary",
+  "guards": {
+    "temp_max_c": 75,
+    "rss_max_bytes": 17179869184,
+    "free_ram_min_bytes": 34359738368,
+    "other_gpu_util_max_percent": 5,
+    "ci_workers": 0,
+    "sample_interval_seconds": 1,
+    "process_limit_seconds": 900
+  },
+  "fixed_census_hashes": {
+    "2048": "aabf9f0e31844c8cfa5f5aaab947963c316b97ad8dfd2583b068b95fedb14608",
+    "4096": "3c1002490f8c7496c34c05345e07a9330ec3b27efb911440e788a43bb26b5cbd"
+  },
+  "reference_hashes": {
+    "2048": "bb452c9025fa24a09240809f85023f37494d3ef5c09635a91047fc6a54d5dcaa",
+    "4096": "cefcca65f88bd25b46eb239609f15b65e4bf307790c922e43bfe81d858cfe0aa"
+  }
+}

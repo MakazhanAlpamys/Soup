@@ -4,6 +4,7 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -11,27 +12,28 @@ import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
-
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Generator
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.stop_strings import StopFilter, StopStringError, cut_at_stop, parse_stop
 from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
 
 console = Console()
 
+#: Response header (and body field ``response_id``) carrying the id of an answer.
+_RESPONSE_ID_HEADER = "X-Response-Id"
+
 
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
     if not name:
         return False
-    return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$", name))
+    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]*$', name))
 
 
 def _validate_adapter_path(path: str, cwd: Optional[str] = None) -> bool:
@@ -61,7 +63,9 @@ def _parse_adapters(adapters: Optional[List[str]]) -> Dict[str, str]:
     result = {}
     for item in adapters:
         if "=" not in item:
-            raise ValueError(f"Invalid adapter format: '{item}'. Expected key=path format.")
+            raise ValueError(
+                f"Invalid adapter format: '{item}'. Expected key=path format."
+            )
         name, path = item.split("=", 1)
         result[name.strip()] = path.strip()
     return result
@@ -91,8 +95,8 @@ def serve(
         "--host",
         help=(
             "Host to bind to. Defaults to loopback (127.0.0.1). Any other host "
-            "needs --tool-auth-token, which is checked on the tool, thumbs and "
-            "adapter routes only: the generation routes take no token."
+            "needs --tool-auth-token, which is checked on the tool, thumbs, feedback "
+            "and adapter routes only: the generation routes take no token."
         ),
     ),
     device: Optional[str] = typer.Option(
@@ -109,12 +113,12 @@ def serve(
     max_tokens_default: int = typer.Option(
         512,
         "--max-tokens",
-        help="Default max tokens for generation",
+        help="Default max tokens for generation (1 to 16384)",
     ),
     backend: str = typer.Option(
         "transformers",
         "--backend",
-        help="Inference backend: transformers (default), vllm, sglang, or mii",
+        help="Inference backend: transformers (default), vllm, sglang, mii, or mlx",
     ),
     tensor_parallel: int = typer.Option(
         1,
@@ -154,6 +158,14 @@ def serve(
         None,
         "--adapters",
         help="LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter",
+    ),
+    adapter_dir: Optional[str] = typer.Option(
+        None,
+        "--adapter-dir",
+        help=(
+            "Directory runtime adapters may be loaded from through POST "
+            "/v1/adapters/load (needs --tool-auth-token). Not set: the route is off."
+        ),
     ),
     prefix_cache: bool = typer.Option(
         False,
@@ -215,9 +227,9 @@ def serve(
         None,
         "--trace-log",
         help=(
-            "Append per-request {prompt, response, latency_ms, tokens, ts} "
-            "to JSONL at this path. Path must stay under cwd. Rotates at "
-            "100 MB (one backup retained). Added in v0.40.3 (#33)."
+            "Append one conversation record per answer (the v1 format of "
+            "docs/loop-formats.md) to JSONL at this path. Path must stay under "
+            "cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33)."
         ),
     ),
     trace_log_cap_mb: int = typer.Option(
@@ -232,6 +244,14 @@ def serve(
             "Auto-capture thumbs-up/down feedback into a local-rl SQLite at "
             "this path via POST /v1/thumbs. Path must stay under cwd. "
             "Transformers backend only. v0.71.1 (#230)."
+        ),
+    ),
+    feedback_log: Optional[str] = typer.Option(
+        None,
+        "--feedback-log",
+        help=(
+            "Append feedback (POST /v1/feedback) as JSONL records to this path; "
+            "must stay under cwd."
         ),
     ),
     reasoning_parser: Optional[str] = typer.Option(
@@ -255,7 +275,10 @@ def serve(
     steer_strength: float = typer.Option(
         1.0,
         "--steer-strength",
-        help=("Steering strength multiplier (|s| <= 10.0). Ignored when --steer is unset."),
+        help=(
+            "Steering strength multiplier (|s| <= 10.0). Ignored when "
+            "--steer is unset."
+        ),
     ),
     hub: str = typer.Option(
         "hf",
@@ -295,11 +318,10 @@ def serve(
         None,
         "--kv-cache-type",
         help=(
-            "KV-cache type: q8_0 (8-bit HQQ, Transformers only), "
-            "bf16 / f16 (Transformers and vLLM), "
-            "fp8 (vLLM + Hopper only). vLLM checks installed dtype support; "
-            "bf16/f16 must match the model dtype. "
-            "q8_0 is unsupported on vLLM; SGLang wiring is deferred."
+            "KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / "
+            "bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers "
+            "backend only — vLLM / SGLang routing is in the blocked tail. "
+            "v0.71.14 (#140)."
         ),
     ),
     tool_auth_token: Optional[str] = typer.Option(
@@ -309,7 +331,7 @@ def serve(
         help=(
             "Require 'Authorization: Bearer <token>' on the tool endpoints "
             "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on "
-            "/v1/thumbs and the adapter routes (/v1/adapters, "
+            "/v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, "
             "/v1/adapters/activate/<name>, /v1/adapters/deactivate). Without it, "
             "/v1/tools/python and /v1/tools/bash answer 401 on every bind and a "
             "non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, "
@@ -336,6 +358,57 @@ def serve(
     # The token that check asks for does not cover every route: say which.
     for _notice in _non_loopback_notices(host, backend):
         console.print(f"[yellow]Note:[/] {_notice}")
+    # #2730 — every backend uses --max-tokens for a request that omits
+    # max_tokens. 0 or a negative value let the server start and then fail each
+    # such request with a 500; a value above 16384 gave such a request more than
+    # the per-request cap (``ChatCompletionRequest.max_tokens``, le=16384) lets
+    # a request ask for. Refused here, before any backend branch or model load,
+    # so the message reads the same on every backend. Checked in the body rather
+    # than with ``min=``/``max=``, for the --help width reason given at
+    # --max-model-len. Exit 2, as for the other bad option values here.
+    if not 1 <= max_tokens_default <= 16384:
+        console.print(
+            f"[red]--max-tokens:[/] must be between 1 and 16384 (got {max_tokens_default})."
+        )
+        raise typer.Exit(2)
+
+    if backend.lower() == "mlx":
+        from soup_cli.utils.mlx_serve import validate_serve_options, validate_serve_paths
+
+        try:
+            validate_serve_options({
+                "--device": (device, None), "--hub": (hub, "hf"),
+                "--tensor-parallel": (tensor_parallel, 1),
+                "--gpu-memory": (gpu_memory_utilization, 0.9),
+                "--max-model-len": (max_model_len, None),
+                "--speculative-decoding": (speculative_model, None),
+                "--num-speculative-tokens": (num_speculative_tokens, 5),
+                "--adapters": (adapters, None), "--adapter-dir": (adapter_dir, None),
+                "--prefix-cache": (prefix_cache, False),
+                "--auto-spec": (auto_spec, False),
+                "--structured-output": (structured_output, "off"),
+                "--json-schema": (json_schema, None), "--regex-pattern": (regex_pattern, None),
+                "--dashboard": (dashboard, False), "--trace": (trace, False),
+                "--trace-endpoint": (trace_endpoint, None), "--auto-quant": (auto_quant, False),
+                "--trace-log": (trace_log, None), "--trace-log-cap-mb": (trace_log_cap_mb, 100),
+                "--record-thumbs": (record_thumbs, None), "--feedback-log": (feedback_log, None),
+                "--reasoning-parser": (reasoning_parser, None), "--steer": (steer, None),
+                "--steer-strength": (steer_strength, 1.0), "--bank": (bank, None),
+                "--bank-strength": (bank_strength, 1.0), "--mole": (mole, None),
+                "--kv-cache-type": (kv_cache_type, None),
+            })
+            validate_serve_paths(model, base_model)
+        except ValueError as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        from importlib.util import find_spec
+
+        if find_spec("mlx_lm") is None:
+            console.print(
+                '[red]Native MLX serving requires MLX-LM on Apple Silicon.[/]\n'
+                'Install with: [bold]pip install "soup-cli\\[mlx,serve]"[/]'
+            )
+            raise typer.Exit(1)
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -383,6 +456,7 @@ def serve(
                 ("--bank", bank),
                 ("--steer", steer),
                 ("--adapters", adapters),
+                ("--adapter-dir", adapter_dir),
                 ("--speculative-decoding", speculative_model),
             )
             if val
@@ -392,6 +466,28 @@ def serve(
                 "[red]--mole cannot be combined with:[/] "
                 f"{_rich_escape(', '.join(conflicts))} "
                 "(MoLE replaces the served model with its own per-token blend)."
+            )
+            raise typer.Exit(code=2)
+    # `--adapter-dir` turns on POST /v1/adapters/load. Checked up front, like --bank and
+    # --mole, so a typo or a backend without the route surfaces before any model load.
+    if adapter_dir is not None:
+        if not os.path.isdir(adapter_dir):
+            console.print(
+                f"[red]--adapter-dir:[/] {for_terminal(adapter_dir)} is not an existing "
+                "directory."
+            )
+            raise typer.Exit(code=2)
+        if _is_filesystem_root(adapter_dir):
+            console.print(
+                f"[red]--adapter-dir:[/] {for_terminal(adapter_dir)} is a filesystem root, "
+                "which makes every path inside it; name the directory that holds the adapters."
+            )
+            raise typer.Exit(code=2)
+        if backend.lower() != "transformers":
+            console.print(
+                "[red]--adapter-dir requires --backend transformers[/] "
+                "(runtime loading wraps the served model in a PEFT model; "
+                "vLLM / SGLang / MII are not supported)."
             )
             raise typer.Exit(code=2)
     # v0.62.0 Part C / v0.71.10 #201 — validate `--steer` name + strength up
@@ -412,7 +508,9 @@ def serve(
             # Escape the exception message — it embeds the operator-
             # supplied --steer value via {value!r}, which would otherwise
             # let a crafted name inject Rich markup (security review M1).
-            console.print(f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}")
+            console.print(
+                f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}"
+            )
             raise typer.Exit(code=2) from exc
         if backend.lower() != "transformers":
             console.print(
@@ -451,7 +549,9 @@ def serve(
                 kv_cache_type, backend=backend.lower(), compute_capability=cc
             )
         except (TypeError, ValueError, NotImplementedError, RuntimeError) as exc:
-            console.print(f"[red]--kv-cache-type:[/] {_rich_escape(str(exc))}")
+            console.print(
+                f"[red]--kv-cache-type:[/] {_rich_escape(str(exc))}"
+            )
             raise typer.Exit(code=2) from exc
         if (
             resolved_kv_runtime.requires_quant_backend
@@ -481,7 +581,9 @@ def serve(
         from soup_cli.utils.hubs import apply_hub_to_cli_model
 
         try:
-            model, base_model = apply_hub_to_cli_model(model, base_model, hub, console=console)
+            model, base_model = apply_hub_to_cli_model(
+                model, base_model, hub, console=console
+            )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(code=2) from exc
@@ -497,19 +599,36 @@ def serve(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            'Install with: [bold]pip install "soup-cli\\[serve]"[/]'
+            "Install with: [bold]pip install \"soup-cli\\[serve]\"[/]"
         )
         raise typer.Exit(1)
 
     # Validate backend
     backend = backend.lower()
-    if backend not in ("transformers", "vllm", "sglang", "mii"):
+    if backend not in ("transformers", "vllm", "sglang", "mii", "mlx"):
         console.print(
             f"[red]Unknown backend: {backend}[/]\n"
             "Supported backends: [bold]transformers[/], [bold]vllm[/], "
-            "[bold]sglang[/], [bold]mii[/]"
+            "[bold]sglang[/], [bold]mii[/], [bold]mlx[/]"
         )
         raise typer.Exit(1)
+
+    # The conversation log, the thumbs database and the feedback log live in the
+    # transformers app. The vLLM, SGLang and MII apps never receive them, so the
+    # flags used to be accepted and then do nothing: refuse instead.
+    if backend != "transformers":
+        for _flag, _value in (
+            ("--trace-log", trace_log),
+            ("--record-thumbs", record_thumbs),
+            ("--feedback-log", feedback_log),
+        ):
+            if _value is not None:
+                console.print(
+                    f"[red]{_flag} requires --backend transformers[/] "
+                    f"(the {for_terminal(backend)} backend does not support it, so the "
+                    "flag would be silently ignored)."
+                )
+                raise typer.Exit(code=2)
 
     # #816 — the old path timed three calls to a constant-returning stub and
     # described the fastest few hundred nanoseconds as a quality-gated model
@@ -581,9 +700,7 @@ def serve(
         # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
         try:
             mii_pipeline = create_mii_pipeline(
-                model_path=model,
-                tensor_parallel=1,
-                max_length=4096,
+                model_path=model, tensor_parallel=1, max_length=4096,
                 tokenizer=mii_tokenizer,
             )
         except (ImportError, RuntimeError, OSError) as exc:
@@ -605,16 +722,13 @@ def serve(
             console.print("[green]Chat template:[/] applying the model's own template.")
 
         mii_app = build_mii_app(
-            mii_pipeline,
-            model_name=mii_model_name,
-            tokenizer=mii_tokenizer,
-            host=host,
+            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer, host=host,
         )
 
         import uvicorn
-
         console.print(
-            f"[green]Starting DeepSpeed-MII server[/] ({mii_model_name}) on http://{host}:{port}"
+            f"[green]Starting DeepSpeed-MII server[/] "
+            f"({mii_model_name}) on http://{host}:{port}"
         )
         uvicorn.run(mii_app, host=host, port=port, log_level="info")
         return
@@ -644,7 +758,7 @@ def serve(
         if not is_vllm_available():
             console.print(
                 "[red]vLLM not installed.[/]\n"
-                'Install with: [bold]pip install "soup-cli\\[serve-fast]"[/]'
+                "Install with: [bold]pip install \"soup-cli\\[serve-fast]\"[/]"
             )
             raise typer.Exit(1)
 
@@ -655,7 +769,7 @@ def serve(
         if not check_sglang_available():
             console.print(
                 "[red]SGLang not installed.[/]\n"
-                'Install with: [bold]pip install "soup-cli\\[sglang]"[/]'
+                "Install with: [bold]pip install \"soup-cli\\[sglang]\"[/]"
             )
             raise typer.Exit(1)
 
@@ -698,7 +812,11 @@ def serve(
     is_adapter = adapter_config_path.exists()
 
     # Resolve base model
-    if is_adapter and not base_model:
+    if is_adapter and backend == "mlx":
+        from soup_cli.utils.mlx_generation import read_native_adapter
+
+        base_model = read_native_adapter(model_path, base_model)["model"]
+    elif is_adapter and not base_model:
         base_model = _detect_base_model(adapter_config_path)
         if not base_model:
             console.print(
@@ -712,6 +830,8 @@ def serve(
         from soup_cli.utils.gpu import detect_device
 
         device, _ = detect_device()
+    elif backend == "mlx":
+        device = "mlx"
     elif not device:
         device = "cuda"
 
@@ -765,7 +885,9 @@ def serve(
         console.print("[red]--structured-output regex requires --regex-pattern.[/]")
         raise typer.Exit(1)
     if structured_mode == "json" and not json_schema:
-        console.print("[red]--structured-output json requires --json-schema <path>.[/]")
+        console.print(
+            "[red]--structured-output json requires --json-schema <path>.[/]"
+        )
         raise typer.Exit(1)
 
     # Validate trace endpoint early
@@ -789,13 +911,18 @@ def serve(
     )
 
     _trust_probe_target = base_model or str(model_path)
-    _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
-    resolved_trust = resolve_trust_remote_code(
-        _trust_probe_target,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=_trust_requires,
-    )
+    if backend == "mlx":
+        # The shared native loader resolves the actual metadata base and applies
+        # the same default-deny policy on the worker, before optional model loading.
+        resolved_trust = trust_remote_code
+    else:
+        _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
+        resolved_trust = resolve_trust_remote_code(
+            _trust_probe_target,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=_trust_requires,
+        )
 
     if backend == "vllm":
         if speculative_model:
@@ -819,9 +946,6 @@ def serve(
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,
-            vllm_cache_dtype=(
-                resolved_kv_runtime.vllm_cache_dtype if resolved_kv_runtime is not None else None
-            ),
             host=host,
         )
     elif backend == "sglang":
@@ -834,6 +958,16 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=resolved_trust,
             host=host,
+        )
+    elif backend == "mlx":
+        from soup_cli.utils.mlx_serve import NativeServerRuntime
+
+        app = _create_app(
+            None, None, device="mlx", model_name=model_path.name,
+            max_tokens_default=max_tokens_default, auth_token=tool_auth_token, host=host,
+            native_runtime=NativeServerRuntime(
+                str(model_path), base_model, trust_remote_code=resolved_trust,
+            ),
         )
     else:
         # Transformers backend (original). ``resolved_trust`` was computed
@@ -875,7 +1009,9 @@ def serve(
                 is_adapter=is_adapter,
                 device=device,
                 trust_remote_code=resolved_trust,
-                kv_cache_dtype=(resolved_kv_runtime.model_dtype if resolved_kv_runtime else None),
+                kv_cache_dtype=(
+                    resolved_kv_runtime.model_dtype if resolved_kv_runtime else None
+                ),
             )
         console.print("[bold green]Model loaded![/]")
         if resolved_kv_runtime is not None:
@@ -892,11 +1028,18 @@ def serve(
             from rich.markup import escape as _esc
 
             try:
-                model_obj, peft_adapter_names = _load_named_adapters(model_obj, adapter_map)
+                model_obj, peft_adapter_names = _load_named_adapters(
+                    model_obj, adapter_map
+                )
             except Exception as exc:  # noqa: BLE001 — surface any PEFT error
-                console.print(f"[red]Failed to load --adapters:[/] {_esc(str(exc))}")
+                console.print(
+                    f"[red]Failed to load --adapters:[/] {_esc(str(exc))}"
+                )
                 raise typer.Exit(1) from exc
-            console.print("[green]Adapters ready:[/] " + ", ".join(sorted(peft_adapter_names)))
+            console.print(
+                "[green]Adapters ready:[/] "
+                + ", ".join(sorted(peft_adapter_names))
+            )
 
         # v0.71.10 #201 — install the activation-steering decode hook. The
         # handle persists for the server's lifetime (process-global model).
@@ -912,7 +1055,9 @@ def serve(
             try:
                 steer_dir = resolve_steering_dir(steer)
                 loaded_steer = load_steering_artifact(steer_dir)
-                install_steering_hook(model_obj, loaded_steer, strength=steer_strength)
+                install_steering_hook(
+                    model_obj, loaded_steer, strength=steer_strength
+                )
             except (TypeError, ValueError, OSError) as exc:
                 console.print(f"[red]--steer:[/] {_esc(str(exc))}")
                 raise typer.Exit(2) from exc
@@ -936,7 +1081,9 @@ def serve(
             try:
                 bank_obj = load_bank(bank)
                 loaded_bank = apply_bank_to_serve(bank_obj)
-                loaded_bank.install_serve_hook(model_obj, strength=bank_strength)
+                loaded_bank.install_serve_hook(
+                    model_obj, strength=bank_strength
+                )
             except (TypeError, ValueError, OSError) as exc:
                 console.print(f"[red]--bank:[/] {_esc(str(exc))}")
                 raise typer.Exit(2) from exc
@@ -1009,7 +1156,6 @@ def serve(
         schema_obj = None
         if json_schema:
             import json as _json
-
             schema_path = Path(json_schema)
             if not is_under_cwd(schema_path):
                 console.print(
@@ -1027,7 +1173,9 @@ def serve(
                 raise typer.Exit(1)
 
         try:
-            constraint = build_constraint(structured_mode, schema_obj, regex_pattern)
+            constraint = build_constraint(
+                structured_mode, schema_obj, regex_pattern
+            )
         except ValueError as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
@@ -1044,8 +1192,7 @@ def serve(
 
             try:
                 trace_log_writer = TraceLogWriter(
-                    trace_log,
-                    cap_mb=trace_log_cap_mb,
+                    trace_log, cap_mb=trace_log_cap_mb,
                 )
             except (TypeError, ValueError) as exc:
                 from rich.markup import escape as _escape
@@ -1053,7 +1200,8 @@ def serve(
                 console.print(f"[red]--trace-log:[/] {_escape(str(exc))}")
                 raise typer.Exit(1) from exc
             console.print(
-                f"[green]Request trace log:[/] {trace_log_writer.path} (cap {trace_log_cap_mb} MB)"
+                f"[green]Request trace log:[/] {trace_log_writer.path} "
+                f"(cap {trace_log_cap_mb} MB)"
             )
 
         # v0.53.9 #98 — validate reasoning parser name once at startup.
@@ -1083,6 +1231,28 @@ def serve(
             record_thumbs_db = record_thumbs
             console.print(f"[green]Thumbs feedback log:[/] {_escape(record_thumbs)}")
 
+        runtime_adapter_dir: Optional[str] = None
+        if adapter_dir is not None:
+            runtime_adapter_dir = os.path.realpath(adapter_dir)
+            console.print(
+                "[green]Runtime adapter loading:[/] POST /v1/adapters/load accepts adapters "
+                f"from {for_terminal(runtime_adapter_dir)} (needs --tool-auth-token)"
+            )
+
+        # POST /v1/feedback appends loop-format feedback records to this file.
+        feedback_log_writer = None
+        if feedback_log is not None:
+            from soup_cli.monitoring.feedback_log import FeedbackLogWriter
+
+            try:
+                feedback_log_writer = FeedbackLogWriter(feedback_log)
+            except (TypeError, ValueError) as exc:
+                from rich.markup import escape as _escape
+
+                console.print(f"[red]--feedback-log:[/] {_escape(str(exc))}")
+                raise typer.Exit(1) from exc
+            console.print(f"[green]Feedback log:[/] {for_terminal(str(feedback_log_writer.path))}")
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -1100,6 +1270,7 @@ def serve(
             trace_log_writer=trace_log_writer,
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
+            feedback_log_writer=feedback_log_writer,
             auth_token=tool_auth_token,
             host=host,
             loaded_bank=loaded_bank,
@@ -1109,6 +1280,7 @@ def serve(
                 if resolved_kv_runtime
                 else None
             ),
+            adapter_dir=runtime_adapter_dir,
         )
 
     console.print(
@@ -1124,7 +1296,7 @@ def serve(
             f'"messages": [{{"role": "user", "content": "Hello!"}}]'
             f"}}'\n\n"
             f"Press [bold]Ctrl+C[/] to stop.",
-            title="[bold green]Server Ready[/]",
+            title="Starting server" if backend == "mlx" else "[bold green]Server Ready[/]",
         )
     )
 
@@ -1147,7 +1319,6 @@ def _serve_vllm(
     trust_remote_code: bool = False,
     max_model_len: Optional[int] = None,
     enable_dashboard: bool = False,
-    vllm_cache_dtype: Optional[str] = None,
     host: str = "127.0.0.1",
 ):
     """Set up vLLM engine and create FastAPI app.
@@ -1157,31 +1328,6 @@ def _serve_vllm(
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
 
     console.print("[dim]Initializing vLLM engine...[/]")
-
-    if vllm_cache_dtype in {"bfloat16", "float16"}:
-        from transformers import AutoConfig
-
-        config_model = base_model if is_adapter and base_model else str(model_path)
-        model_config = AutoConfig.from_pretrained(
-            config_model,
-            trust_remote_code=trust_remote_code,
-        )
-
-        raw_model_dtype = getattr(model_config, "torch_dtype", None)
-
-        if raw_model_dtype is None:
-            raise RuntimeError(
-                "Cannot determine model dtype; "
-                f"cannot safely use vLLM KV-cache dtype {vllm_cache_dtype!r}."
-            )
-
-        model_dtype = str(raw_model_dtype).replace("torch.", "")
-
-        if model_dtype != vllm_cache_dtype:
-            raise RuntimeError(
-                f"vLLM KV-cache dtype {vllm_cache_dtype!r} must match model dtype {model_dtype!r}."
-            )
-
     engine, engine_model_name = create_vllm_engine(
         model_path=str(model_path),
         base_model=base_model,
@@ -1194,7 +1340,6 @@ def _serve_vllm(
         quantization=quantization,
         trust_remote_code=trust_remote_code,
         max_model_len=max_model_len,
-        vllm_cache_dtype=vllm_cache_dtype,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -1255,7 +1400,9 @@ def _load_serve_tokenizer(
 
     for candidate in candidates:
         try:
-            return AutoTokenizer.from_pretrained(candidate, trust_remote_code=trust_remote_code)
+            return AutoTokenizer.from_pretrained(
+                candidate, trust_remote_code=trust_remote_code
+            )
         except Exception as exc:  # noqa: BLE001 — any load failure is a fallback
             logger.debug("tokenizer load failed for %s: %s", candidate, exc)
     return None
@@ -1274,6 +1421,35 @@ _CODE_TOOL_TOKEN_REQUIRED = (
     "every bind. Start soup serve with --tool-auth-token <secret> (or set "
     "SOUP_TOOL_AUTH_TOKEN) and send 'Authorization: Bearer <secret>'."
 )
+# What POST /v1/adapters/load answers, on any bind, when the server was started without
+# --tool-auth-token: it loads files into the serving process, so it takes a token everywhere.
+_ADAPTER_LOAD_TOKEN_REQUIRED = (
+    "Authentication required: POST /v1/adapters/load needs a token on every bind. "
+    "Start soup serve with --tool-auth-token <secret> (or set SOUP_TOOL_AUTH_TOKEN) "
+    "and send 'Authorization: Bearer <secret>'."
+)
+# The request header with which the loop asks for an answer that is not recorded: the
+# paraphrase step of `soup loop` (docs/serving-and-export.md). Honoured only with a valid tool
+# token, on every bind, and echoed in the response so that the caller can tell a server that
+# honours it from an older one that would have recorded the call.
+# soup_cli.utils.loop_paraphrase sends and checks the same two strings.
+_INTERNAL_HEADER = "X-Soup-Internal"
+_INTERNAL_LOOP_CHECK = "loop-check"
+# What a chat request carrying that header answers (401) when the server was started without
+# --tool-auth-token: there is no token to check it against, so the header is refused.
+_INTERNAL_TOKEN_REQUIRED = (
+    "Authentication required: X-Soup-Internal is honoured only with a valid tool token. "
+    "Start soup serve with --tool-auth-token <secret> (or set SOUP_TOOL_AUTH_TOKEN) and send "
+    "'Authorization: Bearer <secret>', or leave the header out."
+)
+# ... and when the token sent is missing or wrong.
+_INTERNAL_TOKEN_INVALID = (
+    "Invalid or missing bearer token: X-Soup-Internal is honoured only with a valid tool "
+    "token. Send 'Authorization: Bearer <secret>' (soup serve --tool-auth-token), or leave "
+    "the header out."
+)
+# What a chat request answers (400) for a value of that header other than "loop-check".
+_INTERNAL_VALUE_UNKNOWN = "Unknown X-Soup-Internal value: the only one is 'loop-check'."
 # What /v1/tools/python and /v1/tools/bash answer (501) when their sandbox is not
 # available or cannot start, whatever the cause; the cause goes to the debug log.
 _PYTHON_SANDBOX_UNAVAILABLE = "python sandbox requires OS-level isolation"
@@ -1323,8 +1499,8 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
     non-loopback bind is refused without ``--tool-auth-token``, which reads as
     if the token covered every route, and it does not.
 
-    * transformers: the token is checked on the tool, thumbs and adapter
-      routes only. On a wildcard bind those routes cannot compare ``Host``
+    * transformers: the token is checked on the tool, thumbs, feedback and
+      adapter routes only. On a wildcard bind those routes cannot compare ``Host``
       with a bound name either, which is the second line.
     * vLLM / SGLang / MII: their apps have no such routes and are never handed
       the token, so no route checks it.
@@ -1349,8 +1525,8 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
             f"intended. Requests {_PLAIN_HTTP_NOTE}"
         ]
     notices = [
-        f"{where}. --tool-auth-token is checked on the tool, thumbs and adapter routes "
-        "only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
+        f"{where}. --tool-auth-token is checked on the tool, thumbs, feedback and adapter "
+        "routes only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
         "answer every client that can reach this port without a token. Put a proxy "
         "that authenticates in front if that is not intended. Requests, the bearer "
         f"token included, {_PLAIN_HTTP_NOTE}"
@@ -1358,7 +1534,7 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
     if is_wildcard_bind(host):
         notices.append(
             "a wildcard bind has no single name, so the Host header is not compared: "
-            "the tool, thumbs and adapter routes check only that an Origin header, "
+            "the tool, thumbs, feedback and adapter routes check only that an Origin header, "
             "when sent, names the same host as Host."
         )
     return notices
@@ -1512,7 +1688,9 @@ def _load_model(
         load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path, trust_remote_code=trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -1560,7 +1738,9 @@ def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
         path = adapter_map[name]
         if idx == 0 and not already_peft:
             # Wrap the plain base model into a multi-adapter PeftModel.
-            model_obj = PeftModel.from_pretrained(model_obj, path, adapter_name=name)
+            model_obj = PeftModel.from_pretrained(
+                model_obj, path, adapter_name=name
+            )
         else:
             model_obj.load_adapter(path, adapter_name=name)
         console.print(f"[dim]Loaded adapter '{name}' from {path}[/]")
@@ -1568,15 +1748,147 @@ def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
     return model_obj, set(names)
 
 
+# --- POST /v1/adapters/load (runtime adapter loading) -------------------------------
+# At most this many adapters are added to one process through the route; adapters given
+# with --adapters at startup do not count.
+_MAX_RUNTIME_ADAPTERS = 16
+# The route's JSON body is a name and a path; anything bigger is not a request for it.
+_ADAPTER_LOAD_MAX_BODY_BYTES = 64 * 1024
+_ADAPTER_NAME_MAX_CHARS = 64
+_ADAPTER_PATH_MAX_CHARS = 4096
+# The pattern of /v1/adapters/activate/{name}, matched in full (``$`` would let a trailing
+# newline through).
+_ADAPTER_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9\-]*")
+
+
+def _parse_adapter_load_body(raw: bytes):
+    """``(name, path)`` from the JSON body of POST /v1/adapters/load, or ``None`` if invalid."""
+    try:
+        body = json.loads(raw)
+    except (ValueError, RecursionError):  # ValueError covers JSONDecodeError, bad UTF-8
+        return None
+    if not isinstance(body, dict):
+        return None
+    name, path = body.get("name"), body.get("path")
+    if not isinstance(name, str) or not isinstance(path, str):
+        return None
+    if len(name) > _ADAPTER_NAME_MAX_CHARS or not _ADAPTER_NAME_PATTERN.fullmatch(name):
+        return None
+    if not path or "\x00" in path or len(path) > _ADAPTER_PATH_MAX_CHARS:
+        return None
+    return name, path
+
+
+def _is_filesystem_root(path: str) -> bool:
+    """Whether ``path`` resolves to the top of a filesystem (``/``, a drive root, a share root).
+
+    Everything is "inside" such a directory, so it cannot serve as the ``--adapter-dir``
+    containment root.
+    """
+    real = os.path.realpath(path)
+    drive, tail = os.path.splitdrive(real)
+    if drive and not tail.strip("\\/"):
+        return True  # a drive root, or a UNC share root with nothing after the share
+    return os.path.dirname(real) == real
+
+
+def _is_remote_or_drive_relative(path: str) -> bool:
+    """Windows only: a UNC path (two leading slashes and a host) or a drive-relative one.
+
+    ``os.path.realpath`` on a UNC path contacts the share (an NTLM handshake with whatever
+    host the client named) before any containment test can say no; a path such as ``C:foo``
+    means "relative to the current directory of drive C:", which is not the working
+    directory. Both are refused before they are resolved. On POSIX these are ordinary
+    file names.
+    """
+    if os.name != "nt":
+        return False
+    drive, tail = os.path.splitdrive(path)
+    if not drive:
+        return False
+    if drive.startswith(("\\\\", "//")):
+        return True
+    return not tail.startswith(("\\", "/"))
+
+
+def _resolve_inside(path: str, root: str):
+    """``os.path.realpath(path)`` if it lies inside ``root`` (a real path), else ``None``.
+
+    Relative paths resolve against the process's working directory, and a symlink that
+    leaves ``root`` fails here because ``realpath`` follows it. A UNC or drive-relative path
+    on Windows is ``None`` without being resolved.
+    """
+    from soup_cli.utils.paths import is_under
+
+    if _is_remote_or_drive_relative(path):
+        return None
+    try:
+        resolved = os.path.realpath(path)
+    except (OSError, ValueError):
+        return None
+    return resolved if is_under(resolved, root) else None
+
+
+def _model_has_adapter(model_obj, name: str) -> bool:
+    """Whether the served PEFT model already carries an adapter called ``name``.
+
+    ``soup serve --model ./adapter`` serves a PeftModel whose adapter is called "default",
+    which no ``--adapters`` map lists: loading under that name would overwrite it.
+    """
+    peft_config = getattr(model_obj, "peft_config", None)
+    return isinstance(peft_config, Mapping) and name in peft_config
+
+
+def _load_runtime_adapter(model_obj, path: str, name: str):
+    """Add the LoRA adapter at ``path`` to ``model_obj`` as ``name``; return the model to serve.
+
+    A plain model is wrapped in a PeftModel (a new object, which the caller must serve from
+    then on); a PeftModel gets the adapter added to itself. The adapter is not activated.
+    Raises on pickle weights (they would execute on load) or any PEFT failure, and a failed
+    add does not leave a half-registered adapter behind.
+    """
+    from peft import PeftModel
+
+    from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+
+    assert_safe_top_level_weights(path)
+    if not isinstance(model_obj, PeftModel):
+        model_obj = PeftModel.from_pretrained(model_obj, path, adapter_name=name)
+    else:
+        was_there = name in model_obj.peft_config
+        try:
+            model_obj.load_adapter(path, adapter_name=name)
+        except Exception:
+            # PEFT registers the adapter before it reads the weights; drop it again so the
+            # name is free for a corrected adapter. One that was already loaded stays.
+            if not was_there and name in model_obj.peft_config:
+                try:
+                    model_obj.delete_adapter(name)
+                except Exception:  # noqa: BLE001 — the load error is the one to report
+                    logger.warning("could not discard adapter %r after a failed load", name)
+            raise
+    model_obj.eval()
+    return model_obj
+
+
 @contextlib.contextmanager
-def _adapter_scope(model, lock, names, requested, active):
+def _adapter_scope(
+    model, lock, names, requested, active, *, always_lock=False, model_getter=None
+):
     """Select the LoRA adapter for one generation, serialized by ``lock``.
 
     ``requested`` (request body ``adapter`` field) overrides ``active`` (the
     ``/v1/adapters/activate`` selection). A name not in ``names`` (or ``None``)
     runs the base model with adapters disabled. No-op when no named adapters
     were loaded (``names`` empty), so the ordinary single-model serve path is
-    completely unaffected.
+    completely unaffected -- unless ``always_lock`` (``soup serve
+    --adapter-dir``): then even a generation with no adapter loaded holds the
+    lock, because ``POST /v1/adapters/load`` may turn the model into a
+    PeftModel under that lock at any moment, and a generation running
+    outside it would see the model half wrapped. ``model_getter`` re-reads
+    the model once the lock is held: a request that queued behind that first
+    load holds the unwrapped object, which has no ``disable_adapter``. The scope
+    yields the effective model for the caller to generate with.
 
     The lock spans the whole generation because the PeftModel is process-global
     and ``set_adapter`` mutates shared state — two concurrent requests on
@@ -1585,22 +1897,106 @@ def _adapter_scope(model, lock, names, requested, active):
     on its worker thread, so the lock is held for exactly the length of the
     generation and released by the thread that took it, however the client leaves.
     """
-    if not names or lock is None:
-        yield
+    if lock is None or (not names and not always_lock):
+        yield model
         return
     # An explicit empty string is the internal sentinel for the unadapted base.
     # Test identity rather than truthiness so it overrides a manual full cutover.
     name = active if requested is None else requested
     with lock:
+        if model_getter is not None:
+            model = model_getter()
         if name and name in names and hasattr(model, "set_adapter"):
             model.set_adapter(name)
-            yield
+            yield model
         elif hasattr(model, "disable_adapter"):
             # No (or unknown) adapter selected → base model for this request.
             with model.disable_adapter():
-                yield
+                yield model
         else:
-            yield
+            yield model
+
+
+def _effective_adapter(model, names, requested, active) -> Optional[str]:
+    """The adapter :func:`_adapter_scope` runs a generation with, or ``None`` for the base.
+
+    Mirrors its selection (same arguments, same rule) so the trace record names what
+    produced the answer. ``None`` also when no named adapters were loaded.
+    """
+    if not names:
+        return None
+    name = active if requested is None else requested
+    if name and name in names and hasattr(model, "set_adapter"):
+        return name
+    return None
+
+
+def _write_conversation_record(
+    writer,
+    *,
+    response_id: str,
+    conversation_id: Optional[str],
+    model_name: str,
+    messages: List[Dict[str, Any]],
+    response_text: str,
+    finish_reason: Any,
+    started: Optional[float],
+    prompt_tokens: Any,
+    completion_tokens: Any,
+    adapter: Optional[str],
+    canary_bucket: Optional[str],
+) -> None:
+    """Append the version 1 conversation record of one answer; no-op without a writer.
+
+    ``started`` is the ``time.perf_counter()`` mark taken before generation. A passive
+    log: a failure is logged at debug level and never reaches the client.
+    """
+    if writer is None:
+        return
+    try:
+        writer.record_conversation(
+            response_id=response_id,
+            conversation_id=conversation_id,
+            model=model_name,
+            messages=messages,
+            response=response_text,
+            adapter=adapter,
+            canary_bucket=canary_bucket,
+            finish_reason=finish_reason,
+            latency_ms=(
+                (time.perf_counter() - started) * 1000 if started is not None else None
+            ),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except Exception:  # noqa: BLE001 — passive log never blocks an answer
+        logger.debug("conversation record %s failed", response_id, exc_info=True)
+
+
+async def _read_capped_body(request, limit: int) -> bytes:
+    """Read a request body of at most ``limit`` bytes; 413 as soon as it is larger.
+
+    The declared ``Content-Length`` is checked first, then the bytes actually received,
+    so a missing or understated header (chunked upload) cannot get past the cap.
+    """
+    from fastapi import HTTPException
+
+    too_large = HTTPException(status_code=413, detail="Request body too large")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > limit:
+                raise too_large
+        except ValueError:
+            pass  # not a number: the byte count below still enforces the cap
+    chunks: List[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > limit:
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _load_draft_model(speculative_model: str, device: str):
@@ -1614,9 +2010,10 @@ def _load_draft_model(speculative_model: str, device: str):
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
-    if re.match(r"^https?://", speculative_model):
+    if re.match(r'^https?://', speculative_model):
         console.print(
-            "[red]Speculative model must be a local path or HuggingFace model ID, not a URL.[/]"
+            "[red]Speculative model must be a local path or HuggingFace model ID, "
+            "not a URL.[/]"
         )
         raise typer.Exit(1)
 
@@ -1646,7 +2043,7 @@ def _load_draft_tokenizer(speculative_model: str, trust_remote_code: bool = Fals
 
     from transformers import AutoTokenizer
 
-    if re.match(r"^https?://", speculative_model):
+    if re.match(r'^https?://', speculative_model):
         return None
     try:
         return AutoTokenizer.from_pretrained(
@@ -1695,6 +2092,46 @@ def _stop_event_criteria(stop_event):
     return StoppingCriteriaList([_StopOnEvent()])
 
 
+def _stop_strings_criteria(tokenizer, stop_strings, prompt_length: int):
+    """A ``StoppingCriteriaList`` that ends generation once the reply holds a stop string.
+
+    The reply is what ``_generate_response`` returns: every token after the prompt,
+    decoded and stripped. The whole reply is decoded each step, as the reply streamer
+    does, because a window of the last few tokens would not decode the way the same
+    tokens do in context (see ``_reply_streamer_class``), and the match has to be on the
+    text that is cut. Generation ends after the token that completes the stop string; the
+    caller cuts the text.
+    """
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    from soup_cli.utils.stop_strings import find_stop
+
+    stops = tuple(stop_strings)
+
+    class _StopOnString(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kwargs):
+            new_ids = input_ids[0, prompt_length:].tolist()
+            reply = tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            return torch.full(
+                (input_ids.shape[0],),
+                find_stop(reply, stops) is not None,
+                device=input_ids.device,
+                dtype=torch.bool,
+            )
+
+    return StoppingCriteriaList([_StopOnString()])
+
+
+class _ClientInputError(ValueError):
+    """The request's own content could not be turned into a prompt: a 4xx, not a server fault.
+
+    Raised from generation for a problem with what the client sent. The canary counts only
+    server-side generation errors as failures, so a client cannot raise a canary's error rate
+    by sending input that fails.
+    """
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -1711,6 +2148,7 @@ def _generate_response(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     streamer: Any = None,
     stop_event: Any = None,
+    stop_strings: Any = (),
 ):
     """Generate a response from the model.
 
@@ -1718,6 +2156,12 @@ def _generate_response(
     produced; the full reply is still returned. ``stop_event`` (a
     ``threading.Event``) ends generation after the current token once it is set.
     Both are only passed by the streaming SSE path, never for a plain reply.
+
+    ``stop_strings`` (#2549) ends generation after the token that completes one of
+    them, on the plain ``generate`` path only: assisted decoding (a draft model or
+    n-gram lookup) and beam search keep generating, and the caller's cut still removes
+    the stop string. The reply returned is NOT cut here; the caller cuts it with
+    ``cut_at_stop`` so it learns which stop string matched.
     """
     import torch
 
@@ -1730,7 +2174,12 @@ def _generate_response(
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
     # the same function so the two backends cannot drift apart again. #781 —
     # encoded without re-adding the special tokens the template rendered.
-    inputs = encode_chat_prompt(messages, tokenizer, fallback_on_error=True, return_tensors="pt")
+    try:
+        inputs = encode_chat_prompt(
+            messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+        )
+    except (ValueError, TypeError, KeyError) as exc:
+        raise _ClientInputError("the messages could not be turned into a prompt") from exc
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -1767,8 +2216,17 @@ def _generate_response(
             gen_kwargs["logits_processor"] = logits_processor
         if streamer is not None:
             gen_kwargs["streamer"] = streamer
+        criteria = []
         if stop_event is not None:
-            gen_kwargs["stopping_criteria"] = _stop_event_criteria(stop_event)
+            criteria.extend(_stop_event_criteria(stop_event))
+        if stop_strings and assistant_model is None and ngram_config is None and _can_stream(model):
+            criteria.extend(
+                _stop_strings_criteria(tokenizer, stop_strings, input_ids.shape[1])
+            )
+        if criteria:
+            from transformers import StoppingCriteriaList
+
+            gen_kwargs["stopping_criteria"] = StoppingCriteriaList(criteria)
         # v0.53.6 #104 — n-gram speculative decoding (transformers backend).
         # Mutually exclusive with a real draft `assistant_model`.
         if ngram_config is not None and assistant_model is None:
@@ -1777,7 +2235,9 @@ def _generate_response(
             # the user-facing knob; n-gram size + prompt_lookup_max are
             # validated upstream by `validate_ngram_config`.
             try:
-                gen_kwargs["prompt_lookup_num_tokens"] = int(ngram_config.num_draft_tokens)
+                gen_kwargs["prompt_lookup_num_tokens"] = int(
+                    ngram_config.num_draft_tokens
+                )
             except (TypeError, AttributeError):
                 # Schema gate at construction time enforces shape; this
                 # is defence-in-depth.
@@ -1791,7 +2251,7 @@ def _generate_response(
 
         outputs = model.generate(**gen_kwargs)
 
-    new_tokens = outputs[0][input_ids.shape[1] :]
+    new_tokens = outputs[0][input_ids.shape[1]:]
     response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
     prompt_tokens = input_ids.shape[1]
@@ -1831,31 +2291,46 @@ def _create_app(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     canary_state_path: Optional[str] = None,
     canary_stats_path: Optional[str] = None,
+    adapter_dir: Optional[str] = None,
+    feedback_log_writer=None,
+    native_runtime: Any = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
     Args:
         auth_token: Bearer token for the v0.53.7 tool endpoints
             (``/v1/tools/python``, ``/v1/tools/bash`` and
-            ``/v1/tools/web_search``), ``/v1/thumbs`` and the adapter routes.
+            ``/v1/tools/web_search``), ``/v1/thumbs``, ``/v1/feedback`` and the
+            adapter routes.
             When set, callers must supply ``Authorization: Bearer <token>``.
             When ``None`` (default), ``/v1/tools/python`` and ``/v1/tools/bash``
             answer 401 on every bind; the other routes take no token on a
             loopback bind and answer 401 on any other.
+        adapter_dir: The one directory ``POST /v1/adapters/load`` may load adapters
+            from, resolved once here. ``None`` (default) switches the route off (404).
+            The route takes ``auth_token`` on every bind, like the code-tool routes.
+        trace_log_writer: Writes one version 1 conversation record per answer
+            (see ``docs/loop-formats.md``); every answer carries a ``response_id``
+            whether or not it is set.
+        feedback_log_writer: Where ``POST /v1/feedback`` appends feedback records;
+            the route answers 404 when it is ``None``.
     """
     import secrets as _secrets
     import threading as _threading
 
-    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
     from fastapi import Path as FPath
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
+    from soup_cli.monitoring.feedback_log import IssuedResponseIds
     from soup_cli.utils.local_request_guard import (
         browser_origin_dependency,
         check_local_request,
+        check_own_origin,
     )
 
     def _check_local_request(request: Request) -> None:
@@ -1866,6 +2341,16 @@ def _create_app(
         if refusal is not None:
             status_code, detail = refusal
             raise HTTPException(status_code=status_code, detail=detail)
+
+    def _check_own_origin(request: Request) -> None:
+        """Refuse a browser request whose Origin is not this server's own (POST /v1/feedback)."""
+        refusal = check_own_origin(request.headers.get("host"), request.headers.get("origin"))
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    # The response ids this process handed out: POST /v1/feedback accepts only these.
+    issued_response_ids = IssuedResponseIds()
 
     # Origin-only check on the generation routes and the adapter listing: a request
     # whose Origin names another site gets 403. Host is not checked, so a reverse
@@ -1903,6 +2388,44 @@ def _create_app(
             )
         _check_tool_auth(authorization)
 
+    def _check_adapter_load_auth(authorization: Optional[str]) -> None:
+        """POST /v1/adapters/load takes a token on every bind, loopback included."""
+        if not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail=_ADAPTER_LOAD_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        _check_tool_auth(authorization)
+
+    def _check_internal_request(value: Optional[str], authorization: Optional[str]) -> bool:
+        """Whether this chat request is the loop's own check (``X-Soup-Internal: loop-check``).
+
+        ``False`` without the header. With it, a valid tool token is required on every bind,
+        loopback included: otherwise any caller could ask for an answer that is not recorded.
+        A server without ``--tool-auth-token`` therefore refuses the header.
+        """
+        if value is None:
+            return False
+        if not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail=_INTERNAL_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        expected = f"Bearer {auth_token}"
+        if not authorization or not _secrets.compare_digest(
+            authorization.encode("utf-8"), expected.encode("utf-8")
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail=_INTERNAL_TOKEN_INVALID,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if value.strip() != _INTERNAL_LOOP_CHECK:
+            raise HTTPException(status_code=400, detail=_INTERNAL_VALUE_UNKNOWN)
+        return True
+
     from collections.abc import AsyncIterator
     from contextlib import asynccontextmanager
 
@@ -1915,12 +2438,18 @@ def _create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
+            if native_runtime is not None:
+                await native_runtime.start()
             yield
         finally:
             try:
-                canary_outcomes.close()
-            except (OSError, TypeError, ValueError):
-                logger.warning("canary shutdown flush failed", exc_info=True)
+                if native_runtime is not None:
+                    await native_runtime.aclose()
+            finally:
+                try:
+                    canary_outcomes.close()
+                except (OSError, TypeError, ValueError):
+                    logger.warning("canary shutdown flush failed", exc_info=True)
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0", lifespan=lifespan)
     app.state.canary_outcomes = canary_outcomes
@@ -1933,8 +2462,8 @@ def _create_app(
     #     requests to the generation routes and the adapter listing, so a page
     #     the operator merely visits cannot burn GPU time or enumerate loaded
     #     adapters. No Origin means no browser, so a proxy / curl / SDK passes.
-    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs and
-    #     adapter-mutation routes, which no reverse proxy needs to rename.
+    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs, feedback
+    #     and adapter-mutation routes, which no reverse proxy needs to rename.
     # None of the three covers a non-browser client, which sends no Origin at
     # all and can name the bind address in Host — for those, on a non-loopback
     # bind, the bearer token checked by `_check_tool_auth` is the only thing
@@ -1945,7 +2474,19 @@ def _create_app(
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
+        # A page on localhost can only read this response header if it is exposed.
+        expose_headers=[_RESPONSE_ID_HEADER],
     )
+
+    if native_runtime is not None:
+        from soup_cli.utils.mlx_serve import install_native_routes
+
+        app.state.native_runtime = native_runtime
+        install_native_routes(
+            app, native_runtime, model_name=model_name, max_tokens_default=max_tokens_default,
+            browser_guard=_check_browser_origin,
+        )
+        return app
 
     # Shared metrics bucket — always created so /metrics works whether or
     # not --dashboard is enabled.
@@ -1978,6 +2519,13 @@ def _create_app(
             max_length=512,
             description="Stable key used by the soup loop canary router.",
         )
+        # #2549 — a string, a list of at most four strings, or null. Typed Any on
+        # purpose: the handler checks it with parse_stop so a bad value is a 400 that
+        # names the field, not the 422 pydantic would answer with.
+        stop: Any = Field(
+            default=None,
+            description="Stop string, or up to 4 of them; the reply is cut before the first.",
+        )
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
@@ -1992,6 +2540,13 @@ def _create_app(
     # v0.71.17 #259 — serve-time MoLE runtime (or None). When set, the chat
     # handler routes generation through the per-token gate-blend decode loop.
     _mole_runtime = mole_runtime
+    # POST /v1/adapters/load: the one directory adapters may come from, resolved once so a
+    # symlink re-pointed later cannot move it (None: the route is off); the names added
+    # through the route (for the cap); and a lock that makes two loads take turns, so the
+    # name and cap checks cannot race. The load itself also takes `_generation_lock`.
+    _adapter_root = os.path.realpath(adapter_dir) if adapter_dir else None
+    _runtime_adapters: List[str] = []
+    _adapter_load_lock = threading.Lock()
 
     # --- Endpoints ---
 
@@ -2022,7 +2577,7 @@ def _create_app(
             if state is None or state.canary_active is None or not state.canary_traffic_pct:
                 return None, None
             policy = CanaryPolicy(
-                stable=state.served_model,
+                stable=state.stable_name(),
                 canary=state.canary_active,
                 traffic_pct=float(state.canary_traffic_pct),
             )
@@ -2077,7 +2632,11 @@ def _create_app(
         _check_tool_auth(authorization)
         current = _active_snapshot()
         return {
-            "adapters": [{"name": name, "active": name == current} for name in _adapter_map],
+            "adapters": [
+                {"name": name, "active": name == current}
+                # A snapshot: POST /v1/adapters/load adds to the map from another thread.
+                for name in list(_adapter_map)
+            ],
             "active": current,
         }
 
@@ -2091,7 +2650,9 @@ def _create_app(
         # adapter names are loaded by reading "unknown adapter" off a probe.
         _check_tool_auth(authorization)
         if not _adapter_map:
-            raise HTTPException(status_code=404, detail="No adapters loaded.")
+            raise HTTPException(
+                status_code=404, detail="No adapters loaded."
+            )
         if name not in _adapter_map:
             raise HTTPException(
                 status_code=404,
@@ -2109,6 +2670,134 @@ def _create_app(
             active_state["active"] = None
         return {"active": None, "status": "ok"}
 
+    def _evictable_runtime_adapter() -> Optional[str]:
+        """The oldest runtime adapter nothing depends on, or ``None``.
+
+        Protected: the active adapter, and what ``loop.yaml`` names as the canary, as production
+        (the stable side of keyed traffic) and as production's rollback target. If the loop's
+        state cannot be read, nothing is evicted.
+        """
+        protected = {_active_snapshot()}
+        try:
+            state = canary_state.get()
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            return None
+        if state is not None:
+            protected.update({
+                state.canary_active, state.production_name, state.previous_production_name,
+            })
+        for candidate in _runtime_adapters:
+            if candidate not in protected:
+                return candidate
+        return None
+
+    def _evict_runtime_adapter(victim: str) -> None:
+        """Unload ``victim`` (the caller holds ``_adapter_load_lock``)."""
+        with _generation_lock:
+            try:
+                model_obj.delete_adapter(victim)
+            except Exception:
+                logger.exception("runtime adapter %r could not be unloaded", victim)
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); the oldest "
+                        "adapter could not be unloaded"
+                    ),
+                ) from None
+            _peft_adapter_names.discard(victim)
+            _adapter_map.pop(victim, None)
+            _runtime_adapters.remove(victim)
+
+    def _load_adapter_blocking(name: str, path: str) -> Dict[str, str]:
+        """Checks d-i of POST /v1/adapters/load. Runs in a worker thread: PEFT is slow."""
+        nonlocal model_obj
+        resolved = _resolve_inside(path, _adapter_root)
+        if resolved is None:
+            raise HTTPException(status_code=403, detail="adapter path is outside --adapter-dir")
+        if not os.path.isfile(os.path.join(resolved, "adapter_config.json")):
+            raise HTTPException(status_code=400, detail="not a LoRA adapter directory")
+        with _adapter_load_lock:
+            if (
+                name in _adapter_map
+                or name in _peft_adapter_names
+                or _model_has_adapter(model_obj, name)
+            ):
+                raise HTTPException(status_code=409, detail="adapter name already loaded")
+            for unsupported, feature in (
+                (_mole_runtime, "--mole"),
+                (_loaded_bank, "--bank"),
+            ):
+                if unsupported is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"runtime adapter loading is not supported with {feature}",
+                    )
+            if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
+                # At the cap the OLDEST runtime adapter that is not in use is unloaded to make
+                # room (never the active one, production, its rollback target or the canary).
+                victim = _evictable_runtime_adapter()
+                if victim is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); every "
+                            "loaded adapter is the active one, production, its rollback target "
+                            "or the canary"
+                        ),
+                    )
+                _evict_runtime_adapter(victim)
+            # The model is process-global: the load takes the lock a generation holds.
+            with _generation_lock:
+                try:
+                    loaded = _load_runtime_adapter(model_obj, resolved, name)
+                except Exception:
+                    logger.exception(
+                        "POST /v1/adapters/load: adapter %r could not be loaded from %r",
+                        name,
+                        resolved,
+                    )
+                    raise HTTPException(
+                        status_code=400, detail="adapter could not be loaded"
+                    ) from None
+                # Only now does anything change. The model first (a wrapped base is a new
+                # object every handler must use from here on), the map last: it is what
+                # makes the adapter selectable.
+                model_obj = loaded
+                _peft_adapter_names.add(name)
+                _adapter_map[name] = resolved
+                _runtime_adapters.append(name)
+        return {"name": name, "status": "loaded"}
+
+    @app.post("/v1/adapters/load", dependencies=[Depends(_check_local_request)])
+    async def load_adapter(
+        request: Request, authorization: Optional[str] = Header(default=None)
+    ):
+        """Add a LoRA adapter from --adapter-dir to the running server (not activated)."""
+        # Security first: before the route says whether it is enabled, and before the body
+        # is read, an unauthenticated caller learns nothing.
+        _check_adapter_load_auth(authorization)
+        if _adapter_root is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "runtime adapter loading is not enabled; "
+                    "start soup serve with --adapter-dir"
+                ),
+            )
+        # The body is read by hand, not declared as a model: a malformed one must answer
+        # 400 "Invalid request" (not FastAPI's 422), and `curl -d` sends it labelled as a form.
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _ADAPTER_LOAD_MAX_BODY_BYTES:
+                raise HTTPException(status_code=400, detail="Invalid request")
+            chunks.append(chunk)
+        parsed = _parse_adapter_load_body(b"".join(chunks))
+        if parsed is None:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        return await run_in_threadpool(_load_adapter_blocking, *parsed)
+
     @app.get("/v1/models")
     def list_models():
         return {
@@ -2125,9 +2814,59 @@ def _create_app(
     @app.post("/v1/chat/completions", dependencies=[Depends(_check_browser_origin)])
     def chat_completions(
         request: ChatCompletionRequest,
+        response: Response,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
-        x_conversation_id: Optional[str] = Header(default=None, alias="X-Conversation-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
+        x_soup_internal: Optional[str] = Header(default=None, alias=_INTERNAL_HEADER),
+        authorization: Optional[str] = Header(default=None),
     ):
+        # Every answer gets an id (docs/serving-and-export.md): the `id` field stays the
+        # OpenAI-style "chatcmpl-..." one; `response_id` (body) and X-Response-Id
+        # (header) carry the id the trace log and POST /v1/feedback use.
+        # The loop's own check (X-Soup-Internal, with a valid tool token) is answered but
+        # not recorded: no conversation record, no canary routing, no canary statistics.
+        internal = _check_internal_request(x_soup_internal, authorization)
+        reply, response_id = _run_chat(
+            request, x_user_id, x_conversation_id, internal=internal
+        )
+        response.headers[_RESPONSE_ID_HEADER] = response_id
+        if internal:
+            response.headers[_INTERNAL_HEADER] = _INTERNAL_LOOP_CHECK
+        return reply
+
+    def _run_chat(
+        request: ChatCompletionRequest,
+        x_user_id: Optional[str],
+        x_conversation_id: Optional[str],
+        internal: bool = False,
+        *,
+        frames_factory: Any = None,
+        report: Optional[dict] = None,
+    ):
+        """Answer one chat request; returns ``(reply, response_id)``.
+
+        ``reply`` is the response dict, or a ``StreamingResponse`` when the request
+        asked for a stream. ``/v1/messages`` calls this too.
+        ``internal`` marks the loop's own check (``chat_completions`` has verified the
+        token): the answer is not written to the trace log and the request is never routed
+        to a canary bucket, so it is not counted in the canary statistics either; it is
+        answered as unkeyed traffic is, by the stable side.
+
+        ``frames_factory`` (``response_id -> frames``) picks the wire format of a streamed
+        reply (the OpenAI chunks when ``None``, the Anthropic events for ``/v1/messages``);
+        ``report`` receives the stop string that ended a plain reply as
+        ``report["stop_sequence"]``.
+        """
+        response_id = str(uuid.uuid4())
+        record_writer = None if internal else trace_log_writer
+        # #2549 — refuse a bad stop value before anything runs.
+        try:
+            stops = parse_stop(request.stop, field="stop")
+        except StopStringError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         # Check adapter selection (from request body)
         # Treat an empty public request value like an omitted adapter. The
         # empty string is reserved internally as the explicit base-model
@@ -2144,13 +2883,23 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+        conversation_id = request.conversation_id or x_conversation_id
         canary_tracking = None
-        if requested_adapter is None:
-            routed_adapter, canary_tracking = _canary_adapter(
-                request.conversation_id or x_conversation_id
-            )
+        if requested_adapter is None and not internal:
+            routed_adapter, canary_tracking = _canary_adapter(conversation_id)
             if canary_tracking is not None:
                 requested_adapter = routed_adapter
+        # What the trace record says produced the answer: the same selection
+        # `_adapter_scope` makes, from the same inputs (MoLE blends, it has no one adapter).
+        active_adapter = _active_snapshot()
+        used_adapter = (
+            None
+            if _mole_runtime is not None
+            else _effective_adapter(
+                model_obj, _peft_adapter_names, requested_adapter, active_adapter
+            )
+        )
+        canary_bucket = canary_tracking[1] if canary_tracking is not None else None
 
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
@@ -2163,20 +2912,18 @@ def _create_app(
         max_tokens = request.max_tokens or max_tokens_default
 
         if request.stream:
+            if not internal:
+                issued_response_ids.add(response_id)
             stream_started = time.perf_counter()
             from soup_cli.utils.structured_output import (
                 build_logits_processors,
             )
-
             processors = build_logits_processors(
-                output_constraint,
-                tokenizer,
+                output_constraint, tokenizer,
             )
             return StreamingResponse(
                 _stream_response(
-                    model_obj,
-                    tokenizer,
-                    messages,
+                    model_obj, tokenizer, messages,
                     max_tokens=max_tokens,
                     temperature=request.temperature,
                     top_p=request.top_p,
@@ -2184,7 +2931,7 @@ def _create_app(
                     assistant_model=draft_model,
                     assistant_tokenizer=draft_tokenizer,
                     num_assistant_tokens=num_speculative_tokens,
-                    trace_log_writer=trace_log_writer,
+                    trace_log_writer=record_writer,
                     started=stream_started,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                     mole_runtime=_mole_runtime,
@@ -2192,15 +2939,29 @@ def _create_app(
                     x_user_id=x_user_id,
                     adapter_lock=_generation_lock,
                     adapter_names=_peft_adapter_names,
+                    always_lock=_adapter_root is not None,
+                    model_getter=lambda: model_obj,
                     requested_adapter=requested_adapter,
-                    active_adapter=_active_snapshot(),
-                    canary_outcome=(lambda ok: _record_canary_outcome(canary_tracking, ok)),
+                    active_adapter=active_adapter,
+                    canary_outcome=(
+                        lambda ok: _record_canary_outcome(canary_tracking, ok)
+                    ),
                     logits_processor=processors or None,
                     ngram_config=ngram_config,
                     reasoning_parser=reasoning_parser,
+                    response_id=response_id,
+                    conversation_id=conversation_id,
+                    trace_adapter=used_adapter,
+                    canary_bucket=canary_bucket,
+                    stop=stops,
+                    frames=frames_factory(response_id) if frames_factory else None,
                 ),
                 media_type="text/event-stream",
-            )
+                headers={
+                    _RESPONSE_ID_HEADER: response_id,
+                    **({_INTERNAL_HEADER: _INTERNAL_LOOP_CHECK} if internal else {}),
+                },
+            ), response_id
 
         import contextlib as _contextlib
 
@@ -2220,10 +2981,8 @@ def _create_app(
                     from soup_cli.utils.structured_output import (
                         build_logits_processors,
                     )
-
                     processors = build_logits_processors(
-                        output_constraint,
-                        tokenizer,
+                        output_constraint, tokenizer,
                     )
                     if _mole_runtime is not None:
                         # v0.71.17 #259 — per-token MoLE gate-blend decode.
@@ -2243,21 +3002,18 @@ def _create_app(
                         # disabled) under the generation lock for the duration
                         # of generate().
                         with _adapter_scope(
-                            model_obj,
-                            _generation_lock,
-                            _peft_adapter_names,
-                            requested_adapter,
-                            _active_snapshot(),
-                        ):
+                            model_obj, _generation_lock, _peft_adapter_names,
+                            requested_adapter, active_adapter,
+                            always_lock=_adapter_root is not None,
+                            model_getter=lambda: model_obj,
+                        ) as selected_model:
                             (
                                 response_text,
                                 prompt_tokens,
                                 completion_tokens,
                                 finish_reason,
                             ) = _generate_response(
-                                model_obj,
-                                tokenizer,
-                                messages,
+                                selected_model, tokenizer, messages,
                                 max_tokens=max_tokens,
                                 temperature=request.temperature,
                                 top_p=request.top_p,
@@ -2267,7 +3023,14 @@ def _create_app(
                                 logits_processor=processors or None,
                                 ngram_config=ngram_config,
                                 kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                                # Reasoning blocks are cut out of the finished text, so a
+                                # stop string is looked for after that, not mid-generation.
+                                stop_strings=stops if reasoning_parser is None else (),
                             )
+                except _ClientInputError as exc:
+                    # The client's input, not a server fault: no canary failure is recorded.
+                    logger.info("request refused: %s", exc)
+                    raise HTTPException(status_code=400, detail="Invalid request: messages")
                 except Exception:
                     _record_canary_outcome(canary_tracking, False)
                     logger.exception("Generation error")
@@ -2280,9 +3043,16 @@ def _create_app(
                     from soup_cli.utils.reasoning_parser import strip_reasoning
 
                     response_text = strip_reasoning(
-                        response_text,
-                        reasoning_parser,
+                        response_text, reasoning_parser,
                     )
+
+                # #2549 — cut the reply before the first stop string; the stop string
+                # itself is not returned and the reply ended on it, whatever else ended it.
+                response_text, matched_stop = cut_at_stop(response_text, stops)
+                if matched_stop is not None:
+                    finish_reason = "stop"
+                if report is not None:
+                    report["stop_sequence"] = matched_stop
 
                 # output_constraint is validated upstream; v0.33.0 #53 wires
                 # it through outlines / lm-format-enforcer into the generate
@@ -2291,18 +3061,22 @@ def _create_app(
                 pass
 
                 # v0.40.3 (#33 (b)) — passive request log; never breaks
-                # the request handler on disk / serialisation issues.
-                if trace_log_writer is not None:
-                    last_user = next(
-                        (m["content"] for m in reversed(messages) if m.get("role") == "user"),
-                        "",
-                    )
-                    trace_log_writer.record(
-                        prompt=str(last_user),
-                        response=response_text,
-                        latency_ms=(time.perf_counter() - started) * 1000,
-                        tokens=completion_tokens,
-                    )
+                # the request handler on disk / serialisation issues. One version 1
+                # conversation record per answer, under the id the client gets back.
+                _write_conversation_record(
+                    record_writer,
+                    response_id=response_id,
+                    conversation_id=conversation_id,
+                    model_name=model_name,
+                    messages=messages,
+                    response_text=response_text,
+                    finish_reason=finish_reason,
+                    started=started,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    adapter=used_adapter,
+                    canary_bucket=canary_bucket,
+                )
 
                 result = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -2324,9 +3098,12 @@ def _create_app(
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                     },
+                    "response_id": response_id,
                 }
                 _record_canary_outcome(canary_tracking, True)
-                return result
+                if not internal:
+                    issued_response_ids.add(response_id)
+                return result, response_id
             finally:
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
@@ -2337,7 +3114,14 @@ def _create_app(
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
     @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
-    def anthropic_messages(payload: dict) -> dict:
+    def anthropic_messages(
+        payload: dict,
+        response: Response,
+        x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
+    ) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,
             validate_anthropic_payload,
@@ -2346,12 +3130,25 @@ def _create_app(
         # v0.53.7 #102: streaming live (Anthropic event shape).
         wants_stream = isinstance(payload, dict) and bool(payload.get("stream"))
 
+        # #2549 — stop_sequences is checked before the generic conversion below, which
+        # answers "Invalid request" without saying why: a client has to learn which
+        # field is wrong. The message names the field and repeats nothing of the value.
+        try:
+            stops = parse_stop(
+                payload.get("stop_sequences") if isinstance(payload, dict) else None,
+                field="stop_sequences",
+                allow_string=False,
+            )
+        except StopStringError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         try:
             validate_anthropic_payload(payload)
             openai_payload = from_anthropic(payload)
-            # Drop the OpenAI-side ``stream`` field — the streaming path is
-            # handled below using the Anthropic event shape, not OpenAI SSE.
-            openai_payload.pop("stream", None)
+            # ``stream`` picks the wire format below: the same generation as
+            # /v1/chat/completions, sent as Anthropic events instead of OpenAI chunks.
+            openai_payload["stream"] = wants_stream
+            openai_payload["stop"] = list(stops)
             request = ChatCompletionRequest(**openai_payload)
         except (TypeError, ValueError) as exc:
             # Security: do not echo internal validator/converter details
@@ -2362,7 +3159,27 @@ def _create_app(
             logger.debug("/v1/messages pydantic error: %s", exc)
             raise HTTPException(status_code=400, detail="Invalid request")
 
-        chat_response = chat_completions(request)
+        out_model = openai_payload.get("model", model_name)
+
+        if wants_stream:
+            # #2515 — the events leave as the model generates, from the generator the
+            # OpenAI stream uses; stop_reason and the token counts close the stream.
+            # The reply carries the answer's id (X-Response-Id header, and
+            # message.response_id in message_start) as /v1/chat/completions does.
+            stream_reply, _stream_response_id = _run_chat(
+                request, x_user_id, x_conversation_id,
+                frames_factory=lambda rid: _AnthropicStreamFrames(
+                    out_model, response_id=rid
+                ),
+            )
+            stream_reply.headers["Cache-Control"] = "no-store"
+            stream_reply.headers["X-Accel-Buffering"] = "no"
+            return stream_reply
+
+        report: dict = {}
+        chat_response, response_id = _run_chat(
+            request, x_user_id, x_conversation_id, report=report
+        )
 
         # Map OpenAI chat response back to Anthropic shape.
         text = ""
@@ -2371,10 +3188,15 @@ def _create_app(
                 text = chat_response["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 text = ""
-        usage = chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        usage = (
+            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        )
 
-        msg_id = chat_response.get("id", "") if isinstance(chat_response, dict) else ""
-        out_model = openai_payload.get("model", model_name)
+        msg_id = (
+            chat_response.get("id", "")
+            if isinstance(chat_response, dict)
+            else ""
+        )
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)
         # #2361 — a run cut off at max_tokens is ``max_tokens``, not a turn end.
@@ -2384,26 +3206,10 @@ def _create_app(
                 finish_reason = chat_response["choices"][0]["finish_reason"]
             except (KeyError, IndexError, TypeError):
                 finish_reason = None
-        stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
+        stop_sequence = report.get("stop_sequence")
+        stop_reason = _anthropic_stop_reason(finish_reason, stop_sequence)
 
-        if wants_stream:
-            # v0.53.7 #102 streaming live — emit Anthropic event-shape SSE.
-            return StreamingResponse(
-                _stream_anthropic_messages(
-                    msg_id=msg_id,
-                    model=out_model,
-                    text=text,
-                    input_tokens=in_tokens,
-                    output_tokens=out_tokens,
-                    stop_reason=stop_reason,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-store",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-
+        response.headers[_RESPONSE_ID_HEADER] = response_id
         return {
             "id": msg_id,
             "type": "message",
@@ -2411,10 +3217,12 @@ def _create_app(
             "model": out_model,
             "content": [{"type": "text", "text": text}],
             "stop_reason": stop_reason,
+            "stop_sequence": stop_sequence,
             "usage": {
                 "input_tokens": in_tokens,
                 "output_tokens": out_tokens,
             },
+            "response_id": response_id,
         }
 
     # ----- v0.53.6 #103 / v0.53.7 — Server-side tool endpoints (live) -----
@@ -2546,7 +3354,9 @@ def _create_app(
                 raw_results = backend(query, max_results, allowlist)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("/v1/tools/web_search backend error: %s", exc)
-                raise HTTPException(status_code=500, detail="Internal server error")
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                )
             for r in (raw_results or [])[:max_results]:
                 if isinstance(r, dict) and "url" in r:
                     # Re-check domain allowlist for backend results.
@@ -2592,7 +3402,9 @@ def _create_app(
         _check_tool_auth(authorization)
         db = getattr(app.state, "record_thumbs_db", None)
         if not db:
-            raise HTTPException(status_code=404, detail="thumbs recording not enabled")
+            raise HTTPException(
+                status_code=404, detail="thumbs recording not enabled"
+            )
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid request")
         prompt = payload.get("prompt")
@@ -2612,10 +3424,75 @@ def _create_app(
             raise HTTPException(status_code=400, detail="Invalid request") from exc
         return {"status": "ok", "thumb": thumb}
 
+    @app.post(
+        "/v1/feedback",
+        dependencies=[Depends(_check_local_request), Depends(_check_own_origin)],
+    )
+    async def record_feedback_endpoint(
+        request: Request,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        """Append one feedback record (docs/loop-formats.md) about an earlier answer.
+
+        ``response_id`` is the id the answer came back with (``response_id`` in the
+        body, ``X-Response-Id`` header); an id this process did not issue is a 404
+        ``unknown response_id`` (the trace log is not read). A browser request from
+        another origin is a 403, a log at its size cap a 507. Answers 404 when
+        ``--feedback-log`` was not passed.
+        """
+        from soup_cli.monitoring.feedback_log import (
+            MAX_BODY_BYTES,
+            FeedbackLogFullError,
+            FeedbackValidationError,
+            build_record,
+            validate_feedback,
+        )
+
+        # Same order as /v1/thumbs: the token is checked before anything about the
+        # server (enabled or not) or the body is revealed.
+        _check_tool_auth(authorization)
+        writer = getattr(app.state, "feedback_log_writer", None)
+        if writer is None:
+            raise HTTPException(
+                status_code=404,
+                detail="feedback recording not enabled; start soup serve with --feedback-log",
+            )
+        body = await _read_capped_body(request, MAX_BODY_BYTES)
+        try:
+            payload = json.loads(body)
+        except (ValueError, RecursionError):
+            raise HTTPException(status_code=400, detail="Invalid request: body") from None
+        try:
+            fields = validate_feedback(payload)
+        except FeedbackValidationError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid request: {exc.field}"
+            ) from None
+        if fields["response_id"] not in issued_response_ids:
+            raise HTTPException(status_code=404, detail="unknown response_id")
+        record = build_record(fields)
+        try:
+            await run_in_threadpool(writer.append, record)
+        except FeedbackLogFullError as exc:
+            logger.warning("feedback log is full: %s", for_terminal(str(exc.path)))
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    f"feedback log is full: {for_terminal(str(exc.path))} has reached its "
+                    f"size cap ({exc.max_bytes} bytes); nothing was stored"
+                ),
+            ) from None
+        except OSError:
+            logger.exception("feedback record could not be written")
+            raise HTTPException(status_code=500, detail="Internal server error") from None
+        return {"status": "ok", "id": record["id"]}
+
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard
     app.state.output_constraint = output_constraint
     app.state.trace_log_writer = trace_log_writer
+    app.state.feedback_log_writer = feedback_log_writer
+    app.state.issued_response_ids = issued_response_ids
     app.state.web_search_config = web_search_config
     app.state.web_search_backend = web_search_backend
     app.state.record_thumbs_db = record_thumbs_db
@@ -2635,74 +3512,165 @@ def _sanitise_sse_field(value: str, *, max_len: int) -> str:
     return cleaned[:max_len]
 
 
-def _stream_anthropic_messages(
-    *,
-    msg_id: str,
-    model: str,
-    text: str,
-    input_tokens: int,
-    output_tokens: int,
-    stop_reason: str = "end_turn",
-) -> "Generator[str, None, None]":
-    """v0.53.7 #102 — yield Anthropic event-shape SSE frames.
+def _anthropic_stop_reason(finish_reason: Optional[str], stop_sequence: Optional[str]) -> str:
+    """Anthropic's ``stop_reason`` for how a reply ended.
 
-    Emits the canonical 4-event sequence:
-    - ``message_start``: opens the message envelope.
-    - ``content_block_delta``: one frame per word (best-effort streaming;
-      the underlying handler ran the full generation eagerly).
-    - ``message_delta`` + ``message_stop``: closes the stream.
+    A stop sequence that matched is ``stop_sequence``, whatever else ended the run (#2549);
+    a run cut off at ``max_tokens`` is ``max_tokens`` (#2361); anything else is ``end_turn``.
     """
-    import json as _json
+    if stop_sequence is not None:
+        return "stop_sequence"
+    return "max_tokens" if finish_reason == "length" else "end_turn"
 
-    # M-A: sanitise caller-influenced fields before SSE embedding.
-    msg_id = _sanitise_sse_field(msg_id, max_len=64)
-    model = _sanitise_sse_field(model, max_len=200)
 
+def _count_prompt_tokens(tokenizer, messages) -> int:
+    """How many tokens the prompt for ``messages`` takes, for ``message_start``'s usage.
+
+    The same rendering and tokenization ``_generate_response`` uses. The count is only
+    reported, never relied on, so a tokenizer that cannot be asked reports ``0``.
+    """
+    from soup_cli.utils.vllm import encode_chat_prompt
+
+    try:
+        inputs = encode_chat_prompt(
+            messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+        )
+        return int(inputs["input_ids"].shape[1])
+    except Exception:  # noqa: BLE001 - usage numbers must not fail a reply
+        logger.debug("could not count the prompt tokens", exc_info=True)
+        return 0
+
+
+class _OpenAIStreamFrames:
+    """The ``chat.completion.chunk`` SSE frames of a streamed ``/v1/chat/completions`` reply."""
+
+    needs_prompt_tokens = False
+
+    def __init__(self, model_name: str, response_id: Optional[str] = None) -> None:
+        self._model_name = model_name
+        self._response_id = response_id
+        self._chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        self._created = int(time.time())
+
+    def _chunk(self, delta: dict, finish_reason: Optional[str]) -> str:
+        chunk = {
+            "id": self._chat_id,
+            "object": "chat.completion.chunk",
+            "created": self._created,
+            "model": self._model_name,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+        # The id the trace log and POST /v1/feedback use rides in every chunk, next to
+        # the OpenAI-style ``id`` above.
+        if self._response_id is not None:
+            chunk["response_id"] = self._response_id
+        return f"data: {json.dumps(chunk)}\n\n"
+
+    def start(self, prompt_tokens: int) -> list[str]:
+        return []
+
+    def text(self, text: str) -> str:
+        return self._chunk({"content": text}, None)
+
+    def error(self) -> str:
+        return 'data: {"error": "Internal server error"}\n\n'
+
+    def end(
+        self, finish_reason: Optional[str], completion_tokens: int, stop_sequence: Optional[str]
+    ) -> list[str]:
+        return [self._chunk({}, finish_reason), "data: [DONE]\n\n"]
+
+
+class _AnthropicStreamFrames:
+    """The Anthropic Messages SSE events of a streamed ``/v1/messages`` reply (#2515).
+
+    The sequence is the one the Anthropic SDKs expect: ``message_start``, one
+    ``content_block_start``, a ``content_block_delta`` per piece of text,
+    ``content_block_stop``, ``message_delta`` carrying ``stop_reason`` and the output
+    token count, then ``message_stop``. A failure after the stream has started is an
+    ``error`` event, which ends the stream.
+    """
+
+    needs_prompt_tokens = True
+
+    def __init__(self, model: str, response_id: Optional[str] = None) -> None:
+        # M-A: sanitise caller-influenced fields before SSE embedding.
+        self._model = _sanitise_sse_field(model, max_len=200)
+        self._msg_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        self._response_id = response_id
+
+    @staticmethod
     def _frame(event_type: str, data: dict) -> str:
-        return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
-    yield _frame(
-        "message_start",
-        {
-            "type": "message_start",
-            "message": {
-                "id": msg_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model,
-                "stop_reason": None,
-                "usage": {
-                    "input_tokens": int(input_tokens),
-                    "output_tokens": 0,
+    def start(self, prompt_tokens: int) -> list[str]:
+        envelope: dict = {
+            "id": self._msg_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": self._model,
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": int(prompt_tokens), "output_tokens": 0},
+        }
+        if self._response_id:
+            envelope["response_id"] = self._response_id
+        return [
+            self._frame("message_start", {"type": "message_start", "message": envelope}),
+            self._frame(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
                 },
-            },
-        },
-    )
+            ),
+        ]
 
-    # Stream word-by-word so SSE consumers see incremental progress, even
-    # though the underlying generation is already complete.
-    words = (text or "").split(" ")
-    for idx, word in enumerate(words):
-        chunk_text = word if idx == 0 else f" {word}"
-        yield _frame(
+    def text(self, text: str) -> str:
+        return self._frame(
             "content_block_delta",
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "text_delta", "text": chunk_text},
+                "delta": {"type": "text_delta", "text": text},
             },
         )
 
-    yield _frame(
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason},
-            "usage": {"output_tokens": int(output_tokens)},
-        },
-    )
-    yield _frame("message_stop", {"type": "message_stop"})
+    def error(self) -> str:
+        return self._frame(
+            "error",
+            {
+                "type": "error",
+                "error": {"type": "api_error", "message": "Internal server error"},
+            },
+        )
+
+    def end(
+        self, finish_reason: Optional[str], completion_tokens: int, stop_sequence: Optional[str]
+    ) -> list[str]:
+        return [
+            self._frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            self._frame(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": _anthropic_stop_reason(finish_reason, stop_sequence),
+                        "stop_sequence": stop_sequence,
+                    },
+                    "usage": {"output_tokens": int(completion_tokens)},
+                },
+            ),
+            self._frame("message_stop", {"type": "message_stop"}),
+        ]
 
 
 # The worker thread of a streamed reply, and how long to wait on it once the reply has
@@ -2753,7 +3721,7 @@ def _reply_streamer_class():
                 # written may change with the next token, so it is held back.
                 end = max(text.rfind(" "), text.rfind("\n")) + 1
             if end > self.print_len:
-                self.on_finalized_text(text[self.print_len : end])
+                self.on_finalized_text(text[self.print_len:end])
                 self.print_len = end
 
     return _ReplyStreamer
@@ -2795,18 +3763,21 @@ class _StripEmitter:
             self._started = True
         text = self._held + piece
         body = text.rstrip()
-        self._held = text[len(body) :]
+        self._held = text[len(body):]
         return body
 
 
-def _iter_generated_text(tokenizer, generate, outcome: dict):
+def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None):
     """Run ``generate`` on a worker thread and yield its text as it is produced.
 
     ``generate(streamer=..., stop_event=...)`` is called on a new thread, in a copy
     of the caller's ``contextvars`` context (a request-local selection such as the
     per-user bank must be visible to it). Pieces come from a ``TextIteratorStreamer``
     that holds a word back until it is complete and keeps the whole reply in its
-    token cache (see ``_reply_streamer_class``).
+    token cache (see ``_reply_streamer_class``). A caller that passes its own
+    ``stop_event`` can set it to end generation early and still read the stream to its
+    end, as ``_stream_response`` does once a stop string has been reached; closing this
+    generator sets it too, as below.
     ``generate``'s return value lands in ``outcome["result"]``; an exception it
     raised is re-raised here once the text that came before it has been yielded.
 
@@ -2821,7 +3792,8 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
     import contextvars
 
     streamer = _reply_streamer_class()(tokenizer, skip_prompt=True, skip_special_tokens=True)
-    stop_event = threading.Event()
+    if stop_event is None:
+        stop_event = threading.Event()
     failure: list = []
 
     def worker() -> None:
@@ -2869,30 +3841,24 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
 
 
 def _stream_response(
-    model,
-    tokenizer,
-    messages,
-    max_tokens,
-    temperature,
-    top_p,
-    model_name,
-    assistant_model=None,
-    assistant_tokenizer=None,
-    num_assistant_tokens=5,
-    trace_log_writer=None,
-    started=None,
+    model, tokenizer, messages,
+    max_tokens, temperature, top_p, model_name,
+    assistant_model=None, assistant_tokenizer=None, num_assistant_tokens=5,
+    trace_log_writer=None, started=None,
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
-    loaded_bank=None,
-    x_user_id=None,
-    adapter_lock=None,
-    adapter_names=None,
-    requested_adapter=None,
-    active_adapter=None,
+    loaded_bank=None, x_user_id=None,
+    adapter_lock=None, adapter_names=None, always_lock=False,
+    requested_adapter=None, active_adapter=None,
     canary_outcome=None,
     logits_processor=None,
     ngram_config=None,
     reasoning_parser=None,
+    response_id=None, conversation_id=None,
+    trace_adapter=None, canary_bucket=None,
+    stop=(),
+    frames=None,
+    model_getter=None,
 ):
     """Generator that yields SSE chunks for streaming responses.
 
@@ -2907,29 +3873,40 @@ def _stream_response(
     * a model whose generation config sets beam search or several return
       sequences, which ``generate`` refuses to combine with a streamer
       (``_can_stream``).
+
+    ``stop`` (#2549) are the stop strings: the reply is cut before the first one. While
+    streaming, text that could be the start of a stop string is held back (see
+    ``StopFilter``), generation is ended as soon as one is complete, and the held text
+    follows when the reply ends without a match. Every other request is cut after the
+    reply is complete.
+
+    ``frames`` is the wire format (#2515): ``_OpenAIStreamFrames`` for
+    ``/v1/chat/completions`` (the default), ``_AnthropicStreamFrames`` for
+    ``/v1/messages``. The generation, the stripping, the stop handling and the
+    full-generation cases above are the same for both.
+
+    ``response_id`` (a fresh uuid when not given) rides in every OpenAI chunk next to the
+    OpenAI-style ``id`` (and in ``message_start`` of an Anthropic stream, as
+    ``message.response_id``, when the frames were built with it). The conversation record
+    is written once the answer is generated, before the remaining chunks and the final
+    chunk go out. A client that disconnects while tokens are streaming still leaves the
+    record its id refers to: the text it was sent, with ``finish_reason``
+    ``"client_disconnected"``.
     """
-    chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
-
-    def content_chunk(text: str) -> str:
-        chunk = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": text},
-                    "finish_reason": None,
-                }
-            ],
-        }
-        return f"data: {json.dumps(chunk)}\n\n"
-
+    if response_id is None:
+        response_id = str(uuid.uuid4())
+    if frames is None:
+        frames = _OpenAIStreamFrames(model_name, response_id=response_id)
+    stops = tuple(stop)
+    stopper = StopFilter(stops)
+    prompt_tokens_for_log = None
     completion_tokens_for_log = 0
     sent = ""  # the text already sent while the reply was being generated
     try:
+        for frame in frames.start(
+            _count_prompt_tokens(tokenizer, messages) if frames.needs_prompt_tokens else 0
+        ):
+            yield frame
         # v0.71.17 #260 — re-select the per-user bank inside the generator's own
         # context. set_active_user runs in the sync endpoint thread, but this
         # generator is iterated later by the async event loop in a DIFFERENT
@@ -2943,9 +3920,7 @@ def _stream_response(
             # v0.71.17 #259 — MoLE blends per-token via a custom decode loop;
             # generate the full text then simulate streaming.
             (
-                response_text,
-                _,
-                completion_tokens_for_log,
+                response_text, prompt_tokens_for_log, completion_tokens_for_log,
                 finish_reason,
             ) = mole_runtime.generate_text(
                 messages,
@@ -2954,23 +3929,19 @@ def _stream_response(
                 top_p=top_p,
             )
         else:
-
             def generate(**streaming):
                 # v0.71.33 — select the request's LoRA adapter under the generation
                 # lock (resolved in the endpoint, applied here where generate runs).
                 # Entered on whichever thread calls generate, so the lock is taken
                 # and released by the same thread.
                 with _adapter_scope(
-                    model,
-                    adapter_lock,
-                    adapter_names,
-                    requested_adapter,
-                    active_adapter,
-                ):
+                    model, adapter_lock, adapter_names,
+                    requested_adapter, active_adapter,
+                    always_lock=always_lock,
+                    model_getter=model_getter,
+                ) as selected_model:
                     return _generate_response(
-                        model,
-                        tokenizer,
-                        messages,
+                        selected_model, tokenizer, messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
                         top_p=top_p,
@@ -2990,36 +3961,61 @@ def _stream_response(
                 and _can_stream(model)
             ):
                 outcome: dict = {}
-                pieces = _iter_generated_text(tokenizer, generate, outcome)
+                stop_event = threading.Event()
+                pieces = _iter_generated_text(tokenizer, generate, outcome, stop_event)
                 emitter = _StripEmitter()
                 try:
                     for piece in pieces:
-                        text = emitter.feed(piece)
+                        # After a stop string only the end of the stream is wanted:
+                        # what the model still says is read and dropped.
+                        text = stopper.feed(emitter.feed(piece))
                         if text:
                             sent += text
-                            yield content_chunk(text)
+                            yield frames.text(text)
+                        if stopper.matched is not None:
+                            stop_event.set()
+                except GeneratorExit:
+                    # Client gone mid-stream: stop generate() first, then leave the record
+                    # its response_id refers to, holding the text it was actually sent.
+                    pieces.close()
+                    if started is not None:
+                        _write_conversation_record(
+                            trace_log_writer,
+                            response_id=response_id,
+                            conversation_id=conversation_id,
+                            model_name=model_name,
+                            messages=messages,
+                            response_text=sent,
+                            finish_reason="client_disconnected",
+                            started=started,
+                            prompt_tokens=None,
+                            completion_tokens=None,
+                            adapter=trace_adapter,
+                            canary_bucket=canary_bucket,
+                        )
+                    raise
                 finally:
                     # Client gone (GeneratorExit): close the text iterator now, which
                     # sets the stop event for generate(). It does not wait for the worker.
                     pieces.close()
                 (
-                    response_text,
-                    _,
-                    completion_tokens_for_log,
-                    finish_reason,
+                    response_text, prompt_tokens_for_log, completion_tokens_for_log, finish_reason,
                 ) = outcome["result"]
             else:
                 (
-                    response_text,
-                    _,
-                    completion_tokens_for_log,
-                    finish_reason,
+                    response_text, prompt_tokens_for_log, completion_tokens_for_log, finish_reason,
                 ) = generate()
+    except _ClientInputError as exc:
+        # The client's input, not a server fault: the stream ends in an error frame, and no
+        # canary failure is recorded.
+        logger.info("request refused: %s", exc)
+        yield frames.error()
+        return
     except Exception:
         if canary_outcome is not None:
             canary_outcome(False)
         logger.exception("Stream generation error")
-        yield 'data: {"error": "Internal server error"}\n\n'
+        yield frames.error()
         return
 
     if canary_outcome is not None:
@@ -3030,8 +4026,38 @@ def _stream_response(
         from soup_cli.utils.reasoning_parser import strip_reasoning
 
         response_text = strip_reasoning(
-            response_text,
-            reasoning_parser,
+            response_text, reasoning_parser,
+        )
+
+    # #2549 — the finished reply, cut before the first stop string. When the stop string
+    # was reached while streaming, this is what was sent; when it was not (the
+    # streamer held text back, or the request is not streamed), what follows below sends
+    # the rest of this text, never what comes after the stop string.
+    response_text, matched_stop = cut_at_stop(response_text, stops)
+    matched_stop = stopper.matched or matched_stop
+    if matched_stop is not None:
+        finish_reason = "stop"
+
+    # v0.40.3 (#33 (b)) — passive request log on the streaming path, as a version 1
+    # conversation record. Latency is measured from the BEFORE-generation mark passed
+    # in by the chat_completions handler. Skipped if the writer is None or `started`
+    # is missing; errors are swallowed (passive log). Written before the remaining
+    # chunks and the final chunk, so the record exists by the time the client has
+    # the whole answer and its response_id. It holds the reply as cut at a stop string.
+    if started is not None:
+        _write_conversation_record(
+            trace_log_writer,
+            response_id=response_id,
+            conversation_id=conversation_id,
+            model_name=model_name,
+            messages=messages,
+            response_text=response_text,
+            finish_reason=finish_reason,
+            started=started,
+            prompt_tokens=prompt_tokens_for_log,
+            completion_tokens=completion_tokens_for_log,
+            adapter=trace_adapter,
+            canary_bucket=canary_bucket,
         )
 
     if not sent:
@@ -3040,50 +4066,20 @@ def _stream_response(
         # send the finished reply word by word.
         words = response_text.split(" ")
         for idx, word in enumerate(words):
-            yield content_chunk(word if idx == 0 else f" {word}")
+            yield frames.text(word if idx == 0 else f" {word}")
     elif response_text.startswith(sent):
         # Whatever the streamer did not release; the stripped reply is what counts.
         if len(response_text) > len(sent):
-            yield content_chunk(response_text[len(sent) :])
+            yield frames.text(response_text[len(sent):])
     else:
         # The incremental decode and the final decode disagree (a tokenizer that
         # decodes a suffix differently from the same text in context): what was
         # already sent stays sent.
         logger.debug("streamed text differs from the final decode; nothing more is sent")
 
-    # Final chunk
-    final_chunk = {
-        "id": chat_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model_name,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": finish_reason,
-            }
-        ],
-    }
-    yield f"data: {json.dumps(final_chunk)}\n\n"
-    yield "data: [DONE]\n\n"
-
-    # v0.40.3 (#33 (b)) — passive request log on the streaming path. Latency
-    # measured from the BEFORE-`_generate_response` mark passed in by the
-    # chat_completions handler. Skipped if writer is None or `started` is
-    # missing. Errors swallowed (passive log).
-    if trace_log_writer is not None and started is not None:
-        try:
-            last_user = next(
-                (m["content"] for m in reversed(messages) if m.get("role") == "user"),
-                "",
-            )
-            trace_log_writer.record(
-                prompt=str(last_user),
-                response=response_text,
-                latency_ms=(time.perf_counter() - started) * 1000,
-                tokens=int(completion_tokens_for_log),
-                extra={"stream": True},
-            )
-        except Exception:  # noqa: BLE001 — passive log never blocks SSE
-            logger.debug("trace_log streaming record failed", exc_info=True)
+    # Final chunk(s): the finish reason, and for Anthropic the token count too.
+    # An engine that did not report the completion count leaves it None: the Anthropic
+    # ``message_delta`` still needs a number, and the conversation record above kept the None.
+    yield from frames.end(
+        finish_reason, int(completion_tokens_for_log or 0), matched_stop
+    )
