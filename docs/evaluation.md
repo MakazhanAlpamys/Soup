@@ -505,7 +505,7 @@ Both files are read under the working directory (no symlink, at most 16 MiB, at 
 text fields at most 20,000 characters, `edit_id` unique per file). A bad row is exit code 3 and the
 message names the file, the line and the problem, for example
 ``--corrections 'c.jsonl' line 7: "paraphrases" must be a list of 1 to 20 non-empty strings``. A
-missing or empty file is "no rows", not an error.
+missing file is refused with exit code 3; an empty file is "no rows", not an error, as is omitting the flag.
 
 **Scoring, `added_recall`.** The *added words* of a correction are its content words (lowercased,
 punctuation stripped, stop words removed; negations and numbers are content) that the answer it
@@ -1062,7 +1062,7 @@ The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is r
 | `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score rescaled to [0, 1] on its rubric scale (not clamped). |
 | `task_win.truncated` | `{"base", "tuned", "n", "max_new_tokens", "warning"}`, or `null`. A count is the number of answers that hit the new-token cap and did not stop on their own, read from the generator's token ids, never from the length of the text. A count is `null`, never `0`, when it was not measured: the generator returned plain text with no token information, or a row's generation failed. `max_new_tokens` is the cap the built-in generator uses for the task leg (`BEHAVIOURAL_MAX_NEW_TOKENS`, 256). It is a constant written into the verdict, not read back from the generator, so a generator you supply yourself may use another cap. |
 | `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
-| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is reserved and always `null` in this release. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
+| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is the `--base-adapter` path as given on the command line, or `null` when no `--base-adapter` is passed. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
 | `task_rows` | The bare name of the per-row file written next to `--output` (see "The per-row file" below), or `null` when this run wrote none (`--task-mode pairwise`, an adapter that changes nothing, a replay of evidence, or no `--output`). |
 
 **A side whose every generation failed is refused** (exit 1): that is a failed measurement, not a
@@ -1611,6 +1611,17 @@ characters are rejected so leaderboard rows can't be markup-injected.
 
 
 ## Model Evaluation
+
+When `soup eval benchmark` scores a local adapter with a matching Hub base
+commit in `soup_run.json`, it prints that commit and passes it to lm-eval as
+`revision`. The HF harness uses that revision for the base config, model and
+tokenizer. Its PEFT call also receives the revision, while the adapter itself
+is read from the local directory. Legacy, local and mismatching identities
+print an unknown revision and retain their existing loading behavior.
+
+The recorded commit must be available to the loader. If downloading it fails
+or offline mode has only another snapshot, the harness error ends evaluation.
+It does not retry against a newer base revision.
 
 Full-featured evaluation platform with standard benchmarks, custom evals, LLM-as-a-judge, and human evaluation:
 
