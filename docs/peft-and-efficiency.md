@@ -887,7 +887,13 @@ config load because its evidence covers BF16, not FP16; see the
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: when the watchdog halts training on a loss spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch (e.g. `soup train --resume`). Capped at `loss_spike_recovery_max_attempts` (default 3); each launch hitting a spike evaluates prior completed attempts against the cap (`attempts < max_attempts`), writes the incremented count, and sets `should_recover: false` once the recovery budget is exhausted.
+When the watchdog halts training on a loss spike, it writes
+`<output>/spike_recovery.json` with the decayed learning rate and attempt count.
+To resume a Transformers run from a saved checkpoint, pass its directory to
+`soup train --resume <checkpoint-dir>` or use `soup train --resume auto` for the latest. Each launch that hits
+a spike compares completed attempts with `loss_spike_recovery_max_attempts`
+(default 3), writes the incremented count, and sets `should_recover: false` once
+the recovery budget is exhausted.
 
 The hint stays under the working directory and is replaced atomically. A symbolic-link
 target is refused with a warning; a failed replacement preserves the previous hint and
