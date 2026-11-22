@@ -75,7 +75,7 @@ class _IdempotencyIndex:
 def _index_jsonl_record(index: _IdempotencyIndex, raw: bytes, keys: tuple[str, ...]) -> None:
     try:
         record = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return
     if not isinstance(record, dict):
         return

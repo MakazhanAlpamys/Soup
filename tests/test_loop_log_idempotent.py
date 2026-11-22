@@ -45,6 +45,27 @@ def _version(to_version=2, cause="promote", iteration_id="iter-1"):
 
 
 class TestLogLevel:
+    def test_deeply_nested_line_does_not_break_dedup_or_later_appends(self, cwd):
+        log = LoopLog(str(cwd / "logs"))
+        path = cwd / "logs" / "versions.jsonl"
+
+        assert log.version(_version()) is True
+        with path.open("ab") as handle:
+            handle.write(b"[" * 10_000 + b"]" * 10_000 + b"\n")
+
+        assert log.version({**_version(), "id": "duplicate"}) is True
+        assert log.version(_version(to_version=3)) is True
+
+        valid = []
+        for raw in path.read_bytes().splitlines():
+            try:
+                record = json.loads(raw)
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(record, dict):
+                valid.append(record)
+        assert [record["to_version"] for record in valid] == [2, 3]
+
     def test_the_same_iteration_and_outcome_is_written_once(self, cwd):
         log = LoopLog(str(cwd / "logs"))
 
