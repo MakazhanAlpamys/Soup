@@ -1198,29 +1198,58 @@ def _iteration_lines_of(name: str) -> "list[dict]":
     return list(latest.values())
 
 
+def _matches_adapter_root(path: str, root: str) -> bool:
+    if path == root:
+        return True
+    try:
+        return os.path.samefile(path, root)
+    except FileNotFoundError:
+        # Preserve lookup by path for a removed adapter tree on Windows.
+        return (
+            os.path.normcase(path) == os.path.normcase(root)
+            and not os.path.lexists(path)
+            and not os.path.lexists(root)
+        )
+    except OSError:
+        return False
+
+
+def _is_direct_checkpoint(path: str) -> bool:
+    name = os.path.basename(path)
+    canonical = name.lower()
+    if re.fullmatch(r"checkpoint-[0-9]+", canonical) is None or not os.path.isdir(path):
+        return False
+    if name == canonical:
+        return True
+    try:
+        return os.path.samefile(path, os.path.join(os.path.dirname(path), canonical))
+    except OSError:
+        return False
+
+
 def _adapter_dir_entry_name(argument: str) -> Optional[str]:
     """The adapter name for an adapter directory or its direct checkpoint directory.
 
     The path is resolved first (``realpath``: ``..``, ``.``, a trailing separator, a symlink or a
-    junction, the case Windows keeps on disk). It must then be inside the loop's adapter
-    directory (``commonpath`` compares whole components, so ``adapters-old/<name>`` is not).
+    junction). A case-folded ``commonpath`` rules out unrelated paths without assuming that
+    the filesystem folds case. The adapter root and a differently cased checkpoint are then
+    checked by directory identity.
     Only a direct adapter entry or an existing ``checkpoint-N`` directory immediately under it
     is recognised.
     """
     try:
         entry = os.path.realpath(argument)
-        adapters = os.path.normcase(os.path.realpath(_ADAPTERS_DIR))
-        inside = os.path.commonpath([os.path.normcase(entry), adapters])
+        adapters = os.path.realpath(_ADAPTERS_DIR)
+        inside = os.path.commonpath([entry.casefold(), adapters.casefold()])
     except (OSError, ValueError):  # a NUL byte, or another drive (commonpath refuses to compare)
         return None
-    if inside != adapters:
+    if inside != adapters.casefold():
         return None
     parent = os.path.dirname(entry)
-    if os.path.normcase(parent) != adapters:
+    if not _matches_adapter_root(parent, adapters):
         if (
-            os.path.normcase(os.path.dirname(parent)) != adapters
-            or re.fullmatch(r"checkpoint-[0-9]+", os.path.basename(entry)) is None
-            or not os.path.isdir(entry)
+            not _matches_adapter_root(os.path.dirname(parent), adapters)
+            or not _is_direct_checkpoint(entry)
         ):
             return None
         entry = parent

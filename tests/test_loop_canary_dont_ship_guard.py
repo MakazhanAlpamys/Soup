@@ -497,6 +497,64 @@ def test_case_folding_requires_the_same_directory_entry(cwd, mixed_case_dont_shi
     assert state.canary_active == spelling and state.canary_override is None
 
 
+@pytest.mark.parametrize("kind", ["adapter-path", "checkpoint-parent", "checkpoint-name"])
+@pytest.mark.parametrize("simulate_folding", [False, True], ids=["native", "simulated"])
+def test_path_case_spelling_follows_directory_identity(
+    cwd, dont_ship, kind, simulate_folding, monkeypatch,
+):
+    # Probe the volume, not the platform. A macOS or Windows volume can also be case-sensitive.
+    root = cwd / ".soup-loops" / "adapters"
+    probe = root / "case-probe"
+    probe.touch()
+    folds_case = probe.with_name("CASE-PROBE").is_file()
+    probe.unlink()
+    if simulate_folding and folds_case:
+        pytest.skip("the native test covers this volume")
+
+    name, why = dont_ship
+    checkpoint = root / name / "checkpoint-12"
+    checkpoint.mkdir()
+    other_root = root.with_name("Adapters")
+    other_checkpoint = checkpoint.with_name("Checkpoint-12")
+    if kind == "checkpoint-name":
+        typed, actual = other_checkpoint, checkpoint
+        argument = typed
+    else:
+        typed, actual = other_root, root
+        argument = typed / name
+        if kind == "checkpoint-parent":
+            argument /= checkpoint.name
+    spelling = os.path.relpath(argument, cwd)
+
+    if simulate_folding:
+        # Linux also exercises POSIX realpath preserving case on a folding volume.
+        isdir, samefile = os.path.isdir, os.path.samefile
+        typed_path = os.path.realpath(typed)
+        actual_path = os.path.realpath(actual)
+
+        def mapped(path):
+            if isinstance(path, str) and (
+                path == typed_path or path.startswith(typed_path + os.sep)
+            ):
+                return actual_path + path[len(typed_path):]
+            return path
+
+        monkeypatch.setattr(os.path, "isdir", lambda path: isdir(mapped(path)))
+        monkeypatch.setattr(os.path, "samefile", lambda a, b: samefile(mapped(a), mapped(b)))
+    elif not folds_case:
+        argument.mkdir(parents=True)
+        _seed_state(cwd)
+        assert ls.known_dont_ship(spelling) is None
+        result, text = _canary(spelling, "--traffic", "5%")
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        state = read_state()
+        assert state.canary_active == spelling and state.canary_override is None
+        return
+
+    _assert_case_variant_uses_verdict(cwd, spelling, why)
+
+
 class TestSpellingsThatAreNotTheAdapter:
     """What the path mapping must leave alone: another adapter, another directory, no verdict."""
 
