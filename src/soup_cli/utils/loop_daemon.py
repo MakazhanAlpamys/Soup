@@ -1609,7 +1609,7 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
             ),
             config.state_path,
         )
-    except TimeoutError:
+    except TimeoutError as start_timeout:
         # Transient (the state lock was held): run on without the promotion —
         # the next cycle re-reads the file and the final write retries the
         # status, exactly as a failed iteration save does. A missing or
@@ -1622,6 +1622,15 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         except BaseException:
             _restore_signal_handlers(previous_handlers)
             raise
+        # A start-up lock-timeout on a still-`stopped` file must fail by
+        # name: the promotion never happened, so the first cycle would read
+        # `stopped`, leave the loop at once and report a finished watch
+        # (`iterations=0 status=stopped`, exit 0) for a start-up that never
+        # ran. `running`/`paused` files are genuinely transient — the next
+        # cycle re-reads the file and the final write retries the status.
+        if state.status == "stopped":
+            _restore_signal_handlers(previous_handlers)
+            raise start_timeout
     except BaseException:
         _restore_signal_handlers(previous_handlers)
         raise

@@ -305,6 +305,27 @@ class TestSignalHandlers:
         assert state.iteration_count == 1
         assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
 
+    def test_a_lock_timeout_at_start_up_on_a_stopped_file_raises(
+        self, cwd, monkeypatch
+    ):
+        # #3055 review — the lock-timeout arm must not run a still-`stopped`
+        # file as a finished watch: the promotion never happened, so the
+        # start-up fails by name (as v0.78.0 did) instead of exiting 0 with
+        # `iterations=0 status=stopped`. A `running` or `paused` file keeps
+        # the transient behaviour tested above.
+        write_state(replace(_state(), status="stopped"), _path(cwd))
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        def locked(mutate, path=None):
+            raise TimeoutError("loop.yaml is locked by another process (pid 1)")
+
+        monkeypatch.setattr(daemon, "update_state", locked)
+
+        with pytest.raises(TimeoutError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
     def test_watch_puts_the_signal_handlers_back(self, cwd):
         write_state(_state(), _path(cwd))
         before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
