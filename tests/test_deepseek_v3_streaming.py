@@ -189,7 +189,6 @@ def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path):
     bias = tensors["mlp.gate.e_score_correction_bias"]
     assert bias.dtype == torch.float32
     assert torch.equal(bias, torch.tensor([0.1, 0.101, 0.102, 0.103], dtype=torch.float32))
-    assert tensors["mlp.gate.weight"].dtype == torch.bfloat16
     assert tensors["mlp.experts.gate_up_proj"].dtype == torch.bfloat16
 
 

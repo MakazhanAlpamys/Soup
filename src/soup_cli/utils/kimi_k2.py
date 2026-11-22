@@ -804,9 +804,9 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     or accelerate's whole-model entry (a single-entry dict like ``{"": 0}``) names it
     directly; any multi-device accelerate map is refused rather than guessed.
 
-    Parameters load at ``dtype``; float buffers keep their stored dtype (the checkpoint
-    and ``from_pretrained`` keep ``e_score_correction_bias`` float32), and integer
-    buffers keep their exact dtype.
+    Parameters load at ``dtype`` with the installed DeepSeek-V3 class's strict FP32
+    policy for router weights. Buffers keep their stored dtype, including the
+    float32 ``e_score_correction_bias``.
 
     A hub id's weights resolve through ``huggingface_hub.snapshot_download`` with the
     safetensors/json allow-pattern. Online, the sizes of files missing from the cache at
@@ -814,9 +814,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     refusal names both numbers and the cache directory. Offline, the cached snapshot is
     used without requesting Hub metadata.
 
-    The model is returned on the requested device in the requested dtype; train/eval mode
-    is the caller's to set. No layer streaming is involved on this route: nothing here
-    reads or builds a streamed shard cache.
+    The model is returned on the requested device. Train/eval mode is the caller's to set.
     """
     import torch
     from transformers import AutoModelForCausalLM
@@ -904,6 +902,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
                 allow_patterns=["*.safetensors", "*.json"],
             )
 
+    from soup_cli.utils.deepseek_v3 import ROUTER_WEIGHT_KEY, router_weight_uses_fp32
     from soup_cli.utils.fp8_block import (
         SUPPORTED_FP8_FORMAT,
         FP8BlockPlan,
@@ -948,10 +947,9 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     with init_empty_weights():
         model = DeepseekV3ForCausalLM(config)
     model.tie_weights()
-    # Only the model's own buffers keep their stored dtype (e_score_correction_bias is
-    # float32 in the checkpoint and in from_pretrained's own load); everything else —
-    # parameters and per-expert tensors awaiting the fuse — takes the requested dtype.
     buffer_keys = {name for name, _buffer in model.named_buffers()}
+    keep_router_fp32 = dtype in (torch.float16, torch.bfloat16) and router_weight_uses_fp32()
+    router_suffix = "." + ROUTER_WEIGHT_KEY
 
     state = {}
     handles = {}
@@ -960,6 +958,9 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
         for key in sorted(entries):
             path, entry = entries[key]
             raw_dtype, shape = tensors[key]
+            target_dtype = (
+                torch.float32 if keep_router_fp32 and key.endswith(router_suffix) else dtype
+            )
             if plan is not None and key in plan.weights:
                 scale_key = FP8BlockPlan.scale_key(key)
                 scale_path, scale_entry = entries[scale_key]
@@ -968,7 +969,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
                 raw_scale = torch.empty(tensors[scale_key][1], dtype=torch.float32)
                 read_into(_shard_handle(handles, scale_path), scale_entry, raw_scale)
                 state[key] = dequantize_fp8_block(
-                    raw_weight, raw_scale, plan.block, name=key, dtype=dtype
+                    raw_weight, raw_scale, plan.block, name=key, dtype=target_dtype
                 )
                 dequantised += 1
                 del raw_weight, raw_scale
@@ -980,12 +981,7 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
                 stored_dtype = _resident_torch_dtype(key, raw_dtype, torch)
                 tensor = torch.empty(shape, dtype=stored_dtype)
                 read_into(_shard_handle(handles, path), entry, tensor)
-                if key in buffer_keys:
-                    # A float buffer keeps its stored dtype; only parameters (and the
-                    # per-expert tensors the fuse turns into parameters) take ``dtype``.
-                    state[key] = tensor
-                else:
-                    state[key] = tensor if stored_dtype == dtype else tensor.to(dtype)
+                state[key] = tensor if key in buffer_keys else tensor.to(target_dtype)
     finally:
         for handle in handles.values():
             handle.close()
