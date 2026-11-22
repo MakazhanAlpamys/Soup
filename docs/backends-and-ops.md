@@ -830,13 +830,14 @@ the embedded config inside the container, and runs `soup train` on the chosen GP
 Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
 named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
 including after a failed run, the app downloads every file in that directory into your local
-output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
-command that retries the download; that command places the files under `<output dir>/<run name>`.
-The command is printed on its own line. A path with spaces or punctuation is wrapped in double
-quotes, and on Windows a nested path is written with forward slashes; a path that a shell could
-still interpret (a `$`, a backtick, a `%`, a `!` or a double quote, and a backslash anywhere but
-on Windows) is not repeated, and the line shows `<local output directory>` for you to replace
-with the path printed just above it.
+output directory. To retry the download, use the Modal CLI's `volume get` subcommand with the
+`soup-outputs` volume, the run directory, your local output directory, and `--force`. A retry
+places the files under your local output directory in a subdirectory named for the run.
+
+The app prints a command on its own line when the output path can be quoted portably. It wraps
+paths with spaces or punctuation in double quotes and uses forward slashes for nested paths on
+Windows. A path that requires shell-specific quoting gets prose instructions with a separate
+path display.
 
 ### RunPod
 

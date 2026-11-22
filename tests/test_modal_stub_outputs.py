@@ -225,13 +225,13 @@ def test_generated_app_downloads_outputs(tmp_path, monkeypatch, capsys, leading_
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    namespace = _exec_stub(_render(tmp_path, vol_root))
+    local = tmp_path / "local-out"
+    namespace = _exec_stub(_render(tmp_path, vol_root, local.as_posix()))
     assert volume.from_name_kwargs == {"name": "soup-outputs", "create_if_missing": True}
     assert namespace["train"].kwargs["volumes"] == {str(vol_root): volume}
 
     namespace["main"]()
 
-    local = tmp_path / "local-out"
     assert (local / "output" / "adapter_model.safetensors").read_bytes() == b"adapter-bytes"
     assert (local / "output" / "checkpoint-5" / "optimizer.pt").read_bytes() == (
         b"optimizer-bytes"
@@ -332,9 +332,6 @@ def test_download_refuses_escaping_entry(tmp_path, monkeypatch):
 # --- the retry hint is a command a person pastes: the output name is repeated as a name
 
 
-_PLACEHOLDER = "<local output directory>"
-
-
 def _run_stub_and_capture(
     tmp_path, monkeypatch, capsys, output_dir: str, windows_separators: bool = False
 ) -> str:
@@ -349,7 +346,7 @@ def _run_stub_and_capture(
     monkeypatch.chdir(tmp_path)
     namespace = _exec_stub(_render(tmp_path, vol_root, output_dir, windows_separators))
     namespace["main"]()
-    return capsys.readouterr().out
+    return strip_ansi(capsys.readouterr().out)
 
 
 def _retry_command_lines(out: str) -> list[str]:
@@ -370,18 +367,18 @@ def _retry_command_lines(out: str) -> list[str]:
         ("-rf", "./-rf"),
         ("--force", "./--force"),
         ("результаты", "результаты"),
-        ("out$(cmd)", _PLACEHOLDER),
-        ("out$HOME", _PLACEHOLDER),
-        ("out`cmd`", _PLACEHOLDER),
-        ('out"x', _PLACEHOLDER),
+        ("out$(cmd)", None),
+        ("out$HOME", None),
+        ("out`cmd`", None),
+        ('out"x', None),
         ("out'; cmd; echo '", '"out\'; cmd; echo \'"'),
-        ('out"; cmd; echo "', _PLACEHOLDER),
-        ("out%COMSPEC%", _PLACEHOLDER),
-        ("out!x", _PLACEHOLDER),
-        ("out\\dir", _PLACEHOLDER),
-        ("out\x1b[2Jx", _PLACEHOLDER),
-        ("out\u201cx", _PLACEHOLDER),
-        ("out\u2013force", _PLACEHOLDER),
+        ('out"; cmd; echo "', None),
+        ("out%COMSPEC%", None),
+        ("out!x", None),
+        ("out\\dir", None),
+        ("out\x1b[2Jx", None),
+        ("out\u201cx", None),
+        ("out\u2013force", None),
     ],
 )
 def test_retry_command_repeats_the_output_name_as_one_argument(
@@ -390,12 +387,10 @@ def test_retry_command_repeats_the_output_name_as_one_argument(
     out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, output_dir)
 
     lines = _retry_command_lines(out)
-    assert len(lines) == 1, out
-    assert lines[0].strip() == f"modal volume get soup-outputs /{_RUN} {pasted} --force", lines
-    # The command is on its own line: no prose in front of it and nothing after it, so a
-    # copied line pastes as exactly the command.
-    assert lines[0].startswith("  modal volume get ")
-    assert lines[0].endswith(" --force")
+    if pasted is None:
+        assert not lines, out
+    else:
+        assert lines == [f"  modal volume get soup-outputs /{_RUN} {pasted} --force"]
     # No raw escape character reaches the terminal, whatever the name holds.
     assert "\x1b" not in out
 
@@ -414,20 +409,30 @@ def test_a_name_left_out_of_the_command_is_shown_only_as_quoted_text(
         assert f"'{output_dir}" in line, line
 
 
-def test_placeholder_explains_why_the_path_is_not_repeated(tmp_path, monkeypatch, capsys):
-    out = " ".join(
-        _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out$(cmd)").split()
-    )
+def test_retry_for_an_output_with_a_tab_is_prose(tmp_path, monkeypatch, capsys):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out\tweek 1")
 
-    assert "is not repeated in the command" in out
-    assert _PLACEHOLDER in out
+    assert not _retry_command_lines(out)
+    assert "volume get subcommand" in out
+    assert f"volume soup-outputs, remote path /{_RUN}" in out
+    assert "the local output path shown above" in out
+    assert "include --force" in out
+    assert "<local output directory>" not in out
+    assert "Retry the download with:" not in out
 
 
-def test_plain_name_prints_no_placeholder_note(tmp_path, monkeypatch, capsys):
+def test_retry_paths_show_tabs_escaped(tmp_path, monkeypatch, capsys):
+    out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "out\tweek 1")
+
+    assert r"to 'out\tweek 1'" in out
+    assert fr"The files land under 'out\tweek 1/{_RUN}'" in out
+
+
+def test_plain_name_prints_no_prose_note(tmp_path, monkeypatch, capsys):
     out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, "./out")
 
-    assert "is not repeated in the command" not in out
-    assert _PLACEHOLDER not in out
+    assert "volume get subcommand" not in out
+    assert "<local output directory>" not in out
 
 
 def test_download_still_writes_into_an_output_name_with_a_space(
@@ -490,8 +495,8 @@ def test_the_output_name_stays_data_in_the_rendered_source(output_dir):
     [
         ("runs\\x", True, "runs/x"),
         ("runs\\my x", True, '"runs/my x"'),
-        ("runs\\x", False, _PLACEHOLDER),
-        ("runs\\$x", True, _PLACEHOLDER),
+        ("runs\\x", False, None),
+        ("runs\\$x", True, None),
     ],
 )
 def test_a_backslash_path_is_repeated_with_forward_slashes_only_on_a_windows_host(
@@ -499,8 +504,11 @@ def test_a_backslash_path_is_repeated_with_forward_slashes_only_on_a_windows_hos
 ):
     out = _run_stub_and_capture(tmp_path, monkeypatch, capsys, output_dir, windows_separators)
 
-    (line,) = _retry_command_lines(out)
-    assert line.strip() == f"modal volume get soup-outputs /{_RUN} {pasted} --force"
+    lines = _retry_command_lines(out)
+    if pasted is None:
+        assert not lines, out
+    else:
+        assert lines == [f"  modal volume get soup-outputs /{_RUN} {pasted} --force"]
 
 
 def test_the_shown_path_has_no_invisible_or_reordering_characters(

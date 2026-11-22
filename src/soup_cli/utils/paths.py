@@ -66,15 +66,15 @@ def paste_arg(value: object, *, windows_separators: bool = False) -> Optional[st
       double quotes, inside which none of them is special in any of those shells;
     * anything else (a control character, ``"``, ``$``, the backtick, a backslash,
       ``%``, ``!``, or non-ASCII punctuation such as the typographic quotes and dashes
-      that PowerShell reads as quotes and dashes): ``None``. The caller shows a
-      placeholder instead of repeating the value.
+      that PowerShell reads as quotes and dashes): ``None``. The caller gives
+      instructions in prose.
 
     A value starting with ``-`` gets ``./`` in front so the program cannot read it as an
     option. An empty value gives ``None``. With ``windows_separators`` (a Windows host,
     where ``str(Path(...))`` spells a nested path with backslashes) every ``\\`` is
     written as ``/`` first: every Windows shell accepts it in an argument, and it is not
     special in any of them; on other hosts a backslash is a name character and stays a
-    reason for the placeholder.
+    reason to give instructions in prose.
     """
     text = str(value)
     if windows_separators:

@@ -675,11 +675,6 @@ def _preflight_cache_estimate(weights_plan: Any, *, arch: str, **estimate_kwargs
         return None
 
 
-#: Stands in for the base model in the printed prune command when its name holds
-#: a character that a shell would interpret (see ``paste_arg``).
-_PRUNE_BASE_PLACEHOLDER = "<base model>"
-
-
 def _render_stream_disk_preflight(
     *,
     source_bytes: int,
@@ -757,19 +752,24 @@ def _render_stream_disk_preflight(
         if len(other_slots) > 20:
             lines.append(f"  +{len(other_slots) - 20} more")
         lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
-        # The command is for pasting into a shell of unknown kind: the base model, which
-        # comes from the configuration, is spelled by ``paste_arg`` or left out.
+        # Use prose when the base model needs shell-specific quoting.
         spelled = paste_arg(base, windows_separators=os.sep == "\\")
-        shown = for_terminal(spelled) if spelled is not None else _PRUNE_BASE_PLACEHOLDER
-        cmd = f"soup prune-layer-cache --model {shown} --yes"
-        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
-        if spelled is None:
-            reason = (
-                "it is not repeated in the command because a shell would interpret part of it."
-                if base
-                else "the configuration does not name one."
-            )
-            lines.append(f"Replace {_PRUNE_BASE_PLACEHOLDER} with the base model name: {reason}")
+        if spelled is not None:
+            cmd = f"soup prune-layer-cache --model {for_terminal(spelled)} --yes"
+            lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        else:
+            lines.append("Remove unreferenced slots (opt-in):")
+            if base:
+                lines.extend((
+                    "  For soup prune-layer-cache, use the base model below as --model.",
+                    "  Quote it for your shell and add --yes.",
+                    f"  Base model: {for_terminal(base, single_line=True)}",
+                ))
+            else:
+                lines.append(
+                    "  Set a base model in your configuration before pruning with "
+                    "soup prune-layer-cache."
+                )
         stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]

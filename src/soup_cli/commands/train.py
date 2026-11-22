@@ -206,9 +206,6 @@ def _format_duration_display(result: dict) -> str:
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
 
-_OUTPUT_PLACEHOLDER = "<output directory>"
-
-
 def _completion_commands(
     output_dir: object,
     merge_note: str | None = None,
@@ -221,9 +218,9 @@ def _completion_commands(
 
     ``output_dir`` is the config's ``output``. The commands are for pasting into a shell of
     unknown kind, so the path goes through ``paste_arg`` (same text for POSIX shells,
-    PowerShell and cmd.exe) and, when no such spelling exists, is replaced by a
-    placeholder with a one-line explanation. ``for_terminal`` then keeps Rich markup and
-    control characters in the path from reaching the console. ``merge_note`` replaces the
+    PowerShell and cmd.exe). When no such spelling exists, prose refers to the Output path
+    in the panel. ``for_terminal`` keeps Rich markup and control characters in the path
+    from reaching the console. ``merge_note`` replaces the
     ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
     this host spells paths with backslashes) writes a nested path with forward slashes.
     ``backend_hint`` (`` --backend mlx``) follows ``soup chat`` and ``soup merge``, and
@@ -236,7 +233,24 @@ def _completion_commands(
     if windows_separators is None:
         windows_separators = os.sep == "\\"
     spelled = paste_arg(output_dir, windows_separators=windows_separators)
-    shown = for_terminal(spelled) if spelled is not None else _OUTPUT_PLACEHOLDER
+    if spelled is None:
+        chat_options = f" and add {backend_hint.strip()}" if backend_hint else ""
+        merge_options = " and ".join(
+            option.strip() for option in (backend_hint, dequantize_hint) if option
+        )
+        merge_flags = f" and add {merge_options}" if merge_options else ""
+        return "\n".join((
+            f"Quick test: For soup chat, use the Output path above as --model{chat_options}.",
+            "Push to HF: For soup push, use the Output path above as --model.",
+            merge_note if merge_note is not None else (
+                "Merge LoRA: For soup merge, use the Output path above as --adapter"
+                f"{merge_flags}."
+            ),
+            "Export GGUF: For soup export, use the Output path above as --model.",
+            "[dim]Use your shell's quoting rules for the Output path.[/]",
+        ))
+
+    shown = for_terminal(spelled)
     merge_line = (
         merge_note
         if merge_note is not None
@@ -245,18 +259,12 @@ def _completion_commands(
             f"{dequantize_hint}"
         )
     )
-    lines = [
+    return "\n".join((
         f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
         f"Push to HF:  [bold]soup push --model {shown}[/]",
         merge_line,
         f"Export GGUF: [bold]soup export --model {shown}[/]",
-    ]
-    if spelled is None:
-        lines.append(
-            f"[dim]Replace {_OUTPUT_PLACEHOLDER} with the Output path above: it is not "
-            "repeated in these commands because a shell would interpret part of it.[/]"
-        )
-    return "\n".join(lines)
+    ))
 
 
 def _run_auto_eval_after_training(
@@ -1750,7 +1758,7 @@ def train(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{_plan_text(plan.output_dir)}[/]\n\n"
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
                 f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
@@ -2833,7 +2841,7 @@ def train(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{_for_terminal(result['output_dir'])}[/]\n"
+            f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"{completion_commands}\n"
             f"Run details: [bold]soup runs show {run_id}[/]",

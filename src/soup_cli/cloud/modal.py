@@ -79,13 +79,6 @@ MODAL_OUTPUT_VOLUME = "soup-outputs"
 # Run names become a volume directory AND a repr()-embedded literal in the stub,
 # so they are restricted to a closed alphabet.
 _RUN_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
-# Stands in for the local output directory in the printed retry command when the
-# directory's name holds a character a shell would interpret (see ``paste_arg``).
-_RETRY_PLACEHOLDER = "<local output directory>"
-_RETRY_PLACEHOLDER_NOTE = (
-    "The output path contains characters a shell would interpret, so it is not "
-    f"repeated in the command: replace {_RETRY_PLACEHOLDER} with the path shown above."
-)
 
 # Test / advanced-operator seam — replaces the live submit. Signature mirrors
 # :func:`submit_modal_run` body -> returns an int exit code.
@@ -149,23 +142,25 @@ def render_modal_stub(
     # repr()-embed so a stray quote / backslash cannot break out of the literal
     # (defence-in-depth on top of the _VERSION_RE allowlist above).
     pip_spec = f"soup-cli[train]=={soup_version}"
-    # The retry hint is a command a person pastes into a shell of unknown kind: the path
-    # is spelled for every shell by paste_arg, or replaced by a placeholder, and printed
-    # on a line of its own. The text outside that line shows the path with control and
-    # invisible characters removed and quote_path-escaped. All of it is decided here, so
-    # the stub carries no logic.
+    # Print a retry command when paste_arg can spell the path for every shell.
+    # Otherwise describe the arguments separately from the path display.
     if windows_separators is None:
         windows_separators = os.sep == "\\"
     destination = paste_arg(output_dir, windows_separators=windows_separators)
+    retry_command = ""
     retry_note = ""
     if destination is None:
-        destination = _RETRY_PLACEHOLDER
-        retry_note = _RETRY_PLACEHOLDER_NOTE
-    retry_command = (
-        f"modal volume get {MODAL_OUTPUT_VOLUME} /{run_name} {destination} --force"
-    )
-    shown_output = quote_path(strip_control(output_dir))
-    shown_run_dir = quote_path(strip_control(f"{output_dir}/{run_name}"))
+        retry_note = (
+            "To retry, use the Modal CLI's volume get subcommand with "
+            f"volume {MODAL_OUTPUT_VOLUME}, remote path /{run_name}, "
+            "and the local output path shown above. Quote the local path for your shell "
+            "and include --force."
+        )
+    else:
+        retry_command = f"modal volume get {MODAL_OUTPUT_VOLUME} /{run_name} {destination} --force"
+    output_display_path = strip_control(output_dir, single_line=True)
+    shown_output = quote_path(output_display_path)
+    shown_run_dir = quote_path(f"{output_display_path}/{run_name}")
 
     # Built by concatenation so there is no triple-quote / brace escaping. The
     # embedded values are the base64 blob and repr()-embedded literals only
@@ -260,9 +255,10 @@ def render_modal_stub(
         '        f"Downloaded {count} file(s) from volume "\n'
         '        f"{_VOLUME_NAME}/{_RUN_NAME} to {_SHOWN_OUTPUT}"\n'
         "    )\n"
-        '    print("Retry the download with:")\n'
-        '    print(f"  {_RETRY_COMMAND}")\n'
-        "    if _RETRY_NOTE:\n"
+        "    if _RETRY_COMMAND:\n"
+        '        print("Retry the download with:")\n'
+        '        print(f"  {_RETRY_COMMAND}")\n'
+        "    else:\n"
         "        print(_RETRY_NOTE)\n"
         '    print(f"The files land under {_SHOWN_RUN_DIR}")\n'
         "\n"

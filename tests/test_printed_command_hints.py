@@ -22,6 +22,8 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
+from tests.conftest import strip_ansi
+
 _SOUP_YAML = """base: hf-internal-testing/tiny-random-gpt2
 task: sft
 data:
@@ -104,10 +106,13 @@ class TestCloudRunCommandQuotesTheStubPath:
 def _plain(markup: str) -> str:
     """What a terminal shows for ``markup``: rendered through Rich, markup consumed."""
     buffer = StringIO()
-    Console(file=buffer, width=500, force_terminal=False, color_system=None).print(
+    Console(
+        file=buffer, width=500, height=100, force_terminal=True, color_system="standard",
+        legacy_windows=False,
+    ).print(
         markup, emoji=False, highlight=False
     )
-    return buffer.getvalue()
+    return strip_ansi(buffer.getvalue())
 
 
 class TestTrainingCompleteCommands:
@@ -134,11 +139,15 @@ class TestTrainingCompleteCommands:
 
     def test_the_flags_are_kept_when_the_path_is_left_out(self):
         shown = self._commands(
-            "out$HOME", backend_hint=" --backend mlx", dequantize_hint=" --dequantize"
+            "runs\tweek 1", backend_hint=" --backend mlx", dequantize_hint=" --dequantize"
         )
 
-        assert "soup chat --backend mlx --model <output directory>" in shown
-        assert "soup merge --backend mlx --adapter <output directory> --dequantize" in shown
+        assert "soup chat --" not in shown
+        assert "soup merge --" not in shown
+        assert "For soup chat, use the Output path above as --model" in shown
+        assert "For soup merge, use the Output path above as --adapter" in shown
+        assert shown.count("--backend mlx") == 2
+        assert "--dequantize" in shown
 
     def test_plain_output_is_repeated_as_it_was_before(self):
         shown = self._commands("./output")
@@ -173,10 +182,11 @@ class TestTrainingCompleteCommands:
 
         for command in ("soup chat --model", "soup push --model", "soup merge --adapter",
                         "soup export --model"):
-            assert f"{command} <output directory>" in shown, shown
+            assert command not in shown, shown
+        assert "<output directory>" not in shown
         assert output_dir not in shown
         assert "\x1b" not in shown
-        assert "is not repeated in these commands" in " ".join(shown.split())
+        assert "Use your shell's quoting rules for the Output path" in shown
 
     def test_a_leading_dash_cannot_become_an_option(self):
         shown = self._commands("-rf")
@@ -207,7 +217,8 @@ class TestTrainingCompleteCommands:
     def test_the_same_path_is_left_out_where_a_backslash_is_a_name_character(self):
         shown = self._commands("output\\sub", windows_separators=False)
 
-        assert "soup chat --model <output directory>" in shown
+        assert "soup chat --model" not in shown
+        assert "For soup chat, use the Output path above as --model" in shown
 
     def test_panel_builds_its_commands_through_the_helper(self):
         """The "Training Complete!" panel in ``train()`` calls the helper with the run's
@@ -236,8 +247,12 @@ class TestTrainingCompleteCommands:
 
 
 class TestCloudPlanPanel:
+    @pytest.mark.parametrize(
+        ("output_dir", "display"),
+        [("out\x1b[2Jx", "out[2Jx"), ("out\tweek 1", r"out\tweek 1")],
+    )
     def test_the_plan_panel_does_not_print_control_characters_of_the_output(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, output_dir, display
     ):
         import yaml
 
@@ -251,7 +266,7 @@ class TestCloudPlanPanel:
         assert init.exit_code == 0, init.output
         cfg = load_config(Path("soup.yaml"))
         cfg.data.train = "teknium/OpenHermes-2.5"
-        cfg.output = "out\x1b[2Jx"
+        cfg.output = output_dir
         Path("soup.yaml").write_text(
             yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
         )
@@ -262,10 +277,7 @@ class TestCloudPlanPanel:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "\x1b[2J" not in result.output
-        assert "out" in result.output
-
-
-_BASE_PLACEHOLDER = "<base model>"
+        assert f"Output:   {display}" in strip_ansi(result.output)
 
 
 def _stream_preflight_text(monkeypatch, tmp_path, base: str) -> str:
@@ -274,7 +286,11 @@ def _stream_preflight_text(monkeypatch, tmp_path, base: str) -> str:
 
     buffer = StringIO()
     monkeypatch.setattr(
-        stream_setup, "console", Console(file=buffer, width=300, color_system=None)
+        stream_setup, "console",
+        Console(
+            file=buffer, width=300, height=100, force_terminal=True, color_system="standard",
+            legacy_windows=False,
+        ),
     )
     monkeypatch.setattr(stream_setup, "_disk_volume", lambda path: (1, 10**15))
     slot = SimpleNamespace(
@@ -286,7 +302,7 @@ def _stream_preflight_text(monkeypatch, tmp_path, base: str) -> str:
         materialized_path=str(tmp_path), shard_bytes=1000, shard_write_bytes=0,
         shard_path=str(tmp_path / "cache"), other_slots=[slot], base=base,
     )
-    return buffer.getvalue()
+    return strip_ansi(buffer.getvalue())
 
 
 def _prune_command_line(text: str) -> str:
@@ -310,34 +326,41 @@ class TestPruneCommandInTheStreamingPreflight:
             ("org/a;b", '"org/a;b"'),
             ("org/a&b", '"org/a&b"'),
             ("-base", "./-base"),
-            ("org/a$(x)", _BASE_PLACEHOLDER),
-            ("org/a`x`", _BASE_PLACEHOLDER),
-            ('org/a"b', _BASE_PLACEHOLDER),
-            ("org/a%x%", _BASE_PLACEHOLDER),
-            ("org/a!b", _BASE_PLACEHOLDER),
-            ("org/a\x1b[2Jb", _BASE_PLACEHOLDER),
-            ("", _BASE_PLACEHOLDER),
         ],
     )
-    def test_the_base_is_one_argument_or_left_out(self, monkeypatch, tmp_path, base, spelled):
+    def test_the_base_is_one_argument(self, monkeypatch, tmp_path, base, spelled):
         text = _stream_preflight_text(monkeypatch, tmp_path, base)
 
         assert _prune_command_line(text) == f"soup prune-layer-cache --model {spelled} --yes"
         assert "\x1b" not in text
 
-    def test_a_left_out_base_is_explained(self, monkeypatch, tmp_path):
-        text = " ".join(_stream_preflight_text(monkeypatch, tmp_path, "org/a$(x)").split())
+    @pytest.mark.parametrize(
+        ("base", "display"),
+        [
+            ("org/a$(x)", "org/a$(x)"),
+            ("org/a`x`", "org/a`x`"),
+            ('org/a"b', 'org/a"b'),
+            ("org/a%x%", "org/a%x%"),
+            ("org/a!b", "org/a!b"),
+            ("org/a\x1b[2Jb", "org/a[2Jb"),
+            ("org/base\nnew\rline\tend", r"org/base\nnew\rline\tend"),
+        ],
+    )
+    def test_a_base_without_a_portable_spelling_gets_prose(
+        self, monkeypatch, tmp_path, base, display
+    ):
+        text = _stream_preflight_text(monkeypatch, tmp_path, base)
 
-        assert f"Replace {_BASE_PLACEHOLDER} with the base model name" in text
-        assert "is not repeated in the command" in text
+        assert "soup prune-layer-cache --model" not in text
+        assert "For soup prune-layer-cache, use the base model below as --model" in text
+        assert f"Base model: {display}" in text
+        assert "\x1b" not in text
 
-    def test_an_empty_base_is_not_blamed_on_the_shell(self, monkeypatch, tmp_path):
+    def test_an_empty_base_prompts_for_configuration(self, monkeypatch, tmp_path):
         text = " ".join(_stream_preflight_text(monkeypatch, tmp_path, "").split())
 
-        assert (
-            f"Replace {_BASE_PLACEHOLDER} with the base model name: "
-            "the configuration does not name one."
-        ) in text
+        assert "soup prune-layer-cache --model" not in text
+        assert "Set a base model in your configuration before pruning" in text
         assert "would interpret" not in text
         assert "is not repeated in the command" not in text
 
@@ -345,7 +368,7 @@ class TestPruneCommandInTheStreamingPreflight:
         text = _stream_preflight_text(monkeypatch, tmp_path, "org/model")
 
         assert "is not repeated in the command" not in text
-        assert _BASE_PLACEHOLDER not in text
+        assert "Base model:" not in text
 
     def test_rich_markup_in_the_base_is_shown_literally(self, monkeypatch, tmp_path):
         text = _stream_preflight_text(monkeypatch, tmp_path, "org/[bold]model")
@@ -355,8 +378,13 @@ class TestPruneCommandInTheStreamingPreflight:
     def test_a_windows_style_path_follows_the_host_separator(self, monkeypatch, tmp_path):
         text = _stream_preflight_text(monkeypatch, tmp_path, "C:\\models\\base")
 
-        expected = "C:/models/base" if os.sep == "\\" else _BASE_PLACEHOLDER
-        assert _prune_command_line(text) == f"soup prune-layer-cache --model {expected} --yes"
+        if os.sep == "\\":
+            assert _prune_command_line(text) == (
+                "soup prune-layer-cache --model C:/models/base --yes"
+            )
+        else:
+            assert "soup prune-layer-cache --model" not in text
+            assert "Base model: C:\\models\\base" in text
 
 
 def _stub_string(stub: str, name: str) -> str:
@@ -372,7 +400,7 @@ def _stub_string(stub: str, name: str) -> str:
 class TestTheHostSeparatorDefault:
     """No test above passes ``windows_separators``; these call without it, as production
     does: a nested path written with backslashes is repeated with forward slashes on a
-    Windows host and is a reason for the placeholder elsewhere."""
+    Windows host and is a reason for prose guidance elsewhere."""
 
     def test_the_training_report_resolves_it_from_the_host(self):
         from soup_cli.commands.train import _completion_commands
@@ -383,7 +411,8 @@ class TestTheHostSeparatorDefault:
             assert "soup chat --model out/dir[/]" in shown
             assert "<output directory>" not in shown
         else:
-            assert "soup chat --model <output directory>[/]" in shown
+            assert "soup chat --model" not in shown
+            assert "For soup chat, use the Output path above as --model" in shown
             assert "out\\dir" not in shown
 
     def test_the_modal_retry_command_resolves_it_from_the_host(self):
@@ -394,7 +423,7 @@ class TestTheHostSeparatorDefault:
             run_name="run-abc",
         )
 
-        destination = "out/dir" if os.sep == "\\" else "<local output directory>"
-        assert _stub_string(stub, "_RETRY_COMMAND") == (
-            f"modal volume get soup-outputs /run-abc {destination} --force"
+        expected = (
+            "modal volume get soup-outputs /run-abc out/dir --force" if os.sep == "\\" else ""
         )
+        assert _stub_string(stub, "_RETRY_COMMAND") == expected
