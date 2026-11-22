@@ -1095,6 +1095,9 @@ def _scenario(name):
     denied = _response(401, body=b'{"detail":"Invalid token"}')
     return {
         "success": (_Transport(_page([_run(1)], cursor="c1"), _page([_run(2)])), 0),
+        "project_id_echoes_key": (
+            _Transport(_page([_run(1)]), sessions=_sessions(project_id=f"proj-{_KEY}")), 0
+        ),
         "unauthorized": (_Transport(denied), 1),
         "unauthorized_lookup": (_Transport(_page([]), sessions=denied), 1),
         "server_echoes_request": (_Transport(_response(500, body=echo)), 1),
@@ -1106,8 +1109,8 @@ def _scenario(name):
 
 
 _SCENARIOS = (
-    "success", "unauthorized", "unauthorized_lookup", "server_echoes_request", "page_cap",
-    "rate_limited", "network_error", "unexpected_exception",
+    "success", "project_id_echoes_key", "unauthorized", "unauthorized_lookup",
+    "server_echoes_request", "page_cap", "rate_limited", "network_error", "unexpected_exception",
 )
 
 
@@ -1166,6 +1169,9 @@ def test_a_planted_key_never_reaches_any_artefact(name, pull_env, monkeypatch, c
     assert any("langsmith pull" in line for line in collected.lines)
     if name == "success":
         assert "file:out.jsonl" in artefacts and payloads
+    if name == "project_id_echoes_key":
+        # The id from the sessions answer reached the debug line, scrubbed.
+        assert any("for project proj-*** from" in line for line in collected.lines)
     if name == "unexpected_exception":
         streams = _plain(captured.out + captured.err)
         assert "Full Traceback" in streams and "transport bug" in streams

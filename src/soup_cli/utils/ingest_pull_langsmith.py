@@ -229,7 +229,7 @@ def pull_langsmith_runs(
     url = f"{settings.host}{LANGSMITH_RUNS_QUERY_PATH}"
     _LOG.debug(
         "langsmith pull: %s for project %s from %s to %s",
-        url, project_id, window["min_start_time"], window["max_start_time"],
+        url, _scrub(project_id, settings), window["min_start_time"], window["max_start_time"],
     )
 
     counters = stats if stats is not None else LangSmithPullStats()
