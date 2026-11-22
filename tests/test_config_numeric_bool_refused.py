@@ -181,6 +181,8 @@ def test_actual_boolean_fields_still_accept_booleans():
 )
 def test_yaml_boolean_spellings_are_rejected_for_reported_fields(section, field_name, yaml_value):
     lines = ["data:", "  train: unused.jsonl"]
+    if section == "data" and field_name == "buffer_size":
+        lines.append("  streaming: true")
     if section != "data":
         parts = section.split(".")
         for depth, part in enumerate(parts):
@@ -190,8 +192,10 @@ def test_yaml_boolean_spellings_are_rejected_for_reported_fields(section, field_
         field_indent = "  "
     lines.append(f"{field_indent}{field_name}: {yaml_value}")
 
-    with pytest.raises(ValueError, match=field_name):
+    with pytest.raises(ValueError, match=field_name) as exc_info:
         load_config_from_string("\n".join(lines) + "\n")
+    if section == "data" and field_name == "buffer_size":
+        assert "buffer_size must be an int, not a bool" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("field_name", sorted(_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS))
