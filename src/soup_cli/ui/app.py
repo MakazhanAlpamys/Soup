@@ -818,7 +818,9 @@ def create_app(
                     ),
                 )
             resolved_id = run["run_id"]
-            tracker.delete_run(resolved_id)
+            # Another request may have removed the run since ``get_run`` found it.
+            if not tracker.delete_run(resolved_id):
+                raise HTTPException(status_code=404, detail="Run not found")
             return {"deleted": True, "run_id": resolved_id}
         finally:
             tracker.close()
