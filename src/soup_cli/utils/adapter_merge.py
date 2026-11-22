@@ -367,7 +367,11 @@ def merge_svd(
     """
     import numpy as np
 
-    from soup_cli.utils.adapter_arithmetic import _lora_role, _LoraStem, _truncated_factors
+    from soup_cli.utils.adapter_arithmetic import (
+        _lora_role,
+        _LoraStem,
+        _truncated_lora_factors,
+    )
 
     if rank is not None:
         if isinstance(rank, bool) or not isinstance(rank, int):
@@ -400,7 +404,7 @@ def merge_svd(
         if rank >= lora_rank:
             continue
         try:
-            new_b, new_a = _truncated_factors(lora_b @ lora_a, rank)
+            new_b, new_a = _truncated_lora_factors(lora_b, lora_a, rank)
         except np.linalg.LinAlgError:
             continue
         pad = lora_rank - new_a.shape[0]
