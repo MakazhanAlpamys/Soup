@@ -631,7 +631,6 @@ def init_cmd(
         ensure_adapters_dir,
         resolve_base_model_source,
     )
-    from soup_cli.utils.owner_only_dir import OwnerOnlyError
 
     verify_method = verify.strip().lower().replace("-", "_")
     try:
@@ -660,11 +659,16 @@ def init_cmd(
     try:
         # The loop deploys through `soup serve --adapter-dir .soup-loops/adapters`,
         # which refuses a missing directory (#3034). Create it before loop.yaml so
-        # a failure here leaves no half-initialized loop behind.
-        ensure_adapters_dir()
-    except OwnerOnlyError as exc:
+        # a failure here leaves no half-initialized loop behind. A folder the train
+        # stage made group-writable is kept and tightened instead of refused.
+        tightened = ensure_adapters_dir()
+    except OSError as exc:
+        # OwnerOnlyError is an OSError, and so is the PermissionError a read-only
+        # .soup-loops raises from _posix_create_dir: both fail init cleanly here.
         console.print(f"[red]init failed:[/] {for_terminal(str(exc))}")
         raise typer.Exit(code=2)
+    if tightened is not None:
+        console.print(f"[yellow]note:[/] {for_terminal(tightened)}")
     try:
         state, path = init_state(
             served_model=served_model,
