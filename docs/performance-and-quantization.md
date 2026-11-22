@@ -1197,7 +1197,8 @@ needs no second base model. IPO uses that same setup. On an untied checkpoint,
 one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
 the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
 nothing. The following DPO/SFT figures were measured on an RTX 3050 4 GB with
-a 730 MB model. BCO and IPO have no peak VRAM measurements.
+a 730 MB model. The table has yet to be remeasured for the frozen `ref` adapter.
+BCO and IPO have no peak VRAM measurements.
 
 | arm | peak VRAM | vs SFT |
 |---|---|---|
