@@ -3923,7 +3923,6 @@ class TrainingConfig(BaseModel):
     stream_layers: bool = Field(
         default=False,
         description=(
-
             "BETA — stream the frozen base one decoder layer at a time from CPU RAM "
             "or an NVMe disk tier (see stream_source), so a model larger than VRAM can "
             "be fine-tuned with LoRA. Tasks: "
@@ -3934,14 +3933,8 @@ class TrainingConfig(BaseModel):
             "quantization none or 4bit (NF4); a concrete batch_size (not 'auto'), "
             "gradient accumulation is allowed. Slower than resident training, but these "
             "models did not run on the card at all."
-
-            "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
-            "model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, "
-            "simpo, kto, bco and ipo, including task='preference' with a single "
-            "preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + "
-            "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
-            "Weighted preference_loss_weights do not stream yet."
-
+            "task: preference streams with a single preference_loss of dpo, orpo, simpo, "
+            "bco or ipo, and weighted preference_loss_weights do not."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -6405,8 +6398,9 @@ class SoupConfig(BaseModel):
         if (
             self.data.chat_template is not None
             and self.task in unsupported
-            # Streaming supports tasks in _STREAM_SUPPORTED_TASKS and _STREAM_ROLLOUT_TASKS;
-            # pretrain is refused by streaming; keep that more actionable error when enabled.
+            # With stream_layers on, _validate_stream_layers_compat refuses every task in this set
+            # (none is in _STREAM_SUPPORTED_TASKS) with its own, more actionable message,
+            # so this check stays quiet.
             and not self.training.stream_layers
         ):
             raise ValueError(
@@ -7704,12 +7698,20 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_stream_layers_compat(self) -> "SoupConfig":
-        """v0.72.0 BETA — layer-streaming compatibility gates.
+        """Layer-streaming compatibility gates at config load.
 
-        Validate layer streaming compatibility: supported task set,
-        transformers backend, text modality, quantization (none or 4bit NF4),
-        concrete batch size, and mutual exclusions.
+        Validate supported task set, transformers backend, text modality,
+        quantization (none or 4bit NF4), concrete batch size, LoRA requirement
+        (with no DoRA/VeRA and init_strategy='random' only), mutual exclusions
+        (moe_expert_quant, quantization_aware, fp8_attention, nvfp4,
+        unfrozen_parameters, lisa_enabled, packing, multipack, use_fsdp2_compile,
+        train_router_only, expand_layers, relora_steps, lora.target_parameters),
+        stream_vram_probe on sft only, stream_* flags without stream_layers,
+        and non-default stream_read_ahead with stream_source='ram'.
+        Architecture allowlist, disk-tier host-staging fit, and layer-shape count
+        are checked later at setup when the run is set up.
         """
+
         tcfg = self.training
         if not tcfg.stream_layers:
             # Footgun: a non-default stream_* while streaming is off almost
