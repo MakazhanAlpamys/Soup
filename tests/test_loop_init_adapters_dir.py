@@ -11,7 +11,9 @@ behind; the panel says ``1 new edit`` / ``1 new rated answer``. A planted
 link, a file, or another owner's folder at the adapters path is refused with
 the fix named, and a folder this account owns is kept and tightened to
 owner-only, with one line saying what changed and why — including one the
-train stage made group-writable before this change. The train stage creates
+train stage made group-writable before this change. On Windows a junction at
+the path is refused the same way. A re-init refused for an existing loop
+leaves a loose adapters folder exactly as it was. The train stage creates
 the folder through the same helper, so the loop does not make a
 group-writable one again.
 """
@@ -22,6 +24,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -165,6 +168,40 @@ class TestInitCreatesAdaptersDir:
         assert "init failed" in text
         assert "belongs to another user" in text
         assert "remove it or change its owner, then re-run init" in text
+        assert not os.path.exists(".soup/loop.yaml")
+
+    @pytest.mark.skipif(os.name == "nt", reason="owner-only mode is POSIX-only")
+    def test_refused_reinit_leaves_a_loose_adapters_dir_alone(self, cwd):
+        result, _, _ = _cli(*_INIT)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        os.chmod(".soup-loops/adapters", 0o775)
+        before = Path(".soup/loop.yaml").read_bytes()
+
+        result, text, _ = _cli(*_INIT)
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "init failed" in text
+        assert "already exists" in text
+        assert "tightened" not in text
+        assert _mode(".soup-loops/adapters") == 0o775
+        assert Path(".soup/loop.yaml").read_bytes() == before
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows junctions need mklink")
+    def test_init_refuses_a_planted_adapters_junction(self, cwd, tmp_path):
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        os.makedirs(".soup-loops", exist_ok=True)
+        link = cwd / ".soup-loops" / "adapters"
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+        )
+
+        result, text, _ = _cli(*_INIT)
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "init failed" in text
+        assert "is a link" in text
+        assert "remove the link and re-run init" in text
         assert not os.path.exists(".soup/loop.yaml")
 
     @pytest.mark.requires_symlink
