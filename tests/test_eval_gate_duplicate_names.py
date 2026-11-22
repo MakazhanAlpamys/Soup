@@ -166,6 +166,77 @@ def test_distinct_baseline_roundtrip_retains_regression(
     assert "GATE FAILED" in strip_ansi(candidate.output)
 
 
+def test_cli_gate_displays_distinct_task_names_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    marked_name = "[red]math[/red]"
+    suite = _suite(tmp_path, ("math", marked_name))
+
+    def factory(_model: str) -> Callable[[str], str]:
+        return lambda prompt: "gold" if prompt == "0" else "wrong"
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    baseline = tmp_path / "baseline.json"
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", str(suite), "--model", "synthetic",
+        "--write-baseline", str(baseline),
+    ])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    lines = [" ".join(strip_ansi(line).split()) for line in result.output.splitlines()]
+    rows = [line for line in lines if "│" in line and "math" in line]
+    assert [line.split("│")[1].strip() for line in rows] == ["math", marked_name]
+    assert json.loads(baseline.read_text(encoding="utf-8"))["scores"] == {
+        "math": 1.0,
+        marked_name: 0.0,
+    }
+
+
+def test_cli_gate_displays_an_unmatched_tag_in_a_task_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    name = "[/x]"
+    suite = _suite(tmp_path, (name,))
+    monkeypatch.setattr(quant_check, "make_model_generator", lambda _model: lambda _prompt: "gold")
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    baseline = tmp_path / "baseline.json"
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", str(suite), "--model", "synthetic",
+        "--write-baseline", str(baseline),
+    ])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    lines = [" ".join(strip_ansi(line).split()) for line in result.output.splitlines()]
+    rows = [line for line in lines if "│" in line and name in line]
+    assert [line.split("│")[1].strip() for line in rows] == [name]
+    assert json.loads(baseline.read_text(encoding="utf-8"))["scores"] == {name: 1.0}
+
+
+def test_cli_gate_displays_task_error_text_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    suite = _suite(tmp_path, ("broken",))
+    message = "[bold]dataset unavailable[/bold]"
+
+    def generate(_prompt: str) -> str:
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(quant_check, "make_model_generator", lambda _model: generate)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    result = CliRunner().invoke(
+        app, ["eval", "gate", "--suite", str(suite), "--model", "synthetic"],
+    )
+
+    assert result.exit_code == 2, (result.output, result.exception)
+    lines = [" ".join(strip_ansi(line).split()) for line in result.output.splitlines()]
+    assert any("GATE FAILED" in line for line in lines)
+    assert any(message in line for line in lines)
+
+
 @pytest.mark.parametrize(
     ("baseline", "error", "message"),
     [
