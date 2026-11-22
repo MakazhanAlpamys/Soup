@@ -156,8 +156,9 @@ def measure_model(
         return score / len(tasks), metrics
     finally:
         try:
-            if generator is not None:
-                generator.close()
+            close = getattr(generator, "close", None)
+            if callable(close):
+                close()
         finally:
             generator = None
             probe.release()
