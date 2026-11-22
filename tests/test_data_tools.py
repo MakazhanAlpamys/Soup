@@ -276,8 +276,9 @@ def multiturn_chatml_file(tmp_path: Path) -> Path:
     return filepath
 
 
-def test_convert_alpaca_counts_multiturn_row_as_failed(mixed_chatml_file, tmp_path):
+def test_convert_alpaca_counts_multiturn_row_as_failed(mixed_chatml_file, tmp_path, monkeypatch):
     """A two-turn row is counted as failed, not shortened to its last exchange."""
+    monkeypatch.chdir(tmp_path)
     output = str(tmp_path / "converted.jsonl")
     result = runner.invoke(
         app, ["data", "convert", str(mixed_chatml_file), "--to", "alpaca", "-o", output]
@@ -293,8 +294,9 @@ def test_convert_alpaca_counts_multiturn_row_as_failed(mixed_chatml_file, tmp_pa
     assert only["output"] == "4"
 
 
-def test_convert_alpaca_all_multiturn_rows_fail(multiturn_chatml_file, tmp_path):
+def test_convert_alpaca_all_multiturn_rows_fail(multiturn_chatml_file, tmp_path, monkeypatch):
     """When every row has more turns than alpaca holds, convert stops."""
+    monkeypatch.chdir(tmp_path)
     output = str(tmp_path / "converted.jsonl")
     result = runner.invoke(
         app, ["data", "convert", str(multiturn_chatml_file), "--to", "alpaca", "-o", output]
