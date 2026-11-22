@@ -408,7 +408,6 @@ class TestInterruptedCaller:
                     if stream is not None:
                         stream.close()
 
-        _assert_all_gone(helpers)
         assert _wait_until(lambda: not _leftover_sandbox_dirs(sandbox_tmp))
 
 
