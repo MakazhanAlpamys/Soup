@@ -30,6 +30,7 @@
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
 - [Data Recipe DAG Runner (`soup data recipe --execute`)](#data-recipe-dag-runner-soup-data-recipe---execute)
+- [Train/evaluation leakage check](#trainevaluation-leakage-check)
 
 ---
 
@@ -153,6 +154,10 @@ taxonomy: "82% code" means 82% of rows landed in a cluster whose top terms look
 like code. Requires `[train]`.
 
 ## Canaries (`soup data canary insert|check`)
+
+The canary commands display paths, diagnostics and exposure-table secrets literally,
+with terminal controls and bidi marks removed from the display. Dataset/manifest/report
+contents, scoring inputs, verdicts and secret-file permissions remain unchanged.
 
 Prove whether a model memorized your data — for leak detection and provenance.
 
@@ -660,6 +665,10 @@ contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a t
 as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
 error is reported with its code cell and line.
 
+A dataset `type:` written as an axolotl custom prompt format (a mapping of `field_*`
+names and a `format` template) has no Soup equivalent: it migrates to `data.format: auto`
+with a warning naming its keys, and the template is not carried over.
+
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
 The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
@@ -670,8 +679,11 @@ notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
 `OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
 to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
 its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
-be read statically, stops the migration naming the value. `SFTConfig` and the
-other TRL `*Config` classes are read for hyperparameters.
+be read statically, stops the migration naming the value. A `DPOTrainer` whose
+`DPOConfig` sets `loss_type="ipo"` migrates to `task: ipo`; any DPO loss other than
+`sigmoid` and `ipo` (`hinge`, `robust`, a list of several) stops the migration
+naming the value. `SFTConfig` and the other TRL `*Config` classes are read for
+hyperparameters.
 The final trainer determines the task; its inline or named config, passed as `args=`
 or positionally, supplies output and hyperparameters using the latest module-level
 binding before that trainer (including annotated assignments).
@@ -687,9 +699,9 @@ where a key is absent (#1807):
   default) rather than leaving Soup's default of 0.1 in force. A value `data.val_split`
   cannot express (an absolute row count, or a fraction above 0.5) is named in a warning
   and not written.
-- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8 and a missing `lora_alpha` is
-  `2 * rank`, as LLaMA-Factory has them; a quoted rank (`lora_rank: "32"`) counts as the
-  integer. A comma-separated `lora_target` becomes a list,
+- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8, a missing `lora_alpha` is
+  `2 * rank` and a missing `lora_dropout` is 0, as LLaMA-Factory has them; a quoted
+  rank (`lora_rank: "32"`) counts as the integer. A comma-separated `lora_target` becomes a list,
   and `lora_target: all` (also the default when the key is absent) becomes `all-linear`,
   every linear layer; so does axolotl `lora_target_linear: true`. `auto` would have
   resolved to `q_proj` / `v_proj` only on Llama.
@@ -701,7 +713,11 @@ where a key is absent (#1807):
   training model wins over the reload. `gradient_accumulation_steps`, `warmup_ratio`,
   `weight_decay` and `seed` are read from the final trainer's `TrainingArguments` or
   TRL `*Config`; `warmup_steps` has no Soup field (warmup comes from
-  `training.warmup_ratio`) and is named in a warning.
+  `training.warmup_ratio`) and is named in a warning. The config's `beta` maps to the
+  field the task's trainer passes to TRL as `beta`: `dpo_beta` (also for online DPO),
+  `ipo_tau`, `kto_beta`, `orpo_beta`, `bco_beta` or `grpo_beta`. A `CPOConfig` `beta`
+  has no Soup field, and is named in the warning below, as is a `loss_type` on any
+  config but `DPOConfig` and `CPOConfig`.
 - **Nothing is dropped in silence.** Every source key, `TrainingArguments` keyword or
   `get_peft_model` keyword the migrator does not map is listed in one
   "not migrated" warning.
@@ -1269,6 +1285,10 @@ soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
+Alpaca holds one exchange per row, so `soup data convert --to alpaca` counts a
+conversation with more turns than that as failed instead of shortening it to
+its last exchange.
+
 `soup data filter --perplexity` and `--score-only` require torch and transformers
 (install with `pip install "soup-cli[train]"`). If either package cannot be
 imported, the command exits 1 with installation instructions before writing an
@@ -1670,3 +1690,41 @@ synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.
+
+
+## Train/evaluation leakage check
+
+```bash
+soup data leakage --train train.jsonl --eval eval.jsonl --samples 5
+soup data leakage --train train.jsonl --eval eval.jsonl --json
+```
+
+This read-only check reports the number and percentage of **eval records** whose
+extracted input text exactly matches any train input. Each eval record counts
+once, even when several train records match. Inputs must be nonempty JSONL
+objects under the current directory; malformed records or unusable input text
+are refused instead of being silently skipped. Neither file is modified.
+Both files are loaded fully into memory, within the loader's per-file caps of
+1 GiB and 1,000,000 records.
+
+Matching uses the shared text extractor on input fields: `prompt` (including
+message-list prompts), Alpaca `instruction`/`input`/`system`, ChatML `messages`,
+ShareGPT `conversations`, preference conversation prefixes, and plain
+`text`/`content`/`query`. For complete conversations, only the final assistant
+answer is excluded; previous turns stay in the context. Preference conversations
+must agree on their input prefix. Thus the same question with different answers
+still matches. Prompt-only preference strings require an explicit `prompt` field.
+
+Only outer whitespace is stripped; case and internal whitespace remain exact.
+Roles and message boundaries are not part of the match: message texts are joined
+with newlines, so one message `a\nb` matches two messages `a` and `b`.
+This compares extracted textual inputs, not rendered chat-template tokens,
+images, semantic similarity, or near-duplicates. A clean result only describes
+this exact check on these two files.
+
+The JSON report includes counts, percentage and up to `--samples` example pairs
+(default 5, range 0–20), with 160-character prompt previews and the number of
+matching train records. Record numbers are one-based logical JSONL records,
+excluding blank lines. Examples use the first matching train record and follow
+eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
+There is no automatic training hook or dataset filtering.

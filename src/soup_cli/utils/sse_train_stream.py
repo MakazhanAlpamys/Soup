@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from soup_cli.experiment.row_kinds import check_metric_row_kind
 from soup_cli.utils.finite_json import finite_json
 
 # Closed allowlist — drop any payload key not in this set.
@@ -24,6 +25,8 @@ _ALLOWED_KEYS = frozenset(
         "loss",
         "val_loss",
         "val_reward",
+        "reward",
+        "reward_std",
         "lr",
         "grad_norm",
         "tokens_per_s",
@@ -32,6 +35,7 @@ _ALLOWED_KEYS = frozenset(
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     }
 )
 
@@ -58,6 +62,13 @@ class TrainEvent:
     #: Its own field for the same reason ``val_loss`` is: a reward written into
     #: the loss curve would read as a loss.
     val_reward: Optional[float] = None
+    #: A reinforcement-style run's training reward for the step (``metrics.reward``;
+    #: experiment/reward_columns.py), and its spread (``metrics.reward_std``). Their own
+    #: fields, not ``val_reward``: that one is the held-out reward at an evaluation.
+    #: None -- every non-RL step, and a reward that is not finite -- is omitted from
+    #: the payload.
+    reward: Optional[float] = None
+    reward_std: Optional[float] = None
     lr: Optional[float] = None
     grad_norm: Optional[float] = None
     tokens_per_s: Optional[float] = None
@@ -66,8 +77,13 @@ class TrainEvent:
     p99_step_ms: Optional[float] = None
     eta_seconds: Optional[float] = None
     message: Optional[str] = None
+    #: What the ``metric`` event mirrors: ``train`` / ``eval`` / ``summary``, the
+    #: ``metrics.kind`` of the row written beside it (experiment/row_kinds.py).
+    #: None is omitted from the payload.
+    kind: Optional[str] = None
 
     def __post_init__(self) -> None:
+        check_metric_row_kind(self.kind)
         if self.type not in _VALID_TYPES:
             raise ValueError(
                 f"type must be one of {sorted(_VALID_TYPES)}; got {self.type!r}"
@@ -99,6 +115,8 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "loss",
         "val_loss",
         "val_reward",
+        "reward",
+        "reward_std",
         "lr",
         "grad_norm",
         "tokens_per_s",
@@ -107,6 +125,7 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "p99_step_ms",
         "eta_seconds",
         "message",
+        "kind",
     ):
         value = getattr(event, key)
         if value is not None:

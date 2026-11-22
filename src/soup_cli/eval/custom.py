@@ -44,6 +44,9 @@ class EvalResult:
     output: str
     score: float
     matched: bool
+    #: True when the generation for this task raised (or returned no text) and the row was
+    #: scored as wrong without an answer. An empty answer is NOT a failure.
+    failed: bool = False
 
 
 @dataclass
@@ -415,7 +418,12 @@ def score_task(task: EvalTask, output: str) -> EvalResult:
 
     if task.scoring == "tool_call_args_subset":
         similarity = tool_call_args_subset(output, task.expected)
-        matched = similarity >= 0.5
+        # Matched only at full credit (#2811): the name and the arguments are
+        # worth 0.5 each, so a 0.5 threshold counted a call with every argument
+        # wrong, or to the wrong tool, as Correct. `score` keeps the partial
+        # credit, which the eval gate, quant_check, deploy_measure and
+        # cmaes_merge average.
+        matched = similarity >= 1.0
         return EvalResult(
             task=task, output=output, score=similarity, matched=matched,
         )
@@ -451,7 +459,7 @@ def run_eval(
     for task, output in track(zip(tasks, outputs), len(tasks)):
         result = (
             score_task(task, output) if output is not None
-            else EvalResult(task=task, output="", score=0.0, matched=False)
+            else EvalResult(task=task, output="", score=0.0, matched=False, failed=True)
         )
         results.append(result)
 

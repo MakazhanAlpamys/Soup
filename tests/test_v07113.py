@@ -1521,3 +1521,29 @@ class TestPatchInvariants:
 
         parts = tuple(int(x) for x in soup_cli.__version__.split(".")[:3])
         assert parts >= (0, 71, 13)
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_prompt_compile_eval_jsonl_keeps_a_row_holding_the_character_3066(
+    tmp_path, monkeypatch, char
+):
+    from soup_cli.utils.prompt_compile import load_eval_examples
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "suite.jsonl").write_bytes(_rows_3066(char).encode("utf-8"))
+
+    assert load_eval_examples("suite.jsonl") == [{"prompt": f"a{char}b"}, {"prompt": "next"}]

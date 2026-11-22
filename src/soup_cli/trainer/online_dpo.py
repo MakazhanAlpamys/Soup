@@ -50,6 +50,7 @@ from soup_cli.trainer.online_dpo_ranking import (
     make_ranked_pairs_trainer,
     report_unranked_pairs,
 )
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -308,8 +309,7 @@ class OnlineDPOTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
@@ -421,19 +421,20 @@ class OnlineDPOTrainerWrapper:
 
         apply_vocab_expansion(self.tokenizer, self.model, cfg.data)
 
-        # QLoRA stabilization: k-bit-loaded models need fp32 layer-norm casting +
-        # input-grad enabling BEFORE LoRA. OnlineDPOTrainer's peft_config path
-        # does NOT do this internally (unlike DPOTrainer), so do it here.
+        # QLoRA stabilization: k-bit-loaded models need the base frozen and input-grad
+        # enabling BEFORE LoRA (and PEFT's fp32 norm cast on a card without bf16).
+        # OnlineDPOTrainer's peft_config path does NOT do this internally (unlike
+        # DPOTrainer), so do it here.
         if tcfg.quantization in ("4bit", "8bit"):
-            from peft import prepare_model_for_kbit_training
-
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         from soup_cli.utils.peft_wiring import (

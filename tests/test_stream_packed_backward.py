@@ -127,6 +127,11 @@ def _ml_budget(monkeypatch, *, seq, free, nf4=True, on_cuda=True, probe=False, m
     """
     import torch
 
+    # Keep these pre-flight arithmetic expectations independent of the runner's
+    # CUDA capability and the newly charged default workspace. Other tests cover
+    # non-zero CUBLAS_WORKSPACE_CONFIG parsing and charging explicitly.
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":0:0")
+
     from soup_cli.trainer.stream_setup import StreamingSetupMixin
     from soup_cli.utils import layer_stream
 

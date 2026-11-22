@@ -24,6 +24,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Sequence
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
+
 _LOG = logging.getLogger(__name__)
 
 # Per-fixture file-size cap (defence against operator-side bundle corruption).
@@ -442,7 +444,7 @@ def load_battery_probes(name: str) -> tuple[dict, ...]:
         text = Path(concrete).read_text(encoding="utf-8")
     rows: list[dict] = []
     skipped = 0
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         line = line.strip()
         if not line:
             continue

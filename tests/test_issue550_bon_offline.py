@@ -717,3 +717,26 @@ def test_candidate_text_tampering_is_detected_before_publication(tmp_path, monke
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "candidate digest mismatch" in result.output
     assert not output.exists()
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_bon_jsonl_reads_a_row_holding_the_character_3066(char):
+    from soup_cli.utils.best_of_n_artifact import _jsonl
+
+    rows = _jsonl(_rows_3066(char).encode("utf-8"), "candidate artifact")
+
+    assert rows == [{"prompt": f"a{char}b"}, {"prompt": "next"}]

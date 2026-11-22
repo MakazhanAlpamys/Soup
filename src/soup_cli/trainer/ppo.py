@@ -18,8 +18,10 @@ from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.experiment.row_kinds import ROW_KIND_TRAIN
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -87,7 +89,6 @@ def _set_ppo_training_kwargs(
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
             "bf16": use_bf16,
             "fp16": use_fp16,
             "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
@@ -99,6 +100,27 @@ def _set_ppo_training_kwargs(
                 ppo_kwargs[name] = value
 
     return applied
+
+
+def _set_ppo_save_kwargs(
+    ppo_kwargs: dict[str, object], ppo_config_cls: type, tcfg: Any
+) -> None:
+    """Forward ``training.save_strategy`` / ``save_steps`` to the PPO config (#2575).
+
+    The keywords come from the shared :func:`save_kwargs`, each passed only when the
+    installed trl config takes it, as every other PPO setting is. A config class without
+    ``save_strategy`` is an old trl whose PPO trainer saves on its own schedule, so
+    ``epoch`` / ``no`` cannot be honoured there and is refused rather than ignored.
+    """
+    from soup_cli.trainer._trl_compat import config_accepts
+
+    ppo_kwargs.update(
+        save_kwargs(
+            tcfg,
+            accepts=lambda name: config_accepts(ppo_config_cls, name),
+            config_name=f"the installed {ppo_config_cls.__name__}",
+        )
+    )
 
 
 def _effective_ppo_setting(
@@ -341,8 +363,7 @@ class PPOTrainerWrapper:
         if config_accepts(ppo_config_cls, "response_length"):
             ppo_kwargs["response_length"] = cfg.data.max_length
 
-        if config_accepts(ppo_config_cls, "save_total_limit"):
-            ppo_kwargs["save_total_limit"] = 3
+        _set_ppo_save_kwargs(ppo_kwargs, ppo_config_cls, tcfg)
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -726,7 +747,7 @@ class PPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -760,13 +781,15 @@ class PPOTrainerWrapper:
         )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         from soup_cli.utils.peft_wiring import (
@@ -800,7 +823,7 @@ class PPOTrainerWrapper:
 
         # #2197: TRL's PPO loop has no Trainer.train(), so nothing else switches
         # checkpointing on for the policy. 4bit/8bit already got it from
-        # prepare_model_for_kbit_training above, with its own kwargs.
+        # prepare_kbit_model above, with its own kwargs.
         if tcfg.quantization not in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
@@ -1042,6 +1065,7 @@ class PPOTrainerWrapper:
                         epoch=epoch + 1,
                         loss=log_entry["loss"],
                         lr=log_entry["lr"],
+                        kind=ROW_KIND_TRAIN,
                     )
 
         duration = time.time() - start

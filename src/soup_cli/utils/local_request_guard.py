@@ -144,6 +144,36 @@ def check_browser_origin(
     return _check_origin(_normalise_bind(bind_host), host_header, origin_header)
 
 
+_ORIGIN_NOT_OWN = (
+    403,
+    "Origin not allowed: this route accepts only requests from the server's own origin",
+)
+
+
+def check_own_origin(host_header: str | None, origin_header: str | None) -> tuple[int, str] | None:
+    """Decide whether an ``Origin`` header names THIS server (scheme, host AND port).
+
+    Stricter than :func:`check_local_request`, which accepts a page on ANY ``localhost``
+    port: here the ``Origin`` must be ``http(s)://<the Host header>``, the origin a page
+    served by this very server sends. No ``Origin`` header means the request is not from a
+    browser (curl, an SDK, a desktop app) and is allowed; ``Origin: null`` and every other
+    site are refused with 403.
+    """
+    if origin_header is None:
+        return None
+    try:
+        parts = urlsplit(origin_header)
+        netloc = parts.netloc.lower()
+    except ValueError:
+        return _ORIGIN_NOT_OWN
+    own = (host_header or "").strip().lower()
+    if parts.scheme not in ("http", "https") or not own or netloc != own:
+        return _ORIGIN_NOT_OWN
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        return _ORIGIN_NOT_OWN
+    return None
+
+
 def browser_origin_dependency(bind_host: str) -> Callable[..., None]:
     """A FastAPI dependency that applies :func:`check_browser_origin` for ``bind_host``.
 

@@ -378,7 +378,8 @@ KNOWN_UNCONSUMED = {
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
-    "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
+    "training.warmup_auto": "#807 / #1814 -- warns at load from v0.78.0, refused as of "
+                            "v0.79.0; read only in autopilot.generate_config, "
                             "which nothing in src/ calls; and that line reads "
                             "the decisions dict and WRITES the value into a "
                             "config, so it is not a read of the field either",
@@ -400,8 +401,9 @@ KNOWN_UNCONSUMED = {
                                     "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                       "(catastrophic-forgetting probe staging)",
-    "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
-                                     "the same name in ship.py is unrelated",
+    "training.forgetting_threshold": "#799 / #1814 -- warns at load from v0.78.0, refused "
+                                     "as of v0.79.0 (staged catastrophic-forgetting "
+                                     "threshold); the same name in ship.py is unrelated",
     "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                      "(catastrophic-forgetting probe staging)",
     "training.forgetting_stop": "#808 -- warns at load from v0.76, refused as of v0.77 "
