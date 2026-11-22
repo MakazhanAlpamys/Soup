@@ -81,6 +81,7 @@ from soup_cli.utils.loop_state import (
     init_state,
     parse_wait_duration,
     read_state,
+    refuse_existing_state,
     update_state,
     validate_sft_recipe_value,
     write_state,
@@ -657,6 +658,11 @@ def init_cmd(
             "soup loop watch --pre-wired refuses until it is known"
         )
     try:
+        # A refused init must leave .soup-loops as it found it (#3062):
+        # refuse an existing loop before creating or tightening the adapters
+        # dir. init_state refuses it again below, so this only moves the
+        # refusal ahead of the folder change.
+        refuse_existing_state(force=force)
         # The loop deploys through `soup serve --adapter-dir .soup-loops/adapters`,
         # which refuses a missing directory (#3034). Create it before loop.yaml so
         # a failure here leaves no half-initialized loop behind. A folder the train
