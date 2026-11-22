@@ -1677,6 +1677,32 @@ class TestWireBounds:
         results = _ok(run_ranks(2, work))
         assert results[0].startswith("the data-parallel group is broken: rank 0: ProtocolError:")
 
+    def test_failed_collective_drains_peer_data_before_closing(self, monkeypatch):
+        peer_socket = MagicMock(spec=socket.socket)
+        peer_socket.recv.side_effect = [b"pending peer data", b""]
+        monkeypatch.setattr(transport, "time", SimpleNamespace(monotonic=lambda: 0.0))
+        group = TcpStarGroup.__new__(TcpStarGroup)
+        group.rank = 0
+        group._seq = 0
+        group._closed = False
+        group._broken = None
+        group._links = {1: SimpleNamespace(sock=peer_socket)}
+
+        def fail_collective():
+            raise ProtocolError("collective failed")
+
+        with pytest.raises(ProtocolError, match="^collective failed$"):
+            group._run(fail_collective)
+
+        calls = [name for name, _args, _kwargs in peer_socket.method_calls]
+        receives = [index for index, name in enumerate(calls) if name == "recv"]
+        assert len(receives) == 2
+        first, last = receives
+        assert calls.index("sendall") < calls.index("shutdown") < first
+        assert last < calls.index("close")
+        assert peer_socket.shutdown.call_args_list[0].args == (socket.SHUT_WR,)
+        assert group._closed
+
     def test_a_closed_group_refuses_every_call(self):
         def work(group, rank):
             group.close()
