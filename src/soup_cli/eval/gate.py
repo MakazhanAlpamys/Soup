@@ -648,6 +648,11 @@ def _run_judge_task(
                     f"field 'prompt' must be a string, got {type(prompt).__name__}"
                 )
             category = row.get("category", "default")
+            if not isinstance(category, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'category' must be a string, got {type(category).__name__}"
+                )
             validated_rows.append((prompt, category))
 
     if not validated_rows:
