@@ -44,7 +44,7 @@ def complete_training(tmp_path, monkeypatch):
     monkeypatch.setattr(train_mod, "get_gpu_info", lambda **kw: {"memory_total": "0 GB"})
     (tmp_path / "base").mkdir()
 
-    def complete(*, backend="mlx", task="sft", stop_reason=None, **training):
+    def complete(*, backend="mlx", task="sft", stop_reason=None, output_dir="./saved", **training):
         row = {"instruction": "Question", "output": "Answer"}
         fmt = "alpaca"
         if task in {"dpo", "orpo", "simpo", "preference"}:
@@ -65,7 +65,7 @@ def complete_training(tmp_path, monkeypatch):
         path.write_text(yaml.safe_dump(config), encoding="utf-8")
         result = {
             # Consumers must target the artifact actually returned by the trainer.
-            "output_dir": "./saved", "initial_loss": 2.0, "final_loss": 1.0,
+            "output_dir": output_dir, "initial_loss": 2.0, "final_loss": 1.0,
             "total_steps": 1, "duration_secs": 1.0, "stop_reason": stop_reason,
         }
         trainer = SimpleNamespace(setup=lambda dataset: None, train=lambda **kw: result)
@@ -125,3 +125,11 @@ def test_relora_keeps_dense_guidance_and_default_chat(complete_training):
     assert "ReLoRA output is already dense; no soup merge is needed" in output
     assert "Merge LoRA:" not in output
     assert "--backend" not in output
+
+
+def test_completion_panel_shows_output_on_one_line(complete_training, monkeypatch):
+    # Windows cannot create a directory whose name contains these characters.
+    monkeypatch.setattr("soup_cli.utils.run_provenance.write_run_provenance", lambda *_: None)
+    output = complete_training(output_dir="./runs\nnew\rline\tend")
+
+    assert r"Output: ./runs\nnew\rline\tend" in output
