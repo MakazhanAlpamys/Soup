@@ -1251,9 +1251,11 @@ def read_state(path: Optional[str] = None) -> LoopState:
     unknown = sorted(set(data) - allowed)
     if unknown:
         details = []
-        for key in unknown:
+        allowed_fields = sorted(allowed)
+        shown_unknown = unknown[:5]
+        for key in shown_unknown:
             nearest = (
-                difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
+                difflib.get_close_matches(key, allowed_fields, n=1, cutoff=0.6)
                 if len(key) <= 128
                 else []
             )
@@ -1265,6 +1267,9 @@ def read_state(path: Optional[str] = None) -> LoopState:
                 details.append(
                     f"unknown loop.yaml key {_brief(key)}; it is not a supported field"
                 )
+        remaining = len(unknown) - len(shown_unknown)
+        if remaining:
+            details.append(f"and {remaining} more unknown keys")
         raise ValueError("; ".join(details))
     filtered = data
     if "production_version" not in data:

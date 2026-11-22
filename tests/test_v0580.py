@@ -325,6 +325,22 @@ class TestStateIO:
         assert "did you mean 'previous_production_iteration_id'?" in message
         assert long_key not in message
 
+    def test_read_state_bounds_many_unknown_top_level_keys(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        unknown = [f"unknown_{index:03d}" for index in range(300)]
+        target.write_text(json.dumps({key: True for key in unknown}))
+
+        with pytest.raises(ValueError) as exc_info:
+            read_state()
+
+        message = str(exc_info.value)
+        assert all(key in message for key in unknown[:5])
+        assert "and 295 more unknown keys" in message
+        assert message.count("unknown loop.yaml key") == 5
+        assert len(message) < 500
+
     def test_status_refuses_unknown_field_without_rewriting_state(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".soup" / "loop.yaml"
