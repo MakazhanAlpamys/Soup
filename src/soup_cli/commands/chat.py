@@ -7,8 +7,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 
 console = Console()
 
@@ -83,7 +84,7 @@ def chat(
         else:
             reject_native_adapter(model)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from exc
 
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any path
@@ -96,16 +97,16 @@ def chat(
                 model, base_model, hub, console=console
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(code=2) from exc
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(code=1) from exc
 
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
+        console.print(terminal_text(f"Model path not found: {model_path}", "red"))
         raise typer.Exit(1)
 
     # Detect if it's a LoRA adapter or full model
@@ -120,7 +121,7 @@ def chat(
                 str(model_path), base_model, trust_remote_code=trust_remote_code,
             )
         except (ImportError, OSError, ValueError) as exc:
-            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(1) from exc
     else:
         # Resolve base model
@@ -141,10 +142,13 @@ def chat(
 
         console.print(
             Panel(
-                f"Model:  [bold]{for_terminal(model_path)}[/]\n"
-                + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
-                + f"Device: [bold]{device}[/]\n"
-                f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
+                Text.assemble(
+                    "Model:  ", terminal_text(model_path, "bold"), "\n",
+                    Text.assemble("Base:   ", terminal_text(base_model, "bold"), "\n")
+                    if is_adapter else "",
+                    "Device: ", terminal_text(device, "bold"), "\n",
+                    "Type:   ", ("LoRA adapter" if is_adapter else "Full model", "bold"),
+                ),
                 title="Loading model",
             )
         )
@@ -212,7 +216,7 @@ def chat(
             # Remove old system prompt if exists
             history = [msg for msg in history if msg["role"] != "system"]
             history.insert(0, {"role": "system", "content": new_system})
-            console.print(f"[dim]System prompt set: {for_terminal(new_system)}[/]\n")
+            console.print(terminal_text(f"System prompt set: {new_system}\n", "dim"))
             continue
 
         # Add user message
@@ -239,7 +243,8 @@ def chat(
             break
 
         history.append({"role": "assistant", "content": response})
-        console.print(f"[bold green]Assistant:[/] {for_terminal(response)}\n")
+        console.print(Text.assemble(("Assistant:", "bold green"), " ",
+                                    terminal_text(response), "\n"))
 
 
 def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
@@ -276,17 +281,17 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
+        console.print(terminal_text(f"Loading base model: {base_model}...", "dim"))
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map=device_map,
             dtype=torch_dtype,
         )
-        console.print(f"[dim]Loading LoRA adapter: {for_terminal(model_path)}...[/]")
+        console.print(terminal_text(f"Loading LoRA adapter: {model_path}...", "dim"))
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
-        console.print(f"[dim]Loading model: {for_terminal(model_path)}...[/]")
+        console.print(terminal_text(f"Loading model: {model_path}...", "dim"))
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
