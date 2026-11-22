@@ -1648,10 +1648,31 @@ def _closes_at_word_end(command: str, index: int) -> bool:
     of the command follows it): ``--opt='a b'`` is ``--opt=a b``. Otherwise it is
     a literal character, as an apostrophe is: ``don't``, ``a'b c``, ``O'Brien``,
     an unclosed ``--opt='a b``, and ``don't stop 'x'`` (the next ``'`` opens a
-    word, it does not end one) keep it.
+    word, it does not end one) keep it. So does a ``'`` followed by a ``"`` that
+    opens a double-quoted group before the next ``'``: in ``don't "James' file"``
+    the ``'`` of ``James'`` is inside that group, and ``don't`` stays one word.
+    A ``"`` after an odd number of backslashes is a literal character, as in
+    :func:`_split_windows_command`, and opens no group.
     """
-    closing = command.find("'", index + 1)
-    return closing != -1 and (closing + 1 == len(command) or command[closing + 1] in " \t")
+    length = len(command)
+    position = index + 1
+    while position < length:
+        char = command[position]
+        if char == "\\":
+            run_end = position
+            while run_end < length and command[run_end] == "\\":
+                run_end += 1
+            if run_end < length and command[run_end] == '"' and (run_end - position) % 2:
+                position = run_end + 1
+            else:
+                position = run_end
+            continue
+        if char == '"':
+            return False
+        if char == "'":
+            return position + 1 == length or command[position + 1] in " \t"
+        position += 1
+    return False
 
 
 def _split_windows_command(command: str) -> list[str]:
