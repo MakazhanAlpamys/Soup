@@ -289,10 +289,10 @@ training:
   rather than ignored.
 - **Backend and task limits.** MLX uses `save_steps` as an iteration interval.
   Adapter training writes numbered adapter files. Native MLX full SFT writes
-  standalone model snapshots in `checkpoint-<iteration>` directories at optimizer
-  boundaries. MLX and `task: unlearn` both refuse `epoch` and `no`. Unlearning writes
-  no intermediate checkpoints. PPO accepts `steps` and `no` because its trainer does
-  not emit epoch-end callbacks.
+  standalone model snapshots at optimizer boundaries in zero-padded directories
+  such as `checkpoint-0000200`. MLX and `task: unlearn` both refuse `epoch` and `no`.
+  Unlearning writes no intermediate checkpoints. PPO accepts `steps` and `no` because
+  its trainer does not emit epoch-end callbacks.
 
 ## Rewind — which row spiked the loss (`soup rewind`)
 

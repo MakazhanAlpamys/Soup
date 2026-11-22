@@ -1301,9 +1301,10 @@ dataset has no usable rows or falls below `--min-valid-fraction`. A file whose
 every row was skipped is not empty: it exits with code `2` ("no usable rows
 remain") when `--format` names the format, and `3` without one, since nothing is
 left to detect a format from. A partially valid dataset still exits with code `0`
-when no minimum is specified. A truly empty file with an explicit `--format`
-reports `0/0` and exits `0`, even with a positive minimum. Auto-detection on an
-empty file exits `3`.
+when no minimum is specified. With an explicit `--format`, an empty `.jsonl` file
+or a `.json` file containing `[]` reports `0/0` and exits `0`, even with a positive
+minimum. Auto-detection on either input exits `3`. A 0-byte `.json` file fails JSON
+parsing.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
