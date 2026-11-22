@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequence, Tuple
 
+from soup_cli.utils.adapter_arithmetic import factor_coeff
 from soup_cli.utils.adapter_diff import (
     WRITE_ADAPTER_DEPS,
     WRITE_ADAPTER_DEPS_MSG,
@@ -209,8 +210,6 @@ def merge_linear(
     """
     import numpy as np
 
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff
-
     if len(weights_list) < _MIN_ADAPTERS:
         raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
     if len(weights_list) > _MAX_ADAPTERS:
@@ -233,7 +232,7 @@ def merge_linear(
             continue
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += _factor_coeff(name, c) * t
+            acc += factor_coeff(name, c) * t
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -319,8 +318,6 @@ def merge_dare(
     for adapters in weights_list[1:]:
         shared &= set(adapters.keys())
 
-    from soup_cli.utils.adapter_arithmetic import _factor_coeff
-
     rng = np.random.default_rng(seed)
     merged: dict[str, Any] = {}
     skipped: list[str] = []
@@ -334,7 +331,7 @@ def merge_dare(
         for c, t in zip(coeffs, tensors):
             mask = rng.random(t.shape) < density_val
             rescaled = np.where(mask, t / density_val, 0.0)
-            acc += _factor_coeff(name, c) * rescaled
+            acc += factor_coeff(name, c) * rescaled
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -427,13 +424,17 @@ def fold_lora_scaling(
         rescaled: Optional[dict[str, Any]] = None
         if config is not None:
             for name, tensor in weights.items():
-                role = _lora_role(name)
-                if role is None and name.endswith(_LORA_B_BIAS):
+                parsed = _lora_role(name)
+                if parsed is not None:
+                    (stem, _kind, _adapter_name), role = parsed
+                    if role != "B":
+                        continue
+                elif name.endswith(_LORA_B_BIAS):
                     # PEFT scales lora_B's output, its bias (lora_bias=True) included.
-                    role = (name[: -len(_LORA_B_BIAS)], "B", _LORA_B_BIAS)
-                if role is None or role[1] != "B":
+                    stem = name.removesuffix(_LORA_B_BIAS)
+                else:
                     continue
-                module = peft_module_name(role[0])
+                module = peft_module_name(stem)
                 target = lora_module_scaling(template, module)
                 own = lora_module_scaling(config, module)
                 if target is None or own is None or target == 0.0 or own == target:

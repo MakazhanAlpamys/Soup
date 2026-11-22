@@ -1,0 +1,85 @@
+{
+  "bundle": {
+    "availability": "available from author; not in this repository or CI",
+    "bytes": 24809923,
+    "filename": "issue2162-later-cells-v1.zip",
+    "sha256": "9043e2f675b46620fb38accc0cf85ef11c3b0a3acc7f181b22cd824501ea117d"
+  },
+  "nested_archives": {
+    "rtx3090/evidence.zip": {
+      "bytes": 2328821,
+      "sha256": "b6574e0a07af0fc5a5f6b334b38d36617df0b7d1985b8b603582b5317faf7286"
+    },
+    "rtx3090/source.zip": {
+      "bytes": 8062293,
+      "sha256": "57aad6a1433184c0ec353144aa85d3c80e2c35dd13a6bd209c24a15a42f3a4c5"
+    },
+    "rtx5090/evidence.zip": {
+      "bytes": 1938503,
+      "sha256": "c0d519ca474ce6100f359752193f5b7266ae159bec5af66f975c8ecd99dd230e"
+    },
+    "rtx5090/source.zip": {
+      "bytes": 8061457,
+      "sha256": "881ebe405e947d55ef363a8e7fb95902485d1c202457ef806591a8ec561eccf8"
+    }
+  },
+  "schema": "issue2162-later-cells-v1",
+  "snapshots": {
+    "issue2162-later-3090-v1/closure-summary.json": {
+      "bytes": 703,
+      "sha256": "431ffc66482205c01930598966658c132585e1af60d008a12fe552a58db24f02"
+    },
+    "issue2162-later-3090-v1/confirmation-decision.json": {
+      "bytes": 1446,
+      "sha256": "9be553ead77856d47dc4251b94f4f51d08c086556b1554f1bffb8cdbe3711a20"
+    },
+    "issue2162-later-3090-v1/freeze.json": {
+      "bytes": 7533,
+      "sha256": "0c4d1ae40dea6c112eb07e31ced5167edecdbc696ae6082c34589c0c08104254"
+    },
+    "issue2162-later-3090-v1/independent-audit.json": {
+      "bytes": 25753,
+      "sha256": "d30fbb02e045bbc7dd347c036d0f4763f22f2f7cb8e1efc6e141fd5ea38837fe"
+    },
+    "issue2162-later-3090-v1/protocol.md": {
+      "bytes": 11089,
+      "sha256": "1e2de69d2ef3e08c1d28f04946e9c27a30e7a5398a417359f52488c28dcf09f4"
+    },
+    "issue2162-later-3090-v1/results.md": {
+      "bytes": 4013,
+      "sha256": "0d171429a4f9003e19ef4c7dcade574a20606f11b25413bc04e7e8e7b437ef62"
+    },
+    "issue2162-later-3090-v1/stage-a-decision.json": {
+      "bytes": 5237,
+      "sha256": "468d6c149d1e8cf56a74a5df028824788d46a474a9fc503ac81d9a5b5f9f4cb1"
+    },
+    "issue2162-later-5090-v1/closure-summary.json": {
+      "bytes": 1229,
+      "sha256": "8029450aa507650c536bf3a7ccc35141d5b6150b4ae40858b77662e47bb59621"
+    },
+    "issue2162-later-5090-v1/desktop-resume-recovery-audit.json": {
+      "bytes": 731,
+      "sha256": "e98d193d00f6a7669e985225b7b9f58c1dfc881f81de8d43e958493f75de9790"
+    },
+    "issue2162-later-5090-v1/freeze.json": {
+      "bytes": 8939,
+      "sha256": "2bcc1d691a4c810a101f0d747d83e74ee98a224ba939617c9accc6bed753272a"
+    },
+    "issue2162-later-5090-v1/independent-audit.json": {
+      "bytes": 45053,
+      "sha256": "c1c28c8657312b69a114b27a62a6ed976e1595f52d3a865c90cf09fbf564e558"
+    },
+    "issue2162-later-5090-v1/protocol.md": {
+      "bytes": 10467,
+      "sha256": "c51146b610cefdbed2bfd3239db84be9a9c5ad88dd27fb22641d7b5689ff8414"
+    },
+    "issue2162-later-5090-v1/results.md": {
+      "bytes": 8682,
+      "sha256": "e03c9998c57394d11852d7874850d11aa9024a12e65474d44068184971907be3"
+    },
+    "issue2162-later-5090-v1/stage-a-decision.json": {
+      "bytes": 5182,
+      "sha256": "7ec25fd09660eaccbe688eef02ae84950a52e61a6666e286c09a07019569405a"
+    }
+  }
+}
