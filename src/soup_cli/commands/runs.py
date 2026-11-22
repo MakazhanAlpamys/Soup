@@ -196,6 +196,8 @@ def show(
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "stopped":
+        status_str = "[yellow]stopped[/]"
     elif status == "terminated":
         status_str = "[red]terminated[/]"
     elif status == "launching":

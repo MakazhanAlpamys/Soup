@@ -58,7 +58,7 @@ _INF = float("inf")
 # The metrics table as 0.77.2 wrote it, in column order (CREATE TABLE of a fresh database).
 _COLUMNS_0772 = [
     "id", "run_id", "step", "epoch", "loss", "val_loss", "val_reward", "lr", "grad_norm",
-    "speed", "gpu_mem", "kind", "timestamp",
+    "speed", "gpu_mem", "timestamp",
 ]
 _NEW_COLUMNS = ["reward", "reward_std"]
 
@@ -294,7 +294,7 @@ def test_reward_from_logs_says_which_columns_the_event_measured():
 def test_a_fresh_database_has_the_columns_after_every_existing_one(tmp_path):
     db = tmp_path / "fresh.db"
     ExperimentTracker(db_path=db).close()
-    assert _columns(db) == [*_COLUMNS_0772, *_NEW_COLUMNS]
+    assert _columns(db) == [*_COLUMNS_0772, "kind", *_NEW_COLUMNS]
 
 
 def _legacy_db(path: Path) -> None:
@@ -306,8 +306,8 @@ def _legacy_db(path: Path) -> None:
         Path(tracker_module.__file__).read_text(encoding="utf-8"), re.S,
     ).group(1)
     legacy = live.replace(
-        "    timestamp TEXT NOT NULL,\n    reward REAL,\n    reward_std REAL\n);",
-        "    timestamp TEXT NOT NULL\n);",
+        ",\n    reward REAL,\n    reward_std REAL\n);",
+        "\n);",
     )
     assert "reward_std" not in legacy and "\n    reward REAL" not in legacy, (
         "the fixture must genuinely predate both columns"
@@ -375,8 +375,8 @@ def test_log_metrics_keeps_its_positional_signature_and_appends_the_new_argument
 
 def test_a_database_written_by_this_version_is_readable_by_0772_statements(tmp_path):
     """0.77.2's reader is ``SELECT * ... ORDER BY step`` + ``dict(row)``, its writer an
-    INSERT that names its twelve columns, its migration a per-column ``PRAGMA table_info``
-    gate: none of them breaks on two extra nullable columns. (The real 0.77.2 module was
+    INSERT that names its eleven columns, its migration a per-column ``PRAGMA table_info``
+    gate: none of them breaks on three extra nullable columns. (The real 0.77.2 module was
     run against such a file when this change was made: see the report.)"""
     db = tmp_path / "new.db"
     store = ExperimentTracker(db_path=db)
@@ -390,9 +390,9 @@ def test_a_database_written_by_this_version_is_readable_by_0772_statements(tmp_p
     conn.execute(
         """INSERT INTO metrics
            (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-            gpu_mem, kind, timestamp)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (run_id, 2, 0.0, 0.2, None, None, 1e-4, None, None, "", "train", "2026-01-01"),
+            gpu_mem, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (run_id, 2, 0.0, 0.2, None, None, 1e-4, None, None, "", "2026-01-01"),
     )
     rows = [dict(row) for row in conn.execute(
         "SELECT * FROM metrics WHERE run_id = ? ORDER BY step", (run_id,)

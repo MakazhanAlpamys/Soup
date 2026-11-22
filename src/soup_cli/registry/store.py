@@ -533,10 +533,14 @@ class RegistryStore:
         Returns ``None`` on miss. Raises :class:`AmbiguousRefError` when a
         prefix or a ``name:tag`` matches more than one entry.
         """
-        if not ref:
-            return None
-        if ref.startswith("registry://"):
+        if ref and ref.startswith("registry://"):
             ref = ref[len("registry://"):]
+        # Checked after the scheme is stripped: a bare ``registry://`` would
+        # otherwise reach the prefix lookup as "" and match every entry, so
+        # ``soup registry delete registry:// --yes`` deleted a lone entry (#2723).
+        # A whitespace-only remainder names nothing either.
+        if not ref or not ref.strip():
+            return None
 
         conn = self._get_conn()
 
@@ -824,9 +828,13 @@ class RegistryStore:
             raise ValueError(f"run not found: {run_id}")
         status = run.get("status")
         if status != "completed":
-            raise ValueError(
-                f"run {run_id} has status {status!r}; only a completed run can be registered"
-            )
+            message = f"run {run_id} has status {status!r}; only a completed run can be registered"
+            if status == "stopped":
+                message += (
+                    ". Resume with soup train --resume <checkpoint> where supported "
+                    "(otherwise start a new run), then push the completed run ID."
+                )
+            raise ValueError(message)
 
         import json as _json
 
