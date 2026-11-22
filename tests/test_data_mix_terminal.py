@@ -188,21 +188,60 @@ def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
 
     assert result.exit_code == 2
     text = _plain(result)
-    assert "apply failed: cannot build this value: day is out of range for month" in text
+    assert (
+        'apply failed: cannot build this value: day is out of range for month in "r.yaml"' in text
+    )
     assert line.replace(bidi, "") in text
     assert _not_shown(text)
 
 
-def test_apply_reports_recipe_yaml_syntax_error():
-    Path("r.yaml").write_text("data: [unfinished\n", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        pytest.param(
+            "r.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser",
+        ),
+        pytest.param(
+            "nested/invalid [red] recipe.yaml",
+            "data:\n\ttrain: []\n",
+            r"while scanning for the next token found character '\t' that cannot start any token "
+            'in "{path}", line 2, column 1: train: [] ^',
+            id="scanner-nested-space-markup",
+        ),
+        pytest.param(
+            f"invalid{_CONTROLS}.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser-bidi",
+        ),
+        pytest.param(
+            "reader.yaml",
+            "data: \x01\n",
+            'unacceptable character #x0001: special characters are not allowed '
+            'in "{path}", position 6',
+            id="reader",
+        ),
+    ],
+)
+def test_apply_reports_recipe_yaml_syntax_error(name, source, expected):
+    recipe = Path(name)
+    recipe.parent.mkdir(exist_ok=True)
+    recipe.write_text(source, encoding="utf-8")
 
-    result = _mix("--apply", "r.yaml")
+    result = _mix("--apply", name)
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
     text = _plain(result)
-    assert "apply failed: while parsing a flow sequence" in text
-    assert "data: [unfinished" in text
+    assert text == "apply failed: " + expected.format(path=_shown(name))
     assert "Loaded recipe:" not in text
+    assert _not_shown(text)
 
 
 @pytest.mark.parametrize(

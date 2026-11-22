@@ -118,11 +118,13 @@ def mix(
     if apply_recipe is not None:
         import yaml
 
+        from soup_cli.utils.yaml_limits import set_yaml_error_filename
+
         try:
             data_block = load_mix_recipe(apply_recipe)
         except (ValueError, FileNotFoundError, TypeError, yaml.YAMLError) as exc:
-            # Most messages name the path with repr(), but a YAML error quotes the
-            # source line as it is in the file, and PyYAML accepts U+202E there.
+            if isinstance(exc, yaml.YAMLError):
+                set_yaml_error_filename(exc, apply_recipe)
             console.print(f"[red]apply failed: {for_terminal(exc)}[/red]", emoji=False)
             raise typer.Exit(code=2) from exc
 
