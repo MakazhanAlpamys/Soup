@@ -562,6 +562,11 @@ The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup ev
 evidence exits `3` and names the JSON input to provide; it never reports a neutral
 pass for a gate that measured nothing.
 
+`soup airgap-bundle` uses its own exit codes outside the gate and verdict scheme.
+It exits `0` after writing the bundle, `1` when the builder reports a missing
+input, and `2` for an invalid plan, an invalid size cap, or a bundle that exceeds
+the cap.
+
 ### Gate Verdict Drift vs. Operational Drift
 
 `soup lock check` operates as a CI gate command where exit `2` (`EXIT_GATE_FAILED`) indicates that the lock closure has drifted from the configuration (requiring regeneration via `soup lock write`), and exit `3` (`EXIT_USAGE_ERROR`) indicates an unparseable or missing lock file. In contrast, operational and environment commands (`soup env check`, `soup apply`, and `soup drift-alarm`) belong to the operational drift family where runtime divergence or ABI mismatch signals exit `3` (with exit `2` reserved for invalid arguments or path errors in those commands). Operational inspection tools such as `soup adapters audit` deliberately reside outside the gate taxonomy, exiting `1` on usage errors so CI can distinguish an agreement (`0`) or diverged (`2`) verdict from invocation errors.
