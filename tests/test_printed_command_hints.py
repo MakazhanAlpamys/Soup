@@ -187,6 +187,7 @@ class TestTrainingCompleteCommands:
         assert output_dir not in shown
         assert "\x1b" not in shown
         assert "Use your shell's quoting rules for the Output path" in shown
+        assert "supply the repository ID with --repo" in shown
 
     def test_a_leading_dash_cannot_become_an_option(self):
         shown = self._commands("-rf")

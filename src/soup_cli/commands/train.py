@@ -241,13 +241,15 @@ def _completion_commands(
         merge_flags = f" and add {merge_options}" if merge_options else ""
         return "\n".join((
             f"Quick test: For soup chat, use the Output path above as --model{chat_options}.",
-            "Push to HF: For soup push, use the Output path above as --model.",
+            "Push to HF: For soup push, use the Output path above as --model "
+            "and supply the repository ID with --repo.",
             merge_note if merge_note is not None else (
                 "Merge LoRA: For soup merge, use the Output path above as --adapter"
                 f"{merge_flags}."
             ),
             "Export GGUF: For soup export, use the Output path above as --model.",
-            "[dim]Use your shell's quoting rules for the Output path.[/]",
+            "[dim]Use your shell's quoting rules for the Output path. "
+            "Enter the original value from your config if the display shows escapes.[/]",
         ))
 
     shown = for_terminal(spelled)
