@@ -1,6 +1,8 @@
 """Tests for experiment tracker (SQLite-backed)."""
 
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -83,6 +85,76 @@ def test_finish_run(tracker):
     assert run["duration_secs"] == 3600.0
     # stored absolute (#2725): on Windows "/tmp/output" gains the current drive
     assert run["output_dir"] == os.path.abspath("/tmp/output")
+
+
+def test_stopped_run_keeps_its_summary_after_successful_watcher_exit(
+    tracker: ExperimentTracker, tmp_path: Path
+) -> None:
+    run_id = "watched-run"
+    tracker.launch_run(
+        run_id=run_id,
+        kind="train",
+        config_dict={},
+        command_digest="digest",
+        log_path=str(tmp_path / "train.log"),
+    )
+    tracker.mark_running(run_id, pid=os.getpid())
+    _start(tracker, run_id)
+
+    output_dir = str(tmp_path / "output")
+    tracker.finish_run(
+        run_id,
+        initial_loss=2.5,
+        final_loss=0.8,
+        total_steps=3,
+        duration_secs=12.0,
+        output_dir=output_dir,
+        loss_summary_kind="per_step",
+        status="stopped",
+    )
+    assert tracker.get_run(run_id)["status"] == "stopped"
+
+    with closing(ExperimentTracker(db_path=tracker.db_path)) as watcher:
+        watcher.finish_execution(run_id, status="completed", exit_code=0)
+        run = watcher.get_run(run_id)
+
+    assert run is not None
+    assert run["status"] == "stopped"
+    assert run["initial_loss"] == 2.5
+    assert run["final_loss"] == 0.8
+    assert run["total_steps"] == 3
+    assert run["duration_secs"] == 12.0
+    assert run["output_dir"] == output_dir
+    assert run["loss_summary_kind"] == "per_step"
+
+
+def test_legacy_completed_run_keeps_its_status_column(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(db_path)) as conn:
+        # Keep the pre-change status definition independent of the live schema.
+        conn.executescript(
+            """
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                config_json TEXT NOT NULL,
+                total_steps INTEGER
+            );
+            INSERT INTO runs VALUES ('old-run', '2026-01-01T00:00:00', 'completed', '{}', 100);
+            """
+        )
+        old_status = next(
+            row for row in conn.execute("PRAGMA table_info(runs)") if row[1] == "status"
+        )
+
+        with closing(ExperimentTracker(db_path=db_path)) as tracker:
+            (run,) = tracker.list_runs()
+
+        assert run["run_id"] == "old-run"
+        assert run["status"] == "completed"
+        assert run["total_steps"] == 100
+        assert old_status in conn.execute("PRAGMA table_info(runs)").fetchall()
 
 
 def test_fail_run(tracker):

@@ -28,7 +28,8 @@ def validate_csm_config(cfg: SoupConfig) -> None:
     supported = {
         "epochs", "lr", "batch_size", "gradient_accumulation_steps", "seed", "data_seed",
         "warmup_ratio", "weight_decay", "max_grad_norm", "optimizer", "scheduler",
-        "save_steps", "logging_steps", "eval_steps", "lora", "quantization", "tts_family",
+        "save_steps", "save_strategy", "logging_steps", "eval_steps", "lora", "quantization",
+        "tts_family",
         "gradient_checkpointing",
     }
     defaults = type(tcfg)().model_dump()
