@@ -37,7 +37,8 @@ MIN_COMPUTE_MAJOR = 8
 def environment_problems(*, system: str, has_triton: bool,
                          compute_capability: Optional[tuple[int, int]],
                          bf16_supported: bool, world_size: int = 1,
-                         sharding: Optional[str] = None) -> list[str]:
+                         sharding: Optional[str] = None,
+                         visible_cuda_devices: int = 1) -> list[str]:
     """Reasons the machine cannot run the kernels. ``system`` is ``platform.system()``;
     ``compute_capability`` is ``None`` without a CUDA device; ``sharding`` names the FSDP or
     DeepSpeed setting of a single-process run, if it has one."""
@@ -64,6 +65,11 @@ def environment_problems(*, system: str, has_triton: bool,
             )
         elif not bf16_supported:
             problems.append("needs bf16 support on the GPU; torch reports none.")
+    if visible_cuda_devices > 1:
+        problems.append(
+            f"supports one GPU only; {visible_cuda_devices} CUDA devices are visible. "
+            "Set CUDA_VISIBLE_DEVICES to expose one device."
+        )
     if world_size != 1:
         problems.append(
             f"supports one GPU only; WORLD_SIZE is {world_size}. FSDP, DeepSpeed and DDP are "

@@ -57,6 +57,12 @@ class TestEnvironment:
         (problem,) = _env(world_size=2)
         assert "supports one GPU only; WORLD_SIZE is 2" in problem
 
+    def test_multiple_visible_cuda_devices_are_refused_in_one_process(self):
+        assert _env(visible_cuda_devices=2) == [
+            "supports one GPU only; 2 CUDA devices are visible. "
+            "Set CUDA_VISIBLE_DEVICES to expose one device."
+        ]
+
     def test_a_sharding_setting_is_named(self):
         (problem,) = _env(sharding="--fsdp full_shard")
         assert "supports one GPU only; --fsdp full_shard is set" in problem

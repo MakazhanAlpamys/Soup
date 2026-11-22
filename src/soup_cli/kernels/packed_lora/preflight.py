@@ -4,8 +4,8 @@
 # the functions of ``support.py``.
 """What ``soup train`` checks, before anything is loaded, for a run with ``training.packed_lora``.
 
-:func:`read_machine` reads the facts of this machine once (platform, Triton, the GPU's compute
-capability and free memory, the free host RAM, the world size); :func:`preflight` takes them with
+:func:`read_machine` reads the facts of this machine once (platform, Triton, visible CUDA devices,
+compute capability and free memory, free host RAM, world size). :func:`preflight` takes them with
 the model's ``transformers`` config and the run's ``SoupConfig`` and returns every reason the
 kernels cannot take the run, and the memory plan they would run it with. Both are cheap and need
 neither a model nor a dataset. The generic hardware-fit estimate (``utils/hardware_fit.py``)
@@ -40,6 +40,7 @@ class Machine:
     free_ram_bytes: Optional[int] = None
     free_vram_bytes: Optional[int] = None
     total_vram_bytes: Optional[int] = None
+    visible_cuda_devices: int = 1
 
 
 @dataclass
@@ -69,9 +70,11 @@ def read_machine() -> Machine:
     """The facts of this machine. Imports torch (and psutil, when it is installed) here, not at
     module import."""
     capability = bf16 = free_vram = total_vram = None
+    visible_cuda_devices = 0
     try:
         import torch
 
+        visible_cuda_devices = torch.cuda.device_count()
         if torch.cuda.is_available():
             capability = tuple(torch.cuda.get_device_capability(0))
             bf16 = bool(torch.cuda.is_bf16_supported())
@@ -91,6 +94,7 @@ def read_machine() -> Machine:
         free_ram_bytes=_free_ram_bytes(),
         free_vram_bytes=free_vram,
         total_vram_bytes=total_vram,
+        visible_cuda_devices=visible_cuda_devices,
     )
 
 
@@ -147,7 +151,7 @@ def preflight(config: Any, model_config: Any, machine: Machine, *,
         system=machine.system, has_triton=machine.has_triton,
         compute_capability=machine.compute_capability,
         bf16_supported=machine.bf16_supported, world_size=machine.world_size,
-        sharding=sharding))
+        sharding=sharding, visible_cuda_devices=machine.visible_cuda_devices))
     if not problems:
         problems += _named(support.attention_signature_problems())
     if model_config is None:

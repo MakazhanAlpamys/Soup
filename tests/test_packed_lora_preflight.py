@@ -287,6 +287,7 @@ class TestReadMachine:
         import torch
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: available)
+        monkeypatch.setattr(torch.cuda, "device_count", lambda: int(available))
         monkeypatch.setattr(torch.cuda, "get_device_capability", lambda index=0: (12, 0))
         monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: True)
         monkeypatch.setattr(torch.cuda, "mem_get_info", lambda index=0: (7 * GIB, 8 * GIB))
@@ -310,6 +311,21 @@ class TestReadMachine:
         read = preflight.read_machine()
         assert read.compute_capability is None and read.bf16_supported is False
         assert read.free_vram_bytes is None and read.total_vram_bytes is None
+        assert read.visible_cuda_devices == 0
+
+    def test_preflight_uses_the_visible_device_count_in_one_process(self, monkeypatch):
+        import torch
+
+        self._cuda(monkeypatch)
+        monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+        monkeypatch.setattr(preflight.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(preflight.loader, "triton_available", lambda: True)
+        monkeypatch.setenv("WORLD_SIZE", "1")
+        result = run_preflight(soup(), model_config(), preflight.read_machine())
+        assert only_problem(result) == (
+            "training.packed_lora supports one GPU only; 2 CUDA devices are visible. "
+            "Set CUDA_VISIBLE_DEVICES to expose one device."
+        )
 
     @pytest.mark.parametrize("value,want", [("4", 4), ("", 1), ("many", 1)])
     def test_world_size(self, monkeypatch, value, want):
