@@ -26,7 +26,7 @@ from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -44,10 +44,11 @@ def inspect(
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
+        console.print(terminal_text(f"File not found: {file_path}", "red"))
         raise typer.Exit(1)
 
-    console.print(f"[dim]Inspecting {for_terminal(file_path)}...[/]\n")
+    console.print(terminal_text(f"Inspecting {file_path}...", "dim"))
+    console.print()
     data = load_raw_data(file_path)
     result = validate_and_stats(data)
 
@@ -56,7 +57,7 @@ def inspect(
     stats_table.add_column("Metric", style="bold")
     stats_table.add_column("Value")
     stats_table.add_row("Total samples", str(result["total"]))
-    stats_table.add_row("Columns", ", ".join(for_terminal(col) for col in result["columns"]))
+    stats_table.add_row("Columns", terminal_text(", ".join(map(str, result["columns"]))))
     stats_table.add_row("Avg length (chars)", str(result["avg_length"]))
     stats_table.add_row("Min length", str(result["min_length"]))
     stats_table.add_row("Max length", str(result["max_length"]))
@@ -75,10 +76,10 @@ def inspect(
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(for_terminal(col), max_width=60)
+            sample_table.add_column(terminal_text(col), max_width=60)
         for row in data[: min(rows, len(data))]:
             values = [
-                for_terminal(str(row.get(col, ""))[:60])
+                terminal_text(str(row.get(col, ""))[:60])
                 for col in result["columns"][:5]
             ]
             sample_table.add_row(*values)
