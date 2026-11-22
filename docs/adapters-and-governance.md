@@ -214,6 +214,8 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --feedback-log ./app-data/feedback.jsonl --train-method kto
 
+# Init creates .soup-loops/adapters (owner-only) for the trained adapters, so the
+# serve command below starts without making the directory by hand.
 # When an sft loop has a feedback log (the file exists), training starts at --min-new-edits
 # (default 8) NEW edits or --min-new-rated (default 30) NEW rated answers, whichever comes
 # first; --min-new-pairs does not apply to it. A new edit is a real edit whose feedback is
