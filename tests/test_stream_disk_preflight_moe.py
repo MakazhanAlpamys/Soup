@@ -812,6 +812,20 @@ def _stream_dtype():
 
 
 class TestTheSetupChargesTheEstimate:
+    def test_cache_inspection_receives_the_resolved_architecture(self, tmp_path, monkeypatch):
+        from soup_cli.utils import layer_shard
+
+        real_inspect = layer_shard.inspect_shard_cache
+        architectures = []
+
+        def inspect(*args, **kwargs):
+            architectures.append(kwargs.get("arch"))
+            return real_inspect(*args, **kwargs)
+
+        monkeypatch.setattr(layer_shard, "inspect_shard_cache", inspect)
+        _drive_preflight(tmp_path, monkeypatch, layout="fused")
+        assert architectures == ["deepseek_v3"]
+
     @pytest.mark.parametrize("layout", ["fused", "per_expert"])
     def test_the_preflight_charges_the_header_estimate(self, tmp_path, monkeypatch, layout):
         panels, path, shares_calls = _drive_preflight(tmp_path, monkeypatch, layout=layout)

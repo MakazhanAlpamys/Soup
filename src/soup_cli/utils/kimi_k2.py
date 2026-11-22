@@ -815,6 +815,8 @@ def load_resident_model(base: str, *, model_kwargs: dict, console: Any = None):
     used without requesting Hub metadata.
 
     The model is returned on the requested device. Train/eval mode is the caller's to set.
+    No layer streaming is involved on this route: nothing here reads or builds a streamed
+    shard cache.
     """
     import torch
     from transformers import AutoModelForCausalLM

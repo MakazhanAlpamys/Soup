@@ -764,7 +764,10 @@ def test_per_expert_layout_moves_routed_experts_out_of_the_layer_file(tmp_path):
 
 
 @pytest.mark.parametrize("dtype", ["bfloat16", "float16"])
-def test_deepseek_shards_follow_the_router_precision_policy(tmp_path, monkeypatch, dtype):
+@pytest.mark.parametrize("legacy", [None, {"e_score_correction_bias"}], ids=["none", "bias"])
+def test_deepseek_shards_follow_the_router_precision_policy(
+    tmp_path, monkeypatch, dtype, legacy,
+):
     import json
     from pathlib import Path
 
@@ -786,8 +789,7 @@ def test_deepseek_shards_follow_the_router_precision_policy(tmp_path, monkeypatc
     source_gate = source.model.layers[1].mlp.gate.weight.detach()
     shard_dir = str(tmp_path / "shards")
     model_files = list(Path(weights).glob("*.safetensors"))
-    legacy = {"e_score_correction_bias"}
-    strict = legacy | {"model.layers.*.mlp.gate.weight"}
+    strict = {"e_score_correction_bias", "model.layers.*.mlp.gate.weight"}
 
     def estimate():
         result = estimate_shard_cache_bytes(model_files, arch="deepseek_v3", dtype=dtype)
@@ -818,7 +820,7 @@ def test_deepseek_shards_follow_the_router_precision_policy(tmp_path, monkeypatc
     current_estimate = estimate()
     miss, reason = check_cache(old)
     assert miss is None
-    assert "router" in reason and "precision" in reason
+    assert reason == f"router weight precision changed ({dtype} -> float32)"
     current = _shard(tmp_path, weights, dtype)
     assert read_shard_index(shard_dir) == current
     assert check_cache(current)[0] == current
@@ -833,10 +835,53 @@ def test_deepseek_shards_follow_the_router_precision_policy(tmp_path, monkeypatc
     assert current_estimate.layer_bytes[1] - old_estimate.layer_bytes[1] == source_gate.numel() * 2
 
     monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", legacy)
-    assert check_cache(current)[0] is None
+    miss, reason = check_cache(current)
+    assert miss is None
+    assert reason == f"router weight precision changed (float32 -> {dtype})"
     rewritten = _shard(tmp_path, weights, dtype)
     assert check_cache(rewritten)[0] == rewritten
     assert load_file(layer_paths(shard_dir, rewritten)[1])[gate].dtype == getattr(torch, dtype)
+
+
+def test_float32_deepseek_cache_is_reusable_under_the_strict_policy(tmp_path, monkeypatch):
+    import torch
+    from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    from soup_cli.utils.layer_shard import inspect_shard_cache, layer_paths
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", None)
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    shard_dir = str(tmp_path / "shards")
+    index = _shard(tmp_path, weights, "float32")
+
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", {"gate.weight"})
+    cached, reason = inspect_shard_cache(
+        shard_dir, "float32", index.source_fingerprint, index.source_files, "none", False, ""
+    )
+
+    assert cached == index
+    assert reason == "cache is reusable"
+    assert cached.fp32_router_weights is False
+    assert load_file(layer_paths(shard_dir, cached)[1])["mlp.gate.weight"].dtype == torch.float32
+
+
+def test_shard_index_refuses_a_non_boolean_router_precision_marker(tmp_path):
+    import json
+    from pathlib import Path
+
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    _shard(tmp_path, weights, "float32")
+    shard_dir = str(tmp_path / "shards")
+    index_path = Path(shard_dir) / "index.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["fp32_router_weights"] = 1
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="^fp32_router_weights must be a boolean$"):
+        read_shard_index(shard_dir)
 
 
 @pytest.mark.parametrize("force", [False, True], ids=["cache-miss", "forced"])

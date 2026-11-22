@@ -560,8 +560,10 @@ Limits and refusals:
 - **Integer and packed formats.** Kimi-K2-Thinking's compressed-tensors `pack-quantized` INT4 (int32 `weight_packed`, `weight_scale`, int64 `weight_shape`) is not dequantised, and nor is any other integer quantiser; see the refusal list below.
 - **Damaged values.** A weight that is NaN after dequantisation (the e4m3fn bytes 0x7F and 0xFF), a negative scale, a non-finite scale, and a weight past float16's range under a float16 stream (pre-Ampere cards; stream it in bfloat16) are refused, naming the tensor, when that tensor is read: before the cache index is written, though files of earlier layers may already be on disk (no index names them, so they are never used, and the next run shards again). A zero scale, as an all-zero block has, is kept.
 - **Cache identity.** For `deepseek_v3`, the cache tracks the config, the weight files and
-  its router weight precision. A change to the installed Transformers router precision
-  policy rebuilds a BF16 or FP16 cache whose stored router precision differs. Use separate
+  its router weight precision. A cache sharded from a bf16 checkpoint is never reused
+  for its FP8 copy at the same path, nor the reverse. When the installed Transformers
+  router policy changes, Soup rebuilds any BF16 or FP16 cache whose stored router
+  precision differs. Use separate
   cache directories when sharing weights between older Soup releases and releases with
   strict FP32 router support. The inference SDK reads the router precision already stored
   in an explicitly supplied cache, so inference can use the same weights as training.
