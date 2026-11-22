@@ -10,7 +10,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -2803,8 +2803,15 @@ def train(
         _record_run_failure(tracker, run_id, exc)
         raise
 
+    from soup_cli.monitoring.manual_save import capture_manual_stop
+
     try:
-        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
+        with (
+            profiler_ctx as profiler,
+            energy_ctx,
+            base_revision_scope(base_identity),
+            capture_manual_stop() as manual_stop,
+        ):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
 
@@ -2823,19 +2830,23 @@ def train(
         confirm_distributed_base_revision(
             base_identity, model=getattr(trainer_wrapper, "model", None),
         )
+        run_status: Literal["completed", "stopped"] = (
+            "stopped" if manual_stop.stopped else "completed"
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
         # Only the saving rank writes portable metadata beside the final artifact.
         if _should_run_diagnose_gate_on_rank():
             metadata = base_identity.metadata(run_id)
+            if manual_stop.stopped:
+                metadata["status"] = run_status
             recorded_run = tracker.get_run(run_id)
             if isinstance(recorded_run, dict):
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker. A run that observed no loss stores NULL, not
-        # the trainer's 0.0 placeholder (stored_run_losses).
+        # Save the terminal status and summary. An unobserved loss remains NULL.
         initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
@@ -2845,6 +2856,7 @@ def train(
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
             loss_summary_kind=stored_loss_summary_kind(result),
+            status=run_status,
         )
 
         _run_auto_eval_after_training(
@@ -2897,6 +2909,13 @@ def train(
         )
     )
 
+    if manual_stop.stopped:
+        title = "[bold yellow]Training Stopped — Ctrl+C[/]"
+    elif result.get("stop_reason") == "loss_watchdog":
+        title = "[bold yellow]Training Stopped — Loss watchdog[/]"
+    else:
+        title = "[bold green]Training Complete![/]"
+
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
@@ -2908,9 +2927,7 @@ def train(
             f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
-            title=("[bold yellow]Training Stopped — Loss watchdog[/]"
-                   if result.get("stop_reason") == "loss_watchdog"
-                   else "[bold green]Training Complete![/]"),
+            title=title,
         )
     )
 
