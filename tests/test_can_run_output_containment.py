@@ -502,6 +502,22 @@ class TestCommand:
         assert "\x1b]0;" not in result.output
         assert "\x07" not in result.output
 
+    @pytest.mark.parametrize(
+        ("overrides", "line"),
+        [
+            ({"output": "first\nsecond"}, r"Output: first\nsecond"),
+            ({"experiment_name": "first\rsecond"}, r"Experiment name: first\rsecond"),
+            ({"data": {"train": "file\tname.jsonl"}}, r"Training data: file\tname.jsonl"),
+        ],
+    )
+    def test_panel_shows_config_values_on_one_line(self, env, overrides, line):
+        can = env.can(_config(**overrides))
+
+        result = _run_cli(can)
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert line in _plain(result.output)
+
     def test_with_yes_an_output_outside_is_refused_with_the_message_and_exit_1(self, env):
         can = env.can(_config(output="../elsewhere"))
 

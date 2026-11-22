@@ -150,9 +150,9 @@ def _target_parts(targets) -> list:
     directory is flagged as refused; a local ``data.train`` path outside it is flagged as a
     warning only.
     """
-    parts: list = [f"\nOutput: {strip_control(targets.output)}"]
+    parts: list = [f"\nOutput: {strip_control(targets.output, single_line=True)}"]
     if targets.experiment:
-        parts.append(f"\nExperiment name: {strip_control(targets.experiment)}")
+        parts.append(f"\nExperiment name: {strip_control(targets.experiment, single_line=True)}")
     if targets.output_problem is not None:
         parts.append(
             (
@@ -164,7 +164,7 @@ def _target_parts(targets) -> list:
     if not targets.data_train:
         parts.append("\nTraining data: (not set)")
     for entry, outside in targets.data_train:
-        parts.append(f"\nTraining data: {strip_control(entry)}")
+        parts.append(f"\nTraining data: {strip_control(entry, single_line=True)}")
         if outside:
             parts.append(("\n  warning: this path is outside the working directory", "yellow"))
     if targets.data_train_more:
