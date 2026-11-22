@@ -1253,52 +1253,39 @@ class TestStatsHistogramWindows:
         assert result.exit_code == 0
         assert "p50" in result.output
 
-    def test_utf8_redirect_logic_on_cp1251_stdout(self):
-        """Verify plotext renders when stdout is redirected from cp1251 to utf-8."""
+    def test_utf8_redirect_logic_on_cp1251_stdout(self, tmp_path, monkeypatch):
+        """The stats command uses UTF-8 while rendering and restores Windows stdout."""
         import io
+        import json
         import sys
+        from types import ModuleType
 
-        try:
-            import plotext as plt
-        except ImportError:
-            pytest.skip("plotext not installed")
+        from rich.console import Console
 
-        # Simulate a cp1251 stdout (like Windows default)
-        raw_buffer = io.BytesIO()
-        fake_cp1251 = io.TextIOWrapper(raw_buffer, encoding="cp1251")
+        from soup_cli.commands import data
+        from soup_cli.utils import plotext_compat
 
-        original_stdout = sys.stdout
-        sys.stdout = fake_cp1251
-
-        # Apply the same redirect logic as data.py stats command
-        needs_redirect = (
-            hasattr(sys.stdout, "encoding")
-            and (sys.stdout.encoding or "").lower().replace("-", "") != "utf8"
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            json.dumps({"instruction": "Question", "input": "", "output": "Answer"}) + "\n",
+            encoding="utf-8",
         )
-        assert needs_redirect, "Should detect cp1251 needs redirect"
+        stdout_during_render = []
 
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace",
-        )
+        def render_histogram(*args, **kwargs):
+            stdout_during_render.append(sys.stdout.encoding)
 
-        try:
-            from rich.console import Console
+        monkeypatch.setitem(sys.modules, "plotext", ModuleType("plotext"))
+        monkeypatch.setattr(data, "console", Console(file=io.StringIO()))
+        monkeypatch.setattr(plotext_compat, "render_histogram", render_histogram)
+        with io.TextIOWrapper(io.BytesIO(), encoding="cp1251") as windows_stdout:
+            with monkeypatch.context() as env:
+                env.setattr(sys, "platform", "win32")
+                env.setattr(sys, "stdout", windows_stdout)
+                data.stats(str(path))
+                assert sys.stdout is windows_stdout
 
-            from soup_cli.utils.plotext_compat import render_histogram
-
-            render_histogram(
-                plt,
-                [10, 20, 30, 40, 50],
-                console=Console(file=sys.stdout),
-                bins=3,
-                title="Test",
-                xlabel="Value",
-                ylabel="Count",
-                theme="dark",
-            )
-            # If we got here, no UnicodeEncodeError — success
-        finally:
-            sys.stdout = original_stdout
+        assert stdout_during_render == ["utf-8"]
 
 
 # --- BUG-015: soup ui --help missing auth token docs (v0.14.2) ---
