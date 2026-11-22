@@ -665,7 +665,10 @@ the canary verdict unless external restart monitoring detects them.
 `.soup-loops/` contains generated runs and append-only logs. Use `soup loop prune` to inspect a
 retention plan; it is a dry run unless `--yes` is supplied. The defaults retain the 20 newest
 iterations and run artifacts, the artifacts needed by the active production/canary state and
-the latest 20 version transitions, and the newest 10,000 lines in each loop log. Pair datasets
+the latest 20 version transitions, and the newest 10,000 lines in each loop log. The version
+log always retains at least those 20 transitions, even when `--keep-log-lines` is lower, so a
+later prune can still preserve the same rollback lineage. Other logs follow `--keep-log-lines`.
+Pair datasets
 are kept when a retained iteration-log entry refers to them; rows for retained iterations
 survive log trimming. Unknown pair, verdict, and adapter filenames are listed and left alone.
 Source traces and feedback are never pruned. Before applying, stop foreground watches yourself;

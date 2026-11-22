@@ -23,6 +23,7 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 DEFAULT_KEEP_RUNS = 20
 DEFAULT_KEEP_LOG_LINES = 10_000
+VERSION_HISTORY_KEEP = 20
 _LOGS = tuple(DEFAULT_LAYOUT[k] for k in ("iteration", "version", "progress", "paraphrase"))
 
 
@@ -249,12 +250,13 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
             pending_iteration = pending.get("iteration_id")
             if isinstance(pending_iteration, str) and pending_iteration:
                 keep_ids.add(Path(pending_iteration).name)
-    # Version history is the rollback lineage. Keep the run manifests for its latest 20
+    # Version history is the rollback lineage. Keep the run manifests for its latest
+    # VERSION_HISTORY_KEEP
     # transitions even when those runs are older than the ordinary N-run window.
     history_uncertain = False
     version_path = Path(DEFAULT_LAYOUT["version"])
     if version_path.is_file():
-        version_tail, _ = _log_tail(version_path, 20)
+        version_tail, _ = _log_tail(version_path, VERSION_HISTORY_KEEP)
         for line in version_tail:
             try:
                 version = json.loads(line)
@@ -394,8 +396,14 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
     for log_rel in _LOGS:
         path = Path(log_rel)
         if path.is_file():
+            # The planner relies on the latest version transitions to preserve rollback
+            # targets on every future prune, so keep at least that many rows in this log.
+            log_keep_lines = (
+                max(keep_log_lines, VERSION_HISTORY_KEEP)
+                if log_rel == DEFAULT_LAYOUT["version"] else keep_log_lines
+            )
             lines, total, size, mtime_ns, stable = _log_tail_snapshot(
-                path, keep_log_lines,
+                path, log_keep_lines,
                 keep_iteration_ids=keep_ids if log_rel == DEFAULT_LAYOUT["iteration"] else None,
                 root=root_path,
             )

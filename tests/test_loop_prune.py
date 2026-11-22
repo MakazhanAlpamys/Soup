@@ -738,6 +738,53 @@ def test_cli_yes_removes_only_the_printed_paths(tmp_path, monkeypatch):
     assert keep_me.exists()
 
 
+def test_cli_two_pass_prune_preserves_twenty_version_lineage_rows(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.loop.daemon_is_running", lambda: False)
+    root = tmp_path / ".soup-loops"
+    version_rows = []
+    iteration_ids = []
+    (root / "verdicts").mkdir(parents=True)
+    for index in range(1, 26):
+        iteration_id = f"iter-202611{index:02d}T120000-{index:08d}"
+        run_id = f"loop-train-{index:02d}"
+        iteration_ids.append(iteration_id)
+        _manifest(root, iteration_id, run_id)
+        adapter = root / "adapters" / run_id
+        adapter.mkdir(parents=True)
+        (root / "adapters" / f"{run_id}.recipe.json").write_text("{}", encoding="utf-8")
+        (root / "verdicts" / f"{run_id}.json").write_text("{}", encoding="utf-8")
+        version_rows.append(json.dumps({"iteration_id": iteration_id}))
+    version_log = root / "versions.jsonl"
+    version_log.write_text("\n".join(version_rows) + "\n", encoding="utf-8")
+    progress_log = root / "progress.jsonl"
+    progress_log.write_text("{}\n" * 25, encoding="utf-8")
+
+    first = runner.invoke(
+        app, ["loop", "prune", "--keep-runs", "1", "--keep-log-lines", "5", "--yes"]
+    )
+
+    assert first.exit_code == 0, _plain(first.output)
+    first_output = _plain(first.output)
+    assert f".soup-loops/{iteration_ids[4]}" in first_output
+    assert ".soup-loops/adapters/loop-train-05" in first_output
+    assert ".soup-loops/adapters/loop-train-05.recipe.json" in first_output
+    assert ".soup-loops/verdicts/loop-train-05.json" in first_output
+    assert len(version_log.read_text(encoding="utf-8").splitlines()) == 20
+    assert len(progress_log.read_text(encoding="utf-8").splitlines()) == 5
+    assert all((root / iteration_id / "iteration.json").exists()
+               for iteration_id in iteration_ids[5:])
+
+    second = runner.invoke(app, ["loop", "prune", "--keep-runs", "1", "--yes"])
+
+    assert second.exit_code == 0, _plain(second.output)
+    second_output = _plain(second.output)
+    assert not any(iteration_id in second_output for iteration_id in iteration_ids[5:])
+    assert all((root / iteration_id / "iteration.json").exists()
+               for iteration_id in iteration_ids[5:])
+    assert len(version_log.read_text(encoding="utf-8").splitlines()) == 20
+
+
 def test_cli_reports_partial_failures_and_continues(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     root = tmp_path / ".soup-loops"
