@@ -89,3 +89,26 @@ def test_a_score_can_also_fall_when_two_words_become_one() -> None:
 @pytest.mark.parametrize(("output", "want"), [("The answer is 4.", 0.25), ("14", 0.0)])
 def test_the_docs_table_cells(output: str, want: float) -> None:
     assert score_semantic(output, "4") == pytest.approx(want)
+
+
+# A minus sign is the ASCII hyphen-minus or U+2212 MINUS SIGN.
+@pytest.mark.parametrize(("output", "expected"), [("-4", "4"), ("−4.", "4")])
+def test_a_minus_sign_before_a_digit_stays_part_of_the_number(output: str, expected: str) -> None:
+    assert score_semantic(output, expected) == 0.0
+    assert score_semantic(expected, output) == 0.0
+
+
+def test_the_edges_of_a_signed_number_are_still_removed() -> None:
+    assert score_semantic("(-4).", "-4") == 1.0
+    assert score_semantic("−(−4)", "−4") == 1.0
+
+
+def test_a_hyphen_before_a_letter_is_still_removed() -> None:
+    assert score_semantic("-h2o", "h2o") == 1.0
+
+
+def test_a_symbol_with_a_variation_selector_is_not_a_word() -> None:
+    # Sun and snowflake, each followed by U+FE0F VARIATION SELECTOR-16 (category Mn).
+    sun, snowflake = "☀️", "❄️"
+    assert score_semantic(sun, snowflake) == 0.0
+    assert score_semantic(f"{sun} h2o", f"{snowflake} h2o") == 1.0
