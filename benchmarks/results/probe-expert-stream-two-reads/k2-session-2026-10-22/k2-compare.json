@@ -1,0 +1,122 @@
+{
+  "schema": "two-read-compare/1",
+  "verdict": "PASS",
+  "refusals": [],
+  "failures": [],
+  "timing": {
+    "step0": {
+      "index": 0,
+      "seconds": {
+        "A1": 945.12,
+        "B1": 646.69,
+        "B2": 650.72,
+        "A2": 970.72
+      },
+      "ratios": {
+        "B1/A1": 0.6842411545623837,
+        "B2/A2": 0.6703477830888412
+      },
+      "class": "two-read faster",
+      "label": "after guest page-cache drop; host cache not controlled"
+    },
+    "later": [
+      {
+        "index": 1,
+        "seconds": {
+          "A1": 928.85,
+          "B1": 651.81,
+          "B2": 635.86,
+          "A2": 970.22
+        },
+        "ratios": {
+          "B1/A1": 0.7017387091564837,
+          "B2/A2": 0.6553771309599884
+        },
+        "class": "two-read faster"
+      }
+    ],
+    "later_median_seconds": {
+      "A1": 928.85,
+      "B1": 651.81,
+      "B2": 635.86,
+      "A2": 970.22
+    }
+  },
+  "per_run": {
+    "A1": {
+      "expert_bytes_read": 3140672348160,
+      "ssd_read_bytes": 3168872685568,
+      "h2d_bytes.experts": 3140672348160,
+      "h2d_bytes.dense": 19669305824,
+      "h2d_bytes.large": 11744051200,
+      "expert_read_seconds": 1227.738153,
+      "nvml_peak_process_bytes_max": 6056574976,
+      "cgroup_memory_peak_bytes_max": 27023273984,
+      "supervisor_memory_peak_bytes": 27023273984
+    },
+    "B1": {
+      "expert_bytes_read": 2093781565440,
+      "ssd_read_bytes": 2120474034176,
+      "h2d_bytes.experts": 2093781565440,
+      "h2d_bytes.dense": 19669305824,
+      "h2d_bytes.large": 11744051200,
+      "expert_read_seconds": 844.4204609999999,
+      "nvml_peak_process_bytes_max": 6056574976,
+      "cgroup_memory_peak_bytes_max": 28550443008,
+      "supervisor_memory_peak_bytes": 28550443008
+    },
+    "B2": {
+      "expert_bytes_read": 2093781565440,
+      "ssd_read_bytes": 2120473796608,
+      "h2d_bytes.experts": 2093781565440,
+      "h2d_bytes.dense": 19669305824,
+      "h2d_bytes.large": 11744051200,
+      "expert_read_seconds": 832.258699,
+      "nvml_peak_process_bytes_max": 6056574976,
+      "cgroup_memory_peak_bytes_max": 28592676864,
+      "supervisor_memory_peak_bytes": 28592676864
+    },
+    "A2": {
+      "expert_bytes_read": 3140672348160,
+      "ssd_read_bytes": 3168872812544,
+      "h2d_bytes.experts": 3140672348160,
+      "h2d_bytes.dense": 19669305824,
+      "h2d_bytes.large": 11744051200,
+      "expert_read_seconds": 1283.15714,
+      "nvml_peak_process_bytes_max": 6056574976,
+      "cgroup_memory_peak_bytes_max": 28584517632,
+      "supervisor_memory_peak_bytes": 28584517632
+    }
+  },
+  "inputs": {
+    "A1": {
+      "record": "/workspace/out/k2-A1.run.json",
+      "run_id": "26baf7d11cae46a780fd093a0291d865",
+      "step_json": "/workspace/out/k2-A1.json",
+      "step_sha256": "7fbd4b59a9e9079c9231800d8fdf66037d444508a89e099b00f82619e25f4018"
+    },
+    "B1": {
+      "record": "/workspace/out/k2-B1.run.json",
+      "run_id": "0243f380acee47b58c8face856603553",
+      "step_json": "/workspace/out/k2-B1.json",
+      "step_sha256": "9328ac9a735e3c6d2dbb167ec783d3ce6564176b60402b974d8c10caa68daa8c"
+    },
+    "B2": {
+      "record": "/workspace/out/k2-B2.run.json",
+      "run_id": "733da7d7c44e4caebaf82debcc988de1",
+      "step_json": "/workspace/out/k2-B2.json",
+      "step_sha256": "74136565202d3facbd9228568f765d76b478be77052583d1291db98009b0b85d"
+    },
+    "A2": {
+      "record": "/workspace/out/k2-A2.run.json",
+      "run_id": "5c45eb20e0c94b30bb72c19d9dffef09",
+      "step_json": "/workspace/out/k2-A2.json",
+      "step_sha256": "8cd0714343ba51b048f9fa480e3f19b6d8411d08110c24e985d9043929369c7f"
+    }
+  },
+  "memory_max": 34359738368,
+  "swap_max": 0,
+  "claims": "random weights / shape-only for synthetic shapes; a read reduction does not imply a 1.5x speedup; emulated-envelope runs are not physical 8 GB evidence",
+  "finished_utc": "2026-10-22T13:34:58Z",
+  "exit_code": 0
+}

@@ -1,0 +1,3 @@
+# Byte-exact: SHA256SUMS.txt and each run record's expect_json.sha256 hash these bytes,
+# so no line-ending conversion on checkout.
+* -text

@@ -1,0 +1,164 @@
+{
+  "schema": "two-read-compare/1",
+  "verdict": "PASS",
+  "refusals": [],
+  "failures": [],
+  "timing": {
+    "step0": {
+      "index": 0,
+      "seconds": {
+        "A1": 12.07,
+        "B1": 8.91,
+        "B2": 9.02,
+        "A2": 11.97
+      },
+      "ratios": {
+        "B1/A1": 0.7381938690969345,
+        "B2/A2": 0.7535505430242272
+      },
+      "class": "two-read faster",
+      "label": "after guest page-cache drop; host cache not controlled"
+    },
+    "later": [
+      {
+        "index": 1,
+        "seconds": {
+          "A1": 11.59,
+          "B1": 8.39,
+          "B2": 8.24,
+          "A2": 11.39
+        },
+        "ratios": {
+          "B1/A1": 0.7238999137187231,
+          "B2/A2": 0.723441615452151
+        },
+        "class": "two-read faster"
+      },
+      {
+        "index": 2,
+        "seconds": {
+          "A1": 11.33,
+          "B1": 8.13,
+          "B2": 7.92,
+          "A2": 11.11
+        },
+        "ratios": {
+          "B1/A1": 0.7175639894086496,
+          "B2/A2": 0.712871287128713
+        },
+        "class": "two-read faster"
+      },
+      {
+        "index": 3,
+        "seconds": {
+          "A1": 11.17,
+          "B1": 7.91,
+          "B2": 7.84,
+          "A2": 11.16
+        },
+        "ratios": {
+          "B1/A1": 0.7081468218442256,
+          "B2/A2": 0.7025089605734767
+        },
+        "class": "two-read faster"
+      },
+      {
+        "index": 4,
+        "seconds": {
+          "A1": 10.61,
+          "B1": 7.78,
+          "B2": 7.75,
+          "A2": 10.68
+        },
+        "ratios": {
+          "B1/A1": 0.7332704995287466,
+          "B2/A2": 0.7256554307116105
+        },
+        "class": "two-read faster"
+      }
+    ],
+    "later_median_seconds": {
+      "A1": 11.25,
+      "B1": 8.02,
+      "B2": 7.88,
+      "A2": 11.135
+    }
+  },
+  "per_run": {
+    "A1": {
+      "expert_bytes_read": 94331791632,
+      "ssd_read_bytes": 95192158208,
+      "h2d_bytes.experts": 94331791632,
+      "h2d_bytes.dense": 4265770512,
+      "h2d_bytes.large": 7381975040,
+      "expert_read_seconds": 35.706648,
+      "nvml_peak_process_bytes_max": 2984247296,
+      "cgroup_memory_peak_bytes_max": 5284950016,
+      "supervisor_memory_peak_bytes": 5284950016
+    },
+    "B1": {
+      "expert_bytes_read": 62887861088,
+      "ssd_read_bytes": 63518187520,
+      "h2d_bytes.experts": 62887861088,
+      "h2d_bytes.dense": 4265770512,
+      "h2d_bytes.large": 7381975040,
+      "expert_read_seconds": 24.481131,
+      "nvml_peak_process_bytes_max": 2959081472,
+      "cgroup_memory_peak_bytes_max": 4919046144,
+      "supervisor_memory_peak_bytes": 4919046144
+    },
+    "B2": {
+      "expert_bytes_read": 62887861088,
+      "ssd_read_bytes": 63518187520,
+      "h2d_bytes.experts": 62887861088,
+      "h2d_bytes.dense": 4265770512,
+      "h2d_bytes.large": 7381975040,
+      "expert_read_seconds": 24.058545,
+      "nvml_peak_process_bytes_max": 2959081472,
+      "cgroup_memory_peak_bytes_max": 4774506496,
+      "supervisor_memory_peak_bytes": 4774506496
+    },
+    "A2": {
+      "expert_bytes_read": 94331791632,
+      "ssd_read_bytes": 95192150016,
+      "h2d_bytes.experts": 94331791632,
+      "h2d_bytes.dense": 4265770512,
+      "h2d_bytes.large": 7381975040,
+      "expert_read_seconds": 35.153943,
+      "nvml_peak_process_bytes_max": 2984247296,
+      "cgroup_memory_peak_bytes_max": 5285068800,
+      "supervisor_memory_peak_bytes": 5285068800
+    }
+  },
+  "inputs": {
+    "A1": {
+      "record": "/workspace/out/moonlight-A1.run.json",
+      "run_id": "91fcd935785544eeb75c57263f660d8e",
+      "step_json": "/workspace/out/moonlight-A1.json",
+      "step_sha256": "377031cb64f54acd5b609f67d561f846cdfdeb6e050e0b4bb7d8065afc3d378e"
+    },
+    "B1": {
+      "record": "/workspace/out/moonlight-B1.run.json",
+      "run_id": "cd58e11a83864646b81c33fee20db0f1",
+      "step_json": "/workspace/out/moonlight-B1.json",
+      "step_sha256": "3ceb661d95c4eed3dfb47ae3917d4ddb584757c38aaf29e88e65ab5a5b1df294"
+    },
+    "B2": {
+      "record": "/workspace/out/moonlight-B2.run.json",
+      "run_id": "fbffcaf7210e40689999fbd3ed40f3f6",
+      "step_json": "/workspace/out/moonlight-B2.json",
+      "step_sha256": "1a745422e74cf33b7cf2cd86219f1141cf92d89214874425af46612e50a89830"
+    },
+    "A2": {
+      "record": "/workspace/out/moonlight-A2.run.json",
+      "run_id": "acae180b507545c5b348a468da2344da",
+      "step_json": "/workspace/out/moonlight-A2.json",
+      "step_sha256": "a59d355a65106e1ba3dee11a055a7bb59fa43e91fcb0bf815f72f7a251aab63c"
+    }
+  },
+  "memory_max": 34359738368,
+  "swap_max": 0,
+  "claims": "random weights / shape-only for synthetic shapes; a read reduction does not imply a 1.5x speedup; emulated-envelope runs are not physical 8 GB evidence",
+  "finished_utc": "2026-10-22T05:50:10Z",
+  "exit_code": 0
+}
