@@ -868,7 +868,8 @@ class TestAsrInfer:
             infer_mod._read_asr_rows(p)
         assert exc_info.value.exit_code == 1
         out = capsys.readouterr().out
-        assert "manifest.jsonl" in out
+        # Rich soft-wraps the path in narrow CI terminals; folding is cosmetic.
+        assert "manifest.jsonl" in out.replace("\n", "")
         assert "UTF-8" in out
 
     def test_resolve_asr_audio_rejects_traversal(self, tmp_path):
