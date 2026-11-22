@@ -307,6 +307,46 @@ def test_k_one_below_the_rank_truncates() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The SVD runs on the factors, never on the dense delta
+# ---------------------------------------------------------------------------
+
+_OUT, _IN, _LORA_RANK = 40, 90, 6
+
+
+def _rectangular_pair(seed: int) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    return {
+        A_KEY: rng.standard_normal((_LORA_RANK, _IN)).astype(np.float32),
+        B_KEY: rng.standard_normal((_OUT, _LORA_RANK)).astype(np.float32),
+    }
+
+
+@pytest.mark.parametrize("k", [1, 3, 5])
+def test_rectangular_factors_give_the_best_rank_k_of_the_dense_delta(k) -> None:
+    inputs = [_rectangular_pair(20), _rectangular_pair(21)]
+    merged, _ = merge_svd(inputs, [0.5, 0.5], rank=k)
+    full = _linear_delta(inputs, [0.5, 0.5])
+    assert merged[A_KEY].shape == (_LORA_RANK, _IN)
+    assert merged[B_KEY].shape == (_OUT, _LORA_RANK)
+    np.testing.assert_allclose(_delta(merged), _best_rank(full, k), atol=1e-4 * np.abs(full).max())
+
+
+def test_no_svd_is_larger_than_the_lora_rank(monkeypatch) -> None:
+    shapes: list[tuple[int, ...]] = []
+    real_svd = np.linalg.svd
+
+    def recording_svd(matrix, *args, **kwargs):
+        shapes.append(np.shape(matrix))
+        return real_svd(matrix, *args, **kwargs)
+
+    monkeypatch.setattr(np.linalg, "svd", recording_svd)
+    merge_svd([_rectangular_pair(22), _rectangular_pair(23)], [0.5, 0.5], rank=2)
+
+    assert shapes, "the truncation ran no SVD"
+    assert all(rows <= _LORA_RANK and cols <= _LORA_RANK for rows, cols in shapes), shapes
+
+
+# ---------------------------------------------------------------------------
 # Through merge_adapters and the command
 # ---------------------------------------------------------------------------
 
