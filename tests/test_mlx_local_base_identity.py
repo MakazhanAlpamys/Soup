@@ -367,3 +367,99 @@ def test_invalid_adapter_does_not_announce_a_successful_resolution(
     with pytest.raises(ValueError, match="missing adapters.safetensors"):
         read_native_adapter(adapter)
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("selection", [
+    "relative", "bare", "parent", "override", "override-parent", "relative-override",
+])
+@pytest.mark.parametrize("colour", [False, True])
+def test_serve_refuses_a_legacy_base_selected_through_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str, colour: bool,
+) -> None:
+    import importlib.util
+
+    from rich.console import Console
+
+    from soup_cli.cli import app
+    from soup_cli.commands import serve
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "base").mkdir()
+    (tmp_path / "parent" / "base").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(tmp_path / "base", target_is_directory=True)
+    (tmp_path / "linked-parent").symlink_to(tmp_path / "parent", target_is_directory=True)
+    stored = "./alias"
+    flags = []
+    if selection == "bare":
+        stored = "alias"
+    elif selection == "parent":
+        stored = "./linked-parent/base"
+    elif selection in {"override", "override-parent"}:
+        stored = "./missing"
+        target = "alias" if selection == "override" else "linked-parent/base"
+        flags = ["--base", str(tmp_path / target)]
+    elif selection == "relative-override":
+        flags = ["--base", "./base"]
+    adapter = _adapter(tmp_path / "adapter", stored)
+    original = (adapter / "adapter_config.json").read_bytes()
+    monkeypatch.setattr(serve, "console", Console(
+        force_terminal=colour, no_color=False, color_system="standard", width=1000,
+    ))
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec",
+        lambda name: None if name == "mlx_lm" else find_spec(name),
+    )
+    result = make_cli_runner().invoke(app, [
+        "--no-telemetry", "--no-audit-log", "serve", "--backend", "mlx",
+        "--model", str(adapter), *flags,
+    ], color=colour)
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    if colour:
+        assert "\x1b[" in result.output
+    assert (
+        "MLX serving model/adapter paths must stay under cwd without symlinks"
+        in _plain(result.output)
+    )
+    assert "resolved to" not in _plain(result.output)
+    assert (adapter / "adapter_config.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("selection", ["relative", "bare", "absolute", "override"])
+@pytest.mark.parametrize("colour", [False, True])
+def test_serve_accepts_an_ordinary_local_base_before_dependency_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str, colour: bool,
+) -> None:
+    import importlib.util
+
+    from rich.console import Console
+
+    from soup_cli.cli import app
+    from soup_cli.commands import serve
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "base").mkdir()
+    stored = {"relative": "./base", "bare": "base", "absolute": str(tmp_path / "base"),
+              "override": "./missing"}[selection]
+    adapter = _adapter(tmp_path / "adapter", stored)
+    original = (adapter / "adapter_config.json").read_bytes()
+    flags = ["--base", str(tmp_path / "base")] if selection == "override" else []
+    monkeypatch.setattr(serve, "console", Console(
+        force_terminal=colour, no_color=False, color_system="standard", width=1000,
+    ))
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec",
+        lambda name: None if name == "mlx_lm" else find_spec(name),
+    )
+    result = make_cli_runner().invoke(app, [
+        "--no-telemetry", "--no-audit-log", "serve", "--backend", "mlx",
+        "--model", str(adapter), *flags,
+    ], color=colour)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    if colour:
+        assert "\x1b[" in result.output
+    assert "Native MLX serving requires MLX-LM on Apple Silicon." in _plain(result.output)
+    assert "without symlinks" not in _plain(result.output)
+    assert (adapter / "adapter_config.json").read_bytes() == original

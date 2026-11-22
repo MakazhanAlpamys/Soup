@@ -194,6 +194,9 @@ same-named base cannot be identified as wrong: the message makes the choice
 visible, and an explicit absolute `--base` disambiguates it. Mismatching overrides
 for absolute identities and Hub IDs remain refused.
 
+Native HTTP serving checks the selected local base spelling against its cwd and
+symlink restrictions before announcing the resolved path or loading the model.
+
 For native HTTP deployment, install `[mlx,serve]` and use
 `soup serve --backend mlx --model ./mlx-output`. Its initial serving slice is
 dense text models plus optional ordinary native LoRA; native batch inference's
