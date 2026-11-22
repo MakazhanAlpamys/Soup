@@ -92,7 +92,7 @@ def test_the_docs_table_cells(output: str, want: float) -> None:
 
 
 # A minus sign is the ASCII hyphen-minus or U+2212 MINUS SIGN.
-@pytest.mark.parametrize(("output", "expected"), [("-4", "4"), ("−4.", "4")])
+@pytest.mark.parametrize(("output", "expected"), [("-4", "4"), ("\u22124.", "4")])
 def test_a_minus_sign_before_a_digit_stays_part_of_the_number(output: str, expected: str) -> None:
     assert score_semantic(output, expected) == 0.0
     assert score_semantic(expected, output) == 0.0
@@ -100,7 +100,7 @@ def test_a_minus_sign_before_a_digit_stays_part_of_the_number(output: str, expec
 
 def test_the_edges_of_a_signed_number_are_still_removed() -> None:
     assert score_semantic("(-4).", "-4") == 1.0
-    assert score_semantic("−(−4)", "−4") == 1.0
+    assert score_semantic("\u2212(\u22124)", "\u22124") == 1.0
 
 
 def test_a_hyphen_before_a_letter_is_still_removed() -> None:
@@ -109,6 +109,6 @@ def test_a_hyphen_before_a_letter_is_still_removed() -> None:
 
 def test_a_symbol_with_a_variation_selector_is_not_a_word() -> None:
     # Sun and snowflake, each followed by U+FE0F VARIATION SELECTOR-16 (category Mn).
-    sun, snowflake = "☀️", "❄️"
+    sun, snowflake = "\u2600\ufe0f", "\u2744\ufe0f"
     assert score_semantic(sun, snowflake) == 0.0
     assert score_semantic(f"{sun} h2o", f"{snowflake} h2o") == 1.0
