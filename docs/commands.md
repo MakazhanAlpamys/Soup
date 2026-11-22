@@ -563,8 +563,9 @@ evidence exits `3` and names the JSON input to provide; it never reports a neutr
 pass for a gate that measured nothing.
 
 `soup airgap-bundle` uses its own exit codes outside the gate and verdict scheme.
-It exits `0` after writing the bundle, `1` when the builder reports a missing
-input, and `2` for an invalid plan, an invalid size cap, or a bundle that exceeds
+It exits `0` after writing the bundle. Exit `1` covers missing paths and
+non-directory paths supplied via `--model`, `--dataset`, `--wheel`, or `--kernel`.
+It exits `2` for an invalid plan, an invalid size cap, or a bundle that exceeds
 the cap.
 
 ### Gate Verdict Drift vs. Operational Drift
