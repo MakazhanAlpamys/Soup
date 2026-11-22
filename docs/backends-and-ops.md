@@ -174,6 +174,13 @@ keep the ordinary unknown-identity message; cache paths keep their unverified-hi
 message. This does not bind MLX sweeps or
 independent inference, chat, serve, merge and export consumers.
 
+For native HTTP deployment, install `[mlx,serve]` and use
+`soup serve --backend mlx --model ./mlx-output`. Its initial serving slice is
+dense text models plus optional ordinary native LoRA; native batch inference's
+4-bit support does not imply quantized serving support. See
+[native MLX HTTP serving](serving-and-export.md#native-mlx-http-serving) for the
+three routes, streaming, admission limits and supported request controls.
+
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
@@ -803,8 +810,15 @@ from your `soup.yaml`. The **effective** config — the loaded object with every
 already applied — is base64-embedded as **data**; credentials are read from the environment only
 when a live submission starts.
 
-`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
-local HF repo, so a cloud run would silently ignore them.
+The provider uses the chosen `--gpu` and runs `soup train --config <yaml> --yes` with the
+effective config. `--name` fills in its experiment name when the config has none.
+Cloud training exits 2 before writing a stub for `--push-as`, `--gate`, `--resume`,
+`--hf-resume`, `--wandb`, `--tensorboard`, `--tracker`, `--deepspeed`, `--fsdp`, `--gpus`,
+`--trust-remote-code`, `--profile`, `--allow-oom-attempt`, `--diagnose-gate`,
+`--diagnose-gate-require-all-modes`, `--annex-xi`, `--repro-receipt`,
+`--capture-activations`, `--track-energy`, `--energy-out` and `--find-lr`.
+Use the local `soup train` command for those options. `--dry-run` is accepted for
+plan-only cloud runs. Combining it with `--cloud-submit` exits 2 before a submission.
 
 A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
 id (every built-in template sets one, so users hit this first). The same applies to local model
@@ -830,8 +844,14 @@ the embedded config inside the container, and runs `soup train` on the chosen GP
 Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
 named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
 including after a failed run, the app downloads every file in that directory into your local
-output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
-command that retries the download; that command places the files under `<output dir>/<run name>`.
+output directory. To retry the download, use the Modal CLI's `volume get` subcommand with the
+`soup-outputs` volume, the run directory, your local output directory, and `--force`. A retry
+places the files under your local output directory in a subdirectory named for the run.
+
+The app prints a command on its own line when the output path can be quoted portably. It wraps
+paths with spaces or punctuation in double quotes and uses forward slashes for nested paths on
+Windows. A path that requires shell-specific quoting gets prose instructions with a separate
+path display.
 
 ### RunPod
 
@@ -1027,6 +1047,10 @@ covered by offline tests.
 
 ## Chat with your model
 
+Chat displays model paths, loader diagnostics, system-prompt receipts and assistant
+replies literally, with terminal controls and bidi marks removed from the display.
+The model's input history and the values passed to its loaders retain their original text.
+
 ```bash
 # Chat with a LoRA adapter (auto-detects base model)
 soup chat --model ./output
@@ -1057,8 +1081,9 @@ soup push --model ./output --repo your-username/my-model \
 ## HuggingFace Hub Deep Integration
 
 Soup treats HF Hub as a first-class artifact backend. One env var, one flag,
-no token flags to plumb — all operations respect `huggingface-cli login`
-credentials by default.
+no token flags to plumb — all operations respect cached login credentials by
+default. Run `hf auth login` with `huggingface-hub` 0.34 or newer, or
+`huggingface-cli login` with older versions.
 
 ```bash
 # Self-hosted Hub: set once, every command routes there.
@@ -1121,7 +1146,7 @@ paste of checkpoint paths. Cwd containment and `local_dir_use_symlinks=False`
 prevent filesystem escape from a crafted repo.
 
 **Auth** follows standard HF conventions: `HF_TOKEN` env var > `HUGGINGFACE_HUB_TOKEN`
-> `~/.cache/huggingface/token` (set by `huggingface-cli login`) > `~/.huggingface/token`.
+> `~/.cache/huggingface/token` (set by the Hub login command) > `~/.huggingface/token`.
 No custom token flags. The deprecated `--token` on `soup push` still works but emits
 a warning.
 
@@ -1320,6 +1345,10 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 
 
 ## Model Comparison
+
+`soup diff` displays paths, prompts and generated replies literally, preserving emoji
+aliases and backslashes while removing terminal controls and bidi marks from the display.
+Model loading, generation inputs, metrics and saved JSONL retain their original values.
 
 Compare outputs of two models side-by-side:
 
@@ -1682,7 +1711,20 @@ soup runs delete run_1
 soup runs replay run_1
 ```
 
-Every completed run also stores an estimated cost (`$` per run) computed from the
+For HF Trainer-backed `soup train` runs, `stopped` means the second Ctrl+C
+ended training after a successful checkpoint and before the last planned
+step. The final artifact and run summary are still saved, and the command's
+exit code is unchanged. A normal finish or configured early stop stays
+`completed`. `soup runs`, `soup runs show`, and `soup runs compare` show the
+recorded status; a `completed` filter does not include `stopped`. Existing
+database rows are not reclassified.
+
+The final artifact's `soup_run.json` carries the `stopped` status with it.
+`soup ship` and `soup eval` warn about stopped inputs without refusing them
+or changing evaluation results. Emitted `soup ship` evidence carries the
+notice through offline replay.
+
+Every completed or stopped run also stores an estimated cost (`$` per run) computed from the
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 

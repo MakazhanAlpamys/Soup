@@ -119,6 +119,30 @@ def test_live_preflight_reports_malformed_base_yaml(monkeypatch: pytest.MonkeyPa
     assert not Path("recipe.yaml").exists()
 
 
+def test_malformed_yaml_keeps_live_preflight_and_named_apply_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #2967's live preflight and #3119's filename-aware --apply handler share
+    # data_mix.py; the same parser error must reach each with its own wording.
+    Path("soup.yaml").write_text("base: [\n", encoding="utf-8")
+    optimizer = Mock()
+    monkeypatch.setattr("soup_cli.utils.data_mix.run_mix_optimizer", optimizer)
+
+    live = _mix("--live", "--base-yaml", "soup.yaml")
+    applied = runner.invoke(app, ["data", "mix", "--apply", "soup.yaml"])
+
+    assert live.exit_code == 2, (live.output, live.exception)
+    live_text = strip_ansi(live.output)
+    assert "live proxy validation failed: while parsing a flow node" in live_text
+    assert "apply failed" not in live_text
+    optimizer.assert_not_called()
+    assert applied.exit_code == 2, (applied.output, applied.exception)
+    applied_text = strip_ansi(applied.output)
+    assert "apply failed: while parsing a flow node" in applied_text
+    assert 'in "soup.yaml", line 2, column 1' in applied_text
+    assert "Loaded recipe:" not in applied_text
+
+
 def test_live_preflight_runs_before_valid_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

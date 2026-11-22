@@ -19,6 +19,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
@@ -136,6 +137,17 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
+            from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            if revision_kwargs:
+                revision = revision_kwargs["revision"]
+                model_arg = f"{model_arg},revision={revision}"
+                console.print(f"[dim]Base revision: {revision} (recorded run)[/]")
+            else:
+                console.print(
+                    "[dim]Base revision: unknown (legacy, local source or base override)[/]"
+                )
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
@@ -143,6 +155,7 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+    warn_stopped_inputs(model_path)
 
     if trust_remote_code:
         # Appended only from the resolved --trust-remote-code flag, never
@@ -457,6 +470,7 @@ def custom(
     results_list = []
     from soup_cli.eval.custom import _create_default_generator, score_task
 
+    warn_stopped_inputs(model_path)
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
         str(model_path), trust_remote_code=trust_remote_code,
@@ -1025,20 +1039,23 @@ def human(
     try:
         prompts = load_prompts(Path(prompts_file))
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
+            console.print(terminal_text(f"Model not found: {mpath}", "red"))
             raise typer.Exit(1)
 
+    warn_stopped_inputs(model_a, model_b)
+
     console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {for_terminal(model_a)}\n"
-        f"Model B: {for_terminal(model_b)}",
+        Text.assemble(
+            ("Human Evaluation", "bold"),
+            f"\nPrompts: {len(prompts)}\nModel A: ", terminal_text(model_a),
+            "\nModel B: ", terminal_text(model_b),
+        ),
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1058,10 +1075,14 @@ def human(
         resp_b = gen_b(prompt_text)
 
         # Display for human judgment
-        console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
-        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
-        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
+        heading = console.render_str(
+            f"--- Prompt {idx + 1}/{len(prompts)} ---", markup=False, emoji=False,
+        )
+        heading.stylize_before("bold")
+        console.print(Text.assemble("\n", heading))
+        console.print(Panel(terminal_text(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(terminal_text(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(terminal_text(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1092,7 +1113,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
+    console.print(Text.assemble("\n", terminal_text(f"Results saved to {output}", "green")))
 
 
 # ─── Helper functions ───
@@ -1289,7 +1310,7 @@ def _display_elo_ratings(results: object) -> None:
         reverse=True,
     ):
         table.add_row(
-            _short_model_name(name),
+            terminal_text(_short_model_name(name, markup=False)),
             f"{rating.rating:.0f}",
             str(rating.wins),
             str(rating.losses),
@@ -1361,9 +1382,7 @@ def gate_cmd(
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     if write_baseline:
-        import os
-
-        from soup_cli.utils.paths import check_report_output_path, quote_path
+        from soup_cli.utils.paths import check_report_output_path, quote_path, same_directory_entry
 
         try:
             check_report_output_path(write_baseline, "--write-baseline")
@@ -1377,9 +1396,8 @@ def gate_cmd(
                 inputs.append((f"task {task.name!r} --tasks", task.tasks))
             elif task.type == "judge" and task.prompts:
                 inputs.append((f"task {task.name!r} --prompts", task.prompts))
-        output_identity = os.path.normcase(os.path.realpath(write_baseline))
         for field, input_path in inputs:
-            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+            if same_directory_entry(write_baseline, input_path):
                 message = (
                     f"--write-baseline {quote_path(write_baseline)} aliases "
                     f"{field} {quote_path(input_path)}; choose a different --write-baseline"
@@ -1393,7 +1411,7 @@ def gate_cmd(
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot resolve baseline:[/] {exc}")
+        console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
@@ -1412,6 +1430,7 @@ def gate_cmd(
     else:
         from soup_cli.eval.quant_check import make_model_generator
 
+        warn_stopped_inputs(model)
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
@@ -1587,6 +1606,8 @@ def quant_check_cmd(
             f"[red]Cannot load --tasks: {for_terminal(str(exc))}[/]"
         )
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
+    warn_stopped_inputs(before_path, after_path)
 
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.

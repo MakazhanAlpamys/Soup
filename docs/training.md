@@ -258,6 +258,40 @@ move the last digits. For bit-exact reruns you also need
 
 ---
 
+## Checkpoints (`training.save_strategy`)
+
+By default a run writes `<output>/checkpoint-N` folders as it trains: one every
+`training.save_steps` steps (default 100), and one more at the **last step**, because
+transformers saves there whenever the strategy is `steps`. The last three are kept
+(`save_total_limit: 3`). The final adapter or model is written separately, after training.
+
+```yaml
+training:
+  save_strategy: "no"      # steps (default) | epoch | no  -- quote it, see below
+```
+
+| `save_strategy` | Writes `checkpoint-N` | Use it for |
+|---|---|---|
+| `steps` (default) | every `save_steps` steps and at the last step | long runs you may need to resume |
+| `epoch` | at the end of every epoch | runs where an epoch is the natural unit |
+| `no` | never | short or throwaway runs, e.g. a loop that trains many of them and would pay the checkpoint size on every one |
+
+- **The final adapter is always saved**, whatever the strategy: `adapter_model.safetensors`
+  (or the full model) and the tokenizer are written after `train()`, as before.
+- **`no` leaves nothing to resume from.** `soup train --resume`, `--push-as`
+  (it pushes each `checkpoint-N`) and `soup runs` checkpoint pruning have no checkpoint to
+  work with. A Ctrl-C still asks the trainer to write one, because that save is requested
+  explicitly.
+- **Quote the value.** YAML reads an unquoted `no` as a boolean, so `save_strategy: no` is
+  refused with a message that says to write `save_strategy: "no"`.
+- **`save_steps` and `save_strategy` go together.** `save_steps` only counts under
+  `save_strategy: steps`. A non-default `save_steps` beside `epoch` or `no` is refused at load
+  rather than ignored.
+- **Not on every combination.** `backend: mlx` writes its own numbered adapter files every
+  `save_steps` iterations and has no epoch or off setting, and `task: unlearn` trains in its
+  own loop and writes no checkpoint, so `epoch` and `no` are refused on both. PPO accepts
+  `steps` and `no` because its trainer does not emit epoch-end callbacks.
+
 ## Rewind — which row spiked the loss (`soup rewind`)
 
 While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
@@ -301,7 +335,11 @@ Scope: task `sft` on the transformers and MLX backends, single process, on the p
 text path. The recorder turns itself off, with one warning naming the reason, for
 resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
 dataset, and anything else it cannot attribute row by row. Previews are shown only when
-the dataset on disk still matches the one the run trained on.
+the dataset on disk still matches the one the run trained on. A run with
+`training.curriculum: true` numbers its rows in the order it trained on, shortest first,
+not in file order (the MLX backend does not sort, so there the numbers follow the file),
+and `soup rewind` shows the text of each row, so the number need not be looked up in the
+file.
 
 **What it costs.** Writing one line per micro-batch measured under 0.1 ms per
 micro-batch, which is negligible against any real step, and a run's peak memory was

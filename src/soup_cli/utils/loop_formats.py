@@ -18,6 +18,8 @@ from importlib.resources.abc import Traversable
 from types import MappingProxyType
 from typing import Any
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
+
 #: The ``schema_version`` every format is currently at.
 SCHEMA_VERSION = 1
 
@@ -64,7 +66,7 @@ def load_schema(name: str) -> dict[str, Any]:
 def load_examples(name: str) -> list[dict[str, Any]]:
     """Parse and return the example records of format ``name``, one per line."""
     text = example_resource(name).read_text(encoding="utf-8")
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    return [json.loads(line) for line in jsonl_lines(text) if line.strip()]
 
 
 def prompt_hash(messages: Sequence[Mapping[str, Any]]) -> str:
