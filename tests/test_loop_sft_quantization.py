@@ -704,7 +704,9 @@ class TestRenderedNoneIsNotFp32:
     The loop's sft config is an all-linear LoRA (r > 0), so ``is_full_finetune`` is false and
     ``SFTTrainerWrapper._resolve_load_dtype`` delegates to ``resolve_frozen_base_load_dtype``:
     ``"auto"``, the checkpoint's own dtype, never the fp32 that ``from_pretrained`` would
-    otherwise upcast to.
+    otherwise upcast to — except on a CPU without native bf16 units, which resolves an
+    explicit float32 instead of emulating bf16 matmuls (#3164). The CPU rows below pin
+    that capability by mock so the contract, not the host's silicon, is what is asserted.
     """
 
     @staticmethod
@@ -730,7 +732,13 @@ class TestRenderedNoneIsNotFp32:
 
         config = self._config(decide)
         device = "cpu"
-        if cuda is not None:
+        if cuda is None:
+            # CPU arm: pin the capability by mock — with native bf16 units the
+            # checkpoint dtype is kept, never fp32 (#3164).
+            monkeypatch.setattr(
+                "soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: True
+            )
+        else:
             monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
             monkeypatch.setattr("soup_cli.utils.gpu.cuda_supports_bf16", lambda: True)
             device = "cuda"
@@ -739,6 +747,20 @@ class TestRenderedNoneIsNotFp32:
 
         assert resolved == "auto"
         assert resolved is not torch.float32
+
+    def test_the_cpu_arm_resolves_float32_without_native_bf16(self, decide, monkeypatch):
+        """The other arm of #3164's capability check: no AVX512-BF16/AMX ->
+        explicit float32, never the emulated-bf16 "auto"."""
+        torch = pytest.importorskip("torch")
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        config = self._config(decide)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr("soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: False)
+
+        resolved = SFTTrainerWrapper(config, device="cpu")._resolve_load_dtype(config.training)
+
+        assert resolved is torch.float32
 
     def test_a_bfloat16_checkpoint_loads_as_bfloat16_with_that_dtype(
         self, decide, tmp_path, monkeypatch
@@ -756,6 +778,8 @@ class TestRenderedNoneIsNotFp32:
             str(checkpoint)
         )
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        # CPU with native bf16 units: bf16 is kept, never upcast (#3164).
+        monkeypatch.setattr("soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: True)
         config = self._config(decide)
 
         resolved = SFTTrainerWrapper(config, device="cpu")._resolve_load_dtype(config.training)

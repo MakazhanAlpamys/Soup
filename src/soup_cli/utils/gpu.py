@@ -679,6 +679,39 @@ def bf16_fp16_flags(
     return (supported, not supported)
 
 
+def cpu_supports_native_bf16() -> bool:
+    """Does this CPU have native bf16 units (AVX512-BF16 or AMX-BF16)?
+
+    PyTorch's own probes answer first (``torch.cpu._is_avx512_bf16_supported`` /
+    ``_is_amx_tile_supported`` — the same pair CI prints in its host report);
+    a torch too old to expose them falls back to the kernel's flag list in
+    ``/proc/cpuinfo``. When neither source can be read the answer is False:
+    the failure this guards against is silent and costs 11.5x throughput,
+    while the cost of a wrong False is visible up front — double the frozen
+    base's resident bytes (#3164).
+    """
+    try:
+        import torch
+
+        probes = (
+            getattr(getattr(torch, "cpu", None), "_is_avx512_bf16_supported", None),
+            getattr(getattr(torch, "cpu", None), "_is_amx_tile_supported", None),
+        )
+        if any(probe is not None for probe in probes):
+            return any(probe() for probe in probes if probe is not None)
+    except (ImportError, RuntimeError, AssertionError, OSError):
+        pass
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith(("flags", "Features")):
+                    if "avx512_bf16" in line or "amx_bf16" in line:
+                        return True
+    except OSError:
+        pass
+    return False
+
+
 def resolve_frozen_base_load_dtype(device: str):
     """``dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
 
@@ -691,15 +724,22 @@ def resolve_frozen_base_load_dtype(device: str):
     resident weights in bf16 storage while every other tensor on the card is
     float16, the same storage/compute split v0.73.1 (#385/#387) removed from
     the other bf16-hardcoded call sites. Returning ``torch.float16`` there
-    keeps storage and compute in the same dtype. On CPU a frozen bf16-saved
-    base must load float32: x86 CPUs without AMX have no bf16 units, so the
-    base's forward/backward matmuls fall back to dtype emulation — measured
-    12x slower end-to-end (TinyLlama-1.1B LoRA, Ryzen 2600, 12 threads:
-    ~1.0 tok/s bf16-cast base vs ~12.6 tok/s fp32). The old docstring called
-    CPU "smoke tests only"; with CPU LoRA training of small models as a
-    supported path, throughput is the correct tie-break and fp32 the correct
-    default. Memory-constrained CPU users can still override via explicit
-    ``dtype=`` in their config.
+    keeps storage and compute in the same dtype.
+
+    On CPU the answer now turns on the silicon (``cpu_supports_native_bf16``):
+    where the CPU has no native bf16 units (AVX512-BF16 / AMX — a Ryzen, a
+    pre-Ice Lake Xeon, EPYC Zen 1-3), a frozen bf16-saved base must load
+    float32, because every base forward/backward matmul would otherwise fall
+    back to dtype emulation — measured 11.5x slower end-to-end (1005 s/it to
+    87 s/it, ~1.0 to ~11.7 tok/s; TinyLlama-1.1B LoRA, Ryzen 2600, 12
+    threads) with val loss unchanged (1.5947 vs 1.6003). Where the units are
+    native the checkpoint's own dtype is kept as before: those CPUs are not
+    emulating, and float32 would double the frozen base's resident bytes for
+    no throughput gain — that doubling is the memory cost to weigh on a
+    memory-constrained box. The old docstring called CPU "smoke tests only";
+    with CPU LoRA training of small models as a supported path, throughput is
+    the correct tie-break and fp32 the correct default on hardware without
+    the units (#3164).
     """
     _, fp16_only = bf16_fp16_flags(device)
     if fp16_only:
@@ -707,6 +747,8 @@ def resolve_frozen_base_load_dtype(device: str):
 
         return torch.float16
     if str(device).lower().startswith("cpu"):
+        if cpu_supports_native_bf16():
+            return "auto"
         import torch
 
         return torch.float32

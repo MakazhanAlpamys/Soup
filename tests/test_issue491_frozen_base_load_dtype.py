@@ -69,24 +69,39 @@ def fake_torch_cuda(monkeypatch):
 
 
 class TestResolveFrozenBaseLoadDtype:
-    def test_cpu_resolves_to_float32(self):
-        """CPU resolves an explicit float32, not the checkpoint's own dtype.
+    def test_cpu_resolves_to_float32_without_native_bf16(self, monkeypatch):
+        """A CPU with no native bf16 units resolves an explicit float32.
 
-        x86 CPUs without AMX (Ryzen, older Xeons) have no bf16 units, so a
-        bf16-saved checkpoint loaded with dtype="auto" gets bf16 matmuls
-        executed in software emulation. Measured on a Ryzen 2600 (Zen+, 12
-        threads): TinyLlama-1.1B LoRA went from 1005 s/it to 87 s/it
-        (11.5x) once the frozen base loaded float32 on CPU, with val loss
-        unchanged (1.5947 vs 1.6003). The old "auto on CPU is harmless"
+        x86 CPUs without AVX512-BF16/AMX (Ryzen, older Xeons) have no bf16
+        units, so a bf16-saved checkpoint loaded with dtype="auto" gets bf16
+        matmuls executed in software emulation. Measured on a Ryzen 2600
+        (Zen+, 12 threads): TinyLlama-1.1B LoRA went from 1005 s/it to
+        87 s/it (11.5x) once the frozen base loaded float32 on CPU, with val
+        loss unchanged (1.5947 vs 1.6003). The old "auto on CPU is harmless"
         assumption held only because CPU was smoke-test territory; with CPU
         LoRA training as a real path, throughput is the correct tie-break.
-        Memory-constrained users can still override via explicit dtype=.
+        The capability is mocked rather than read from the host so the row
+        pins the contract, not this machine's silicon.
         """
         import torch
 
+        monkeypatch.setattr(
+            "soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: False
+        )
         from soup_cli.utils.gpu import resolve_frozen_base_load_dtype
 
         assert resolve_frozen_base_load_dtype("cpu") == torch.float32
+
+    def test_cpu_keeps_the_checkpoint_dtype_with_native_bf16(self, monkeypatch):
+        """A CPU whose bf16 units are native keeps the checkpoint's dtype:
+        those CPUs are not emulating, and float32 would double the frozen
+        base's resident bytes for no throughput gain (#3164 review item 3)."""
+        monkeypatch.setattr(
+            "soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: True
+        )
+        from soup_cli.utils.gpu import resolve_frozen_base_load_dtype
+
+        assert resolve_frozen_base_load_dtype("cpu") == "auto"
 
     def test_cuda_unavailable_resolves_to_auto(self, fake_torch_cuda):
         from soup_cli.utils.gpu import resolve_frozen_base_load_dtype
