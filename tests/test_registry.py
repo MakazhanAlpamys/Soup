@@ -918,7 +918,7 @@ class TestRegistryCLI:
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
-    @pytest.mark.parametrize("status", ["failed", "running", "terminated", "launching"])
+    @pytest.mark.parametrize("status", ["failed", "running", "terminated", "launching", "stopped"])
     def test_push_rejects_uncompleted_run_statuses(self, tmp_path, monkeypatch, status):
         self._setup_dbs(tmp_path, monkeypatch)
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -934,6 +934,8 @@ class TestRegistryCLI:
             pass
         elif status == "failed":
             tracker.fail_run(run_id, error="diverged")
+        elif status == "stopped":
+            tracker.finish_run(run_id, 2.0, 0.5, 50, 30.0, str(tmp_path / "out"), status="stopped")
         else:
             tracker._get_conn().execute(
                 "UPDATE runs SET status = ? WHERE run_id = ?", (status, run_id)
@@ -951,6 +953,12 @@ class TestRegistryCLI:
             f"run {run_id} has status '{status}'; only a completed run can be registered"
         )
         assert expected in message
+        if status == "stopped":
+            assert "soup train --resume" in message
+            assert "otherwise start a new run" in message
+            assert "push the completed run ID" in message
+        else:
+            assert "--resume" not in message
         with RegistryStore() as store:
             assert store.list() == []
 

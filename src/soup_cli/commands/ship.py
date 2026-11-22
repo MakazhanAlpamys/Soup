@@ -53,6 +53,7 @@ from typing import (
     Optional,
     Tuple,
     TypeVar,
+    Union,
 )
 
 import typer
@@ -2291,6 +2292,7 @@ def _refuse_output_that_is_an_input(
     held_out: Optional[str],
     baseline: Optional[str],
     reward_fn: Optional[str],
+    train: Union[str, list[str], None] = None,
 ) -> None:
     """Refuse an output path that is one of the run's input files, or the other output (exit 3).
 
@@ -2303,7 +2305,12 @@ def _refuse_output_that_is_an_input(
     before any model loads and before anything is written: the config and the gate's files are
     read first, to know what the run is; ``--evidence`` and the task file are not. A
     ``--baseline`` or ``--reward-fn`` that is not a file (a ``registry://`` id, a built-in
-    reward name) is not a path and is not compared.
+    reward name) is not a path and is not compared. ``train`` is the ``data.train`` of the parsed
+    ``--config``, the training file the provenance hashes: a path, or a list of paths, each of
+    which is an input (named ``data.train of --config``, or ``data.train[i] of --config`` for an
+    entry of the list, with the path as the config writes it). A relative one is taken relative to
+    the working directory, as the hashing does; an entry that is not a file (a Hub dataset id, a
+    path that does not exist) is not compared.
     """
     if not output and not emit_evidence:
         return
@@ -2315,6 +2322,16 @@ def _refuse_output_that_is_an_input(
     inputs = [
         (flag, value) for flag, value in named
         if value and (flag not in ("--baseline", "--reward-fn") or _is_a_file(value))
+    ]
+    if isinstance(train, str):
+        train_files = [("data.train of --config", train)]
+    else:
+        train_files = [
+            (f"data.train[{index}] of --config", entry) for index, entry in enumerate(train or ())
+        ]
+    inputs += [
+        (flag, value) for flag, value in train_files
+        if isinstance(value, str) and value and _is_a_file(value)
     ]
     written = [(flag, value) for flag, value in (
         ("--output", output), ("--emit-evidence", emit_evidence)) if value]
@@ -2593,6 +2610,7 @@ def ship(
         },
     )
     soup_config = None
+    from soup_cli.utils.run_provenance import warn_stopped_inputs
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
     try:
@@ -2661,7 +2679,7 @@ def ship(
     _refuse_output_that_is_an_input(
         output=output, emit_evidence=emit_evidence, evidence=evidence, task_eval=task_eval,
         config=config, corrections=corrections, held_out=held_out, baseline=baseline,
-        reward_fn=reward_fn,
+        reward_fn=reward_fn, train=soup_config.data.train if soup_config is not None else None,
     )
 
     # Fail a mistyped --push target FAST (usage error) — before computing the
@@ -2752,6 +2770,13 @@ def ship(
                 verdict.task_win.mode, [item.name for item in verdict.benchmark_deltas],
                 recorded_runs, verdict.task_win.reward,
             )
+        recorded = payload.get("provenance")
+        stopped_input = warn_stopped_inputs(
+            adapter if require_provenance or emit_evidence else None,
+            evidence_stopped=isinstance(recorded, dict)
+            and recorded.get("training_status") == "stopped",
+            stderr=progress != "jsonl",
+        )
     elif base or tuned or adapter or task_eval:
         if emit_evidence:
             # without the reward function: that is added from the verdict below, so the file is
@@ -2779,6 +2804,9 @@ def ship(
             **({"base_adapter": base_adapter} if base_adapter is not None else {}),
             **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
         )
+        stopped_input = warn_stopped_inputs(
+            base, tuned, adapter, base_adapter, stderr=progress != "jsonl",
+        )
         if emit_evidence:
             if binding != capture_binding(task_mode, _parse_suite(general_suite), noise_floor):
                 _fail(
@@ -2804,6 +2832,8 @@ def ship(
         if soup_config is not None:
             provenance.update(_compute_provenance(soup_config))
         provenance["binding"] = binding
+        if stopped_input:
+            provenance["training_status"] = "stopped"
     _emit_and_exit(
         verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
     )
