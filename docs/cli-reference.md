@@ -3559,7 +3559,7 @@ Usage: `soup serve [OPTIONS]`
 | `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs, feedback and adapter routes only: the generation routes take no token. |
 | `--device` | text |  |  | Device: cuda, cuda:&lt;index>, mps or cpu. Auto-detected if not set. With the transformers backend, cpu loads on the CPU in float32 (unless --kv-cache-type bf16/f16 picks the dtype); cuda:&lt;index> and mps are pinned to that device; cuda uses device_map=auto, all in float16. |
 | `--max-tokens` | integer | `512` |  | Default max tokens for generation (1 to 16384) |
-| `--backend` | text | `transformers` |  | Inference backend: transformers (default), vllm, sglang, or mii |
+| `--backend` | text | `transformers` |  | Inference backend: transformers (default), vllm, sglang, mii, or mlx |
 | `--tensor-parallel`, `--tp` | integer | `1` |  | Number of GPUs for tensor parallelism (vLLM only) |
 | `--gpu-memory` | float | `0.9` |  | Fraction of GPU memory to use (vLLM only, 0.0-1.0) |
 | `--max-model-len` | integer |  |  | Maximum sequence length for the vLLM engine (vLLM only). Lower this when the engine refuses to start because the KV cache does not fit. Default: the model's own maximum. |
@@ -3624,6 +3624,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
 | `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
 | `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
+| `--judge-reference` | flag | off |  | Show the judge each task's `expected` answer as a reference (--task-mode judge_score or pairwise; live runs only). |
 
 ## `soup shrink`
 

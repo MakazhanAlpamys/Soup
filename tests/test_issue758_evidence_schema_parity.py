@@ -120,6 +120,16 @@ EVIDENCE_CORPUS = (
             "checkpoint_step": None,
         },
     },
+    {
+        # #2520: a reference-judged leg records its judge mode and template (schema version 2).
+        "schema_version": 2,
+        "task": {
+            "mode": "pairwise", "base": 0.50, "tuned": 0.75,
+            "judge_mode": "reference",
+            "judge_template": {"id": "pairwise.reference", "version": 1},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.71}},
+    },
 )
 
 
@@ -336,6 +346,21 @@ MALFORMED_CORPUS = (
         "task": {
             "mode": "reward", "base": 0.50, "tuned": 0.80,
             "reward": {"fn": "accuracy", "sha256": None},
+        },
+        "benchmarks": {},
+    },
+    {
+        # #2520: judge_mode without judge_template.
+        "schema_version": 2,
+        "task": {"mode": "judge_score", "base": 0.5, "tuned": 0.6, "judge_mode": "reference"},
+        "benchmarks": {},
+    },
+    {
+        # #2520: a metric leg has no judge.
+        "schema_version": 2,
+        "task": {
+            "mode": "metric", "base": 0.5, "tuned": 0.6, "judge_mode": "reference",
+            "judge_template": {"id": "judge_score.reference", "version": 1},
         },
         "benchmarks": {},
     },

@@ -853,7 +853,28 @@ soup adapters branches
 
 The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` truncates the merged result and does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
 
-**How `--weights` is applied.** Weights are normalised to sum to 1 (`7,3` is `0.7,0.3`; the default is equal weights). A LoRA's delta is `ΔW = B·A`, so `linear`, `dare` and `svd` scale each input's `lora_A` and `lora_B` (and `lora_embedding_A` / `lora_embedding_B`) by `√cᵢ`: each input's own term is `cᵢ` times its delta, so `--weights 0.7,0.3` keeps 0.7 and 0.3 of the two deltas and equal weights keep half of each of two inputs. Other tensors, such as a DoRA magnitude vector or the `lora_B.bias` that PEFT saves with `lora_bias=True`, take `cᵢ`. This is the rule of the same-rank path of `soup adapters arithmetic`, and like it a factor-wise merge also adds cross terms `√(cᵢcⱼ)·Bᵢ·Aⱼ` between inputs; for the exact weighted sum of the deltas use `soup adapters arithmetic ... --rank N`, which concatenates the factors. `dare` applies its `1/density` rescale on top, and `ties` is not weighted this way: its disjoint average divides by the weights that agree. Before v0.78.0 both factors took `cᵢ`, so an input's own term was `cᵢ²` times its delta (0.49 and 0.09 for `0.7,0.3`; a quarter of each for an equal-weight pair).
+**How `--weights` is applied.** Weights are normalised to sum to 1 (`7,3` is `0.7,0.3`;
+the default is equal weights). A LoRA's delta is `ΔW = B·A`, so `linear`, `dare` and `svd`
+scale each input's factors by `√cᵢ`: `--weights 0.7,0.3` keeps 0.7 and 0.3 of the two
+inputs' own deltas. Factors include `lora_A.weight`, `lora_B.weight`, `lora_embedding_A`
+and `lora_embedding_B`, and their named forms `lora_A.<name>.weight`,
+`lora_B.<name>.weight`, `lora_embedding_A.<name>` and `lora_embedding_B.<name>`.
+`<name>` is exactly one non-empty dot-separated segment. If it is also a factor
+marker, the named spelling takes precedence: `lora_B.lora_A.weight` is B for the
+adapter named `lora_A`. Other tensors, such as a DoRA magnitude vector,
+`lora_B.bias` or `lora_B.<name>.bias`, take `cᵢ` directly.
+
+The same-rank path of `soup adapters arithmetic` uses the same factor rule. These
+factor-wise merges also add cross terms `√(cᵢcⱼ)·Bᵢ·Aⱼ` between inputs. For the exact
+weighted sum of deltas, use `soup adapters arithmetic ... --rank N` with a large
+enough `N` to avoid truncation: it concatenates the factors, keeping A/B pairs
+separate by adapter name and preserving the original tensor keys. `dare` applies
+its `1/density` rescale on top, and `ties` is not weighted this way: its disjoint
+average divides by the weights that agree.
+
+Before v0.78.0, `adapters merge` applied `cᵢ` to each factor, so each input's own
+delta was scaled by `cᵢ²` (0.49 and 0.09 for `0.7,0.3`). v0.78.0 fixed unnamed
+factors but still applied `cᵢ` to named factors. Re-merge affected artifacts.
 
 **Defaults & safety:**
 
