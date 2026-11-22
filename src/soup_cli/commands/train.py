@@ -2313,7 +2313,9 @@ def train(
         sharding=f"--fsdp {fsdp}" if fsdp else ("--deepspeed" if ds_config_path else None),
     )
     if not packed_lora_runs:
-        # Padded stock runs can defer a refusal until their longest data row is known.
+        # A refusal of a run that pads to its longest row is held back until the data is loaded
+        # and its longest row is known (`_realised_length_verdict`, below); anything else the
+        # pre-flight decides here, as before.
         fit_deferred = _hardware_fit_preflight(
             cfg,
             gpu_info,
