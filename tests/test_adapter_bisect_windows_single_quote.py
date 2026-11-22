@@ -35,6 +35,8 @@ from tests.conftest import strip_ansi
         ("run --a='x y' --b='z w'", ["run", "--a=x y", "--b=z w"]),
         ("run --opt='a b'\tx", ["run", "--opt=a b", "x"]),
         ("run --ckpt='{ckpt}'", ["run", "--ckpt={ckpt}"]),
+        # An escaped \" opens no group, so the ' after it still ends the word.
+        (r"tool --opt='a \"b' x", ["tool", '--opt=a \\"b', "x"]),
     ],
 )
 def test_a_quote_inside_a_word_groups_when_its_closing_quote_ends_the_word(command, expected):
@@ -54,6 +56,8 @@ def test_a_quote_inside_a_word_groups_when_its_closing_quote_ends_the_word(comma
         ('run "it\'s"', ["run", "it's"]),
         (r"run x\'a b'", ["run", r"x\'a", "b'"]),
         (r"C:\Users\O'Brien\tool.bat {ckpt}", [r"C:\Users\O'Brien\tool.bat", "{ckpt}"]),
+        # The next ' is inside a later double-quoted argument, so it closes nothing.
+        ("tool don't \"James' file.txt\"", ["tool", "don't", "James' file.txt"]),
     ],
 )
 def test_any_other_quote_is_a_literal_character_as_before(command, expected):
