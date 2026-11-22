@@ -1239,6 +1239,29 @@ def _number_versions_of_old_state(fields: dict) -> None:
     fields["latest_version"] = version
 
 
+def refuse_existing_state(path: Optional[str] = None, *, force: bool = False) -> None:
+    """Raise :exc:`FileExistsError` when a loop already exists at the state path.
+
+    Lets ``soup loop init`` refuse before it creates or tightens
+    ``.soup-loops/adapters`` (#3062): a refused init must leave the folder as
+    it found it. A symlink at the state path does not count here — it falls
+    through to :func:`init_state`, which refuses it itself — and an unreadable
+    path is left to ``init_state`` too, so this never masks its error.
+    """
+    target = path if path is not None else default_state_path()
+    try:
+        st = os.lstat(target)
+    except OSError:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        return
+    if not force:
+        raise FileExistsError(
+            f"loop state already exists at {os.path.basename(target)} "
+            "(re-run with --force to overwrite)"
+        )
+
+
 def init_state(
     served_model: str,
     eval_suite: str,
