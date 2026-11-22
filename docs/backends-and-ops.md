@@ -174,6 +174,13 @@ keep the ordinary unknown-identity message; cache paths keep their unverified-hi
 message. This does not bind MLX sweeps or
 independent inference, chat, serve, merge and export consumers.
 
+For native HTTP deployment, install `[mlx,serve]` and use
+`soup serve --backend mlx --model ./mlx-output`. Its initial serving slice is
+dense text models plus optional ordinary native LoRA; native batch inference's
+4-bit support does not imply quantized serving support. See
+[native MLX HTTP serving](serving-and-export.md#native-mlx-http-serving) for the
+three routes, streaming, admission limits and supported request controls.
+
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
@@ -1034,6 +1041,10 @@ covered by offline tests.
 
 ## Chat with your model
 
+Chat displays model paths, loader diagnostics, system-prompt receipts and assistant
+replies literally, with terminal controls and bidi marks removed from the display.
+The model's input history and the values passed to its loaders retain their original text.
+
 ```bash
 # Chat with a LoRA adapter (auto-detects base model)
 soup chat --model ./output
@@ -1694,7 +1705,20 @@ soup runs delete run_1
 soup runs replay run_1
 ```
 
-Every completed run also stores an estimated cost (`$` per run) computed from the
+For HF Trainer-backed `soup train` runs, `stopped` means the second Ctrl+C
+ended training after a successful checkpoint and before the last planned
+step. The final artifact and run summary are still saved, and the command's
+exit code is unchanged. A normal finish or configured early stop stays
+`completed`. `soup runs`, `soup runs show`, and `soup runs compare` show the
+recorded status; a `completed` filter does not include `stopped`. Existing
+database rows are not reclassified.
+
+The final artifact's `soup_run.json` carries the `stopped` status with it.
+`soup ship` and `soup eval` warn about stopped inputs without refusing them
+or changing evaluation results. Emitted `soup ship` evidence carries the
+notice through offline replay.
+
+Every completed or stopped run also stores an estimated cost (`$` per run) computed from the
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
