@@ -7,7 +7,7 @@ swanlab) plus the third-party `trackio` callback when installed; Soup only
 validates the name and surfaces a friendly error when the backing package
 is missing.
 
-Telemetry: opt-out via `SOUP_TELEMETRY=0` env var. Default is OFF until a
+Telemetry: opt-in via `SOUP_TELEMETRY=1` env var. Default is OFF until a
 public privacy policy ships — `is_telemetry_enabled` returns False unless
 the user explicitly enables it. Hardware-info-only payload schema lives in
 `build_telemetry_payload` for documentation/testing; no network calls in
@@ -211,9 +211,10 @@ _POSTHOG_ENDPOINT = f"{_POSTHOG_HOST}/i/v0/e/"
 # v0.53.10 #154 — bundled public write-only project key for Soup CLI
 # telemetry. The key is INTENTIONALLY hard-coded: PostHog "phc_*" keys are
 # write-only (cannot read events back); rotating it requires a release.
-# Operators wanting to point telemetry at their own PostHog project should
-# set ``SOUP_POSTHOG_KEY`` AND ``SOUP_POSTHOG_ENDPOINT`` together; both env
-# vars are validated by :func:`_resolve_posthog_target`.
+# Operators wanting to point telemetry at their own PostHog project may set
+# ``SOUP_POSTHOG_KEY`` and ``SOUP_POSTHOG_ENDPOINT`` independently; each
+# overrides its own default, and both env vars are validated by
+# :func:`_resolve_posthog_target`.
 _POSTHOG_DEFAULT_KEY = "phc_soup_public_write_only"
 _TELEMETRY_TIMEOUT_S = 1.0
 
