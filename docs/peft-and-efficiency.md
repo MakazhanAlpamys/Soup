@@ -667,10 +667,10 @@ printed.
 Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`).
 Only `task: sft` (and `tts`, which trains through the SFT trainer) applies these two fields; on any
 other task the config is refused at load, because that trainer would train every layer (#1497).
-Within `sft` and `tts` they are applied on the text path with `backend: transformers` only:
-`backend: mlx`, `backend: unsloth`, `modality: vision`, `modality: audio` and `stream_layers: true`
-are refused at load too: those setups never read the fields and always attach an adapter, so the run
-would train every layer (#1581).
+The Transformers backend applies these fields on the text path for `sft` and `tts` without layer
+streaming. MLX applies them to [dense Llama text SFT](training.md#dense-llama-training-on-mlx)
+with `training.lora.r: 0`. Config loading refuses these fields for MLX LoRA, Unsloth, vision,
+audio and layer-streamed setups (#1581).
 
 ```yaml
 training:
@@ -679,8 +679,8 @@ training:
   freeze_ratio: 0.75   # Freeze 75% of layers from the bottom
 ```
 
-Works with and without LoRA. When used with LoRA, the adapter is attached only to the unfrozen
-layers, so a frozen layer stays frozen rather than training through a fresh adapter.
+On Transformers this works with and without LoRA. When LoRA is enabled, Soup attaches the
+adapter only to the unfrozen layers.
 
 `freeze_layers`/`freeze_ratio` combine with a list `target_modules` (module-name suffixes) and
 with a string one — `all-linear` or a regex. A string is resolved to the module names peft would
