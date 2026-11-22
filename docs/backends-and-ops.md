@@ -128,6 +128,12 @@ optimizer updates; a triggering report stops further updates and saves the last
 adapter with the actual completed work and termination reason in
 `adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
 
+Explicit `training.lora.target_modules` names must all match the native model.
+MLX SFT, native preference trainers and GRPO refuse an unmatched name before
+adapter conversion or any optimizer update and list every missing target. Correct
+or remove those names; training no longer silently uses only the matching subset. Valid targets, `auto`
+resolution and the existing supported conversion types are unchanged.
+
 For unquantized Llama text SFT, `training.lora.r: 0` selects
 [dense full fine-tuning](training.md#dense-llama-training-on-mlx), including bottom-layer
 freezing and standalone model checkpoints. Trainable weights and AdamW moments use

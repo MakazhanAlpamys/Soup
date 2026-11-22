@@ -716,6 +716,23 @@ class MLXSFTTrainerWrapper:
             )
         keys = set(target_keys)
         use_dora = bool(lora_cfg.use_dora)
+        # Match the same layer and root names that mlx-lm converts. Check the
+        # whole request before freezing or converting any matching subset.
+        matches = [
+            (name, module)
+            for parent in [*model.layers, model]
+            for name, module in parent.named_modules()
+            if name in keys
+        ]
+        missing = keys - {name for name, _ in matches}
+        if missing and not use_dora and lora_cfg.target_modules not in (
+            None, [], "auto", ["auto"],
+        ):
+            self._applied_lora = False
+            raise ValueError(
+                f"MLX LoRA unmatched targets: {sorted(missing)}; "
+                "correct or remove these target_modules names before training."
+            )
         if use_dora:
             import mlx.nn as nn
 
@@ -723,13 +740,6 @@ class MLXSFTTrainerWrapper:
             # DoRA path qualifies dense linear targets only. Check every target
             # before freezing/converting so a typo or unsupported layer cannot
             # silently train a subset or leave a partly converted model.
-            matches = [
-                (name, module)
-                for parent in [*model.layers, model]
-                for name, module in parent.named_modules()
-                if name in keys
-            ]
-            missing = keys - {name for name, _ in matches}
             unsupported = [
                 name for name, module in matches
                 if not isinstance(module, (nn.Linear, nn.QuantizedLinear))
