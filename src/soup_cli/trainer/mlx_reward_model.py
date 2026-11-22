@@ -102,6 +102,12 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
         mx.random.seed(seed)
         backbone, _ = load_mlx_model(str(base), quantization=cfg.training.quantization)
         check_dense_llama(backbone)
+        vocab_size = len(self.tokenizer)
+        if vocab_size > backbone.args.vocab_size:
+            raise ValueError(
+                "MLX reward: tokenizer vocabulary exceeds base embeddings. "
+                "Use a tokenizer that matches the base model."
+            )
         self._apply_lora(backbone)  # freezes the base before LoRA insertion
         self.model = make_reward_model(
             backbone,
@@ -118,7 +124,7 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
                 "keys": resolve_mlx_target_keys(lora),
                 "layers": len(backbone.layers),
             },
-            "tokenizer": {"eos_id": self.tokenizer.eos_token_id, "vocab_size": len(self.tokenizer)},
+            "tokenizer": {"eos_id": self.tokenizer.eos_token_id, "vocab_size": vocab_size},
             "max_length": cfg.data.max_length,
             "head": {"seed": seed, "std": 0.02, "dtype": "float32", "bias": False},
         }

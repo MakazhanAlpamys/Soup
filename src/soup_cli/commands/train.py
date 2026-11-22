@@ -23,6 +23,7 @@ from soup_cli.data.loader import (
     data_config_for_task,
     load_dataset,
     task_preserves_source_columns,
+    validate_mlx_reward_load,
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
@@ -420,6 +421,11 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     from soup_cli.data.loader import last_load_outcome
 
     outcome = last_load_outcome()
+    try:
+        validate_mlx_reward_load(cfg, outcome)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
     fmt = outcome.fmt or cfg.data.format
 
     # kto rows must be {prompt, completion, label}; auto-detection may pick a

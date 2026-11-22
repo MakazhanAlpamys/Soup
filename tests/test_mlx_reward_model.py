@@ -441,16 +441,41 @@ def test_base_extra_shard_and_duplicate_keys(trained):
 
 
 @pytest.mark.usefixtures("native_stack")
-def test_checkpoint_gradients_and_no_global_class_change():
+def test_checkpoint_gradients_and_no_global_class_change(monkeypatch):
+    from unittest.mock import Mock
+
+    checkpoint = Mock(wraps=mx.checkpoint)
+    monkeypatch.setattr(mx, "checkpoint", checkpoint)
     plain = tiny_model()
     original = type(plain.backbone.layers[0]).__call__
     checkpointed = make_reward_model(tiny_model().backbone, 42, gradient_checkpointing=True)
     loss1, g1 = accumulated_gradients(plain, [pairs()], 2)
+    checkpoint.assert_not_called()
     loss2, g2 = accumulated_gradients(checkpointed, [pairs()], 2)
+    assert checkpoint.called
     assert abs(loss1 - loss2) < 1e-6
     for key, value in flat(g1).items():
         assert mx.allclose(value, flat(g2)[key], atol=1e-6).item(), key
     assert type(plain.backbone.layers[0]).__call__ is original
+
+
+def test_setup_refuses_tokenizer_with_unused_token_outside_embeddings(trained, tmp_path):
+    from transformers import AutoTokenizer
+
+    trainer, _, _, base = trained
+    tokenizer = AutoTokenizer.from_pretrained(base, local_files_only=True)
+    assert len(tokenizer) == 32
+    assert tokenizer.add_tokens(["unused_reward_test_token"]) == 1
+    assert len(tokenizer) == 33
+    tokenizer.save_pretrained(base)
+    output = tmp_path / "oversized-tokenizer-output"
+    config = trainer.config.model_copy(update={"output": str(output)})
+    wrapper = MLXRewardModelTrainerWrapper(config)
+
+    with pytest.raises(ValueError, match="vocabulary exceeds base embeddings"):
+        wrapper.setup({"train": [{"prompt": "Q", "chosen": "good", "rejected": "bad"}]})
+
+    assert not output.exists()
 
 
 @pytest.mark.usefixtures("native_stack")
@@ -952,6 +977,58 @@ def test_public_cli_early_refusals(tmp_path, args, expected):
     assert expected in " ".join(strip_ansi(result.stdout).split()), result.stdout + result.stderr
     assert "Setting up model" not in result.stdout
     assert not (tmp_path / ".soup").exists()
+
+
+@pytest.mark.parametrize("entry", ["train", "sweep"])
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        pytest.param({"prompt": "Q", "chosen": "good"}, id="missing-rejected"),
+        pytest.param({"prompt": "Q", "chosen": None, "rejected": "bad"}, id="null-chosen"),
+        pytest.param({"prompt": "Q", "chosen": "good", "rejected": 7}, id="numeric-rejected"),
+    ],
+)
+def test_mlx_reward_cli_refuses_dropped_preference_row(tmp_path, monkeypatch, entry, bad_row):
+    import yaml
+
+    from soup_cli.cli import app
+    from tests.conftest import make_cli_runner, strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    for module in ("soup_cli.commands.train", "soup_cli.utils.gpu"):
+        monkeypatch.setattr(f"{module}.detect_device", lambda **kw: ("cpu", "test CPU"))
+        monkeypatch.setattr(f"{module}.get_gpu_info", lambda **kw: {"memory_total": "N/A"})
+    base = tmp_path / "base"
+    base.mkdir()
+    rows = [{"prompt": "Q", "chosen": "good", "rejected": "bad"}, bad_row]
+    data = tmp_path / "pairs.jsonl"
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    out = tmp_path / "output"
+    config = reward_config(
+        base=str(base), output=str(out), data={"train": str(data), "val_split": 0},
+    )
+    path = tmp_path / "soup.yaml"
+    path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    trainer_calls = []
+
+    def build_trainer(*args, **kwargs):
+        trainer_calls.append(args)
+        raise AssertionError("a malformed dataset reached trainer creation")
+
+    monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", build_trainer)
+    args = [entry, "--config", str(path), "--yes"]
+    if entry == "sweep":
+        args += ["--param", "lr=0.001"]
+
+    result = make_cli_runner().invoke(app, args)
+
+    assert result.exit_code == 1, (result.output, result.exception)
+    output = " ".join(strip_ansi(result.output).split())
+    assert "MLX reward_model: malformed preference row 1" in output
+    assert not trainer_calls
+    assert not out.exists()
 
 
 @pytest.mark.usefixtures("native_stack")

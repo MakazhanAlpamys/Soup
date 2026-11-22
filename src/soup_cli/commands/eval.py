@@ -142,12 +142,13 @@ def benchmark(
     if adapter_config.exists():
         adapter_info = json.loads(adapter_config.read_text())
         base_model = adapter_info.get("base_model_name_or_path", "")
-        try:
-            refuse_reward_artifact(base_model)
-        except ValueError as exc:
-            console.print(str(exc), markup=False)
-            raise typer.Exit(1) from exc
         if base_model:
+            if isinstance(base_model, str):
+                try:
+                    refuse_reward_artifact(base_model)
+                except ValueError as exc:
+                    console.print(str(exc), markup=False)
+                    raise typer.Exit(1) from exc
             _reject_lm_eval_injection(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )

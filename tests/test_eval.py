@@ -95,7 +95,9 @@ def test_reward_resolved_benchmark_base_refused(tmp_path, monkeypatch):
     )
     # Isolate the post-resolution seam from the independent preflight check.
     monkeypatch.setattr(mlx_reward_bundle, 'read_json', lambda _: {})
-    assert_reward_guard(benchmark, {'model': str(adapter), 'run_id': None}, 'if base_model:')
+    assert_reward_guard(
+        benchmark, {'model': str(adapter), 'run_id': None}, '_reject_lm_eval_injection('
+    )
     import typer
 
     with pytest.raises(typer.Exit) as error:
