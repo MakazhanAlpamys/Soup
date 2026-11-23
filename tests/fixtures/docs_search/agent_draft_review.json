@@ -1,10 +1,10 @@
 {
-  "cohort": "agent-drafted-user-review-pending",
+  "cohort": "supplemental10",
   "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
   "authorship": "AI-drafted by the Codex implementation agent who developed and tuned this candidate.",
   "outside_tuning_authorship": false,
-  "user_review_status": "pending; not yet reviewed or approved by the user",
-  "scoring_status": "UNSCORED; no baseline or candidate ranking has been inspected for these questions",
+  "user_review_status": "Approved by the user in chat on 2026-11-23; original questions and targets unchanged.",
+  "scoring_status": "Frozen before first supplemental scoring; execution state is recorded separately in benchmarks/docs-search-3192/supplemental10-results.json.",
   "eligibility": "Does not establish outside-tuning authorship and does not satisfy the confirmed independent fresh-set condition. User review alone does not change that provenance.",
   "intents": "Five new wordings of known development intents, four additional intents and one technical control; not a representative random sample.",
   "documents": {

@@ -1,14 +1,12 @@
-# Questions for user review
+# Supplemental 10 questions
 
-Authorship: AI-drafted by the Codex implementation agent who developed and tuned the ranker. These questions were not supplied by someone outside the tuning work. User review is pending.
+The user approved these ten questions and their target sections in chat on November 23, 2026. Their wording and target records are unchanged from the draft.
 
-Candidate frozen before drafting: `f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5`. The ten questions and provisional target sections below have not been scored. Source inspection confirmed the sections exist; no rankings were run.
+The ranker was frozen at `f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5` before the questions were drafted. Authorship and eligibility are preserved in the fixture and `supplemental10-lock.json`: the implementation agent generated this set, so it does not establish outside-tuning independence.
 
-This is a draft for review, not independent fresh-set evidence. The set contains five reworded development intents, four additional intents and one technical control. Multiple plausible target sections are retained where the question permits them.
+The approved fixture and its hash were committed before the first scoring run. Results are recorded separately in `supplemental10-results.json`; this set is supplemental evidence and does not replace the confirmed fresh-set requirement.
 
-Please review whether each question is natural and whether the listed sections answer it. Keep edits and any changed target labels explicit. Approval of the text will not change the recorded AI authorship or make this an outside-tuning set.
-
-| ID | Question | Provisional target sections |
+| ID | Question | Approved target sections |
 | --- | --- | --- |
 | R01 | Can I do local adapter training on my M2 laptop, or do I need to rent a GPU? | `backends-and-ops.md` → Apple Silicon (MLX Backend) |
 | R02 | The machine rebooted halfway through a run. How do I continue training from the saved state? | `backends-and-ops.md` → Resume Training |
@@ -21,6 +19,5 @@ Please review whether each question is natural and whether the listed sections a
 | R09 | The server is already running. Can I switch to another LoRA adapter without restarting it? | `serving-and-export.md` → Dynamic LoRA Hot-Swap |
 | R10 | What does soup data dedup --semantic --threshold 0.85 change compared with default deduplication? | `data.md` → Semantic dedup (`soup data dedup --semantic`); `data.md` → It is not a paraphrase detector — and why the default is 0.8 |
 
-Unscored fixture: `tests/fixtures/docs_search/agent_draft_review.json`. SHA-256: `e954c6d4a69fe26cfe458a39a0390ccd80f9684b52929618d56de5cf13f1a2c2`.
 
-No Hit@5 gain or other result is claimed. The confirmed fresh-query requirement remains pending unless an eligible new set is provided or the maintainer explicitly changes the evaluation plan.
+Fixture: `tests/fixtures/docs_search/agent_draft_review.json`. SHA-256: `4318f4eb6a1f36d62e766b7a45cb6643b63b00efe2ab24a8dfbb07789fc50aa4`.
