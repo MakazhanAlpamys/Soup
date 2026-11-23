@@ -1035,7 +1035,8 @@ shown as "0 %". The warning line is added only when the fraction is **below `1e-
 
 **Why a warning and not a rule.** The instrument was calibrated by training seven runs
 with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
-checkpoints (33 adapters), plus nine public adapters on seven bases, 42 in all. Sorted by changed
+checkpoints (31 adapters), plus two take-home adapters and nine public adapters on seven
+bases, 42 in all. Sorted by changed
 fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
 interleave:
 
