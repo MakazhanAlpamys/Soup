@@ -1,5 +1,7 @@
 # Docs-search lexical candidate for #3192
 
+Draft implementation PR: [#3242](https://github.com/MakazhanAlpamys/Soup/pull/3242).
+
 This is a development candidate for draft implementation review. An eligible
 fresh query set with a Hit@5 gain and resolution of the historical corpus
 provenance gap below are required before requesting review or merge of a default

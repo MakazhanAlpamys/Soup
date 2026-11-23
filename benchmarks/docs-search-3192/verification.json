@@ -12,12 +12,12 @@
     "wheel": "Built; 17 guides exactly once; base-only offline search and five-field JSON verified",
     "cache": "Existing bytes and mtime unchanged on cache hit; no build/write allowed by test",
     "original28_numerical_gate": "PASS locally, all four metrics preserved or improved; one individual loss disclosed",
-    "current28_section_gate": "PASS; pinned docs/chunks/baseline/mappings; no individual loss"
+    "current28_section_gate": "PASS; pinned docs/chunks/baseline/mappings; no individual loss",
+    "changelog": "Fragment renamed to changelog.d/0.78.0/3242.changed.md using the actual PR number."
   },
   "pending": {
     "historical_fixture": "Two passages lack established Soup docs source; bodies not committed",
     "fresh_set": "Ten AI-drafted questions by the implementation agent await user review and remain unscored. They are not authored outside the tuning work; the confirmed fresh-set requirement remains pending.",
-    "pull_request": "Draft for implementation review only; ready-for-review and merge remain blocked on eligible fresh Hit@5 evidence and historical fixture provenance.",
-    "changelog": "3192.changed.md uses issue number temporarily; rename to actual PR number when allocated"
+    "pull_request": "Draft #3242 opened for implementation review only; ready-for-review and merge remain blocked on eligible fresh Hit@5 evidence and historical fixture provenance."
   }
 }
