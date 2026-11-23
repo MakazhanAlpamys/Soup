@@ -237,7 +237,7 @@ def token_finish_reason(new_tokens: Any, max_tokens: Optional[int], eos_ids: fro
 def is_vllm_available() -> bool:
     """Check if vLLM is installed."""
     try:
-        import vllm
+        import vllm  # noqa: F401
 
         return True
     except ImportError:
