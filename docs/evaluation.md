@@ -289,10 +289,12 @@ handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 `training.eval_gate.baseline: previous` is not implemented and is refused when the
-config loads; use a path to a baseline results file instead. A baseline set in
-`training.eval_gate` that cannot be resolved (a missing or invalid file, an unknown
-`registry://` reference) stops `soup train` when training starts, with an error naming
-`training.eval_gate.baseline`, instead of running the gate with no baseline (#2523).
+config loads, even when `training.eval_gate.enabled` is `false`; use a path to a
+baseline results file instead. A baseline file or a `registry://` reference is resolved
+only when the gate runs: one that cannot be resolved (a missing or invalid file, an
+unknown `registry://` reference) stops `soup train` when training starts with the gate
+enabled, with an error naming `training.eval_gate.baseline`, instead of running the gate
+with no baseline (#2523).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
@@ -478,9 +480,10 @@ With a local `--adapter`, ship reads the adapter weights before loading either m
 tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
 failed rule `adapter_noop`, and no evidence is written. Adapters without `lora_B` keys (VeRA and
 other PEFT types) are not refused, and an `--adapter` that is not a local directory (a Hub id) is
-skipped without a message. Weights the reader refuses (`adapter_model.bin`, a symlink, a path
-outside the working directory, or a file over 2 GiB) print a warning and the live run continues
-(#2410).
+skipped without a message. Weights the reader refuses (a symlink, a path outside the working
+directory, or a file over 2 GiB) print a warning and the live run continues (#2410). Pickle
+weights (`adapter_model.bin`, `.pt`) are not among them: they are refused with exit 3, as the
+next paragraph says.
 
 `--base-adapter <path>` (and `--adapter`) must not hold pickle weights (`adapter_model.bin`, `.pt`): `soup ship` refuses them before PEFT reads the directory (exit 3, `unsafe weight file (pickle / PyTorch-classic)`), so use safetensors; a safetensors file that is merely unreadable is not refused, only warned about. It swaps the *before* side from the bare base to `base + that LoRA adapter`,
 so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
@@ -1032,7 +1035,7 @@ shown as "0 %". The warning line is added only when the fraction is **below `1e-
 
 **Why a warning and not a rule.** The instrument was calibrated by training seven runs
 with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
-checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
+checkpoints (33 adapters), plus nine public adapters on seven bases, 42 in all. Sorted by changed
 fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
 interleave:
 
