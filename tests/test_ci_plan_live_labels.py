@@ -351,7 +351,11 @@ class TestEveryEventGetsTheMatrixOfTheLiveLabel:
 
 
 class TestContributingSaysWhereTheLabelIsRead:
-    def test_it_says_the_label_is_read_when_the_run_starts(self) -> None:
+    def test_it_explains_the_live_read_and_event_fallback(self) -> None:
         text = " ".join((ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
-        assert "The label is read from the pull request when the run starts" in text
-        assert "not from the event that started it" in text
+        assert "The plan job reads the current pull request labels when it runs" in text
+        assert "the job warns and falls back to the labels in its triggering event" in text
+        assert (
+            "If the required cells are still missing after that fallback, "
+            "a maintainer removes and re-adds `ci:full`"
+        ) in text

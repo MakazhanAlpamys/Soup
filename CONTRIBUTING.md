@@ -644,10 +644,12 @@ and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
 3.11 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
 maintainer adds the `ci:full` label at approval, and on every later push while
 the label stays. Until then the other `test (...)` checks show as *Expected* and
-the smoke jobs as *skipped*; neither is a failure on your side. The label is read
-from the pull request when the run starts, not from the event that started it, so a
-label added a moment after a push still gives one run of the required cells on the
-current head. A PR is merged
+the smoke jobs as *skipped*; neither is a failure on your side. The plan job reads
+the current pull request labels when it runs. If the read succeeds, the surviving
+run sees `ci:full` even when it was added just after the push. If the read fails,
+the job warns and falls back to the labels in its triggering event. If the required
+cells are still missing after that fallback, a maintainer removes and re-adds
+`ci:full`. A PR is merged
 only when those checks are green on its current head. After the merge, `main`
 runs the same quick set on every commit and the full matrix (every Python from
 3.11 to 3.13, with 3.11 on Ubuntu only) once a night; a push to a `release/**`

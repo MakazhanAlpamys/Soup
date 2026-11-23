@@ -281,11 +281,9 @@ jobs:
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
-  # The pull request's current labels decide, not the event, so every run on a
-  # labelled pull request is an approval run -- including each later push, which
-  # a merge on the current head needs anyway. Remove the label to go back to
-  # quick runs. A
-  # labelled run is an ordinary pull_request run, with the token and secrets a
+  # The plan job reads the current labels. If lookup fails, it warns and uses
+  # the triggering event's labels. Remove ci:full to go back to quick runs.
+  # A labelled run is an ordinary pull_request run, with the token and secrets a
   # push to that pull request already gets.
   #
   # What this costs, and why the merge gate still holds:
@@ -414,13 +412,13 @@ jobs:
         # label existed, so its payload has no `ci:full`. When that run was the later one it chose
         # the QUICK matrix, the other required contexts were never created, and the label had to
         # be removed and added again (#3156 and #3166, 2026-11-21 and 2026-11-22; 11 of the last
-        # 100 merged pull requests carry that remove-and-re-add pair). Read live, whichever run
-        # survives the group computes the matrix from the same labels, so one `ci:full` always
-        # gives exactly one approval run on the current head, and a label removed while the run
-        # waited for a runner (a median of 30 minutes) is not acted on. The call is one GET of the
+        # 100 merged pull requests carry that remove-and-re-add pair). When the live read succeeds,
+        # the surviving run computes the matrix from labels current at lookup time, including
+        # changes made while it waited for a runner. The call is one GET of the
         # pull request, with the `pull-requests: read` this job already has; the filter prints
         # `true` or `false`, matched case-insensitively like the expression it replaces. An error,
-        # or any other answer, falls back to the payload and says so in a warning. Only a pull
+        # or any other answer, falls back to the payload with a warning. If the required cells
+        # are missing after a fallback, remove and re-add `ci:full`. Only a pull
         # request has the label: no other event makes the call. Values come in through `env:`,
         # never into the script text. tests/test_ci_plan_live_labels.py pins it.
         id: labels
