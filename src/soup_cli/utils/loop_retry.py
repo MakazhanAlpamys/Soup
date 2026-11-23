@@ -45,6 +45,9 @@ from typing import Any, Mapping, Optional
 RETRY_DELAYS_SEC = (300.0, 1800.0)
 #: Failures on the same inputs after which the loop holds.
 ATTEMPT_LIMIT = len(RETRY_DELAYS_SEC) + 1
+#: Upper bound ``LoopState`` accepts for a persisted attempt counter. A streak
+#: that never holds (a training-only one) must not grow past it (#3221).
+MAX_FAILED_ATTEMPTS = 100
 
 _REASON_CHARS = 300
 #: The stages whose exception is remembered.
@@ -216,6 +219,11 @@ def after_failure(
     """
     same = isinstance(previous, Mapping) and previous.get("inputs") == fingerprint
     attempts = int(previous["attempts"]) + 1 if same else 1
+    if not hold_after_limit:
+        # A training-only streak never holds, so it has nowhere to go past the
+        # persisted bound. Keep it at the bound instead of emitting an attempts
+        # count that LoopState refuses (#3221).
+        attempts = min(attempts, MAX_FAILED_ATTEMPTS)
     held = attempts >= ATTEMPT_LIMIT and hold_after_limit
     wait = timedelta(seconds=RETRY_DELAYS_SEC[min(attempts, len(RETRY_DELAYS_SEC)) - 1])
     return {
