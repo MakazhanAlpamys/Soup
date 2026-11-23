@@ -6,9 +6,13 @@ Thank you for your interest in contributing to Soup! We welcome bug reports, fea
 
 ### 1. Fork & Clone
 
+Fork [Soup](https://github.com/MakazhanAlpamys/Soup) on GitHub. Replace
+`YOUR_GITHUB_USERNAME` with your account name and clone the fork:
+
 ```bash
-git clone https://github.com/MakazhanAlpamys/Soup.git
+git clone https://github.com/YOUR_GITHUB_USERNAME/Soup.git
 cd Soup
+git remote add upstream https://github.com/MakazhanAlpamys/Soup.git
 ```
 
 ### 2. Set Up Development Environment
@@ -17,13 +21,36 @@ cd Soup
 dropped in #1805). CI runs exactly those three; `tests/test_requires_python_bound.py` derives
 the declared bound from the CI matrix, so widening one without the other fails the suite.
 
-Work inside a virtualenv, then install the project in editable mode with dev
-dependencies:
+Create a virtualenv with a supported Python interpreter. On macOS and Linux:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+source .venv/bin/activate
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` in place of
+`python` in the install and check commands.
+
+For docs, configuration and other work that only needs the core CLI, install
+the editable checkout and the standalone tools:
+
+```bash
+python -m pip install -e .
+python -m pip install ruff pytest pytest-cov
+python -m pytest tests/test_version_sync.py --no-cov -q
+```
+
+Install the full dev environment for training changes and the full test suite:
+
+```bash
+python -m pip install -e ".[dev]"
 ```
 
 The `venv` step is not optional on Debian 12, Ubuntu 23.04 or later: without it
@@ -33,13 +60,13 @@ stop pip writing into the system Python that `apt` manages
 *installing* Soup and the wrong tool here, since an editable checkout needs to be
 importable by the test suite rather than isolated from it.
 
-This installs:
+The `[dev]` install includes:
 - `pytest` for testing
-- `ruff` for linting + formatting
+- `ruff` for linting
 - `pytest-cov` for coverage
 - `httpx` for HTTP testing
 - `mypy` for type checking
-- `pre-commit` for the lint/format git hooks
+- `pre-commit` for lint and repository checks on staged files
 - the full training stack — `[dev]` self-references `[train]`, so `torch`,
   `transformers`, `peft`, `trl`, `datasets`, `bitsandbytes`, `accelerate` are
   pulled in too (since v0.71.0 these are an opt-in extra, not core deps)
@@ -62,7 +89,8 @@ Run the linter:
 ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 ```
 
-If both pass — you're ready to contribute!
+To install the optional local Git hooks, run `pre-commit install`. In a
+core-only environment, install `pre-commit` separately first.
 
 ## Code Style
 
@@ -142,6 +170,8 @@ examples/             - Real-world config examples and datasets
 
 ### All Tests
 
+Use the full `[dev]` environment for the suite.
+
 ```bash
 pytest tests/ -v --tb=short
 ```
@@ -149,14 +179,18 @@ pytest tests/ -v --tb=short
 ### Single Test File
 
 ```bash
-pytest tests/test_config.py -v
+pytest tests/test_config.py --no-cov -v
 ```
 
 ### Single Test
 
 ```bash
-pytest tests/test_data.py::test_detect_alpaca_format -v
+pytest tests/test_data.py::test_detect_alpaca_format --no-cov -v
 ```
+
+The project-wide coverage threshold applies by default. Use `--no-cov` for a
+focused run. Keep `pytest-cov` installed so pytest can read the configured
+coverage options.
 
 ### With Coverage
 
@@ -194,7 +228,9 @@ Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-tes
 
 ### Test Files
 
-> A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
+Put new tests in a relevant `tests/test_*.py` module and use `test_` function
+names for discovery. The table below is a representative sample. In the full
+dev environment, run `pytest tests/ --collect-only --no-cov -q` to list tests.
 
 Name a new test file after the module or feature it covers (`test_<module>.py`), not after
 an issue number or a version. Existing test files keep their names.
@@ -342,9 +378,10 @@ an issue number or a version. Existing test files keep their names.
 
 ## Claiming an Issue
 
-Comment on it saying you are taking it. GitHub only lets us set the formal
-assignee badge for repo collaborators, so the comment **is** the claim — it will
-look unassigned either way, and we treat the thread as the record.
+Comment on the issue with a short plan naming the proposed change and the tests
+that would fail without it. GitHub only lets us set the formal assignee badge
+for repo collaborators, so the discussion thread records the plan and its
+confirmation.
 
 The current board is the pinned issue
 [#1945](https://github.com/MakazhanAlpamys/Soup/issues/1945), regenerated daily.
@@ -507,13 +544,11 @@ Then open a pull request on GitHub with:
 
 ## Pull Request Checklist
 
-When you open a PR, the GitHub template will show this checklist:
-
-- [ ] `ruff check src/soup_cli/ scripts/ tests/ benchmarks/` passes
-- [ ] `pytest tests/ -v` passes
-- [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
-- [ ] New tests added for new functionality
-- [ ] No breaking changes (or documented in PR description)
+Use the [GitHub pull request template](.github/pull_request_template.md). It
+asks for lint and test results, relevant docs updates, a changelog fragment
+when the change is user-visible, and the Apache-2.0 license confirmation.
+Include the checks you ran in the PR description. The CI lint command covers
+`src/soup_cli/`, `scripts/`, `tests/` and `benchmarks/`.
 
 Contributions are accepted under the Apache License, Version 2.0, the project's own terms (section 5 of the license): by opening a pull request you agree that your contribution is licensed that way and you keep your copyright; there is no CLA and no DCO sign-off for now.
 
