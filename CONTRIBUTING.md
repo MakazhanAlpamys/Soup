@@ -36,7 +36,8 @@ py -3.12 -m venv .venv
 ```
 
 If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` in place of
-`python` in the install and check commands.
+`python` below. For bare tool commands, use that interpreter with
+`-m ruff`, `-m pytest`, or `-m pre_commit`.
 
 For docs, configuration and other work that only needs the core CLI, install
 the editable checkout and the standalone tools:
@@ -44,7 +45,6 @@ the editable checkout and the standalone tools:
 ```bash
 python -m pip install -e .
 python -m pip install ruff pytest pytest-cov
-python -m pytest tests/test_version_sync.py --no-cov -q
 ```
 
 Install the full dev environment for training changes and the full test suite:
@@ -77,20 +77,29 @@ The `[dev]` install includes:
 
 ### 3. Verify Setup
 
-Run the test suite to confirm everything works:
+For a core-only install, run the focused version check:
 
 ```bash
-pytest tests/ -v --tb=short
+python -m pytest tests/test_version_sync.py --no-cov -q
 ```
 
-Run the linter:
+With `[dev]` installed, run the full suite:
 
 ```bash
-ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+python -m pytest tests/ -v --tb=short
 ```
 
-To install the optional local Git hooks, run `pre-commit install`. In a
-core-only environment, install `pre-commit` separately first.
+Run the linter in either environment:
+
+```bash
+python -m ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+```
+
+For the optional local Git hooks, run `python -m pre_commit install`. A
+core-only environment can add the tool with `python -m pip install pre-commit`.
+The `actionlint` workflow hook builds with Go. Current pre-commit can
+provision Go on the first run. If that download is blocked, install Go before
+running the workflow hook.
 
 ## Code Style
 
@@ -98,10 +107,10 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+python -m ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 
 # Auto-fix issues
-ruff check --fix src/soup_cli/ scripts/ tests/
+python -m ruff check --fix src/soup_cli/ scripts/ tests/ benchmarks/
 ```
 
 ### Style Guidelines
@@ -378,8 +387,9 @@ an issue number or a version. Existing test files keep their names.
 
 ## Claiming an Issue
 
-Comment on the issue with a short plan naming the proposed change and the tests
-that would fail without it. GitHub only lets us set the formal assignee badge
+Comment on the issue saying you are taking it (for example, `I will take this`).
+Include a short plan naming the proposed change and the tests that would fail
+without it. GitHub only lets us set the formal assignee badge
 for repo collaborators, so the discussion thread records the plan and its
 confirmation.
 
@@ -481,9 +491,10 @@ take it back.
 ### 1. Create a Branch
 
 ```bash
-git checkout -b feature/your-feature-name
+git fetch upstream
+git checkout -b feature/your-feature-name upstream/main
 # or
-git checkout -b fix/your-bug-fix
+git checkout -b fix/your-bug-fix upstream/main
 ```
 
 ### 2. Make Your Changes
@@ -507,15 +518,14 @@ page, keep either side and re-run `python scripts/gen_reference_docs.py`.
 
 ### 3. Run Tests & Lint
 
-Before pushing, ensure everything passes:
+Before pushing, run Ruff on the same directories as CI:
 
 ```bash
-# Lint first
-ruff check --fix src/soup_cli/ scripts/ tests/
-
-# Then run tests
-pytest tests/ -v --tb=short
+python -m ruff check --fix src/soup_cli/ scripts/ tests/ benchmarks/
 ```
+
+Use the command for your environment in [Verify Setup](#3-verify-setup),
+then run any focused tests that cover your change.
 
 ### 4. Commit
 
@@ -816,10 +826,10 @@ That is why a green tick can describe a `main` that no longer exists (#763's
 has already fixed. Neither is the contributor's fault, and neither clears by
 waiting.
 
-**If your PR is red for failures you do not touch:** merge or rebase onto current
-`origin/main` and push. That is the only way to rebuild the merge SHA for the
-test matrix. Maintainers will not `gh pr update-branch` onto a fork without
-asking.
+If CI fails in code outside your change, run `git fetch upstream`, then merge
+or rebase onto `upstream/main` and push the branch to `origin`. This rebuilds
+the merge SHA for the test matrix. Maintainers will not `gh pr update-branch`
+onto a fork without asking.
 
 **If your PR is green and `main` has moved:** the `merge-freshness` check is
 re-posted on every push to `main`. It rebuilds the merge with
