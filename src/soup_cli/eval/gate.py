@@ -121,6 +121,15 @@ class GateTask(BaseModel):
     def _valid_judge_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        # (Kept inline here: the net-guard contract test requires this
+        # validator itself to call the shared refusal.)
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        parsed = urlparse(value)
+        if parsed.scheme == "https":
+            refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
         return _check_judge_model_url(value)
 
 
