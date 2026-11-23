@@ -12,6 +12,9 @@ RETIRED = {"claude-3-haiku-20240307", "claude-3-5-haiku-20241022", "claude-3-5-s
 
 
 def test_generate_provider_default_model_is_served():
+    assert isinstance(anthropic_provider.DEFAULT_MODEL, str)
+    assert anthropic_provider.DEFAULT_MODEL.strip() == anthropic_provider.DEFAULT_MODEL
+    assert anthropic_provider.DEFAULT_MODEL
     assert anthropic_provider.DEFAULT_MODEL not in RETIRED
 
 
@@ -26,3 +29,5 @@ def test_augment_uses_a_served_anthropic_model_by_default(monkeypatch):
     data_cmd._load_augment_provider("anthropic", rpm=60)
 
     assert seen["model"] not in RETIRED
+    # One Anthropic default for both commands, so a later edit cannot change one alone.
+    assert seen["model"] == anthropic_provider.DEFAULT_MODEL
