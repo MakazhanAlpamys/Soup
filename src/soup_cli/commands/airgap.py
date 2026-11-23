@@ -67,8 +67,10 @@ def _resolve_repro_receipt(explicit: Optional[str], model_dir: str) -> Optional[
 
 
 def airgap_bundle(
-    output: str = typer.Option(..., "--output", "-o",
-                               help="Output tarball path (cwd-contained)"),
+    output: str = typer.Option(
+        ..., "--output", "-o",
+        help="Output path for the uncompressed tar archive (cwd-contained)",
+    ),
     model: str = typer.Option(..., "--model", help="Path to model directory"),
     dataset: Optional[List[str]] = typer.Option(
         None, "--dataset",

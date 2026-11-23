@@ -40,7 +40,37 @@ TOKEN = "smoke-" + "s" * 26
 ENDPOINT = "http://127.0.0.1:8000"
 
 
-def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
+@pytest.fixture
+def released_model(monkeypatch):
+    """Free the served model when the test ends and check its CUDA memory came back (#3080).
+
+    FastAPI keeps every endpoint it has classified in module-level ``lru_cache``s
+    (``fastapi.dependencies.models``). The endpoints of ``serve._create_app`` close over the
+    model, so the cache kept it, and its weights stayed allocated for the rest of the
+    process, where a later test's ``max_memory_allocated()`` counted them. Undoing the
+    monkeypatches alone does not free it.
+    """
+    import gc
+
+    import fastapi.dependencies.models as fastapi_models
+    import torch
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    before = torch.cuda.memory_allocated()
+    yield
+    monkeypatch.undo()
+    for value in vars(fastapi_models).values():
+        if callable(getattr(value, "cache_clear", None)):
+            value.cache_clear()
+    gc.collect()
+    torch.cuda.empty_cache()
+    left = torch.cuda.memory_allocated() - before
+    # What may stay is the cuBLAS workspace the test's matmuls created (8 MiB on sm_86).
+    assert left < 64 * 1024 * 1024, f"{left / 2**20:.1f} MiB still allocated after the test"
+
+
+def test_the_loop_on_a_real_model(tmp_path, monkeypatch, released_model):
     import httpx
     import torch
     from fastapi.testclient import TestClient

@@ -748,15 +748,13 @@ generation context documents, and Autopilot's local model `config.json` probe.
 Only the file's initial UTF-8 signature is consumed; embedded U+FEFF remains
 content, and these commands continue writing ordinary UTF-8 without a BOM.
 
-**Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
-to the richest format its keys fit. If every row agrees, that format is used. A file
-that mixes `chatml` and `tool-calling` rows loads as `tool-calling` (the plain rows
-convert as ordinary chat turns). Every other mix (`sharegpt` with `llava`, `chatml`
-with `audio`, `plaintext` with `asr`, or two unrelated shapes) is refused with a message
-naming both shapes and the row where each first appears, because converting the file
-with either one would drop the other's keys or rows; set `data.format` to choose. Rows
-after the first 100 are not inspected; `soup data validate` lists every row the chosen
-format drops.
+**Auto-detection.** Soup inspects up to 100 retained rows. Each recognized row
+votes for the richest format its keys fit. If those votes agree, Soup uses that format.
+For two related formats, Soup chooses the richer one only if it converts every sampled
+row of the simpler format to the same messages, including their fields. Otherwise it
+reports the conflicting formats and the first row of each. Set `data.format` to choose
+explicitly. After selecting a format, `soup data validate` counts every rejected row
+and shows up to three format-rejection examples, followed by the remaining count.
 
 **Alpaca:**
 ```json
@@ -1303,14 +1301,17 @@ dataset has no usable rows or falls below `--min-valid-fraction`. A file whose
 every row was skipped is not empty: it exits with code `2` ("no usable rows
 remain") when `--format` names the format, and `3` without one, since nothing is
 left to detect a format from. A partially valid dataset still exits with code `0`
-when no minimum is specified.
+when no minimum is specified. With an explicit `--format`, an empty `.jsonl` file
+or a `.json` file containing `[]` reports `0/0` and exits `0`, even with a positive
+minimum. Auto-detection on either input exits `3`. A 0-byte `.json` file fails JSON
+parsing.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
 drop is reported: `soup train`, and every other command that loads a dataset,
 prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
-command that lists them all. The
+command, which reports the total number of dropped rows and shows examples. The
 count agrees with `soup data validate` for the same file, except that the training
 drop report counts retained rows only, so the rows the loader skipped before
 conversion appear in `soup data validate` alone. Before #1181 the rows

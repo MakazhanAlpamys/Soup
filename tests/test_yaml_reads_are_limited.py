@@ -47,6 +47,7 @@ YAML_USERS = {
     "commands/deploy.py": ("YAMLError",),
     "commands/plan.py": ("YAMLError",),
     "commands/push.py": ("YAMLError",),
+    "commands/quickstart.py": ("safe_dump",),
     "commands/ship.py": ("YAMLError",),
     "commands/spectrum.py": ("safe_dump",),
     "commands/sweep.py": ("YAMLError",),
@@ -569,6 +570,7 @@ def test_every_routed_reader_has_a_case():
     covered_elsewhere = {
         "config/loader.py",  # tests/test_config_loader_limits.py
         "cans/unpack.py",  # tests/test_yaml_expanded_limit.py
+        "cans/run.py",  # tests/test_can_run_output_containment.py
         "commands/adapters.py",  # tests/test_config_loader_limits.py
         "commands/recipes.py",  # tests/test_config_loader_limits.py
         "commands/deploy.py",
@@ -723,6 +725,7 @@ def test_license_frontmatter_falls_back_one_byte_over_its_cap(tmp_path, monkeypa
 
 #: Every call of the limited loader names its cap: a module constant, never a number.
 _CAP_NAMES = {
+    "cans/run.py": {"MAX_CONFIG_BYTES"},
     "cans/unpack.py": {"MAX_CONFIG_BYTES", "MAX_MANIFEST_BYTES"},
     "cloud/runpod.py": {"_MAX_CONFIG_BYTES"},
     "commands/adapters.py": {"MAX_CONFIG_BYTES"},

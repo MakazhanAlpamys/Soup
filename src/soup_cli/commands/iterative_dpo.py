@@ -43,6 +43,7 @@ def main(
     from soup_cli.utils.iterative_dpo import (
         build_iterative_dpo_plan,
         run_iterative_dpo,
+        validate_iterative_dpo_prompts,
     )
 
     try:
@@ -57,6 +58,18 @@ def main(
     except (ValueError, TypeError) as exc:
         console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(code=2) from exc
+
+    if not plan_only:
+        try:
+            validate_iterative_dpo_prompts(plan)
+        except Exception as exc:  # noqa: BLE001 — CLI boundary: friendly exit-1
+            console.print(
+                Panel(
+                    f"[red]Iterative DPO failed:[/red] {escape(str(exc))}",
+                    title="Iterative DPO",
+                )
+            )
+            raise typer.Exit(code=1) from exc
 
     table = Table(title="Iterative-DPO plan")
     table.add_column("Round")

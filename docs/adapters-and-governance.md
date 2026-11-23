@@ -415,6 +415,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # own died with exit 3221225786 (0xC000013A, STATUS_CONTROL_C_EXIT) and no message. A child that
 # ends by a signal or an NTSTATUS is named in last_failure (for example "train failed (exit code
 # 3221225786 (STATUS_CONTROL_C_EXIT 0xC000013A: ...)"); POSIX is unchanged.
+# A top-level key that loop.yaml does not support is invalid too: `soup loop status` names the
+# key and, when possible, the closest supported field, and leaves the file untouched. Every
+# `soup loop` command that reads this state exits 2; a running `soup loop watch` stops, and
+# `soup serve` disables canary traffic and logs a warning. Remove or correct the key before
+# resuming the loop; the canary route stays off until then.
 # A training run that failed is not started again on every poll: the same inputs (the dataset,
 # the method, the base model and the recipe) wait 5 minutes after the first failure, 30 minutes
 # after the second, and after the third the loop holds. A held loop trains again when the inputs
@@ -503,7 +508,9 @@ SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" sou
 # Start serve with the candidate loaded, then promote it at 5% traffic. The command refuses an
 # adapter whose last verdict was DON'T SHIP (the latest line of the iteration that trained it in
 # iterations.jsonl, or a verdict file .soup-loops/verdicts/<adapter>.json) and exits 2 naming the
-# adapter; --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
+# adapter. The check also recognises paths to a direct checkpoint directory and spelling variants
+# of the adapter name on a case-insensitive filesystem.
+# --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
 # (canary_override), in the canary start line of progress.jsonl and, if the canary is promoted,
 # in the promotion's note and its line in versions.jsonl. An adapter the loop has no verdict for
 # (trained by hand, verified by a hand-run soup ship with another file name) is not checked.
@@ -659,6 +666,29 @@ A canary that kills the serving process never reaches outcome recording: recordi
 happens only after generation returns or raises. Such crashes remain invisible to
 the canary verdict unless external restart monitoring detects them.
 
+
+### Retaining loop artifacts
+
+`.soup-loops/` contains generated runs and append-only logs. Use `soup loop prune` to inspect a
+retention plan; it is a dry run unless `--yes` is supplied. The defaults retain the 20 newest
+iterations and run artifacts, the artifacts needed by the active production/canary state and
+the latest 20 version transitions, and the newest 10,000 lines in each loop log. The version
+log always retains at least those 20 transitions, even when `--keep-log-lines` is lower, so a
+later prune can still preserve the same rollback lineage. Other logs follow `--keep-log-lines`.
+Pair datasets
+are kept when a retained iteration-log entry refers to them; rows for retained iterations
+survive log trimming. Unknown pair, verdict, and adapter filenames are listed and left alone.
+Source traces and feedback are never pruned. Before applying, stop foreground watches yourself;
+the command detects only a detached daemon. Log trimming is best effort and skips a log whose
+size or modification time changed after it was read. Exit status is 0 on success, 1 when one or
+more planned entries fail, and 2 when pruning is refused before deletion. The daemon check is
+the main guard against concurrent writes.
+
+```bash
+soup loop prune
+soup loop prune --keep-runs 40 --keep-log-lines 20000
+soup loop prune --yes
+```
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
 
@@ -923,7 +953,7 @@ soup can publish ./llama31-chat.can --hf-hub me/llama31-chat-recipe
 
 **Credentials** — `soup can pack` and `soup can fork` replace credentials in the config and the description with `<redacted>` before the can is written (the same rules as crash bundles: URL userinfo and sensitive query parameters, token shapes, values under credential-named keys) and print the key paths that were changed, never the values. A can packed from a config that carried one therefore holds `<redacted>` in its place, so `soup can run` refuses a can with a `<redacted>` value (supply the value in the can's `config.yaml` and run `soup train` on it). The name, tags and author of the can are redacted too, and `soup can publish` warns about key paths that still look like credentials without changing the file. Redaction is pattern-based and best-effort: read a can before sharing it.
 
-**Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version supports `1` and `2` (additive bump in v0.33.0 added `deploy_targets`). `soup can run` requires `--yes` (mandatory consent — auto-downloads data + auto-trains). `soup can publish` validates `repo_id` and resolves the HF token via env / cache files; commit messages are first-line + 200-char capped.
+**Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version supports `1` and `2` (additive bump in v0.33.0 added `deploy_targets`). `soup can run` requires `--yes` (mandatory consent — auto-downloads data + auto-trains). Without `--yes` its confirmation panel lists the can's `output` and every `data.train` entry; a local `data.train` path outside the working directory gets a warning line. `soup can run` refuses a can whose trainer output directory (the configured `output`, with `experiment_name` appended by trainers that use it and a leading `~` read as the home directory) resolves outside the working directory (an absolute path elsewhere, `..`, a symlink that leads out, another drive, a network share or a device) and exits 1: start it from a directory that contains both the can and the output path, or take `config.yaml` out of the can, set `output` to a path under your working directory and run `soup train` on it. Every command that reads a can also refuses an archive that holds one name twice (in any spelling), a link, a device, a member below a file or more than 10,000 members, and names the members (exit 1; exit 2 for `soup loop replay --extract`); `soup can pack` and `soup can fork` never write one. `soup can publish` validates `repo_id` and resolves the HF token via env / cache files; commit messages are first-line + 200-char capped.
 
 
 
