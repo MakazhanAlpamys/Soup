@@ -3625,6 +3625,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
 | `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
 | `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
+| `--judge-reference` | flag | off |  | Show the judge each task's `expected` answer as a reference (--task-mode judge_score or pairwise; live runs only). |
 
 ## `soup shrink`
 

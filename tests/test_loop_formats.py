@@ -1095,3 +1095,29 @@ def test_prompt_hash_does_not_change_its_input():
 def test_prompt_hash_refuses_what_is_not_a_list_of_messages(messages, message):
     with pytest.raises(ValueError, match=message):
         loop_formats.prompt_hash(messages)
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_loop_examples_read_a_row_holding_the_character_3066(tmp_path, monkeypatch, char):
+    """Through a temporary resource standing in for a packaged example file."""
+    example = tmp_path / "example.jsonl"
+    example.write_bytes(_rows_3066(char).encode("utf-8"))
+    monkeypatch.setattr(loop_formats, "example_resource", lambda name: example)
+
+    rows = loop_formats.load_examples(loop_formats.FORMATS[0])
+
+    assert rows == [{"prompt": f"a{char}b"}, {"prompt": "next"}]

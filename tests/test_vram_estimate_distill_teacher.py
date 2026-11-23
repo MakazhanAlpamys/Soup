@@ -30,6 +30,7 @@ fit the card is refused, as on ``main``. The teacher's weights stay out of the f
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 import math
@@ -823,6 +824,11 @@ def test_real_card_distill_peak_is_within_the_band(tmp_path, monkeypatch):
     from soup_cli.trainer.distill import DistillTrainerWrapper
     from tests._tiny_hf_models import build_tokenizer
 
+    # max_memory_allocated() counts every tensor still allocated in the process, also ones an
+    # earlier test left behind (#3080), so the peak is measured above what is there now.
+    gc.collect()
+    torch.cuda.empty_cache()
+    allocated_before = torch.cuda.memory_allocated()
     monkeypatch.chdir(tmp_path)
     tokenizer = build_tokenizer()
     for name, seed in (("student", 0), ("teacher", 1)):
@@ -857,5 +863,5 @@ def test_real_card_distill_peak_is_within_the_band(tmp_path, monkeypatch):
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     trainer.train()
-    measured = torch.cuda.max_memory_allocated()
+    measured = torch.cuda.max_memory_allocated() - allocated_before
     assert BAND[0] <= predicted / measured <= 1.25, (predicted / 1e9, measured / 1e9)
