@@ -121,27 +121,31 @@ class GateTask(BaseModel):
     def _valid_judge_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        # Allowlist of schemes — SSRF hardening consistent with the project.
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        return _check_judge_model_url(value)
 
-        parsed = parse_url_with_safe_error(value, label="judge_model URL")
 
-        if parsed.scheme == "ollama":
-            return value
+def _check_judge_model_url(value: Optional[str]) -> Optional[str]:
+    # Allowlist of schemes — SSRF hardening consistent with the project.
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
-        if parsed.scheme == "https":
-            # A private IP literal is refused when the suite is parsed, so a
-            # suite file cannot name one any more than --judge-model can.
-            refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
-            return value
+    parsed = parse_url_with_safe_error(value, label="judge_model URL")
 
-        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
-            return value
+    if parsed.scheme == "ollama":
+        return value
 
-        raise ValueError(
-            f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
-            "use ollama://, https://, or http://localhost"
-        )
+    if parsed.scheme == "https":
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
+        return value
+
+    if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
+        return value
+
+    raise ValueError(
+        f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
+        "use ollama://, https://, or http://localhost"
+    )
 
 
 class EvalSuite(BaseModel):
@@ -195,6 +199,10 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
                 f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
             )
         names.add(task.name)
+        # #3241: a judge_model assigned after the suite is parsed is re-checked
+        # with the load-time rule, before any generator call in run_gate.
+        if task.judge_model is not None:
+            _check_judge_model_url(task.judge_model)
 
 
 def _suite_error_location(loc: tuple[object, ...]) -> str:
