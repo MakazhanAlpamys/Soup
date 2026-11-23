@@ -36,11 +36,21 @@ from soup_cli.utils.ingest_sources import (
     validate_source_name,
 )
 from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
 _DEFAULT_SINCE = "7d"
+
+
+# The typed --source and --output, a bad --since, the Langfuse host and the text
+# of a refused or failed pull come from outside the program, so every line that
+# carries them is printed as ``Text``: shown as typed, never read as markup or
+# ``:name:`` emoji, control characters removed (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
 
 
 class _LogsUnreadableError(Exception):
@@ -119,7 +129,7 @@ def ingest(
     try:
         canonical = validate_source_name(source)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     slack_url, discord_url = validate_webhook_flags(
@@ -268,7 +278,7 @@ def _pull(
     try:
         enforce_under_cwd_and_no_symlink(str(output_path), "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from exc
 
     from soup_cli.utils import ingest_pull
@@ -277,23 +287,26 @@ def _pull(
     try:
         window = ingest_pull.parse_since(since_text)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
     try:
         credentials = ingest_pull.load_langfuse_credentials(
             os.environ, allow_private_host=allow_private_host
         )
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from None
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from None
 
     _print_pii_reminder(canonical)
     console.print(
-        f"[dim]Pulling GENERATION observations from {escape(credentials.host)} "
-        f"for the last {escape(since_text)}...[/]"
+        terminal_text(
+            f"Pulling GENERATION observations from {credentials.host} "
+            f"for the last {since_text}...",
+            "dim",
+        )
     )
 
     stats = ingest_pull.PullStats()
@@ -315,13 +328,16 @@ def _pull(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
-        console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
+        _refuse(exc)
+        _refuse(f"Nothing was written to {output_path.name}.")
         raise typer.Exit(1) from None
 
     console.print(
-        f"[green]Wrote {written} traces from langfuse ({stats.generations} generations "
-        f"pulled) -> {escape(output_path.name)}[/]"
+        terminal_text(
+            f"Wrote {written} traces from langfuse ({stats.generations} generations "
+            f"pulled) -> {output_path.name}",
+            "green",
+        )
     )
     if stats.generations > written:
         console.print(

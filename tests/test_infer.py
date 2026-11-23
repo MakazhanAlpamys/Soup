@@ -191,6 +191,49 @@ class TestReadPrompts:
         assert result[1] == "Explain gravity."
         assert result[2] == "Hello world."
 
+    @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_cli_preserves_prompts_with_optional_utf8_bom(
+        self, tmp_path, monkeypatch, suffix, encoding,
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        prompts = ["Explain café.", "Keep this embedded \ufeff marker."]
+        lines = (
+            [json.dumps({"prompt": prompt}, ensure_ascii=False) for prompt in prompts]
+            if suffix == ".jsonl" else prompts
+        )
+        input_path = tmp_path / f"prompts{suffix}"
+        input_path.write_bytes(("\r\n".join(lines) + "\r\n").encode(encoding))
+        output_path = tmp_path / "results.jsonl"
+        received = []
+
+        def generate(_model, _tokenizer, messages, **_kwargs):
+            received.append(messages[0]["content"])
+            return f"echo: {messages[0]['content']}", 1
+
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+        monkeypatch.setattr("soup_cli.commands.infer._generate", generate)
+        result = CliRunner().invoke(app, [
+            "infer", "--model", "fake/model",
+            "--input", str(input_path), "--output", str(output_path),
+            "--device", "cpu",
+        ])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert received == prompts
+        rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+        assert rows == [
+            {"prompt": prompt, "response": f"echo: {prompt}", "tokens_generated": 1}
+            for prompt in prompts
+        ]
+
 
 class TestPromptDependentBatchPairing:
     MAX_TOKENS = 12

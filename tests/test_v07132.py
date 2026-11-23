@@ -806,35 +806,39 @@ class TestAsrInfer:
         cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "--task" in cleaned
 
-    def test_infer_asr_writes_transcriptions_and_wer(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_infer_asr_writes_transcriptions_and_wer(self, tmp_path, monkeypatch, encoding):
         import json
 
+        from typer.testing import CliRunner
+
         import soup_cli.commands.infer as infer_mod
+        from soup_cli.cli import app
 
         # Test seam: skip the real Whisper load, return a fixed hypothesis.
         monkeypatch.setattr(
             infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", lambda audio_path: "hello world"
         )
 
+        audio = ["clip.wav", "clip2.wav"]
+        for name in audio:
+            (tmp_path / name).touch()
         in_path = tmp_path / "in.jsonl"
-        in_path.write_text(
-            json.dumps({"audio": "clip.wav", "text": "hello world"}) + "\n"
-            + json.dumps({"audio": "clip2.wav", "text": "goodbye"}) + "\n",
-            encoding="utf-8",
+        payload = (
+            json.dumps({"audio": audio[0], "text": "hello world"}) + "\r\n"
+            + json.dumps({"audio": audio[1], "text": "goodbye"}) + "\r\n"
         )
+        in_path.write_bytes(payload.encode(encoding))
         out_path = tmp_path / "out.jsonl"
         # Run under cwd so the output-containment check passes.
         monkeypatch.chdir(tmp_path)
-        infer_mod._infer_asr(
-            model="openai/whisper-tiny",
-            base=None,
-            input_file="in.jsonl",
-            device="cpu",
-            output_file="out.jsonl",
-            max_tokens=64,
-            trust_remote_code=False,
-        )
+        result = CliRunner().invoke(app, [
+            "infer", "--task", "asr", "--model", "openai/whisper-tiny",
+            "--input", "in.jsonl", "--output", "out.jsonl", "--device", "cpu",
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
         lines = [json.loads(x) for x in out_path.read_text(encoding="utf-8").splitlines()]
+        assert [line["audio"] for line in lines] == audio
         assert lines[0]["transcription"] == "hello world"
         assert lines[0]["wer"] == 0.0
         # ref "goodbye" (1 word) vs hyp "hello world" -> 2 edits / 1 = 2.0

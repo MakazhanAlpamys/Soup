@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -25,14 +24,14 @@ import soup_cli.utils.loop_stages as ls
 from soup_cli.commands.loop import app as loop_app
 from soup_cli.utils.loop_daemon import WatchConfig, _promote
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
+from tests.conftest import strip_ansi
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 ADAPTER = "loop-train-ab12cd34"
 ITERATION = "iter-20261116T100000-aaaaaaaa"
 
 
 def _plain(text: str) -> str:
-    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
+    return " ".join(strip_ansi(text).replace("│", " ").split())
 
 
 @pytest.fixture
@@ -188,6 +187,21 @@ SPELLINGS = [
     pytest.param("junction-outside", marks=_ON_WINDOWS),
 ]
 
+# #3068: a direct checkpoint directory by relative or absolute path, with an
+# optional trailing separator. On Windows backslashes are separators; on POSIX
+# they are literal filename characters and cannot spell the same checkpoint.
+CHECKPOINT_SPELLINGS = [
+    "checkpoint-relative", "checkpoint-absolute", "checkpoint-relative-trailing",
+    "checkpoint-absolute-trailing",
+    pytest.param("checkpoint-backslashes", marks=_ON_WINDOWS),
+    pytest.param("checkpoint-backslashes-trailing", marks=_ON_WINDOWS),
+    pytest.param("checkpoint-through-adapter-link", marks=pytest.mark.requires_symlink),
+    pytest.param("checkpoint-through-direct-link", marks=pytest.mark.requires_symlink),
+]
+# A filesystem that folds case must recognise all three spellings. A sensitive
+# filesystem must keep the differently cased spelling distinct.
+CASE_SPELLINGS = ["name-upper", "name-lower", "name-mixed"]
+
 
 def _link(link: Path, target: Path, *, junction: bool) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
@@ -204,6 +218,29 @@ def _spell(kind: str, cwd: Path, name: str) -> str:
     relative = f".soup-loops/adapters/{name}"
     absolute = str(cwd / ".soup-loops" / "adapters" / name)
     adapter_dir = cwd / ".soup-loops" / "adapters" / name
+    if kind.startswith("checkpoint-"):
+        checkpoint_dir = adapter_dir / "checkpoint-12"
+        checkpoint_dir.mkdir(exist_ok=True)
+        if kind == "checkpoint-through-adapter-link":
+            _link(cwd / "links" / "adapter", adapter_dir, junction=False)
+            return "links/adapter/checkpoint-12"
+        if kind == "checkpoint-through-direct-link":
+            _link(cwd / "links" / "checkpoint", checkpoint_dir, junction=False)
+            return "links/checkpoint"
+        checkpoint = f"{relative}/checkpoint-12"
+        if kind.startswith("checkpoint-absolute"):
+            checkpoint = str(adapter_dir / "checkpoint-12")
+        if kind.startswith("checkpoint-backslashes"):
+            checkpoint = checkpoint.replace("/", "\\")
+        if kind.endswith("-trailing"):
+            checkpoint += os.sep
+        return checkpoint
+    if kind in CASE_SPELLINGS:
+        return {
+            "name-upper": name.upper(),
+            "name-lower": name.lower(),
+            "name-mixed": name.swapcase(),
+        }[kind]
     spelled = {
         "bare": name,
         "path": relative,
@@ -266,6 +303,17 @@ def dont_ship(request, cwd):
     )
 
 
+@pytest.fixture(params=["iteration log", "verdict file"])
+def mixed_case_dont_ship(request, cwd):
+    name = "Loop-Train-Ab12"
+    (cwd / ".soup-loops" / "adapters" / name).mkdir(parents=True)
+    if request.param == "iteration log":
+        _write_log(cwd, [_line(adapter=name, reason="regressed")])
+        return name, f"its last verdict is DON'T SHIP (iteration {ITERATION}: regressed)"
+    _ship_verdict_file(cwd, name, "DON'T SHIP")
+    return name, f"its verdict file .soup-loops/verdicts/{name}.json says DON'T SHIP"
+
+
 @pytest.fixture
 def loop_with_verdicts(cwd):
     """A loop where ``ADAPTER`` and ``VERDICT_FILE_NAME`` are DON'T SHIP; two others are SHIP."""
@@ -302,13 +350,13 @@ class TestEverySpellingOfTheAdapterDirectory:
     spelling tab completion gives, and the one the plan and the iteration log use) was not.
     """
 
-    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS, *CHECKPOINT_SPELLINGS])
     def test_the_lookup_sees_through_it(self, cwd, dont_ship, kind):
         name, why = dont_ship
 
         assert ls.known_dont_ship(_spell(kind, cwd, name)) == why
 
-    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS, *CHECKPOINT_SPELLINGS])
     def test_the_command_refuses_it_and_changes_nothing(self, cwd, dont_ship, kind):
         name, why = dont_ship
         spelling = _spell(kind, cwd, name)
@@ -327,7 +375,7 @@ class TestEverySpellingOfTheAdapterDirectory:
         assert state.canary_active is None and state.canary_override is None
         assert not (cwd / ".soup-loops" / "progress.jsonl").exists()
 
-    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS])
+    @pytest.mark.parametrize("kind", ["bare", *SPELLINGS, *CHECKPOINT_SPELLINGS])
     def test_the_override_accepts_it_and_records_what_was_typed(self, cwd, dont_ship, kind):
         name, why = dont_ship
         spelling = _spell(kind, cwd, name)
@@ -360,11 +408,174 @@ class TestEverySpellingOfTheAdapterDirectory:
         assert ls.known_dont_ship(f".soup-loops/ADAPTERS/{name}") == why
 
 
+def _assert_case_variant_uses_verdict(cwd, spelling, why):
+    _seed_state(cwd)
+    result, text = _canary(spelling, "--traffic", "5%")
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert _refusal_tail(why) in text
+    assert read_state().canary_active is None
+
+    result, _ = _canary(spelling, "--traffic", "5%", "--allow-dont-ship")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    state = read_state()
+    assert state.canary_active == spelling
+    assert state.canary_override is not None and why in state.canary_override
+
+
+@pytest.mark.parametrize("kind", CASE_SPELLINGS)
+def test_a_case_insensitive_filesystem_uses_the_same_verdict(cwd, mixed_case_dont_ship, kind):
+    name, why = mixed_case_dont_ship
+    spelling = _spell(kind, cwd, name)
+    if not (cwd / ".soup-loops" / "adapters" / spelling).is_dir():
+        pytest.skip("the adapter filesystem is case-sensitive")
+
+    _assert_case_variant_uses_verdict(cwd, spelling, why)
+
+
+@pytest.mark.parametrize("kind", CASE_SPELLINGS)
+def test_a_case_sensitive_filesystem_keeps_names_distinct(cwd, mixed_case_dont_ship, kind):
+    name, _ = mixed_case_dont_ship
+    spelling = _spell(kind, cwd, name)
+    other = cwd / ".soup-loops" / "adapters" / spelling
+    if other.is_dir():
+        pytest.skip("the adapter filesystem is case-insensitive")
+    other.mkdir()
+    _seed_state(cwd)
+
+    result, text = _canary(spelling, "--traffic", "5%")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "canary set:" in text
+    state = read_state()
+    assert state.canary_active == spelling and state.canary_override is None
+
+
+@pytest.mark.parametrize("kind", CASE_SPELLINGS)
+def test_case_folding_lookup_on_case_sensitive_ci(cwd, mixed_case_dont_ship, kind, monkeypatch):
+    name, why = mixed_case_dont_ship
+    spelling = _spell(kind, cwd, name)
+    if (cwd / ".soup-loops" / "adapters" / spelling).is_dir():
+        pytest.skip("the native case-insensitive test covers this filesystem")
+    # Simulate lookup of just this name so Linux also exercises the positive path.
+    isdir, samefile = os.path.isdir, os.path.samefile
+    typed = os.path.join(ls._ADAPTERS_DIR, spelling)
+    actual = os.path.join(ls._ADAPTERS_DIR, name)
+
+    def mapped(path):
+        return actual if path == typed else path
+
+    monkeypatch.setattr(os.path, "isdir", lambda path: isdir(mapped(path)))
+    monkeypatch.setattr(os.path, "samefile", lambda a, b: samefile(mapped(a), mapped(b)))
+
+    _assert_case_variant_uses_verdict(cwd, spelling, why)
+
+
+@pytest.mark.parametrize("kind", CASE_SPELLINGS)
+def test_case_folding_requires_the_same_directory_entry(cwd, mixed_case_dont_ship, kind,
+                                                       monkeypatch):
+    name, _ = mixed_case_dont_ship
+    spelling = _spell(kind, cwd, name)
+    adapters = cwd / ".soup-loops" / "adapters"
+    if (adapters / spelling).is_dir():
+        pytest.skip("requires a distinct spelling that does not exist on disk")
+
+    # Fold only the directory probe. The real samefile cannot confirm the typed path.
+    isdir = os.path.isdir
+    typed = os.path.join(ls._ADAPTERS_DIR, spelling)
+    actual = os.path.join(ls._ADAPTERS_DIR, name)
+    monkeypatch.setattr(os.path, "isdir", lambda path: isdir(actual if path == typed else path))
+    _seed_state(cwd)
+
+    assert ls.known_dont_ship(spelling) is None
+    result, text = _canary(spelling, "--traffic", "5%")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "canary set:" in text
+    state = read_state()
+    assert state.canary_active == spelling and state.canary_override is None
+
+
+@pytest.mark.parametrize("kind", ["adapter-path", "checkpoint-parent", "checkpoint-name"])
+@pytest.mark.parametrize("simulate_folding", [False, True], ids=["native", "simulated"])
+def test_path_case_spelling_follows_directory_identity(
+    cwd, dont_ship, kind, simulate_folding, monkeypatch,
+):
+    # Probe the volume, not the platform. A macOS or Windows volume can also be case-sensitive.
+    root = cwd / ".soup-loops" / "adapters"
+    probe = root / "case-probe"
+    probe.touch()
+    folds_case = probe.with_name("CASE-PROBE").is_file()
+    probe.unlink()
+    if simulate_folding and folds_case:
+        pytest.skip("the native test covers this volume")
+
+    name, why = dont_ship
+    checkpoint = root / name / "checkpoint-12"
+    checkpoint.mkdir()
+    other_root = root.with_name("Adapters")
+    other_checkpoint = checkpoint.with_name("Checkpoint-12")
+    if kind == "checkpoint-name":
+        typed, actual = other_checkpoint, checkpoint
+        argument = typed
+    else:
+        typed, actual = other_root, root
+        argument = typed / name
+        if kind == "checkpoint-parent":
+            argument /= checkpoint.name
+    spelling = os.path.relpath(argument, cwd)
+
+    if simulate_folding:
+        # Linux also exercises POSIX realpath preserving case on a folding volume.
+        isdir, samefile = os.path.isdir, os.path.samefile
+        typed_path = os.path.realpath(typed)
+        actual_path = os.path.realpath(actual)
+
+        def mapped(path):
+            if isinstance(path, str) and (
+                path == typed_path or path.startswith(typed_path + os.sep)
+            ):
+                return actual_path + path[len(typed_path):]
+            return path
+
+        monkeypatch.setattr(os.path, "isdir", lambda path: isdir(mapped(path)))
+        monkeypatch.setattr(os.path, "samefile", lambda a, b: samefile(mapped(a), mapped(b)))
+    elif not folds_case:
+        argument.mkdir(parents=True)
+        _seed_state(cwd)
+        assert ls.known_dont_ship(spelling) is None
+        result, text = _canary(spelling, "--traffic", "5%")
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        state = read_state()
+        assert state.canary_active == spelling and state.canary_override is None
+        return
+
+    _assert_case_variant_uses_verdict(cwd, spelling, why)
+
+
 class TestSpellingsThatAreNotTheAdapter:
     """What the path mapping must leave alone: another adapter, another directory, no verdict."""
 
+    @pytest.mark.skipif(os.name != "posix", reason="backslashes are literal on POSIX")
+    def test_a_literal_backslash_name_is_not_the_checkpoint_path(self, cwd, dont_ship):
+        name, _ = dont_ship
+        checkpoint = _spell("checkpoint-relative", cwd, name)
+        spelling = checkpoint.replace("/", "\\")
+        (cwd / spelling).mkdir()
+        _seed_state(cwd)
+
+        result, text = _canary(spelling, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        state = read_state()
+        assert state.canary_active == spelling and state.canary_override is None
+
     @pytest.mark.parametrize("kind", [
         "bare", "path", "dot-slash", "trailing-slash", "absolute", "dotdot-leaf",
+        "checkpoint-relative",
         pytest.param("symlink-inside", marks=pytest.mark.requires_symlink),
     ])
     @pytest.mark.parametrize("name", [SHIPPED, SHIPPED_VERDICT_FILE_NAME])
@@ -412,7 +623,9 @@ class TestSpellingsThatAreNotTheAdapter:
 
         assert ls.known_dont_ship(spelling) is None
 
-    @pytest.mark.parametrize("kind", ["bare", "path", "dot-slash", "absolute"])
+    @pytest.mark.parametrize(
+        "kind", ["bare", "path", "dot-slash", "absolute", "checkpoint-relative"],
+    )
     def test_an_adapter_with_no_verdict_at_all_is_accepted(self, loop_with_verdicts, kind):
         cwd = loop_with_verdicts
         (cwd / ".soup-loops" / "adapters" / "never-trained").mkdir()
@@ -424,6 +637,57 @@ class TestSpellingsThatAreNotTheAdapter:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert read_state(str(cwd / ".soup" / "loop.yaml")).canary_override is None
+
+    @pytest.mark.parametrize("suffix", ["subdir/checkpoint-12", "checkpoint-best", "notes"])
+    def test_an_unrelated_subdirectory_is_not_a_checkpoint(self, loop_with_verdicts, suffix):
+        path = f".soup-loops/adapters/{ADAPTER}/{suffix}"
+        (loop_with_verdicts / path).mkdir(parents=True)
+        assert ls.known_dont_ship(path) is None
+
+    @pytest.mark.parametrize("file_exists", [True, False], ids=["file", "missing"])
+    def test_a_checkpoint_spelling_requires_a_directory(self, cwd, dont_ship, file_exists):
+        name, _ = dont_ship
+        path = f".soup-loops/adapters/{name}/checkpoint-12"
+        if file_exists:
+            (cwd / path).touch()
+        _seed_state(cwd)
+
+        result, text = _canary(path, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        state = read_state()
+        assert state.canary_active == path and state.canary_override is None
+
+    @pytest.mark.parametrize("parent", ["elsewhere", ".soup-loops/adapters/other"])
+    def test_a_checkpoint_without_a_direct_adapter_parent_is_not_matched(
+        self, cwd, dont_ship, parent,
+    ):
+        name, _ = dont_ship
+        path = f"{parent}/{name}/checkpoint-12"
+        (cwd / path).mkdir(parents=True, exist_ok=True)
+        _seed_state(cwd)
+
+        result, text = _canary(path, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        assert read_state().canary_override is None
+
+    @pytest.mark.requires_symlink
+    def test_a_checkpoint_link_pointing_outside_adapters_is_not_matched(self, cwd, dont_ship):
+        name, _ = dont_ship
+        target = cwd / "elsewhere" / name / "checkpoint-12"
+        target.mkdir(parents=True)
+        path = f".soup-loops/adapters/{name}/checkpoint-12"
+        _link(cwd / path, target, junction=False)
+        _seed_state(cwd)
+
+        result, text = _canary(path, "--traffic", "5%")
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "canary set:" in text
+        assert read_state().canary_override is None
 
     @pytest.mark.parametrize("spelling", [
         ".soup-loops/adapters", ".soup-loops/adapters/", ".soup-loops/adapters/.",

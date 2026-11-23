@@ -664,7 +664,9 @@ soup serve --model ./output --kv-cache-type bf16   # cache in the model compute 
 soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (needs `hqq`)
 ```
 
-`bf16`/`f16` need no extra dependency; `q8_0` requires a quant backend (`hqq` / `optimum-quanto`) or the CLI exits with an install hint; `fp8` is Hopper-only. Full detail and the vLLM/SGLang status live in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
+`bf16` and `f16` need no extra dependency. Install `hqq` for `q8_0`. Soup currently
+refuses `fp8` on every serving backend. See
+[KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530) for details.
 
 ### Native MLX HTTP serving
 
@@ -1136,7 +1138,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 183 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 184 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -1145,7 +1147,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (183 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (184 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -1475,7 +1477,10 @@ Three POST routes are now available on `soup serve`:
   Returns the real stdout, stderr, exit code, and timeout state. A timeout returns
   `timed_out: true` and `exit_code: 124`; an output overflow returns
   `timed_out: false` and `exit_code: 1`. Other process failures retain their exit
-  code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB.
+  code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB. When a
+  run times out, overflows or ends, every process it started that is still in its process
+  group (Linux, macOS) or its job (Windows) is ended with it; a Windows host that does not
+  allow job objects ends the direct child only.
   The code is compiled under the file name `<code>`, so a traceback gives the caller's
   own line numbers (`File "<code>", line 2` for an error on the second line). Tool
   authentication failures return HTTP 401 with `WWW-Authenticate: Bearer`.

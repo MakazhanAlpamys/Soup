@@ -293,22 +293,83 @@ class TestStateIO:
         with pytest.raises(ValueError, match="1 MiB"):
             read_state()
 
-    def test_read_state_drops_unknown_fields(self, tmp_path, monkeypatch):
+    def test_read_state_refuses_unknown_top_level_fields(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".soup" / "loop.yaml"
         target.parent.mkdir()
-        target.write_text(
-            json.dumps(
-                {
-                    "served_model": "m",
-                    "eval_suite": "e",
-                    "baseline": "b",
-                    "future_field_v59": "ignored",
-                }
-            )
-        )
-        s = read_state()
-        assert s.served_model == "m"
+        target.write_text(json.dumps({
+            "served_model": "m",
+            "eval_suite": "e",
+            "baseline": "b",
+            "min_new_pair": 5,
+        }))
+        with pytest.raises(
+            ValueError, match=r"unknown loop\.yaml key 'min_new_pair'.*min_new_pairs"
+        ):
+            read_state()
+
+    def test_read_state_bounds_long_unknown_top_level_key(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        long_key = "previous_production_iteration_id" + "x" * 35
+        target.write_text(json.dumps({long_key: True}))
+
+        with pytest.raises(ValueError) as exc_info:
+            read_state()
+
+        message = str(exc_info.value)
+        assert len(long_key) > 60
+        assert len(message) < 200
+        assert "unknown loop.yaml key '" + "previous_production_iteration_id" in message
+        assert "did you mean 'previous_production_iteration_id'?" in message
+        assert long_key not in message
+
+    def test_read_state_bounds_many_unknown_top_level_keys(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        unknown = [f"unknown_{index:03d}" for index in range(300)]
+        target.write_text(json.dumps({key: True for key in unknown}))
+
+        with pytest.raises(ValueError) as exc_info:
+            read_state()
+
+        message = str(exc_info.value)
+        assert all(key in message for key in unknown[:5])
+        assert "and 295 more unknown keys" in message
+        assert message.count("unknown loop.yaml key") == 5
+        assert len(message) < 500
+
+    def test_status_refuses_unknown_field_without_rewriting_state(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        original = json.dumps({
+            "served_model": "m",
+            "eval_suite": "e",
+            "baseline": "b",
+            "min_new_pair": 5,
+        })
+        target.write_text(original)
+
+        result = runner.invoke(app, ["loop", "status"])
+
+        assert result.exit_code == 2
+        assert "unknown loop.yaml key 'min_new_pair'" in strip_ansi(result.output)
+        assert "min_new_pairs" in strip_ansi(result.output)
+        assert target.read_text() == original
+
+    def test_read_state_round_trips_known_top_level_fields(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        original = LoopState(served_model="m", eval_suite="e", baseline="b")
+        target = tmp_path / ".soup" / "loop.yaml"
+        target.parent.mkdir()
+        target.write_text(json.dumps(dict(original.to_dict())))
+
+        reloaded = read_state()
+
+        assert reloaded.to_dict() == original.to_dict()
 
     @pytest.mark.requires_symlink
     def test_write_state_rejects_symlink(self, tmp_path, monkeypatch):

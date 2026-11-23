@@ -193,15 +193,25 @@ class JudgeResults:
         self.criteria_averages = criteria_averages
 
 
+def rubric_file_label(path: Path) -> str:
+    """How the errors of reading a rubric file name it: ``Rubric file <path>``."""
+    return f"Rubric file {path}"
+
+
 def load_rubric(path: Path) -> dict:
-    """Load a rubric YAML file with validation."""
+    """Load a rubric YAML file with validation.
+
+    The errors of reading the file (too large, nested too deeply) start with
+    :func:`rubric_file_label`; the errors of its shape (``Rubric must ...``,
+    ``Criterion N ...``) do not name the file.
+    """
     from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
     if not path.exists():
         raise FileNotFoundError(f"Rubric file not found: {path}")
 
     rubric = load_yaml_file_limited(
-        path, f"Rubric file {path}", max_bytes=MAX_CONFIG_BYTES
+        path, rubric_file_label(path), max_bytes=MAX_CONFIG_BYTES
     )
 
     if not isinstance(rubric, dict):
