@@ -525,15 +525,6 @@ def serve(
     # surfaces immediately. The resolved runtime is threaded into the
     # transformers branch below (model dtype + generate kwargs).
     resolved_kv_runtime = None
-    if backend == "vllm":
-        from soup_cli.utils.vllm import is_vllm_available
-
-        if not is_vllm_available():
-            console.print(
-                "[red]This option requires vLLM, which is not installed (vllm).[/]\n"
-                'Install with: [bold]pip install "soup-cli\\[serve-fast]"[/]'
-            )
-            raise typer.Exit(1)
     if kv_cache_type is not None:
         from rich.markup import escape as _rich_escape
 
@@ -553,6 +544,16 @@ def serve(
             # vLLM-only message instead of the precise capability one.
             logger.debug("kv-cache CUDA capability probe failed: %r", _cc_exc)
             cc = None
+        if backend.lower() == "vllm":
+            from soup_cli.utils.vllm import is_vllm_available
+
+            if not is_vllm_available():
+                console.print(
+                    "[red]This option requires vLLM, which is not installed (vllm).[/]\n"
+                    'Install with: [bold]pip install "soup-cli\\[serve-fast]"[/]'
+                )
+                raise typer.Exit(1)
+
         try:
             resolved_kv_runtime = apply_kv_cache_type(
                 kv_cache_type, backend=backend.lower(), compute_capability=cc

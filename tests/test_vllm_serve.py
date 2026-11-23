@@ -1,9 +1,17 @@
 """Tests for vLLM backend in soup serve."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 # ============================================================
 # vLLM utility tests
@@ -99,7 +107,7 @@ class TestServeBackendFlag:
         model_dir.mkdir()
 
         with (
-            patch("importlib.util.find_spec", return_value=None),
+            patch("soup_cli.utils.vllm.is_vllm_available", return_value=False),
             patch("soup_cli.utils.kv_cache.apply_kv_cache_type") as mock_resolve,
         ):
             result = CliRunner().invoke(
@@ -296,10 +304,11 @@ class TestServeBackendFlag:
             )
 
         assert result.exit_code == 1
-        assert "Failed to initialize vLLM" in result.output
-        assert "must match model" in result.output
-        assert "dtype 'float16'" in result.output
-        assert "Traceback" not in result.output
+        output = " ".join(_strip_ansi(result.output).split())
+        assert "Failed to initialize vLLM" in output
+        assert "must match model" in output
+        assert "dtype 'float16'" in output
+        assert "Traceback" not in output
 
 
 class TestServeTensorParallel:

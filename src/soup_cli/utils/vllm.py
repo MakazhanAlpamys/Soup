@@ -236,15 +236,11 @@ def token_finish_reason(new_tokens: Any, max_tokens: Optional[int], eos_ids: fro
 
 def is_vllm_available() -> bool:
     """Check if vLLM is installed."""
-    import importlib.util
-    import sys
-
-    if "vllm" in sys.modules:
-        return sys.modules["vllm"] is not None
-
     try:
-        return importlib.util.find_spec("vllm") is not None
-    except (ImportError, ValueError):
+        import vllm
+
+        return True
+    except ImportError:
         return False
 
 

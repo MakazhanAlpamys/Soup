@@ -709,7 +709,7 @@ class TestServeKvCacheCli:
 
     def test_vllm_missing_install_hint_exit_1(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+        monkeypatch.setattr("soup_cli.utils.vllm.is_vllm_available", lambda: False)
         model = tmp_path / "model"
         model.mkdir()
         result = runner.invoke(
