@@ -47,6 +47,7 @@ from typing import (
 )
 
 from soup_cli import __version__
+from soup_cli.utils.deepseek_v3 import ROUTER_WEIGHT_KEY, router_weight_uses_fp32
 from soup_cli.utils.expert_stream import (
     EXPERT_LAYOUT_PER_EXPERT,
     expert_shard_name,
@@ -164,6 +165,19 @@ _LAYER_BUFFER_KEYS = {"deepseek_v3": ("mlp.gate.e_score_correction_bias",)}
 def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
     """Short keys of the per-layer buffers streamed for ``arch`` (see above)."""
     return _LAYER_BUFFER_KEYS.get(arch, ())
+
+
+def _uses_fp32_router_weights(arch: str, dtype: str) -> bool:
+    return (
+        arch == "deepseek_v3"
+        and dtype in ("bfloat16", "float16")
+        and router_weight_uses_fp32()
+    )
+
+
+def _fp32_layer_storage_keys(arch: str, *, fp32_router_weights: bool) -> Tuple[str, ...]:
+    router_params = (ROUTER_WEIGHT_KEY,) if fp32_router_weights else ()
+    return layer_buffer_keys(arch) + router_params
 
 
 #: Architectures admitted to ``expert_layout="per_expert"``: each one passed
@@ -334,6 +348,9 @@ class ShardIndex:
     expert_shapes: Mapping[str, Tuple[int, ...]] = field(default_factory=dict)
     #: per_expert under NF4: the spec of "gate_up" and "down". Empty otherwise.
     expert_quant_specs: Mapping[str, NF4WeightSpec] = field(default_factory=dict)
+    #: Whether router parameters use strict FP32 in a reduced-precision cache.
+    #: Older indexes always stored router parameters at the stream dtype.
+    fp32_router_weights: bool = False
 
 
 @dataclass(frozen=True)
@@ -735,6 +752,9 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
         )
     ):
         raise ValueError("the index's expert fields do not describe one layout")
+    fp32_router_weights = payload.get("fp32_router_weights", False)
+    if not isinstance(fp32_router_weights, bool):
+        raise ValueError("fp32_router_weights must be a boolean")
     return ShardIndex(
         n_layers=n_layers,
         layer_keys=tuple(payload["layer_keys"]),
@@ -771,6 +791,7 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
             str(part): NF4WeightSpec.from_json(value)
             for part, value in (payload.get("expert_quant_specs") or {}).items()
         },
+        fp32_router_weights=fp32_router_weights,
     )
 
 
@@ -990,12 +1011,13 @@ def _layer_tensor_storage(
     """``(stored dtype, NF4?)`` for one decoder-layer key that is not a routed expert.
 
     The one rule :func:`shard_checkpoint` writes by and
-    :func:`estimate_shard_cache_bytes` sizes by: a key the meta probe found
-    converted to ``Linear4bit`` (``suffixes``) is NF4, a layer buffer the runtime
-    loads back stays float32, everything else is stored at ``dtype``.
+    :func:`estimate_shard_cache_bytes` sizes by: the declared FP32 keys are
+    stored as float32, and keys the meta probe found converted to ``Linear4bit``
+    (``suffixes``) are stored as NF4. The other keys are stored at ``dtype``.
     """
-    stored = "float32" if short in fp32_keys else dtype
-    return stored, bool(quantise) and short in suffixes
+    if short in fp32_keys:
+        return "float32", False
+    return dtype, bool(quantise) and short in suffixes
 
 
 def _routed_experts_quantised(expert_layout: str, quantise: bool) -> bool:
@@ -1204,13 +1226,14 @@ def estimate_shard_cache_bytes(
 
     itemsize = _ITEMSIZE[dtype]
     stack_experts = arch in _STACKED_EXPERT_ARCHS
-    fp32_keys = layer_buffer_keys(arch)
+    fp32_buffers = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
     sidecars = _nf4_sidecar_suffixes(double_quant)
 
     layer_bytes: Dict[int, int] = {}
     routed: Dict[int, Dict[int, Dict[str, int]]] = {}
+    router_numels: Dict[int, int] = {}
     other_bytes = 0
     header_bytes = 0
     expert_file_bytes = 0
@@ -1224,6 +1247,19 @@ def estimate_shard_cache_bytes(
         if indexed:
             stored_names.update(names)
         return sum(len(name) + _HEADER_BYTES_PER_TENSOR for name in names)
+
+    def _charge_layer_tensor(idx: int, short: str, numel: int, fp32_keys: Tuple[str, ...]):
+        nonlocal any_nf4, header_bytes
+        stored, nf4 = _layer_tensor_storage(
+            short, dtype=dtype, quantise=quantise, suffixes=suffixes, fp32_keys=fp32_keys
+        )
+        if nf4:
+            any_nf4 = True
+            layer_bytes[idx] += nf4_weight_bytes(numel, double_quant=double_quant)
+            header_bytes += _charge_names(short + suffix for suffix in sidecars)
+        else:
+            layer_bytes[idx] += numel * _ITEMSIZE[stored]
+            header_bytes += _charge_names((short,))
 
     for key, (_source_dtype, shape) in tensors.items():
         if key in consumed:
@@ -1245,16 +1281,10 @@ def estimate_shard_cache_bytes(
             projections[expert_match.group("projection")] = numel
             continue
         short = match.group(2)
-        stored, nf4 = _layer_tensor_storage(
-            short, dtype=dtype, quantise=quantise, suffixes=suffixes, fp32_keys=fp32_keys
-        )
-        if nf4:
-            any_nf4 = True
-            layer_bytes[idx] += nf4_weight_bytes(numel, double_quant=double_quant)
-            header_bytes += _charge_names(short + suffix for suffix in sidecars)
+        if arch == "deepseek_v3" and short == ROUTER_WEIGHT_KEY:
+            router_numels[idx] = numel
         else:
-            layer_bytes[idx] += numel * _ITEMSIZE[stored]
-            header_bytes += _charge_names((short,))
+            _charge_layer_tensor(idx, short, numel, fp32_buffers)
 
     for idx, experts in routed.items():
         for expert, projections in experts.items():
@@ -1307,6 +1337,13 @@ def estimate_shard_cache_bytes(
     if len(layer_bytes) != n_layers:
         missing = sorted(set(range(n_layers)) - set(layer_bytes))
         raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")
+    # The model import is only needed for router weights in a valid layer layout.
+    if router_numels:
+        fp32_keys = _fp32_layer_storage_keys(
+            arch, fp32_router_weights=_uses_fp32_router_weights(arch, dtype)
+        )
+        for idx, numel in router_numels.items():
+            _charge_layer_tensor(idx, ROUTER_WEIGHT_KEY, numel, fp32_keys)
     if any_nf4:
         # The shared code tables in extras: the 16 float32 NF4 levels, plus the
         # 256-entry float32 nested map under double quantisation.
@@ -1616,6 +1653,8 @@ def inspect_shard_cache(
     external_mode: str = "",
     stripe_roots: Sequence[str] = (),
     expert_layout: str = "",
+    *,
+    arch: Optional[str] = None,
 ) -> Tuple[Optional[ShardIndex], str]:
     """Return a reusable index or the precise reason it must be rewritten.
 
@@ -1634,6 +1673,12 @@ def inspect_shard_cache(
         return None, "cache index is missing or unreadable"
     if index.dtype != dtype:
         return None, f"dtype changed ({index.dtype!r} -> {dtype!r})"
+    cache_arch = index.arch if arch is None else arch
+    fp32_router_weights = _uses_fp32_router_weights(cache_arch, dtype)
+    if index.fp32_router_weights != fp32_router_weights:
+        stored = "float32" if index.fp32_router_weights else dtype
+        expected = "float32" if fp32_router_weights else dtype
+        return None, f"router weight precision changed ({stored} -> {expected})"
     if index.quant != quant:
         return None, f"quantization changed ({index.quant!r} -> {quant!r})"
     if index.quant != QUANT_NONE and index.double_quant != double_quant:
@@ -1711,6 +1756,7 @@ def _content_change_requires_index_quarantine(
     quant_device: str,
     external_mode: str,
     expert_layout: str = "",
+    fp32_router_weights: bool = False,
 ) -> bool:
     """Return whether the next write could make the current index describe wrong bytes."""
     try:
@@ -1726,6 +1772,7 @@ def _content_change_requires_index_quarantine(
             index.source_fingerprint != fingerprint,
             index.external_mode != external_mode,
             index.expert_layout != expert_layout,
+            index.fp32_router_weights != fp32_router_weights,
             index.format_version != _SHARD_FORMAT_VERSION,
         )
     )
@@ -2054,8 +2101,9 @@ def shard_checkpoint(
     ``quant='nf4'`` quantises every per-layer key named in ``quant_suffixes``
     (short names, i.e. without the ``model.layers.N.`` prefix) and stores the
     packed nibbles plus the statistics needed to rebuild its ``QuantState``.
-    Everything else is stored at ``dtype``, exactly as
-    ``replace_with_bnb_linear`` leaves it.  When BOTH ``embed_tokens`` and an
+    Other weights are stored at ``dtype``, with FP32 storage for the router
+    parameters covered by the installed Transformers policy. Per-layer buffers
+    listed by :func:`layer_buffer_keys` stay FP32. When BOTH ``embed_tokens`` and an
     explicit (untied) ``lm_head`` exist, each is written to its own shard and
     remains unquantised; the runtime streams them through one large slot. A tied
     checkpoint keeps its single embedding matrix resident and unchanged.
@@ -2137,7 +2185,6 @@ def shard_checkpoint(
     # Fused routed experts are stacked at the stream dtype below and never quantised;
     # per_expert ones are NF4 under quant='nf4'. The disk pre-flight sizes by this too.
     experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
-    fp32_layer_keys = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
     from safetensors import safe_open
@@ -2262,6 +2309,8 @@ def shard_checkpoint(
     consumed = _fp8_consumed_keys(fp8_plan)
     del source_tensors
 
+    fp32_router_weights = _uses_fp32_router_weights(arch, dtype)
+    fp32_layer_keys = _fp32_layer_storage_keys(arch, fp32_router_weights=fp32_router_weights)
     resolved_out = _validate_out_dir(out_dir)
 
     from soup_cli.utils.stripe_roots import (
@@ -2309,6 +2358,7 @@ def shard_checkpoint(
             external_mode,
             stripe_roots=stripe,
             expert_layout=expert_layout,
+            arch=arch,
         )
         if cached is not None:
             if notify is not None:
@@ -2321,17 +2371,6 @@ def shard_checkpoint(
             # as text, never as markup or raw control bytes.
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
-        if _content_change_requires_index_quarantine(
-            resolved_out,
-            dtype=dtype,
-            fingerprint=fingerprint,
-            quant=quant,
-            double_quant=double_quant,
-            quant_device=device_kind,
-            external_mode=external_mode,
-            expert_layout=expert_layout,
-        ):
-            _quarantine_shard_index(resolved_out)
 
     if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
         raise ValueError(
@@ -2485,6 +2524,20 @@ def shard_checkpoint(
     stale_root0_copies: List[str] = []
     expert_layers_written: List[int] = []
     expert_meta: Optional[Tuple[int, Dict[str, Any], Dict[str, Any]]] = None
+
+    if _content_change_requires_index_quarantine(
+        resolved_out,
+        dtype=dtype,
+        fingerprint=fingerprint,
+        quant=quant,
+        double_quant=double_quant,
+        quant_device=device_kind,
+        external_mode=external_mode,
+        expert_layout=expert_layout,
+        fp32_router_weights=fp32_router_weights,
+    ):
+        _quarantine_shard_index(resolved_out)
+
     # At most _MAX_LIVE_SOURCE_HANDLES source files are mapped at once (#926);
     # a failed open, or a raise anywhere below, still releases the live ones.
     with _SourceHandles(shards, safe_open) as handles:
@@ -2805,6 +2858,7 @@ def shard_checkpoint(
         expert_count=expert_meta[0] if expert_meta else 0,
         expert_shapes=expert_meta[1] if expert_meta else {},
         expert_quant_specs=expert_meta[2] if expert_meta else {},
+        fp32_router_weights=fp32_router_weights,
     )
     _atomic_write_index(index, resolved_out)
     resharding_index = os.path.join(resolved_out, _RESHARDING_INDEX_NAME)

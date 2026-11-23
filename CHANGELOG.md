@@ -14,6 +14,20 @@ reproducing 70+ versions of notes.
 
 ## [0.78.1] - 2026-11-23
 
+### Fixed
+
+- Fixed the nightly failures after peft 0.22.0 (#3133): a MoE LoRA string target
+  could again adapt the routers, because peft 0.22 keeps a v4 name such as `gate`
+  as a module target and then matches it too broadly. The conversion probe now
+  reports the module targets peft keeps, and the string becomes the explicit list
+  when one of them reaches a gate (#3150). The peft-dependent test expectations are
+  derived from capability probes instead of version tables, and the pinned upstream
+  stack moves to peft 0.22.0.
+
+- The YAML merge-key (`<<`) rule of Soup's config loader is now the installed PyYAML's own, so a config loads exactly as `yaml.safe_load` loads it on every PyYAML release; on PyYAML 6.0.4 it previously resolved a repeated key merged from a list or from two `<<` keys the way 6.0.3 does, which `safe_load` no longer does (#3154, reported by @abdumutalipabay0, in #3156).
+
+- Resident Kimi K2 and layer-streamed DeepSeek-V3 now retain FP32 router weights when the installed Transformers model requires them. Layer streaming rebuilds a cache if its router precision differs (#3175, in #3183). Upgrading Transformers to a stricter router policy re-shards existing DeepSeek-V3 and Kimi K2 BF16 or FP16 streaming caches once, including NF4 runs, and a forced re-shard quarantines the incompatible index before writing replacements.
+
 ### Security
 
 - Modal download retries, training follow-ups, and layer-streaming cache pruning print copyable commands when their arguments can be quoted portably. Paths with spaces or punctuation are double-quoted when supported, and Windows path separators are written as forward slashes. Values that require shell-specific quoting get prose instructions and a separate display that escapes newlines, carriage returns, and tabs. The `soup train --cloud` run command also quotes its stub file name. (#3184)

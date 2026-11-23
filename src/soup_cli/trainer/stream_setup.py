@@ -1275,6 +1275,7 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                     expert_layout=expert_layout,
+                    arch=arch,
                 )
             cached_bytes = None
             if cached is not None:
