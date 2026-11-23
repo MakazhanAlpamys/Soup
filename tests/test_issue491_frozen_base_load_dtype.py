@@ -68,6 +68,105 @@ def fake_torch_cuda(monkeypatch):
     return apply
 
 
+class TestCpuSupportsNativeBf16:
+    """Direct rows for the capability probe itself (#3164 review item 1).
+
+    Every other row in this branch replaces it with a lambda, so a broken
+    body — ``return True``, ``return False``, or dropping the
+    ``/proc/cpuinfo`` fallback — fails nothing. These call the real
+    function with each answer source forced.
+    """
+
+    @staticmethod
+    def _call():
+        """Call the real function (import fresh so monkeypatching its module
+        globals and its torch probes is what the body actually sees)."""
+        from soup_cli.utils.gpu import cpu_supports_native_bf16
+
+        return cpu_supports_native_bf16()
+
+    @staticmethod
+    def _without_probes(monkeypatch):
+        """A torch that predates both probes (they read as absent)."""
+        import torch
+
+        monkeypatch.delattr(torch.cpu, "_is_avx512_bf16_supported", raising=False)
+        monkeypatch.delattr(torch.cpu, "_is_amx_tile_supported", raising=False)
+
+    @staticmethod
+    def _cpuinfo(monkeypatch, content):
+        """Force the /proc/cpuinfo read to return exactly ``content``."""
+        import io
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/proc/cpuinfo":
+                return io.StringIO(content)
+            raise OSError(path)
+
+        monkeypatch.setattr("builtins.open", fake_open)
+
+    def test_a_true_torch_probe_answers_true(self, monkeypatch):
+        import torch
+
+        monkeypatch.setattr(
+            torch.cpu, "_is_avx512_bf16_supported", lambda: True, raising=False
+        )
+        assert self._call() is True
+
+    def test_both_probes_false_answers_false_without_reading_cpuinfo(
+        self, monkeypatch
+    ):
+        """Probes present: their answer is final, the flag file is never
+        opened (that early return is exactly what the row pins)."""
+        import torch
+
+        monkeypatch.setattr(
+            torch.cpu, "_is_avx512_bf16_supported", lambda: False, raising=False
+        )
+        monkeypatch.setattr(
+            torch.cpu, "_is_amx_tile_supported", lambda: False, raising=False
+        )
+
+        def no_open(*args, **kwargs):
+            raise AssertionError("cpuinfo must not be read when probes answer")
+
+        monkeypatch.setattr("builtins.open", no_open)
+        assert self._call() is False
+
+    def test_flags_line_with_avx512_bf16_answers_true(self, monkeypatch):
+        self._without_probes(monkeypatch)
+        self._cpuinfo(
+            monkeypatch, "flags\t\t: fma avx2 avx512f avx512_bf16 avx512_vnni\n"
+        )
+        assert self._call() is True
+
+    def test_flags_line_without_the_tokens_answers_false(self, monkeypatch):
+        self._without_probes(monkeypatch)
+        self._cpuinfo(monkeypatch, "flags\t\t: fma avx2 avx512f avx512_vnni\n")
+        assert self._call() is False
+
+    def test_plain_bf16_on_an_arm_features_line_answers_false(self, monkeypatch):
+        """The x86-only scope (#3164): an aarch64 kernel prints a ``Features``
+        line whose whole-token ``bf16`` is deliberately NOT matched — whether
+        torch uses native bf16 kernels on aarch64 is unverified here, so ARM
+        resolves as no-native-bf16 rather than guessing."""
+        self._without_probes(monkeypatch)
+        self._cpuinfo(
+            monkeypatch,
+            "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics bf16\n",
+        )
+        assert self._call() is False
+
+    def test_an_unreadable_cpuinfo_answers_false(self, monkeypatch):
+        self._without_probes(monkeypatch)
+
+        def no_read(path, *args, **kwargs):
+            raise OSError("unreadable")
+
+        monkeypatch.setattr("builtins.open", no_read)
+        assert self._call() is False
+
+
 class TestResolveFrozenBaseLoadDtype:
     def test_cpu_resolves_to_float32_without_native_bf16(self, monkeypatch):
         """A CPU with no native bf16 units resolves an explicit float32.

@@ -689,6 +689,16 @@ def cpu_supports_native_bf16() -> bool:
     the failure this guards against is silent and costs 11.5x throughput,
     while the cost of a wrong False is visible up front — double the frozen
     base's resident bytes (#3164).
+
+    The scope is x86-only, both by declaration and by construction: the two
+    torch probes and the ``avx512_bf16`` / ``amx_bf16`` flag tokens this
+    function searches for are x86-specific, so an aarch64 CPU carrying the
+    ``bf16`` extension in its ``Features`` list is treated as having none.
+    Whether torch would actually use its bf16 kernels natively there is not
+    verified on any aarch64 host here, so ARM is declared out of scope in
+    the fragment and the PR description rather than guessed at (#3164
+    review). The whole-token ``bf16`` an aarch64 kernel lists is therefore
+    deliberately NOT matched.
     """
     try:
         import torch
