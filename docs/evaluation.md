@@ -274,6 +274,9 @@ smoke generator are unchanged (#1798).
 
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+A task `name` must also be non-empty and free of NUL characters; a suite with
+such a name is refused at load time (`soup eval gate` exits `3`), before any
+model setup or verdict.
 
 Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
