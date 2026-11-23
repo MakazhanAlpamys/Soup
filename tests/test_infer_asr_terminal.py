@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import infer
 from soup_cli.utils import asr_metrics
+from soup_cli.utils.paths import quote_path
 from tests.conftest import strip_ansi
 
 SPELLINGS = [
@@ -31,12 +32,12 @@ def isolated_cli(tmp_path, monkeypatch):
     )
 
 
-def _run(rows, output):
+def _run(rows, output, *, model="whisper-tiny"):
     Path("rows.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
     )
     return CliRunner().invoke(app, [
-        "infer", "--task", "asr", "--model", "whisper-tiny",
+        "infer", "--task", "asr", "--model", model, "--device", "cpu",
         "--input", "rows.jsonl", "--output", output,
     ])
 
@@ -117,3 +118,53 @@ def test_asr_metric_skip_shows_filename_and_keeps_transcript(monkeypatch, value,
     assert json.loads(Path("output.jsonl").read_text(encoding="utf-8")) == {
         "audio": bad, "transcription": "hello",
     }
+
+
+def _assert_red_refusal(result, exit_code, message):
+    assert _lines(result, exit_code) == [message]
+    styled = result.stdout.strip().replace("\x1b[0m\x1b[31m", "")
+    assert styled == f"\x1b[31m{message}\x1b[0m"
+
+
+@pytest.mark.parametrize("value,_shown", SPELLINGS)
+def test_asr_refuses_real_outside_output_with_literal_path(tmp_path, monkeypatch, value, _shown):
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    output = f"../outside-{value}.jsonl"
+    result = _run([{"audio": "clip.wav"}], output)
+
+    # Path refusals already spell ASCII/C1 controls as quoted escape sequences.
+    quoted = quote_path(output).replace("\u202e", "")
+    _assert_red_refusal(result, 1, f"--output {quoted} must stay under cwd")
+    assert list(tmp_path.iterdir()) == [workdir]
+
+
+@pytest.mark.parametrize("value,shown", SPELLINGS)
+def test_asr_dependency_refusal_shows_literal_error(monkeypatch, value, shown):
+    def missing_dependency(*args, **kwargs):
+        raise ImportError(f"Could not import decoder {value}")
+
+    monkeypatch.setattr(infer, "_build_asr_transcriber", missing_dependency)
+    result = _run([{"audio": "clip.wav"}], "output.jsonl")
+
+    _assert_red_refusal(result, 1, f"Could not import decoder {shown}")
+    assert not Path("output.jsonl").exists()
+
+
+@pytest.mark.parametrize("value,_shown", SPELLINGS)
+def test_asr_rejects_real_non_whisper_config_with_literal_model_name(value, _shown):
+    pytest.importorskip("transformers")
+    _require_filename(value)
+    model = Path(f"gpt2-{value}")
+    model.mkdir()
+    (model / "config.json").write_text('{"model_type":"gpt2"}', encoding="utf-8")
+
+    result = _run([{"audio": "clip.wav"}], "output.jsonl", model=str(model))
+
+    message = (
+        f"task='asr' requires a Whisper base model, but {str(model)!r} has "
+        "model_type='gpt2'. Use e.g. openai/whisper-tiny / whisper-base / whisper-large-v3."
+    )
+    _assert_red_refusal(result, 2, message)
+    assert not Path("output.jsonl").exists()

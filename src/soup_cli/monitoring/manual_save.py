@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Iterator
 
@@ -28,6 +30,25 @@ def _shared_requests(save: bool, stop: bool) -> tuple[bool, bool]:
     return bool(flags[0].item()), bool(flags[1].item())
 
 
+@dataclass
+class _ManualStop:
+    stopped: bool = False
+
+
+_ACTIVE_STOP: ContextVar[_ManualStop | None] = ContextVar("soup_manual_stop", default=None)
+
+
+@contextmanager
+def capture_manual_stop() -> Iterator[_ManualStop]:
+    """Capture user stops for one CLI training call across all HF wrappers."""
+    result = _ManualStop()
+    token = _ACTIVE_STOP.set(result)
+    try:
+        yield result
+    finally:
+        _ACTIVE_STOP.reset(token)
+
+
 @contextmanager
 def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Iterator[None]:
     """Run a HF-backed trainer with checkpoint triggers and scoped SIGINT handling.
@@ -47,11 +68,13 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
     from transformers import TrainerCallback
 
     requests = SimpleNamespace(should_save=False, should_training_stop=False)
+    result = _ACTIVE_STOP.get()
     handler = GracefulSaveHandler()
     handler.attach_state(requests)
 
     class ManualSaveCallback(TrainerCallback):
         trigger_pending = False
+        initiated_stop = False
 
         def on_train_begin(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
             handler.install()
@@ -68,6 +91,7 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
             if save or stop:
                 control.should_save = True
             if stop:
+                self.initiated_stop |= not control.should_training_stop
                 control.should_training_stop = True
 
         def on_save(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
@@ -79,7 +103,17 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
             # It is already safe to stop after this successful save.
             _save, stop = _shared_requests(False, requests.should_training_stop)
             if stop:
+                # If a configured stop was already in effect, a late SIGINT
+                # does not change its cause. PPO ignores the control flag and
+                # is stopped by the explicit unwind below.
+                initiated = (
+                    self.initiated_stop or not control.should_training_stop or stop_after_save
+                )
                 control.should_training_stop = True
+                if result is not None and initiated and (
+                    state.max_steps <= 0 or state.global_step < state.max_steps
+                ):
+                    result.stopped = True
                 if stop_after_save:
                     raise _StopAfterCheckpoint
 

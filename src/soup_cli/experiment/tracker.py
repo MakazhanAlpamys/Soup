@@ -13,9 +13,11 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Callable, Iterable
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from soup_cli.experiment.reward_columns import finite_reward
 from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
@@ -93,8 +95,8 @@ CREATE TABLE IF NOT EXISTS metrics (
     grad_norm REAL,
     speed     REAL,
     gpu_mem   TEXT,
-    kind      TEXT,
     timestamp TEXT NOT NULL,
+    kind      TEXT,
     reward REAL,
     reward_std REAL
 );
@@ -259,10 +261,11 @@ class ExperimentTracker:
              "ALTER TABLE runs ADD COLUMN loss_summary_kind TEXT"),
             # A reinforcement-style run's per-step training reward and its spread
             # (experiment/reward_columns.py). Nullable with no default and never
-            # backfilled, like the columns above: NULL is "not measured". Appended
-            # after every existing column here and in _SCHEMA_SQL, so in a fresh and
-            # in an upgraded database alike they are the last two columns and no
-            # existing one moves: a reader that indexes a row by position keeps working.
+            # backfilled, like the columns above: NULL is "not measured". Fresh
+            # tables follow the upgrade order from 0.77.2: timestamp, kind, then these
+            # two fields. Existing tables keep their order, which can differ for
+            # older upgrades and databases created by v0.78.0. get_metrics reads
+            # columns by name, so both orders work without rebuilding any table.
             ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
             ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
         ):
@@ -406,7 +409,7 @@ class ExperimentTracker:
         conn = self._get_conn()
         conn.execute(
             """UPDATE runs SET status = ?, exit_code = ? WHERE run_id = ?
-               AND status NOT IN ('completed', 'failed')""",
+               AND status NOT IN ('completed', 'failed', 'stopped')""",
             (status, exit_code, run_id),
         )
         conn.commit()
@@ -538,8 +541,10 @@ class ExperimentTracker:
         duration_secs: float,
         output_dir: str,
         loss_summary_kind: Optional[str] = None,
+        *,
+        status: Literal["completed", "stopped"] = "completed",
     ) -> None:
-        """Mark run as completed and fill summary fields.
+        """Record a completed or user-stopped run and fill summary fields.
 
         ``initial_loss`` / ``final_loss`` are ``None`` for a run that observed no
         loss; the columns are NULL then, not 0.0, so a reader can tell "no
@@ -589,12 +594,13 @@ class ExperimentTracker:
                 cost_label = None
         conn.execute(
             """UPDATE runs SET
-               status = 'completed',
+               status = ?,
                initial_loss = ?, final_loss = ?,
                total_steps = ?, duration_secs = ?, output_dir = ?,
                cost_usd = ?, cost_gpu_label = ?, loss_summary_kind = ?
                WHERE run_id = ?""",
             (
+                status,
                 initial_loss, final_loss, total_steps, duration_secs, output_dir,
                 cost_usd, cost_label, loss_summary_kind, run_id,
             ),
@@ -632,8 +638,8 @@ class ExperimentTracker:
         Only MCP-spawned runs carry a pid; a run recorded without one is left
         untouched because its liveness cannot be checked here. A dead pid is
         persisted as _STATUS_TERMINATED with exit_code None (unknown) through
-        finish_execution, whose guard keeps a richer 'completed'/'failed'
-        terminal status intact and makes the rewrite idempotent.
+        finish_execution, whose guard keeps a richer terminal status intact and
+        makes the rewrite idempotent.
         """
         pid = run.get("pid")
         if (
@@ -648,13 +654,21 @@ class ExperimentTracker:
             run["exit_code"] = None
         return run
 
-    def list_runs(self, limit: int = 50) -> list[dict]:
-        """Return list of runs ordered by created_at desc."""
+    def list_runs(
+        self,
+        limit: int = 50,
+        *,
+        select_runs: Callable[[Iterable[dict]], list[dict]] | None = None,
+    ) -> list[dict]:
+        """List newest runs, letting a selector apply the limit after filtering."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+        sql_limit = limit if select_runs is None or limit == 0 else -1
+        with closing(conn.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (sql_limit,)
+        )) as cursor:
+            rows = map(dict, cursor)
+            selected = list(rows) if select_runs is None else select_runs(rows)
+        return [self._reconcile_orphaned_run(run) for run in selected]
 
     def list_active_execution_runs(self) -> list[dict]:
         """Return every 'launching' or 'running' run, newest first, with no limit.
@@ -677,7 +691,9 @@ class ExperimentTracker:
             "SELECT * FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
 
-        if row is None:
+        # An empty id is not a prefix: its pattern is "%", which names every run,
+        # so with a single run `soup runs delete ""` would delete it.
+        if row is None and run_id:
             rows = conn.execute(
                 "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC",
@@ -703,6 +719,8 @@ class ExperimentTracker:
         ).fetchone()
         if exact is not None:
             return 1
+        if not run_id:
+            return 0  # an empty id names no run (see get_run)
         (count,) = conn.execute(
             "SELECT COUNT(*) FROM runs WHERE run_id LIKE ? ESCAPE '\\'",
             (_run_id_prefix_pattern(run_id),),

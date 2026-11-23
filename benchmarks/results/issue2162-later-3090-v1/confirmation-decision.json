@@ -1,0 +1,70 @@
+{
+  "comparison": {
+    "median_reduction_percent": 6.968552971461994,
+    "ordinary_95": [
+      6.520774388235448,
+      7.39832716744796
+    ],
+    "family_adjusted_ci": [
+      6.512996396342107,
+      7.41913489371679
+    ],
+    "adjusted_quantiles": [
+      0.0010416666666666667,
+      0.9989583333333333
+    ],
+    "correction_family": 24,
+    "reductions_percent": [
+      7.368703991160565,
+      7.377519441179129,
+      7.41913489371679,
+      6.528552380128788,
+      6.512996396342107,
+      6.568401951763423
+    ],
+    "resamples": 10000,
+    "seed": 73,
+    "count": 6,
+    "positive_lower_bounds": true,
+    "passes_two_percent": true
+  },
+  "memory_checks": [
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    },
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    },
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    },
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    },
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    },
+    {
+      "contrast": "mixed_vs_native",
+      "delta": 636303360,
+      "saved": 4940890112,
+      "passes": true
+    }
+  ],
+  "passes": true
+}
