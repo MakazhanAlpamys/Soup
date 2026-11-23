@@ -2733,6 +2733,7 @@ Subcommands:
 - [`canary`](#soup-loop-canary)
 - [`init`](#soup-loop-init)
 - [`pause`](#soup-loop-pause)
+- [`prune`](#soup-loop-prune)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
 - [`rollback`](#soup-loop-rollback)
@@ -2800,6 +2801,18 @@ Usage: `soup loop pause`
 
 Takes no options or arguments.
 
+### `soup loop prune`
+
+Safely prune loop artifacts. Detects detached daemons only; stop foreground watches first.
+
+Usage: `soup loop prune [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
+| `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
+
 ### `soup loop replay`
 
 Replay a recorded loop iteration manifest.
@@ -2854,7 +2867,7 @@ Usage: `soup loop watch [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--foreground` | flag | off |  | Run in foreground (default). |
+| `--foreground` | flag | off |  | Run in foreground (default); stop this watch before pruning loop artifacts. |
 | `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
