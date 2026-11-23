@@ -13,11 +13,12 @@
     "cache": "Existing bytes and mtime unchanged on cache hit; no build/write allowed by test",
     "original28_numerical_gate": "PASS locally, all four metrics preserved or improved; one individual loss disclosed",
     "current28_section_gate": "PASS; pinned docs/chunks/baseline/mappings; no individual loss",
-    "changelog": "Fragment renamed to changelog.d/0.78.0/3242.changed.md using the actual PR number."
+    "changelog": "Fragment renamed to changelog.d/0.78.0/3242.changed.md using the actual PR number.",
+    "supplemental10": "Completed once after approval and freeze. FAIL: Hit@5 7/10 to 7/10; MRR@10 0.4750 to 0.453333; all four first-rank losses disclosed."
   },
   "pending": {
     "historical_fixture": "Two passages lack established Soup docs source; bodies not committed",
-    "fresh_set": "Ten AI-drafted questions by the implementation agent await user review and remain unscored. They are not authored outside the tuning work; the confirmed fresh-set requirement remains pending.",
-    "pull_request": "Draft #3242 opened for implementation review only; ready-for-review and merge remain blocked on eligible fresh Hit@5 evidence and historical fixture provenance."
+    "fresh_set": "Supplemental10 approved and scored, but no Hit@5 gain and lower MRR@10. Outside-tuning independence was not established; the confirmed fresh-set requirement remains pending.",
+    "pull_request": "Draft #3242; promotion unsupported by supplemental results and still pending eligible fresh-set evidence and historical fixture provenance."
   }
 }

@@ -1,0 +1,425 @@
+{
+  "cohort": "supplemental10",
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "query_count": 10,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": false,
+  "require_hit5_gain": true,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.3,
+      "hit5": 0.7,
+      "mrr10": 0.475,
+      "recall5": 0.6
+    },
+    "candidate": {
+      "hit1": 0.3,
+      "hit5": 0.7,
+      "mrr10": 0.4533333333333333,
+      "recall5": 0.6
+    }
+  },
+  "rank_losses": [
+    {
+      "id": "R01",
+      "query": "Can I do local adapter training on my M2 laptop, or do I need to rent a GPU?",
+      "old_rank": 38,
+      "new_rank": 39
+    },
+    {
+      "id": "R05",
+      "query": "My training dataset repeats the same instruction with small wording changes. Can I filter those rows by embedding similarity?",
+      "old_rank": 13,
+      "new_rank": 15
+    },
+    {
+      "id": "R07",
+      "query": "Does the merge command check whether the licenses of my adapters are compatible?",
+      "old_rank": 2,
+      "new_rank": 3
+    },
+    {
+      "id": "R08",
+      "query": "Can I stop a run automatically if its evaluation falls below the model I started with?",
+      "old_rank": 4,
+      "new_rank": 5
+    }
+  ],
+  "per_query": [
+    {
+      "id": "R01",
+      "query": "Can I do local adapter training on my M2 laptop, or do I need to rent a GPU?",
+      "targets": [
+        "53"
+      ],
+      "baseline": {
+        "rank": 38,
+        "top10": [
+          "18",
+          "508",
+          "424",
+          "490",
+          "701",
+          "219",
+          "648",
+          "36",
+          "225",
+          "678"
+        ]
+      },
+      "candidate": {
+        "rank": 39,
+        "top10": [
+          "18",
+          "508",
+          "424",
+          "701",
+          "490",
+          "219",
+          "648",
+          "678",
+          "36",
+          "225"
+        ]
+      }
+    },
+    {
+      "id": "R02",
+      "query": "The machine rebooted halfway through a run. How do I continue training from the saved state?",
+      "targets": [
+        "71"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "71",
+          "18",
+          "407",
+          "124",
+          "464",
+          "653",
+          "89",
+          "569",
+          "59",
+          "118"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "71",
+          "18",
+          "59",
+          "464",
+          "407",
+          "124",
+          "569",
+          "649",
+          "61",
+          "693"
+        ]
+      }
+    },
+    {
+      "id": "R03",
+      "query": "Can Soup try different batch sizes and pick the largest one my card can handle?",
+      "targets": [
+        "576",
+        "585"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "576",
+          "568",
+          "553",
+          "118",
+          "645",
+          "564",
+          "405",
+          "174",
+          "637",
+          "571"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "576",
+          "568",
+          "553",
+          "118",
+          "564",
+          "645",
+          "405",
+          "174",
+          "637",
+          "571"
+        ]
+      }
+    },
+    {
+      "id": "R04",
+      "query": "I have chosen and rejected answers but cannot fit a second model. Which preference methods avoid a reference model?",
+      "targets": [
+        "686",
+        "687"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "437",
+          "687",
+          "665",
+          "436",
+          "570",
+          "672",
+          "446",
+          "651",
+          "511",
+          "56"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "437",
+          "687",
+          "570",
+          "665",
+          "436",
+          "672",
+          "446",
+          "651",
+          "511",
+          "56"
+        ]
+      }
+    },
+    {
+      "id": "R05",
+      "query": "My training dataset repeats the same instruction with small wording changes. Can I filter those rows by embedding similarity?",
+      "targets": [
+        "417"
+      ],
+      "baseline": {
+        "rank": 13,
+        "top10": [
+          "459",
+          "444",
+          "436",
+          "466",
+          "426",
+          "448",
+          "486",
+          "423",
+          "490",
+          "508"
+        ]
+      },
+      "candidate": {
+        "rank": 15,
+        "top10": [
+          "459",
+          "486",
+          "444",
+          "436",
+          "466",
+          "426",
+          "448",
+          "423",
+          "508",
+          "490"
+        ]
+      }
+    },
+    {
+      "id": "R06",
+      "query": "I need a checkpoint right now, but I want the running job to keep training afterwards.",
+      "targets": [
+        "105"
+      ],
+      "baseline": {
+        "rank": 62,
+        "top10": [
+          "72",
+          "570",
+          "648",
+          "645",
+          "36",
+          "492",
+          "18",
+          "569",
+          "127",
+          "453"
+        ]
+      },
+      "candidate": {
+        "rank": 38,
+        "top10": [
+          "72",
+          "570",
+          "648",
+          "645",
+          "36",
+          "492",
+          "18",
+          "569",
+          "127",
+          "453"
+        ]
+      }
+    },
+    {
+      "id": "R07",
+      "query": "Does the merge command check whether the licenses of my adapters are compatible?",
+      "targets": [
+        "24"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "122",
+          "24",
+          "142",
+          "602",
+          "2",
+          "618",
+          "9",
+          "0",
+          "422",
+          "508"
+        ]
+      },
+      "candidate": {
+        "rank": 3,
+        "top10": [
+          "122",
+          "142",
+          "24",
+          "2",
+          "602",
+          "618",
+          "9",
+          "0",
+          "422",
+          "508"
+        ]
+      }
+    },
+    {
+      "id": "R08",
+      "query": "Can I stop a run automatically if its evaluation falls below the model I started with?",
+      "targets": [
+        "463"
+      ],
+      "baseline": {
+        "rank": 4,
+        "top10": [
+          "615",
+          "679",
+          "437",
+          "463",
+          "490",
+          "483",
+          "36",
+          "273",
+          "119",
+          "618"
+        ]
+      },
+      "candidate": {
+        "rank": 5,
+        "top10": [
+          "615",
+          "679",
+          "483",
+          "437",
+          "463",
+          "490",
+          "119",
+          "36",
+          "273",
+          "618"
+        ]
+      }
+    },
+    {
+      "id": "R09",
+      "query": "The server is already running. Can I switch to another LoRA adapter without restarting it?",
+      "targets": [
+        "620"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "621",
+          "620",
+          "648",
+          "395",
+          "642",
+          "627",
+          "3",
+          "616",
+          "467",
+          "67"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "621",
+          "620",
+          "648",
+          "642",
+          "395",
+          "627",
+          "3",
+          "616",
+          "467",
+          "67"
+        ]
+      }
+    },
+    {
+      "id": "R10",
+      "query": "What does soup data dedup --semantic --threshold 0.85 change compared with default deduplication?",
+      "targets": [
+        "417",
+        "418"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "417",
+          "418",
+          "197",
+          "465",
+          "416",
+          "448",
+          "225",
+          "444",
+          "248",
+          "230"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "417",
+          "418",
+          "197",
+          "465",
+          "416",
+          "448",
+          "225",
+          "444",
+          "248",
+          "230"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "4318f4eb6a1f36d62e766b7a45cb6643b63b00efe2ab24a8dfbb07789fc50aa4",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}

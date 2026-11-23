@@ -4,7 +4,7 @@ The user approved these ten questions and their target sections in chat on Novem
 
 The ranker was frozen at `f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5` before the questions were drafted. Authorship and eligibility are preserved in the fixture and `supplemental10-lock.json`: the implementation agent generated this set, so it does not establish outside-tuning independence.
 
-The approved fixture and its hash were committed before the first scoring run. Results are recorded separately in `supplemental10-results.json`; this set is supplemental evidence and does not replace the confirmed fresh-set requirement.
+The approved fixture and its hash were frozen in commit `f1f507ad` before the first scoring run. The run returned exit code 1: Hit@5 stayed at 7/10 and MRR@10 decreased from 0.4750 to 0.4533. Full outputs are in `supplemental10-results.json`, with the execution record in `supplemental10-execution.json`. The candidate, wording and labels were not changed after scoring. This set is supplemental evidence and does not replace the confirmed fresh-set requirement.
 
 | ID | Question | Approved target sections |
 | --- | --- | --- |
