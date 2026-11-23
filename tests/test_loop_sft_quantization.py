@@ -614,6 +614,85 @@ class TestOfflineCache:
             total, "count from the cached safetensors headers"
         )
 
+    @staticmethod
+    def _two_shard_snapshot(tmp_path, *, with_index, present=(1,)):
+        """A snapshot of a two-shard checkpoint holding only the shards in ``present``."""
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        names = {n: f"model-0000{n}-of-00002.safetensors" for n in (1, 2)}
+        if with_index:
+            index = {"weight_map": {"a": names[1], "b": names[2]}}
+            (snapshot / "model.safetensors.index.json").write_text(json.dumps(index))
+        total = 0
+        for n in present:
+            total += _write_safetensors(snapshot / names[n], {"ab"[n - 1]: [300, 200]})
+        return snapshot, total
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_with_one_of_two_shards_is_not_counted_from_its_headers(
+        self, cache, tmp_path, monkeypatch, with_index
+    ):
+        """The shard on disk would fit, the whole model does not: the subtotal must not win."""
+        snapshot, subtotal = self._two_shard_snapshot(tmp_path, with_index=with_index)
+        cache(SMOL_135M, str(snapshot))
+        free = 100 * 1024**2
+        monkeypatch.setattr(lq, "free_vram_bytes", lambda: free)
+        assert lq.estimated_need_bytes(subtotal) <= free  # control: the subtotal fits
+        assert model_shape.read_model_shape("org/base", allow_network=False).params == subtotal
+
+        value, note = lq.resolve_sft_quantization("auto", "org/base")
+
+        assert value == "4bit"
+        assert note == (
+            "sft quantization auto: 4bit (need 1.3 GB, free 0.1 GB; count from the cached "
+            "config.json, an estimate without biases; the cache holds only part of the "
+            "safetensors weights)"
+        )
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_partial_cache_with_a_config_it_cannot_count_is_unknown(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, _ = self._two_shard_snapshot(tmp_path, with_index=with_index)
+        cache({"model_type": "unknown-arch"}, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            None, "the cache holds only part of the safetensors weights"
+        )
+        assert lq.resolve_sft_quantization("auto", "org/base") == (
+            "4bit",
+            "sft quantization auto: 4bit (parameter count unknown: "
+            "the cache holds only part of the safetensors weights)",
+        )
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_with_every_shard_is_counted_from_its_headers(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, total = self._two_shard_snapshot(
+            tmp_path, with_index=with_index, present=(1, 2)
+        )
+        cache(SMOL_135M, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            total, "count from the cached safetensors headers"
+        )
+
+    @pytest.mark.parametrize(
+        ("names", "complete"),
+        [
+            (["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"], True),
+            (["model-00002-of-00002.safetensors"], False),
+            (["model-00001-of-00002.safetensors", "model-00003-of-00002.safetensors"], False),
+            (["model-00001-of-00002.safetensors", "model-00002-of-00003.safetensors"], False),
+        ],
+    )
+    def test_numbered_shards_are_complete_only_with_1_to_n(self, tmp_path, names, complete):
+        for name in names:
+            _write_safetensors(tmp_path / name, {"a": [2, 2]})
+
+        assert lq._holds_every_weight_file(str(tmp_path)) is complete
+
     def test_nothing_cached_stays_4bit_and_says_why(self, cache):
         cache()
 

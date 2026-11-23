@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from typing import Optional
 
@@ -70,6 +71,39 @@ _CACHED_SOURCES = {
 }
 
 
+_PARTIAL_CACHE = "the cache holds only part of the safetensors weights"
+_NUMBERED_SHARD = re.compile(r"^model-(\d+)-of-(\d+)\.safetensors$")
+
+
+def _holds_every_weight_file(snapshot: str) -> bool:
+    """Whether a cached snapshot has every weight file of its checkpoint on disk.
+
+    ``param_count_from_local_safetensors`` sums the files that are present, so a snapshot
+    whose index names a shard it lacks, or whose ``model-0000x-of-0000N`` shards are fewer
+    than ``N``, gives a subtotal. An unreadable index counts as incomplete.
+    """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
+    try:
+        selected = checkpoint_files(snapshot)
+    except (OSError, ValueError):
+        return False
+    if selected.missing:
+        return False
+    if selected.rule == "shards":
+        numbers = set()
+        totals = set()
+        for name in selected.weights:
+            match = _NUMBERED_SHARD.match(name)
+            if match is None:
+                return False
+            numbers.add(int(match.group(1)))
+            totals.add(int(match.group(2)))
+        if len(totals) != 1 or numbers != set(range(1, totals.pop() + 1)):
+            return False
+    return True
+
+
 def estimated_need_bytes(params: int) -> int:
     """VRAM a bf16 LoRA run on ``params`` parameters is expected to need, in bytes."""
     return params * BYTES_PER_PARAM * WORKING_SET_FACTOR
@@ -107,6 +141,18 @@ def count_parameters(base: str) -> tuple[Optional[int], str]:
     if count is not None:
         return count, ""
     shape = model_shape.read_model_shape(base, allow_network=False)
+    if shape.params_source == "safetensors":
+        config, snapshot = model_shape._hub_lookup(base, allow_network=False)
+        if snapshot is None or not _holds_every_weight_file(snapshot):
+            # The headers summed only the shards on disk: a subtotal, not the model.
+            estimate = None
+            if config is not None:
+                estimate = model_shape.shape_from_config(
+                    config, params=None, params_source="config.json"
+                )
+            if estimate is None:
+                return None, _PARTIAL_CACHE
+            return estimate.params, f"{_CACHED_SOURCES['config.json']}; {_PARTIAL_CACHE}"
     source = _CACHED_SOURCES.get(shape.params_source)
     if source is not None and shape.params > 0:
         return shape.params, source
