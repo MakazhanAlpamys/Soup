@@ -1287,6 +1287,40 @@ class TestStatsHistogramWindows:
 
         assert stdout_during_render == ["utf-8"]
 
+    def test_real_plotext_histogram_reaches_a_cp1251_stdout_as_utf8(self, tmp_path, monkeypatch):
+        """Canary: a real plotext render is written to a cp1251 stdout without an encode error.
+
+        The row above stubs plotext; this one lets plotext draw its box/block glyphs, which
+        cp1251 cannot encode, through the real console and the real UTF-8 redirect.
+        """
+        import io
+        import json
+        import sys
+
+        pytest.importorskip("plotext")
+        from soup_cli.commands import data
+
+        path = tmp_path / "data.jsonl"
+        rows = [
+            {"instruction": "Q" * (10 * index), "input": "", "output": "A" * (5 * index)}
+            for index in range(1, 9)
+        ]
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        out_path = tmp_path / "stdout.bin"
+
+        with open(out_path, "wb") as raw:
+            windows_stdout = io.TextIOWrapper(raw, encoding="cp1251")
+            with monkeypatch.context() as env:
+                env.setattr(sys, "platform", "win32")
+                env.setattr(sys, "stdout", windows_stdout)
+                data.stats(str(path))
+        rendered = out_path.read_bytes().decode("utf-8")
+
+        assert "Histogram skipped" not in rendered
+        assert "Text Length Distribution (chars)" in rendered
+        with pytest.raises(UnicodeEncodeError):
+            rendered.encode("cp1251")
+
 
 # --- BUG-015: soup ui --help missing auth token docs (v0.14.2) ---
 
