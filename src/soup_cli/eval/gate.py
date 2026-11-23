@@ -92,6 +92,16 @@ class GateTask(BaseModel):
             raise ValueError("threshold must be a number, not a boolean")
         return value
 
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, value: str) -> str:
+        # Same rule as the baseline writer (stamp_baseline_scores) so a
+        # suite that could never be stored under --write-baseline is
+        # refused at load time, before any model setup (#3122).
+        if not value or "\x00" in value:
+            raise ValueError("task name must be non-empty and null-free")
+        return value
+
     @field_validator("tasks", "prompts")
     @classmethod
     def _clean_path_fields(cls, value: Optional[str]) -> Optional[str]:
@@ -648,6 +658,11 @@ def _run_judge_task(
                     f"field 'prompt' must be a string, got {type(prompt).__name__}"
                 )
             category = row.get("category", "default")
+            if not isinstance(category, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'category' must be a string, got {type(category).__name__}"
+                )
             validated_rows.append((prompt, category))
 
     if not validated_rows:

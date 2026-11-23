@@ -97,7 +97,7 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     if (path / "added_tokens.safetensors").exists():
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
-            "with expanded vocabularies (#1986)"
+            "with expanded vocabularies (#3089)"
         )
     config_path = path / "adapter_config.json"
     if not config_path.exists():
@@ -121,7 +121,7 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     if config.get("vocab_expansion"):
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
-            "with expanded vocabularies (#1986)"
+            "with expanded vocabularies (#3089)"
         )
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")

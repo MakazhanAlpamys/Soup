@@ -14,6 +14,7 @@ v0.26.0 Soup Cans under ``.soup-loops/``.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -1246,10 +1247,31 @@ def read_state(path: Optional[str] = None) -> LoopState:
         raise ValueError(f"state file is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("state file root must be a JSON object")
-    # Drop keys we don't recognise so a forward-compat dump can still load
-    # backwards (the alternative is mass-rejecting on any unknown field).
     allowed = set(LoopState.__dataclass_fields__.keys())
-    filtered = {k: v for k, v in data.items() if k in allowed}
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        details = []
+        allowed_fields = sorted(allowed)
+        shown_unknown = unknown[:5]
+        for key in shown_unknown:
+            nearest = (
+                difflib.get_close_matches(key, allowed_fields, n=1, cutoff=0.6)
+                if len(key) <= 128
+                else []
+            )
+            if nearest:
+                details.append(
+                    f"unknown loop.yaml key {_brief(key)}; did you mean {nearest[0]!r}?"
+                )
+            else:
+                details.append(
+                    f"unknown loop.yaml key {_brief(key)}; it is not a supported field"
+                )
+        remaining = len(unknown) - len(shown_unknown)
+        if remaining:
+            details.append(f"and {remaining} more unknown keys")
+        raise ValueError("; ".join(details))
+    filtered = data
     if "production_version" not in data:
         _number_versions_of_old_state(filtered)
     try:

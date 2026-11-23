@@ -327,4 +327,207 @@ def test_plain_escape_is_left_only_on_values_from_closed_sets():
             and node.func.id == "escape"
         }
     )
-    assert arguments == ["bench", "m.name", "m.verdict", "report.overall"], arguments
+    assert arguments == ["m.name", "m.verdict", "report.overall"], arguments
+
+
+# ---------------------------------------------------------------------------
+# Emoji aliases and a backslash before a bracket (#2489)
+# ---------------------------------------------------------------------------
+#
+# ``for_terminal`` strips controls and escapes markup, but inside a markup
+# string a ``:name:`` alias still became an emoji and a backslash before a
+# bracket was lost. Every line that carries outside text is now a ``Text``.
+
+BIDI_OVERRIDE = chr(0x202E)
+EM_DASH = chr(0x2014)
+
+#: name -> (text as given, text the terminal must show)
+LITERALS = {
+    "alias": ("ZQ:rocket:QZ", "ZQ:rocket:QZ"),
+    "backslash": ("ZQ" + BACKSLASH + "[nQZ", "ZQ" + BACKSLASH + "[nQZ"),
+    "tag": ("ZQ[red]n[/]QZ", "ZQ[red]n[/]QZ"),
+    "controls": ("ZQ" + ESC + BEL + CSI_C1 + BIDI_OVERRIDE + "nQZ", "ZQnQZ"),
+}
+
+
+def _assert_line(out: str, line: str, *, times: int = 1) -> None:
+    """``line`` is shown whole, and no control or bidi character is anywhere."""
+    _assert_no_control_bytes(out)
+    assert BIDI_OVERRIDE not in out, out
+    assert _flat(out).count(_flat(line)) == times, out
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_benchmark_refusal_quotes_the_typed_name(monkeypatch, tmp_path, name):
+    given, _ = LITERALS[name]
+    result, out = _run(monkeypatch, tmp_path, "run1", "--benchmark", given)
+    _exit(result, 2)
+    _assert_line(
+        out, f"Invalid benchmark: unknown benchmark {given!r}; supported: muse, tofu, wmdp"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_evidence_refusal_quotes_the_typed_path(monkeypatch, tmp_path, name):
+    path = "../" + LITERALS[name][0]
+    result, out = _run(monkeypatch, tmp_path, "run1", "--evidence", path)
+    _exit(result, 2)
+    _assert_line(out, f"Cannot read evidence: evidence path must stay under cwd: {path!r}")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_invalid_json_refusal_shows_the_message_as_written(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+
+    def _load(path):
+        raise json.JSONDecodeError(f"cannot parse {given}", "{", 0)
+
+    monkeypatch.setattr(unlearning_eval, "load_evidence_file", _load)
+    result, out = _run(monkeypatch, tmp_path, "run1", "--evidence", "evidence.json")
+    _exit(result, 2)
+    _assert_line(
+        out, f"Evidence file is not valid JSON: cannot parse {shown}: line 1 column 1 (char 0)"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_eval_failure_shows_the_message_as_written(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+
+    def _fail(**kwargs):
+        raise ValueError(f"cannot score run {kwargs['run_id']}")
+
+    monkeypatch.setattr(unlearning_eval, "run_unlearn_eval", _fail)
+    result, out = _run(monkeypatch, tmp_path, given)
+    _exit(result, 2)
+    _assert_line(out, f"Eval failed: cannot score run {shown}")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_table_title_shows_the_typed_run_id(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+    result, out = _run(monkeypatch, tmp_path, given)
+    _exit(result, 0)
+    _assert_line(out, f"Unlearn eval {EM_DASH} tofu {EM_DASH} {shown}")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_evidence_cells_show_the_text_as_written(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+    _with_evidence_text(monkeypatch, given)
+    result, out = _run(monkeypatch, tmp_path, "run1")
+    _exit(result, 0)
+    _assert_line(out, shown, times=3)
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_write_refusal_quotes_the_typed_path(monkeypatch, tmp_path, name):
+    from soup_cli.utils.paths import quote_path
+
+    path = "../" + LITERALS[name][0]
+    result, out = _run(monkeypatch, tmp_path, "run1", "--output", path)
+    _exit(result, 2)
+    quoted = quote_path(path).replace(BIDI_OVERRIDE, "")
+    _assert_line(out, f"Cannot write report: output {quoted} must stay under cwd")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_wrote_receipt_shows_the_typed_path(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+    monkeypatch.setattr(unlearning_eval, "write_unlearn_report", lambda report, path: path)
+    result, out = _run(monkeypatch, tmp_path, "run1", "--output", given)
+    _exit(result, 0)
+    _assert_line(out, f"Wrote report -> {shown}")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_attach_failure_shows_the_message_as_written(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+
+    def _missing(entry_id, *, path, kind, enforce_cwd=True):
+        raise ValueError(f"registry entry not found: {entry_id}")
+
+    monkeypatch.setattr(attach_mod, "attach_artifact", _missing)
+    result, out = _run(
+        monkeypatch, tmp_path, "run1", "--output", "report.json", "--attach-to-registry", given
+    )
+    _exit(result, 1)
+    _assert_line(out, f"Registry attach failed: registry entry not found: {shown}")
+
+
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_attached_receipt_shows_the_typed_registry_id(monkeypatch, tmp_path, name):
+    given, shown = LITERALS[name]
+
+    def _attached(entry_id, *, path, kind, enforce_cwd=True):
+        return 1
+
+    monkeypatch.setattr(attach_mod, "attach_artifact", _attached)
+    result, out = _run(
+        monkeypatch, tmp_path, "run1", "--output", "report.json", "--attach-to-registry", given
+    )
+    _exit(result, 0)
+    _assert_line(out, f"Attached eval_results -> registry {shown}")
+
+
+# ---------------------------------------------------------------------------
+# The lines keep their colours
+# ---------------------------------------------------------------------------
+
+
+def _run_coloured(monkeypatch, tmp_path, *args):
+    """Like ``_run``, on a console that emits ANSI colour."""
+    monkeypatch.chdir(tmp_path)
+    buffer = StringIO()
+    eval_app = typer.Typer()
+
+    @eval_app.callback()
+    def _root() -> None:
+        """Keep ``unlearning`` a named subcommand, as under ``soup eval``."""
+
+    unlearning_cmd.register(
+        eval_app,
+        Console(
+            file=buffer,
+            width=400,
+            force_terminal=True,
+            color_system="standard",
+            no_color=False,
+        ),
+    )
+    result = runner.invoke(eval_app, ["unlearning", *args])
+    return result, buffer.getvalue()
+
+
+def test_a_refusal_keeps_its_red_label(monkeypatch, tmp_path):
+    result, out = _run_coloured(monkeypatch, tmp_path, "run1", "--benchmark", "nope")
+    _exit(result, 2)
+    assert (
+        ESC + "[31mInvalid benchmark:" + ESC + "[0m unknown benchmark 'nope'; "
+        "supported: muse, tofu, wmdp\n"
+    ) in out, repr(out)
+
+
+def test_the_table_keeps_its_bold_metric_and_coloured_verdict(monkeypatch, tmp_path):
+    result, out = _run_coloured(monkeypatch, tmp_path, "run1")
+    _exit(result, 0)
+    # A ``Text`` title is rendered as it is, so it stays italic only through the
+    # explicit ``table.title`` style; the title is centred inside the italic span.
+    title = out.split(ESC + "[3m", 1)
+    assert len(title) == 2 and title[1].lstrip(" ").startswith("Unlearn eval"), repr(out)
+    assert ESC + "[1mforget_quality" in out, repr(out)
+    assert ESC + "[32mOK" + ESC + "[0m" in out, repr(out)
+    assert "Overall: " + ESC + "[32mOK" + ESC + "[0m" in out, repr(out)
+
+
+def test_the_receipts_stay_unstyled(monkeypatch, tmp_path):
+    def _attached(entry_id, *, path, kind, enforce_cwd=True):
+        return 1
+
+    monkeypatch.setattr(attach_mod, "attach_artifact", _attached)
+    result, out = _run_coloured(
+        monkeypatch, tmp_path, "run1", "--output", "report.json", "--attach-to-registry", "entry"
+    )
+    _exit(result, 0)
+    assert "\nWrote report -> report.json\n" in out, repr(out)
+    assert "\nAttached eval_results -> registry entry\n" in out, repr(out)

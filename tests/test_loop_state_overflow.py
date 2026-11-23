@@ -101,6 +101,23 @@ def test_a_loop_yaml_with_a_huge_integer_is_refused_by_name_on_read(cwd, field):
         read_state(".soup/loop.yaml")
 
 
+def test_an_unknown_loop_yaml_key_is_bounded_in_the_error(cwd):
+    write_state(_state(), ".soup/loop.yaml")
+    data = json.loads((cwd / ".soup" / "loop.yaml").read_text(encoding="utf-8"))
+    long_key = "untrusted_" + "x" * 512
+    data[long_key] = True
+    (cwd / ".soup" / "loop.yaml").write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        read_state(".soup/loop.yaml")
+
+    message = str(caught.value)
+    assert "unknown loop.yaml key" in message
+    assert repr(long_key)[:57] + "..." in message
+    assert long_key not in message
+    assert len(message) < 128
+
+
 @pytest.mark.parametrize("field", sorted(REFUSALS))
 def test_the_status_command_shows_one_line_for_it_not_a_traceback(cwd, field):
     write_state(_state(), ".soup/loop.yaml")
