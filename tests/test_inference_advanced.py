@@ -691,6 +691,7 @@ class TestJsonSchemaContainment:
         """Serve refuses a schema outside cwd without reading it or starting."""
         pytest.importorskip("fastapi")
         uvicorn = pytest.importorskip("uvicorn")
+        from rich.console import Console
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -706,7 +707,9 @@ class TestJsonSchemaContainment:
         model_dir = cwd / "model"
         model_dir.mkdir()
         monkeypatch.chdir(cwd)
-        monkeypatch.setenv("COLUMNS", "400")
+        # serve.py builds its Console at import, so COLUMNS set here is read too late and a
+        # CI worker's 80 columns would wrap the long tmp path; give the command a wide one.
+        monkeypatch.setattr(serve, "console", Console(width=500, height=100))
 
         loader = MagicMock(return_value=(object(), object()))
         server = MagicMock(side_effect=AssertionError("unexpected server startup"))
