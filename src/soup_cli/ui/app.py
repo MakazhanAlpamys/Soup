@@ -14,7 +14,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Union
 from urllib.parse import urlencode
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -480,8 +480,13 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def create_app(host: str = "127.0.0.1", port: int = 7860):
+def create_app(
+    host: str = "127.0.0.1",
+    port: int = 7860,
+    server_dir: Optional[Union[str, Path]] = None,
+):
     """Create the Soup Web UI FastAPI application."""
+    base_dir = Path.cwd() if server_dir is None else Path(server_dir)
     if not _is_loopback(host):
         token = get_auth_token()
         valid = False
@@ -707,11 +712,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     @app.get("/api/runs", dependencies=[Depends(_verify_token)])
     def list_runs(limit: int = Query(default=50, ge=1, le=500)):
         from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.utils.paths import sanitize_run_row
 
         tracker = ExperimentTracker()
         try:
             runs = tracker.list_runs(limit=limit)
-            return {"runs": runs}
+            return {"runs": [sanitize_run_row(run, base=base_dir) for run in runs]}
         finally:
             tracker.close()
 
@@ -736,7 +742,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             result = []
             for rid in run_ids:
                 run_info = tracker.get_run(rid)
-                metrics = tracker.get_metrics(rid)
+                resolved_id = run_info["run_id"] if run_info else rid
+                metrics = tracker.get_metrics(resolved_id)
                 config = {}
                 if run_info and run_info.get("config_json"):
                     try:
@@ -744,7 +751,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     except (ValueError, TypeError):
                         pass
                 result.append({
-                    "run_id": rid,
+                    "run_id": resolved_id,
                     "config": config,
                     "metrics": metrics,
                 })
@@ -755,6 +762,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+        from soup_cli.utils.paths import sanitize_run_row
 
         tracker = ExperimentTracker()
         try:
@@ -766,7 +774,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         tracker, run_id, markup=False, name_missing_id=False
                     ),
                 )
-            return run
+            return sanitize_run_row(run, base=base_dir)
         finally:
             tracker.close()
 
@@ -784,8 +792,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         tracker, run_id, markup=False, name_missing_id=False
                     ),
                 )
-            metrics = tracker.get_metrics(run_id)
-            return {"run_id": run_id, "metrics": metrics}
+            resolved_id = run["run_id"]
+            metrics = tracker.get_metrics(resolved_id)
+            return {"run_id": resolved_id, "metrics": metrics}
         finally:
             tracker.close()
 

@@ -10,6 +10,7 @@ from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.formats import split_embedding_negatives
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -197,8 +198,7 @@ class EmbeddingTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             "bf16": _bf16,
             "fp16": _fp16,
             "report_to": self.report_to,
@@ -270,7 +270,7 @@ class EmbeddingTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModel, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -308,13 +308,15 @@ class EmbeddingTrainerWrapper:
         )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         if tcfg.lora.r == 0:

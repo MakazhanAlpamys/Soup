@@ -3,6 +3,7 @@
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -124,6 +125,38 @@ def test_existing_output_strips_controls_from_the_display():
     text = _plain(result)
     assert "x[bold]o.yaml already exists. Use --force to overwrite." in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize("flags", [[], ["--force"]], ids=["default", "force"])
+def test_output_directory_is_refused_with_a_diagnostic(flags):
+    directory = Path("output[draft]")
+    directory.mkdir()
+    child = directory / "keep.yaml"
+    child.write_text("keep", encoding="utf-8")
+
+    result = _fetch("examples", _ENTRY, "--output", str(directory), *flags)
+
+    assert result.exit_code == 1
+    assert "Cannot write --output output[draft]: destination is a directory." in _plain(result)
+    assert "--force to overwrite" not in _plain(result)
+    assert list(directory.iterdir()) == [child]
+    assert child.read_text(encoding="utf-8") == "keep"
+
+
+def test_copy_failure_names_the_destination(monkeypatch):
+    def fail(source, destination):
+        assert Path(destination).name == "new[draft].yaml"
+        raise PermissionError(r"write refused:warning:\[draft" + _CONTROLS)
+
+    monkeypatch.setattr("soup_cli.commands.fetch.shutil", SimpleNamespace(copyfile=fail))
+
+    result = _fetch("examples", _ENTRY, "--output", "new[draft].yaml")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert r"Cannot write --output new[draft].yaml: write refused:warning:\[draft" in text
+    assert _not_shown(text)
+    assert "Wrote" not in text
 
 
 @pytest.mark.requires_symlink

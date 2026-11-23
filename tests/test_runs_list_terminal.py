@@ -1,6 +1,8 @@
 """soup runs prints run names and curriculum-history file names as typed, not as Rich markup."""
 
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -74,6 +76,19 @@ def test_runs_list_strips_controls_from_each_cell(db, field):
     text = _plain(result)
     assert "x[bold]v" in text
     assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize("show", [False, True], ids=["list", "show"])
+def test_runs_display_stopped_training(db: Path, show: bool) -> None:
+    run_id = _start(db, run_id="demo-run")
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE runs SET status = 'stopped' WHERE run_id = ?", (run_id,))
+
+    args = ["runs", "show", run_id, "--no-plot"] if show else ["runs"]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "stopped" in _plain(result).split()
 
 
 def _curve(db: Path, history: str):

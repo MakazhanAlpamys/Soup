@@ -47,17 +47,20 @@ def prune_layer_cache(
             console.print(
                 f"[red]Failed[/] {for_terminal(slot.path)}: {for_terminal(error)}",
                 soft_wrap=True,
+                emoji=False,
             )
         else:
             console.print(
                 f"{verb} {for_terminal(slot.path)} ({slot.bytes / 1e9:.2f} GB)",
                 soft_wrap=True,
+                emoji=False,
             )
         for stripe in slot.stripes:
             console.print(
                 f"  stripe folder kept, delete manually: {for_terminal(stripe.path)} "
                 f"({stripe.bytes / 1e9:.2f} GB)",
                 soft_wrap=True,
+                emoji=False,
             )
     if not yes:
         console.print("Dry run. Re-run with --yes to remove.")
