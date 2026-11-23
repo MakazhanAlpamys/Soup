@@ -378,7 +378,8 @@ def _powershell_fallback_commands(
     text = str(path)
     if not text or any(not char.isprintable() for char in text):
         return None
-    shown = for_terminal(re.sub(r"['\u2018-\u201b]", r"\g<0>\g<0>", text))
+    escaped = re.sub(r"['\u2018-\u201b]", r"\g<0>\g<0>", text)
+    shown = for_terminal(f"'{escaped}'")
     merge_line = (
         merge_note
         if merge_note is not None
