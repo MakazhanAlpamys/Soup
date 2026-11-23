@@ -349,6 +349,9 @@ def run_sweep(args) -> dict:
     except ImportError:
         return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
+    # Read the idle clock BEFORE the sweep loads the card; reading it in the
+    # return dict would report a post-sweep clock as idle (#3205).
+    env = hardware()
     shapes = [tuple(int(p) for p in s.split("x")) for s in args.shapes.split(",")]
     seeds = [int(s) for s in args.seeds.split(",")]
     rows = []
@@ -358,7 +361,7 @@ def run_sweep(args) -> dict:
 
     verdict = evaluate(rows)
     return {
-        "env": hardware(),
+        "env": env,
         "protocol": {
             "note": "both arms resident; variant 2 vs MatMul4Bit on the same NF4 weight",
             "blocksize": BLOCKSIZE,
