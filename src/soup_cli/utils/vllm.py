@@ -236,11 +236,15 @@ def token_finish_reason(new_tokens: Any, max_tokens: Optional[int], eos_ids: fro
 
 def is_vllm_available() -> bool:
     """Check if vLLM is installed."""
-    try:
-        import vllm  # noqa: F401
+    import importlib.util
+    import sys
 
-        return True
-    except ImportError:
+    if "vllm" in sys.modules:
+        return sys.modules["vllm"] is not None
+
+    try:
+        return importlib.util.find_spec("vllm") is not None
+    except (ImportError, ValueError):
         return False
 
 
@@ -297,6 +301,12 @@ def create_vllm_engine(
     """
     from vllm import AsyncEngineArgs, AsyncLLMEngine
 
+    kv_cache_kwargs = (
+        {"kv_cache_dtype": vllm_cache_dtype}
+        if vllm_cache_dtype is not None
+        else {}
+    )
+
     # For LoRA adapters, load the base model and apply LoRA at request time
     if is_adapter and base_model:
         engine_args = AsyncEngineArgs(
@@ -308,7 +318,7 @@ def create_vllm_engine(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
-            kv_cache_dtype=vllm_cache_dtype,
+            **kv_cache_kwargs,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
@@ -321,7 +331,7 @@ def create_vllm_engine(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
-            kv_cache_dtype=vllm_cache_dtype,
+            **kv_cache_kwargs,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len

@@ -206,7 +206,13 @@ def _resolve_vllm_cache_dtype(canonical: str) -> str:
         "fp8": "fp8",
     }[canonical]
 
-    from soup_cli.utils.vllm import get_vllm_version
+    from soup_cli.utils.vllm import get_vllm_version, is_vllm_available
+
+    if not is_vllm_available():
+        raise RuntimeError(
+            "--kv-cache-type with --backend vllm requires vLLM. "
+            'Install with: pip install "soup-cli[serve-fast]"'
+        )
 
     version = get_vllm_version()
 

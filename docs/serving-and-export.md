@@ -657,14 +657,26 @@ On the default Transformers backend, including a MoLE runtime, `finish_reason` i
 
 ### KV Cache Quantization (`soup serve --kv-cache-type`)
 
-Shrink the inference-time KV cache on the transformers backend:
+Shrink the inference-time KV cache on the Transformers or vLLM backend:
 
 ```bash
 soup serve --model ./output --kv-cache-type bf16   # cache in the model compute dtype
 soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (needs `hqq`)
 ```
+For the vLLM backend:
 
-`bf16`/`f16` need no extra dependency; `q8_0` requires a quant backend (`hqq` / `optimum-quanto`) or the CLI exits with an install hint; `fp8` is Hopper-only. Full detail and the vLLM/SGLang status live in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
+```bash
+soup serve --model ./output --backend vllm --kv-cache-type bf16
+soup serve --model ./output --backend vllm --kv-cache-type f16
+soup serve --model ./output --backend vllm --kv-cache-type fp8
+```
+
+For Transformers, `bf16` / `f16` use the model compute dtype, `q8_0`
+requires `hqq` or `optimum-quanto`, and `fp8` requires Hopper-class GPU
+support. For vLLM, `bf16` / `f16` must match the model checkpoint dtype;
+float32 checkpoints are refused. `fp8` requires Hopper-class GPU support,
+and `q8_0` is unsupported. SGLang KV-cache wiring remains deferred. Full
+details are in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
 
 ### Native MLX HTTP serving
 

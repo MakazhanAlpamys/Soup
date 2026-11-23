@@ -525,6 +525,15 @@ def serve(
     # surfaces immediately. The resolved runtime is threaded into the
     # transformers branch below (model dtype + generate kwargs).
     resolved_kv_runtime = None
+    if backend == "vllm":
+        from soup_cli.utils.vllm import is_vllm_available
+
+        if not is_vllm_available():
+            console.print(
+                "[red]This option requires vLLM, which is not installed (vllm).[/]\n"
+                'Install with: [bold]pip install "soup-cli\\[serve-fast]"[/]'
+            )
+            raise typer.Exit(1)
     if kv_cache_type is not None:
         from rich.markup import escape as _rich_escape
 
@@ -932,22 +941,33 @@ def serve(
             )
         if prefix_cache:
             console.print("[green]Prefix caching enabled.[/]")
-        app = _serve_vllm(
-            model_path=model_path,
-            base_model=base_model,
-            is_adapter=is_adapter,
-            max_tokens_default=max_tokens_default,
-            tensor_parallel=tensor_parallel,
-            gpu_memory_utilization=gpu_memory_utilization,
-            speculative_model=speculative_model,
-            num_speculative_tokens=num_speculative_tokens,
-            enable_prefix_caching=prefix_cache,
-            quantization=None,
-            trust_remote_code=resolved_trust,
-            max_model_len=max_model_len,
-            enable_dashboard=dashboard,
-            host=host,
-        )
+
+        try:
+            app = _serve_vllm(
+                model_path=model_path,
+                base_model=base_model,
+                is_adapter=is_adapter,
+                max_tokens_default=max_tokens_default,
+                tensor_parallel=tensor_parallel,
+                gpu_memory_utilization=gpu_memory_utilization,
+                speculative_model=speculative_model,
+                num_speculative_tokens=num_speculative_tokens,
+                enable_prefix_caching=prefix_cache,
+                quantization=None,
+                trust_remote_code=resolved_trust,
+                max_model_len=max_model_len,
+                enable_dashboard=dashboard,
+                vllm_cache_dtype=(
+                    resolved_kv_runtime.vllm_cache_dtype
+                    if resolved_kv_runtime is not None
+                    else None
+                ),
+                host=host,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]Failed to initialize vLLM:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+
     elif backend == "sglang":
         app = _serve_sglang(
             model_path=model_path,
@@ -959,6 +979,7 @@ def serve(
             trust_remote_code=resolved_trust,
             host=host,
         )
+
     elif backend == "mlx":
         from soup_cli.utils.mlx_serve import NativeServerRuntime
 
@@ -1319,12 +1340,43 @@ def _serve_vllm(
     trust_remote_code: bool = False,
     max_model_len: Optional[int] = None,
     enable_dashboard: bool = False,
+    vllm_cache_dtype: Optional[str] = None,
     host: str = "127.0.0.1",
 ):
     """Set up vLLM engine and create FastAPI app.
 
     ``host`` is the address the server binds; the app checks ``Origin`` against it.
     """
+    if vllm_cache_dtype in {"bfloat16", "float16"}:
+        from transformers import AutoConfig
+
+        config_model = base_model if is_adapter and base_model else str(model_path)
+        model_config = AutoConfig.from_pretrained(
+            config_model,
+            trust_remote_code=trust_remote_code,
+        )
+
+        raw_model_dtype = getattr(model_config, "torch_dtype", None)
+
+        if raw_model_dtype is None:
+            raise RuntimeError(
+                "Cannot determine model dtype; "
+                f"cannot safely use vLLM KV-cache dtype {vllm_cache_dtype!r}."
+            )
+
+        model_dtype = str(raw_model_dtype).replace("torch.", "")
+
+        if model_dtype == "float32":
+            raise RuntimeError(
+                "The checkpoint uses float32 weights. "
+                "vLLM KV-cache dtype bf16/f16 requires a bf16 or f16 checkpoint."
+            )
+
+        if model_dtype != vllm_cache_dtype:
+            raise RuntimeError(
+                f"vLLM KV-cache dtype {vllm_cache_dtype!r} must match model dtype {model_dtype!r}."
+            )
+
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
 
     console.print("[dim]Initializing vLLM engine...[/]")
@@ -1340,6 +1392,7 @@ def _serve_vllm(
         quantization=quantization,
         trust_remote_code=trust_remote_code,
         max_model_len=max_model_len,
+        vllm_cache_dtype=vllm_cache_dtype,
     )
     console.print("[bold green]vLLM engine ready![/]")
 

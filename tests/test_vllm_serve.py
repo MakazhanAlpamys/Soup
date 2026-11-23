@@ -90,6 +90,94 @@ class TestServeBackendFlag:
             result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "vllm"])
             assert result.exit_code != 0
 
+    def test_vllm_missing_preflight_skips_kv_cache_resolver(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch("soup_cli.utils.kv_cache.apply_kv_cache_type") as mock_resolve,
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "serve",
+                    "--model",
+                    str(model_dir),
+                    "--backend",
+                    "vllm",
+                    "--kv-cache-type",
+                    "bf16",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "requires vLLM" in result.output
+        assert "pip install" in result.output
+        assert "vllm" in result.output
+        mock_resolve.assert_not_called()
+
+    def test_vllm_cli_forwards_resolved_kv_cache_dtype(self, tmp_path):
+        from types import SimpleNamespace
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        resolved_runtime = SimpleNamespace(
+            vllm_cache_dtype="bfloat16",
+            requires_quant_backend=False,
+        )
+
+        with (
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+            patch(
+                "soup_cli.utils.kv_cache.apply_kv_cache_type",
+                return_value=resolved_runtime,
+            ) as mock_resolve,
+            patch(
+                "soup_cli.commands.serve._serve_vllm",
+                return_value=MagicMock(),
+            ) as mock_serve_vllm,
+            patch(
+                "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+                return_value=False,
+            ),
+            patch(
+                "soup_cli.utils.trust_remote.resolve_trust_remote_code",
+                return_value=False,
+            ),
+            patch("uvicorn.run"),
+            patch(
+                "soup_cli.utils.vllm.is_vllm_available",
+                return_value=True,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "serve",
+                    "--model",
+                    str(model_dir),
+                    "--backend",
+                    "vllm",
+                    "--kv-cache-type",
+                    "bf16",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_resolve.assert_called_once()
+        mock_serve_vllm.assert_called_once()
+        assert mock_serve_vllm.call_args.kwargs["vllm_cache_dtype"] == "bfloat16"
+
     def test_vllm_hint_shown_when_available(self, tmp_path):
         """When vllm is installed but not selected, show hint."""
         from io import StringIO
@@ -152,6 +240,66 @@ class TestServeBackendFlag:
         assert backend_param is not None
         # Just check the param exists and has help text mentioning vllm
         assert "vllm" in backend_param.default.help.lower()
+
+    def test_vllm_cli_reports_dtype_mismatch_cleanly(self, tmp_path):
+        from types import SimpleNamespace
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        resolved_runtime = SimpleNamespace(
+            vllm_cache_dtype="bfloat16",
+            requires_quant_backend=False,
+        )
+
+        with (
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+            patch(
+                "soup_cli.utils.kv_cache.apply_kv_cache_type",
+                return_value=resolved_runtime,
+            ),
+            patch(
+                "soup_cli.commands.serve._serve_vllm",
+                side_effect=RuntimeError(
+                    "vLLM KV-cache dtype 'bfloat16' must match model dtype 'float16'."
+                ),
+            ),
+            patch(
+                "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+                return_value=False,
+            ),
+            patch(
+                "soup_cli.utils.trust_remote.resolve_trust_remote_code",
+                return_value=False,
+            ),
+            patch("uvicorn.run"),
+            patch(
+                "soup_cli.utils.vllm.is_vllm_available",
+                return_value=True,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "serve",
+                    "--model",
+                    str(model_dir),
+                    "--backend",
+                    "vllm",
+                    "--kv-cache-type",
+                    "bf16",
+                ],
+            )
+
+        assert result.exit_code == 1
+        assert "Failed to initialize vLLM" in result.output
+        assert "must match model" in result.output
+        assert "dtype 'float16'" in result.output
+        assert "Traceback" not in result.output
 
 
 class TestServeTensorParallel:
@@ -278,6 +426,59 @@ class TestCreateVllmEngine:
             assert call_kwargs.kwargs["model"] == "meta-llama/Llama-3.1-8B"
             assert call_kwargs.kwargs["enable_lora"] is True
             assert call_kwargs.kwargs["kv_cache_dtype"] == "float16"
+
+    def test_create_engine_full_model_omits_default_cache_dtype(self):
+        mock_args_cls = MagicMock()
+        mock_engine_cls = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
+            from importlib import reload
+
+            import soup_cli.utils.vllm as vllm_mod
+
+            reload(vllm_mod)
+
+            vllm_mod.create_vllm_engine(
+                model_path="/path/to/model",
+                is_adapter=False,
+            )
+
+            assert "kv_cache_dtype" not in mock_args_cls.call_args.kwargs
+
+    def test_create_engine_adapter_omits_default_cache_dtype(self):
+        mock_args_cls = MagicMock()
+        mock_engine_cls = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
+            from importlib import reload
+
+            import soup_cli.utils.vllm as vllm_mod
+
+            reload(vllm_mod)
+
+            vllm_mod.create_vllm_engine(
+                model_path="/path/to/adapter",
+                base_model="meta-llama/Llama-3.1-8B",
+                is_adapter=True,
+            )
+
+            assert "kv_cache_dtype" not in mock_args_cls.call_args.kwargs
 
     def test_create_engine_max_model_len(self):
         """create_vllm_engine should set max_model_len when provided."""
@@ -590,6 +791,148 @@ class TestServeVllmIntegration:
                 )
 
             mock_create_engine.assert_not_called()
+
+    def test_serve_vllm_rejects_float32_checkpoint(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(
+            torch_dtype="torch.float32"
+        )
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch("soup_cli.utils.vllm.create_vllm_engine") as mock_create_engine,
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            with pytest.raises(RuntimeError, match="checkpoint uses float32"):
+                _serve_vllm(
+                    model_path=tmp_path / "model",
+                    base_model=None,
+                    is_adapter=False,
+                    max_tokens_default=512,
+                    tensor_parallel=1,
+                    gpu_memory_utilization=0.9,
+                    vllm_cache_dtype="bfloat16",
+                )
+
+            mock_create_engine.assert_not_called()
+
+    def test_serve_vllm_rejects_unknown_checkpoint_dtype(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(torch_dtype=None)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch("soup_cli.utils.vllm.create_vllm_engine") as mock_create_engine,
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            with pytest.raises(RuntimeError, match="Cannot determine model dtype"):
+                _serve_vllm(
+                    model_path=tmp_path / "model",
+                    base_model=None,
+                    is_adapter=False,
+                    max_tokens_default=512,
+                    tensor_parallel=1,
+                    gpu_memory_utilization=0.9,
+                    vllm_cache_dtype="bfloat16",
+                )
+
+            mock_create_engine.assert_not_called()
+
+    def test_serve_vllm_accepts_matching_dtype(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(
+            torch_dtype="torch.bfloat16"
+        )
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(MagicMock(), "model"),
+            ) as mock_create_engine,
+            patch(
+                "soup_cli.utils.vllm.create_vllm_app",
+                return_value=MagicMock(),
+            ),
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            _serve_vllm(
+                model_path=tmp_path / "model",
+                base_model=None,
+                is_adapter=False,
+                max_tokens_default=512,
+                tensor_parallel=1,
+                gpu_memory_utilization=0.9,
+                vllm_cache_dtype="bfloat16",
+            )
+
+            mock_auto_config.from_pretrained.assert_called_once_with(
+                str(tmp_path / "model"),
+                trust_remote_code=False,
+            )
+            mock_create_engine.assert_called_once()
+            assert mock_create_engine.call_args.kwargs["vllm_cache_dtype"] == "bfloat16"
+
+    def test_serve_vllm_adapter_checks_base_model_dtype(self, tmp_path):
+        from types import SimpleNamespace
+
+        mock_auto_config = MagicMock()
+        mock_auto_config.from_pretrained.return_value = SimpleNamespace(
+            torch_dtype="torch.float16"
+        )
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"transformers": MagicMock(AutoConfig=mock_auto_config)},
+            ),
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(MagicMock(), "base-model"),
+            ) as mock_create_engine,
+            patch(
+                "soup_cli.utils.vllm.create_vllm_app",
+                return_value=MagicMock(),
+            ),
+        ):
+            from soup_cli.commands.serve import _serve_vllm
+
+            adapter_path = tmp_path / "adapter"
+
+            _serve_vllm(
+                model_path=adapter_path,
+                base_model="base-model",
+                is_adapter=True,
+                max_tokens_default=512,
+                tensor_parallel=1,
+                gpu_memory_utilization=0.9,
+                vllm_cache_dtype="float16",
+            )
+
+            mock_auto_config.from_pretrained.assert_called_once_with(
+                "base-model",
+                trust_remote_code=False,
+            )
+            mock_create_engine.assert_called_once()
+            assert mock_create_engine.call_args.kwargs["vllm_cache_dtype"] == "float16"
 
     def test_serve_vllm_with_adapter(self, tmp_path):
         """_serve_vllm with adapter should pass adapter_path."""
