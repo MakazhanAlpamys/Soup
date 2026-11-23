@@ -78,6 +78,13 @@ def make_mole_trainer_class(base_cls: type) -> type:
     class _MoleTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for MoLE per-token routing."""
 
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # compute_loss returns a token mean and never reads
+            # num_items_in_batch, so keep training_step's 1 / G division (as
+            # prm.py does for #1444); left True, loss and gradient came out G times.
+            self.model_accepts_loss_kwargs = False
+
         def _save_checkpoint(self, model, trial):
             super()._save_checkpoint(model, trial)
             step = int(getattr(self.state, "global_step", 0) or 0)
