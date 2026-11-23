@@ -4280,6 +4280,28 @@ class TrainingConfig(BaseModel):
             "(v0.37.0)."
         ),
     )
+    # Prefix-tree batches — tokens several examples share are computed once
+    prefix_tree: bool = Field(
+        default=False,
+        description=(
+            "Lay each training batch out as prefix trees: tokens that several "
+            "examples begin with (one system prompt, one tool schema, one "
+            "document) and that are not trained on are held once, with a 4D "
+            "ancestor attention mask and tree-depth position ids. The loss and "
+            "its gradient are those of the ordinary batch holding the same "
+            "examples, to rounding; the step runs the trees' tokens instead of the sum of "
+            "the examples' lengths. A step is still at most batch_size rows of "
+            "data.max_length tokens. Needs untrained prompt tokens (e.g. "
+            "data.train_on_responses_only) to have anything to share. "
+            "task='sft' on the transformers backend only (refused on mlx "
+            "and unsloth); works with "
+            "stream_layers. Mutually exclusive with packing, multipack, "
+            "stream_loss_chunk, neftune_alpha, curriculum and a non-zero "
+            "lora.dropout (0.05 by default; set it to 0); a model that applies "
+            "dropout in training is refused at setup. A bool only: 1 or 'yes' "
+            "is refused."
+        ),
+    )
     # NEFTune — noisy embeddings for better fine-tuning
     neftune_alpha: Optional[float] = Field(
         default=None,
@@ -4540,6 +4562,76 @@ class TrainingConfig(BaseModel):
                 "pick one (multipack uses FFD bin-packing; packing "
                 "uses TRL's basic packer). For most uses, multipack=true "
                 "is the better choice."
+            )
+        return self
+
+    @field_validator("prefix_tree", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_prefix_tree_is_bool(cls, v, info: ValidationInfo):
+        """``prefix_tree: 1`` or ``yes`` (a quoted one) is refused instead of
+        being coerced to ``true``: the switch changes how every step is laid
+        out, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @model_validator(mode="after")
+    def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
+        """``prefix_tree`` decides which examples share a row, as packing and
+        multipack do; two of them at once have no defined result.
+
+        ``stream_loss_chunk`` is refused beside it until the chunked loss has
+        been checked on prefix-tree rows: it is correct by construction (a row
+        is still scored by the row shift), but not measured.
+
+        ``neftune_alpha`` changes the loss on a prefix-tree row (its noise
+        depends on the row length), and ``curriculum`` sets an order the
+        sampler would replace: both are refused rather than quietly altered.
+        """
+        if not self.prefix_tree:
+            return self
+        others = [name for name in ("packing", "multipack") if getattr(self, name)]
+        if others:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with {' and '.join(others)}: "
+                "each of them decides which examples share a row. Keep one."
+            )
+        if self.stream_loss_chunk is not None:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.stream_loss_chunk "
+                "yet: the chunked loss has not been checked on prefix-tree rows. "
+                "Remove one of the two."
+            )
+        if self.neftune_alpha is not None:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.neftune_alpha: "
+                "NEFTune scales its noise by the row length and draws it once per row "
+                "token, so on a prefix-tree row (longer, with shared tokens) the noise "
+                "is not the ordinary batch's. Remove one of the two."
+            )
+        if self.curriculum:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.curriculum: the "
+                "prefix-tree sampler orders the examples by their shared beginnings and "
+                "shuffles its rows every epoch, which would drop the curriculum order "
+                "without a word. Remove one of the two."
+            )
+        # The same test as trainer/sft.py's is_full_finetune (not imported: the
+        # trainer module imports this one). Without an adapter, lora.dropout is
+        # never applied.
+        full_finetune = bool(self.unfrozen_parameters or self.lisa_enabled or self.lora.r == 0)
+        if not full_finetune and self.lora.dropout:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with a LoRA dropout "
+                f"(training.lora.dropout={self.lora.dropout!r}, 0.05 by default): an "
+                "ordinary batch draws a dropout mask per example over a shared "
+                "beginning, a prefix-tree row draws one for every example that shares "
+                "it, so the loss would no longer be the ordinary batch's. Set "
+                "training.lora.dropout: 0 or training.prefix_tree: false."
             )
         return self
 
@@ -6587,6 +6679,56 @@ class SoupConfig(BaseModel):
                 f"multipack=true is not supported for task={self.task!r} "
                 "in v0.37.0 (only sft and pretrain are wired). "
                 "Set multipack: false or switch task."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prefix_tree_supported(self) -> "SoupConfig":
+        """``training.prefix_tree`` is wired where its equality was checked:
+        text SFT through the HF trainer (resident or layer-streamed).
+
+        Every refusal names what to change: a switch that silently did nothing
+        would leave a run at its ordinary speed with no sign of why.
+        """
+        if not self.training.prefix_tree:
+            return self
+        from soup_cli.utils.prefix_tree_trainer import supports_prefix_tree
+
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.prefix_tree is supported on backend='transformers' only; got "
+                f"backend={self.backend!r} (it replaces the HF Trainer's dataloader and "
+                "is checked on that path only). Use backend='transformers' or set "
+                "prefix_tree: false."
+            )
+        if not supports_prefix_tree(self.task):
+            raise ValueError(
+                f"training.prefix_tree supports task='sft' only; got task={self.task!r}. "
+                "It shares tokens that are not trained on, and only the SFT path is "
+                "wired. Set prefix_tree: false or switch task."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.prefix_tree supports modality='text' only; got "
+                f"{self.modality!r} (its collator carries input_ids, labels and an "
+                "attention mask, nothing else). Set prefix_tree: false."
+            )
+        if self.data.format == "raft":
+            raise ValueError(
+                "training.prefix_tree cannot be combined with data.format='raft': RAFT "
+                "builds its own trainer and collator. Set prefix_tree: false."
+            )
+        if self.data.replay is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.replay (grouping "
+                "examples by their shared beginning breaks the replay ratio). "
+                "Remove one of the two."
+            )
+        if self.data.interleave is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.interleave (grouping "
+                "examples by their shared beginning breaks the per-source mixture ratio). "
+                "Remove one of the two."
             )
         return self
 
