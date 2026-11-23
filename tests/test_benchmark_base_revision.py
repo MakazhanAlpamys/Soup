@@ -23,8 +23,11 @@ def benchmark_case(tmp_path, monkeypatch):
         json.dumps({"base_model_name_or_path": BASE}), encoding="utf-8"
     )
     metadata = {
-        "schema_version": 1, "run_id": "run-test", "base_model": BASE,
-        "base_revision": SHA, "base_revision_source": "hub_commit",
+        "schema_version": 1,
+        "run_id": "run-test",
+        "base_model": BASE,
+        "base_revision": SHA,
+        "base_revision_source": "hub_commit",
         "training_data_sha256": None,
     }
     path = adapter / "soup_run.json"
@@ -115,3 +118,36 @@ def test_unavailable_recorded_commit_propagates_without_retry(benchmark_case, mo
     assert isinstance(result.exception, OSError)
     assert len(calls) == 1
     assert f"revision={SHA}" in calls[0]["model_args"]
+
+
+@pytest.mark.parametrize(
+    ("adapter_revision", "expected_revision"),
+    [("a" * 40, SHA), ("b" * 40, None)],
+)
+def test_adapter_revision_must_match_recorded_commit(
+    benchmark_case, adapter_revision, expected_revision
+):
+    adapter, _path, _metadata, calls = benchmark_case
+    (adapter / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": BASE,
+                "revision": adapter_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = invoke(adapter)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    expected_args = f"pretrained={BASE},peft={adapter}"
+    if expected_revision:
+        expected_args += f",revision={expected_revision}"
+
+    assert calls[0]["model_args"] == expected_args
+    output = " ".join(strip_ansi(result.output).split())
+    if expected_revision:
+        assert f"Base revision: {SHA} (recorded run)" in output
+    else:
+        assert "Base revision: unknown (legacy, local source or base override)" in output

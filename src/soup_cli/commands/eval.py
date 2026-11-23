@@ -137,9 +137,16 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
-            from soup_cli.utils.run_provenance import recorded_base_kwargs
+            from soup_cli.utils.run_provenance import (
+                recorded_adapter_base,
+                recorded_base_kwargs,
+            )
 
-            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            revision_kwargs = (
+                recorded_base_kwargs(str(model_path), base_model)
+                if recorded_adapter_base(str(model_path)) == base_model
+                else {}
+            )
             if revision_kwargs:
                 revision = revision_kwargs["revision"]
                 model_arg = f"{model_arg},revision={revision}"
