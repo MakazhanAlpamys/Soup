@@ -10,7 +10,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -465,12 +464,13 @@ def register(app: typer.Typer, console: Console) -> None:
                 overwrite=force,
             )
         except (TypeError, ValueError, OSError) as exc:
-            console.print(f"[red]Cannot install hook:[/] {exc}")
+            _refuse(console, "Cannot install hook:", exc)
             raise typer.Exit(1) from exc
-        console.print(
-            f"[green]Installed pre-push gate[/] → [cyan]{escape(path)}[/]"
-        )
-        console.print(
-            f"[dim]Baseline: {escape(baseline_run_id)} • suite: "
-            f"{escape(suite_path)}[/]"
-        )
+        console.print(Text.assemble(
+            ("Installed pre-push gate", "green"),
+            " → ",
+            (strip_control(path), "cyan"),
+        ))
+        console.print(terminal_text(
+            f"Baseline: {baseline_run_id} • suite: {suite_path}", "dim",
+        ))

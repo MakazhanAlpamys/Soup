@@ -1,6 +1,6 @@
-"""``soup eval design / discover / lock / coverage / against``: text as typed.
+"""``soup eval design / discover / lock / coverage / against / gate-install``: text as typed.
 
-#2489. The dataset, output, design and suite paths, the goal, the
+#2489. The dataset, output, design, suite and hook paths, the goal, the
 registry entry and run ids, the metric, and the errors raised about them keep
 ``:name:`` aliases, markup and a backslash before a bracket as written, and lose
 their control and bidi characters. A closing tag in ``--output`` no longer crashes ``design``,
@@ -424,6 +424,82 @@ def test_the_verdict_shows_the_metric_as_typed(workdir, monkeypatch, value):
 
 
 # ---------------------------------------------------------------------------
+# gate-install
+# ---------------------------------------------------------------------------
+
+#: Suite paths the hook accepts: its shell quoting refuses a C0 control, and on
+#: Windows the cwd check does not resolve a name with ``:`` under cwd.
+_SUITE_VALUES = [
+    pytest.param(v, marks=skip_colon_on_windows) if ":" in v else v
+    for v in VALUES
+    if "\x1b" not in v
+]
+
+
+@pytest.mark.parametrize("value", VALUES)
+def test_a_hook_install_error_is_shown_as_typed(workdir, monkeypatch, value):
+    monkeypatch.setattr(eval_gate_hook, "write_pre_push_hook", _raising(ValueError(value)))
+
+    result = _eval("gate-install", "--baseline", "base")
+
+    _assert_line(result, 1, f"Cannot install hook: {_shown(value)}")
+
+
+@pytest.mark.parametrize("value", [v for v in [*VALUES, CLOSING_TAG] if v != "plain"])
+def test_a_refused_baseline_names_the_rule(workdir, value):
+    result = _eval("gate-install", "--baseline", value)
+
+    _assert_line(result, 1, "Cannot install hook: run_id must be alphanumeric + '_-' (1-128 chars)")
+    assert not os.path.exists(".git/hooks/pre-push")
+
+
+@pytest.mark.parametrize("value", _SUITE_VALUES)
+def test_the_gate_receipt_shows_the_suite_as_typed(workdir, value):
+    suite = f"evals/{value}.json"
+
+    result = _eval("gate-install", "--baseline", "base", "--suite", suite)
+
+    _assert_line(result, 0, "Installed pre-push gate → .git/hooks/pre-push")
+    _assert_line(result, 0, f"Baseline: base • suite: {_shown(suite)}")
+
+
+@pytest.mark.parametrize("value", FILE_VALUES)
+def test_the_gate_receipt_shows_the_hook_path_as_typed(workdir, value):
+    hook = f"hooks/{value}"
+
+    result = _eval("gate-install", "--baseline", "base", "--hook-path", hook)
+
+    _assert_line(result, 0, f"Installed pre-push gate → {_shown(hook)}")
+    assert os.path.isfile(hook)
+
+
+@pytest.mark.parametrize("value", VALUES)
+def test_the_gate_receipt_shows_the_baseline_as_typed(workdir, monkeypatch, value):
+    calls = []
+
+    def write(**kwargs):
+        calls.append(kwargs)
+        return kwargs["hook_path"]
+
+    monkeypatch.setattr(eval_gate_hook, "write_pre_push_hook", write)
+
+    result = _eval(
+        "gate-install", "--baseline", value, "--suite", f"s{value}", "--hook-path", f"h{value}"
+    )
+
+    _assert_line(result, 0, f"Installed pre-push gate → h{_shown(value)}")
+    _assert_line(result, 0, f"Baseline: {_shown(value)} • suite: s{_shown(value)}")
+    assert calls == [
+        {
+            "baseline_run_id": value,
+            "suite_path": f"s{value}",
+            "hook_path": f"h{value}",
+            "overwrite": False,
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Styles kept on a colour terminal
 # ---------------------------------------------------------------------------
 
@@ -498,3 +574,13 @@ def test_an_unavailable_comparison_stays_red(workdir, monkeypatch):
         "task_accuracy: baseline base=0, candidate cand=1.\x1b[0m" in result.output
     )
 
+
+def test_the_gate_receipt_stays_green_and_cyan_with_a_dim_line(workdir):
+    result = _eval_coloured("gate-install", "--baseline", "base")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert (
+        "\x1b[32mInstalled pre-push gate\x1b[0m → \x1b[36m.git/hooks/pre-push\x1b[0m"
+        in result.output
+    )
+    assert "\x1b[2mBaseline: base • suite: evals/locked.json\x1b[0m" in result.output
