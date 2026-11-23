@@ -28,6 +28,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.experiment.row_kinds import ROW_KIND_EVAL, ROW_KIND_TRAIN
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -856,7 +857,9 @@ class MLXSFTTrainerWrapper:
         from mlx_lm.tuner.trainer import TrainingArgs, train  # type: ignore
 
         cfg = self.config
-        output_dir = Path(cfg.output)
+        output_dir = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        ))
         if full_finetune and (
             list(output_dir.glob("*.safetensors"))
             or (output_dir / "adapter_config.json").exists()
