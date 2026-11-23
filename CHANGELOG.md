@@ -12,7 +12,7 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
-## [0.78.1] - 2026-11-22
+## [0.78.1] - 2026-11-23
 
 ### Security
 
