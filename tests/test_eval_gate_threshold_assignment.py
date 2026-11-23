@@ -81,6 +81,20 @@ def test_direct_run_keeps_decimal_threshold(
     assert [row.score for row in result.task_results] == [1.0]
 
 
+def test_direct_run_refuses_huge_integer_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    suite = gate.load_suite(str(_suite(tmp_path)))
+    suite.tasks[0].threshold = 10**10000  # type: ignore[assignment]
+    calls: list[str] = []
+    with pytest.raises(ValueError) as caught:
+        gate.run_gate(suite, generate_fn=lambda prompt: calls.append(prompt) or "gold")
+    assert "task 'first'" in str(caught.value)
+    assert "must be a finite number within 0.0-1000.0" in str(caught.value)
+    assert calls == []
+
+
 def test_direct_run_refuses_scorer_mutation_after_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

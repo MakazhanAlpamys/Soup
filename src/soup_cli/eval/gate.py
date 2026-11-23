@@ -166,12 +166,17 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         threshold = task.threshold
         try:
             finite = not isinstance(threshold, bool) and math.isfinite(threshold)
-        except TypeError:
+        except (TypeError, OverflowError):
             finite = False
         if not finite or not _THRESHOLD_MIN <= threshold <= _THRESHOLD_MAX:
+            try:
+                shown = repr(threshold)
+            except ValueError:
+                # repr of a very large int refuses past 4300 digits.
+                shown = f"<{type(threshold).__name__} too large to display>"
             raise ValueError(
                 f"eval-gate suite {suite.suite!r} task {task.name!r} threshold "
-                f"{threshold!r} must be a finite number within "
+                f"{shown} must be a finite number within "
                 f"{_THRESHOLD_MIN}-{_THRESHOLD_MAX}"
             )
         if task.scorer is not None and task.scorer not in _VALID_SCORERS:
