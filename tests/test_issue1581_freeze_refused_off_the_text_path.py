@@ -45,7 +45,8 @@ def _refusal(text):
 # settings the message names, the change it asks for).
 _CASES = {
     "sft-mlx": (
-        "sft", {"backend": "mlx"}, {}, "backend='mlx'", "backend: transformers",
+        "sft", {"backend": "mlx"}, {}, "backend='mlx'",
+        "backend: transformers, or lora.r: 0 with quantization: none",
     ),
     "sft-vision": (
         "sft", {"modality": "vision"}, {}, "modality='vision'", "modality: text",
@@ -80,6 +81,8 @@ class TestRefusedOffTheTextPath:
         assert "frozen only on the text path with backend: transformers" in message
         assert "would train every layer" in message
         assert f"Use {change}, or remove the key." in message
+        # #3086 T-2: only native MLX text SFT has the full fine-tune route.
+        assert ("in native MLX text SFT with lora.r: 0" in message) == (case == "sft-mlx")
 
     @pytest.mark.parametrize("case", list(_CASES))
     def test_without_the_fields_the_config_still_loads(self, case):
@@ -129,6 +132,8 @@ class TestRefusedOffTheTextPath:
 
         assert f"with {settings}:" in message, message
         assert f"Use {change}, or remove the key." in message
+        # #3086 T-2: MLX vision has no full fine-tune route, so none is named.
+        assert "lora.r: 0" not in message
 
     def test_the_issue_reproduction_is_refused(self):
         """The issue's vision config."""
@@ -278,7 +283,10 @@ class TestTheRefusalFollowsTheSetups:
             quantization="none", lora={"r": 0},
         ))
         assert cfg.training.freeze_layers == 1
-        assert "backend='mlx'" in _refusal(_yaml("sft", {"backend": "mlx"}, freeze_layers=1))
+        message = _refusal(_yaml("sft", {"backend": "mlx"}, freeze_layers=1))
+        assert "backend='mlx'" in message
+        # #3086 T-2: the refusal names the route that loaded above.
+        assert "Use backend: transformers, or lora.r: 0 with quantization: none" in message
 
     def test_the_message_follows_the_dispatch_order(self):
         """The refusal names settings in the order ``setup`` checks them (MLX is
