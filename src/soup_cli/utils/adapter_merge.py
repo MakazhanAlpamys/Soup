@@ -430,8 +430,16 @@ def fold_lora_scaling(
                     if role != "B":
                         continue
                 elif name.endswith(_LORA_B_BIAS):
-                    # PEFT scales lora_B's output, its bias (lora_bias=True) included.
+                    # PEFT scales lora_B's output, including its bias (lora_bias=True).
                     stem = name.removesuffix(_LORA_B_BIAS)
+                elif name.endswith(".bias"):
+                    prefix = name.removesuffix(".bias")
+                    module, dot, adapter_name = prefix.rpartition(".")
+                    if not dot or not adapter_name:
+                        continue
+                    stem, marker_dot, marker = module.rpartition(".")
+                    if not marker_dot or marker != "lora_B":
+                        continue
                 else:
                     continue
                 module = peft_module_name(stem)
