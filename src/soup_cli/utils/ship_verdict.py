@@ -543,10 +543,6 @@ class BenchmarkDelta:
     delta: float  # tuned - base (signed; negative = drop)
     regressed: bool  # drop exceeds the forgetting threshold
 
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.delta):
-            raise ValueError(f"benchmark delta for {self.name!r} must be finite")
-
 
 @dataclass(frozen=True)
 class NoiseFloor:

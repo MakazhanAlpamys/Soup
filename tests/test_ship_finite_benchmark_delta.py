@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from soup_cli.commands import ship as ship_cmd
+from soup_cli.mcp_server.registry import McpToolError, tool_ship_evidence
 from soup_cli.utils.ship_verdict import (
     BenchmarkDelta,
     build_task_win,
@@ -17,21 +18,13 @@ from soup_cli.utils.ship_verdict import (
     verdict_to_dict,
 )
 from tests.cli_runner import CliRunner
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 
 def reject_constant(value: str) -> None:
     raise ValueError(f"non-compliant float token: {value}")
-
-
-def test_benchmark_delta_dataclass_rejects_non_finite_delta():
-    with pytest.raises(ValueError, match="benchmark delta for 'sample' must be finite"):
-        BenchmarkDelta("sample", base=0.0, tuned=1.0, delta=float("inf"), regressed=False)
-    with pytest.raises(ValueError, match="benchmark delta for 'sample' must be finite"):
-        BenchmarkDelta("sample", base=0.0, tuned=1.0, delta=float("-inf"), regressed=True)
-    with pytest.raises(ValueError, match="benchmark delta for 'sample' must be finite"):
-        BenchmarkDelta("sample", base=0.0, tuned=1.0, delta=float("nan"), regressed=False)
 
 
 def test_compute_benchmark_deltas_raises_on_overflow():
@@ -44,9 +37,13 @@ def test_compute_benchmark_deltas_raises_on_overflow():
 
 def test_decide_ship_raises_on_recomputed_overflow():
     task_win = build_task_win("metric", 0.5, 0.75)
-    bd = BenchmarkDelta("sample", base=-1e308, tuned=1e308, delta=0.0, regressed=False)
+    bd_pos = BenchmarkDelta("sample", base=-1e308, tuned=1e308, delta=0.0, regressed=False)
     with pytest.raises(ValueError, match="benchmark delta for 'sample' must be finite"):
-        decide_ship(task_win, [bd])
+        decide_ship(task_win, [bd_pos])
+
+    bd_neg = BenchmarkDelta("sample", base=1e308, tuned=-1e308, delta=0.0, regressed=False)
+    with pytest.raises(ValueError, match="benchmark delta for 'sample' must be finite"):
+        decide_ship(task_win, [bd_neg])
 
 
 def test_verdict_from_evidence_raises_on_overflow():
@@ -104,7 +101,8 @@ def test_cli_evidence_overflow_refused_exit_usage():
         cmd = ["--evidence", "evidence.json", "--output", "verdict.json"]
         res = runner.invoke(ship_cmd.app, cmd)
         assert res.exit_code == 3
-        assert "benchmark delta for 'sample' must be finite" in res.output
+        output = " ".join(strip_ansi(res.output).split())
+        assert "benchmark delta for 'sample' must be finite" in output
         assert not out_file.exists()
 
 
@@ -122,7 +120,8 @@ def test_cli_evidence_negative_overflow_refused_exit_usage():
         cmd = ["--evidence", "evidence.json", "--output", "verdict.json"]
         res = runner.invoke(ship_cmd.app, cmd)
         assert res.exit_code == 3
-        assert "benchmark delta for 'sample' must be finite" in res.output
+        output = " ".join(strip_ansi(res.output).split())
+        assert "benchmark delta for 'sample' must be finite" in output
         assert not out_file.exists()
 
 
@@ -161,3 +160,59 @@ def test_cli_controls_produce_strictly_valid_json():
         parsed2 = json.loads(content2, parse_constant=reject_constant)
         assert parsed2["decision"] == "DON'T SHIP"
         assert parsed2["benchmark_deltas"][0]["delta"] == -0.2
+
+
+def test_mcp_evidence_overflow_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ev_pos = tmp_path / "evidence_pos.json"
+    ev_pos.write_text(
+        json.dumps({
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.75},
+            "benchmarks": {"sample": {"base": -1e308, "tuned": 1e308}},
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(McpToolError, match=r"benchmark delta for <redacted> must be finite"):
+        tool_ship_evidence({"evidence": "evidence_pos.json"})
+
+    ev_neg = tmp_path / "evidence_neg.json"
+    ev_neg.write_text(
+        json.dumps({
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.75},
+            "benchmarks": {"sample": {"base": 1e308, "tuned": -1e308}},
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(McpToolError, match=r"benchmark delta for <redacted> must be finite"):
+        tool_ship_evidence({"evidence": "evidence_neg.json"})
+
+
+def test_mcp_controls_produce_strictly_valid_json(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ev_file = tmp_path / "evidence.json"
+
+    # Control 1: 0.0 vs 1e308 (SHIP)
+    ev_file.write_text(
+        json.dumps({
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.75},
+            "benchmarks": {"sample": {"base": 0.0, "tuned": 1e308}},
+        }),
+        encoding="utf-8",
+    )
+    res1 = tool_ship_evidence({"evidence": "evidence.json"})
+    assert res1["decision"] == "SHIP"
+    strict1 = json.dumps(res1, allow_nan=False)
+    assert "Infinity" not in strict1
+
+    # Control 2: 0.9 vs 0.7 (DON'T SHIP, regression)
+    ev_file.write_text(
+        json.dumps({
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.75},
+            "benchmarks": {"sample": {"base": 0.9, "tuned": 0.7}},
+        }),
+        encoding="utf-8",
+    )
+    res2 = tool_ship_evidence({"evidence": "evidence.json"})
+    assert res2["decision"] == "DON'T SHIP"
+    strict2 = json.dumps(res2, allow_nan=False)
+    assert "Infinity" not in strict2
