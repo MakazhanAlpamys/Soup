@@ -1681,8 +1681,10 @@ def _split_windows_command(command: str) -> list[str]:
 
     A ``'`` that starts a word groups to the next ``'``. A ``'`` inside a word
     groups only as :func:`_closes_at_word_end` says, so ``--opt='a b'`` groups as
-    ``--opt="a b"`` does. A ``'`` inside double quotes, or after a backslash, is
-    a literal character.
+    ``--opt="a b"`` does. A ``'`` that ends a word (whitespace or the end of the
+    command follows it, as in ``dogs' and cats'``) never opens a group, and
+    neither does a ``'`` inside double quotes or after a backslash: each is a
+    literal character.
     """
     args: list[str] = []
     current: list[str] = []
@@ -1712,7 +1714,15 @@ def _split_windows_command(command: str) -> list[str]:
                 current.append(char)
                 index += 1
                 continue
-            elif char == "'" and (not has_token or _closes_at_word_end(command, index)):
+            elif char == "'" and (
+                not has_token
+                or (
+                    # A ' that ends a word (dogs') stays a literal character.
+                    index + 1 < length
+                    and command[index + 1] not in " \t"
+                    and _closes_at_word_end(command, index)
+                )
+            ):
                 in_squote = True
                 has_token = True
                 index += 1
