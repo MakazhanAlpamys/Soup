@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -20,6 +21,16 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.terminal import strip_control, terminal_text
+
+# Paths, the goal, registry and run ids, the metric and error text come from
+# outside the program, so every line that carries them is printed as ``Text``:
+# shown as typed, never read as markup or ``:name:`` emoji, control characters
+# removed (#2489).
+
+
+def _refuse(console: Console, label: str, exc: object) -> None:
+    console.print(Text.assemble((label, "red"), " ", strip_control(exc)))
 
 
 def register(app: typer.Typer, console: Console) -> None:
@@ -51,7 +62,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             rows = load_advise_dataset(data)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot read dataset:[/] {escape(str(exc))}")
+            _refuse(console, "Cannot read dataset:", exc)
             raise typer.Exit(1) from exc
 
         try:
@@ -59,13 +70,13 @@ def register(app: typer.Typer, console: Console) -> None:
                 rows, goal=goal, num_dimensions=num_dimensions,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Cannot build design:[/] {exc}")
+            _refuse(console, "Cannot build design:", exc)
             raise typer.Exit(2) from exc
 
         try:
             path = write_eval_design(design, output)
         except (ValueError, OSError) as exc:
-            console.print(f"[red]Cannot write design:[/] {exc}")
+            _refuse(console, "Cannot write design:", exc)
             raise typer.Exit(1) from exc
 
         table = Table(title="Eval Design", show_header=True)
@@ -74,13 +85,16 @@ def register(app: typer.Typer, console: Console) -> None:
         table.add_column("Rubric", overflow="fold")
         for dim in design.dimensions:
             table.add_row(
-                escape(dim.name), escape(dim.scorer_type), escape(dim.rubric),
+                terminal_text(dim.name),
+                terminal_text(dim.scorer_type),
+                terminal_text(dim.rubric),
             )
         console.print(table)
-        console.print(
-            f"[green]Wrote {len(design.dimensions)} dimensions[/] to "
-            f"[cyan]{escape(path)}[/]"
-        )
+        console.print(Text.assemble(
+            (f"Wrote {len(design.dimensions)} dimensions", "green"),
+            " to ",
+            (strip_control(path), "cyan"),
+        ))
 
     @app.command(name="discover")
     def discover_cmd(
@@ -113,7 +127,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             rows = load_advise_dataset(data)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot read dataset:[/] {escape(str(exc))}")
+            _refuse(console, "Cannot read dataset:", exc)
             raise typer.Exit(1) from exc
 
         try:
@@ -122,21 +136,25 @@ def register(app: typer.Typer, console: Console) -> None:
                 per_cluster=per_cluster, seed=seed,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Cannot discover canaries:[/] {exc}")
+            _refuse(console, "Cannot discover canaries:", exc)
             raise typer.Exit(2) from exc
 
         try:
             path = write_canary_set(canary, output)
         except (ValueError, OSError) as exc:
-            console.print(f"[red]Cannot write canary set:[/] {exc}")
+            _refuse(console, "Cannot write canary set:", exc)
             raise typer.Exit(1) from exc
 
-        console.print(
-            f"[green]Wrote {len(canary.held_out)} held-out + "
-            f"{len(canary.adjacent_skills)} adjacent + "
-            f"{len(canary.memorization_probes)} memorization probes[/] to "
-            f"[cyan]{escape(path)}[/]"
-        )
+        console.print(Text.assemble(
+            (
+                f"Wrote {len(canary.held_out)} held-out + "
+                f"{len(canary.adjacent_skills)} adjacent + "
+                f"{len(canary.memorization_probes)} memorization probes",
+                "green",
+            ),
+            " to ",
+            (strip_control(path), "cyan"),
+        ))
 
     @app.command(name="lock")
     def lock_cmd(
@@ -159,20 +177,22 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             design = load_eval_design(design_path)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot load design:[/] {exc}")
+            _refuse(console, "Cannot load design:", exc)
             raise typer.Exit(1) from exc
 
         try:
             locked = lock_suite(design, output)
         except (ValueError, OSError) as exc:
-            console.print(f"[red]Cannot lock suite:[/] {exc}")
+            _refuse(console, "Cannot lock suite:", exc)
             raise typer.Exit(1) from exc
 
-        console.print(
-            f"[green]Locked {locked.dimension_count} dimensions[/] "
-            f"sha256=[dim]{locked.checksum[:16]}…[/] → "
-            f"[cyan]{escape(locked.path)}[/]"
-        )
+        console.print(Text.assemble(
+            (f"Locked {locked.dimension_count} dimensions", "green"),
+            " sha256=",
+            (f"{locked.checksum[:16]}…", "dim"),
+            " → ",
+            (strip_control(locked.path), "cyan"),
+        ))
 
         if attach_to_registry:
             try:
@@ -183,12 +203,13 @@ def register(app: typer.Typer, console: Console) -> None:
                     kind="eval_suite",
                     path=locked.path,
                 )
-                console.print(
-                    f"[green]Attached to registry entry "
-                    f"{escape(attach_to_registry)}[/]"
-                )
+                console.print(terminal_text(
+                    f"Attached to registry entry {attach_to_registry}", "green",
+                ))
             except (ValueError, FileNotFoundError, ImportError) as exc:
-                console.print(f"[yellow]Registry attach skipped:[/] {exc}")
+                console.print(Text.assemble(
+                    ("Registry attach skipped:", "yellow"), " ", strip_control(exc),
+                ))
 
     @app.command(name="coverage")
     def coverage_cmd(
@@ -211,17 +232,20 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             design = load_eval_design(design_path)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot load design:[/] {exc}")
+            _refuse(console, "Cannot load design:", exc)
             raise typer.Exit(1) from exc
 
         try:
             report = compute_coverage(design, task_category=task_category)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Cannot compute coverage:[/] {exc}")
+            _refuse(console, "Cannot compute coverage:", exc)
             raise typer.Exit(2) from exc
 
+        # A Text title is not given the table title style by itself.
         table = Table(
-            title=f"Coverage — {escape(report.task_category)}",
+            title=terminal_text(
+                f"Coverage — {report.task_category}", "table.title",
+            ),
             show_header=True,
         )
         table.add_column("Scorer")
@@ -235,7 +259,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 + ", ".join(report.missing_scorers)
             )
         for rec in report.recommendations:
-            console.print(f"[dim]•[/] {escape(rec)}")
+            console.print(Text.assemble(("•", "dim"), " ", strip_control(rec)))
 
     @app.command(name="against", cls=GateCommand)
     def against_cmd(
@@ -295,7 +319,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             metric_spec = resolve_gate_metric(metric)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid --metric:[/] {escape(str(exc))}")
+            _refuse(console, "Invalid --metric:", exc)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         # The locked suite is a hard precondition when supplied: validate it
@@ -307,15 +331,12 @@ def register(app: typer.Typer, console: Console) -> None:
             from soup_cli.utils.paths import is_under_cwd
 
             if not is_under_cwd(suite):
-                console.print(f"[red]--suite is outside cwd:[/] {escape(str(suite))}")
+                _refuse(console, "--suite is outside cwd:", suite)
                 raise typer.Exit(EXIT_USAGE_ERROR)
             try:
                 load_locked_suite(suite)
             except (FileNotFoundError, ValueError, OSError) as exc:
-                console.print(
-                    f"[red]Locked eval suite invalid — gate blocked:[/] "
-                    f"{escape(str(exc))}"
-                )
+                _refuse(console, "Locked eval suite invalid — gate blocked:", exc)
                 raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -340,7 +361,7 @@ def register(app: typer.Typer, console: Console) -> None:
             )
             raise typer.Exit(EXIT_RUNTIME_ERROR) from None
         except (FileNotFoundError, ValueError, KeyError) as exc:
-            console.print(f"[red]Cannot fetch metric series:[/] {exc}")
+            _refuse(console, "Cannot fetch metric series:", exc)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         # Prefer the first source with a complete pair. If only one run has a
@@ -358,12 +379,13 @@ def register(app: typer.Typer, console: Console) -> None:
         source_metric, baseline_series, candidate_series = selected
 
         if not baseline_series or not candidate_series:
-            console.print(
-                f"[red]Comparison unavailable — no eval results or tracked metrics "
-                f"for {escape(source_metric)}: "
-                f"baseline {escape(baseline_run_id)}={len(baseline_series)}, "
-                f"candidate {escape(candidate_run_id)}={len(candidate_series)}.[/]"
-            )
+            console.print(terminal_text(
+                f"Comparison unavailable — no eval results or tracked metrics "
+                f"for {source_metric}: "
+                f"baseline {baseline_run_id}={len(baseline_series)}, "
+                f"candidate {candidate_run_id}={len(candidate_series)}.",
+                "red",
+            ))
             raise typer.Exit(EXIT_USAGE_ERROR)
 
         try:
@@ -376,7 +398,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 seed=seed,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Regression check failed:[/] {exc}")
+            _refuse(console, "Regression check failed:", exc)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         sample_count = len(baseline_series)
@@ -406,10 +428,12 @@ def register(app: typer.Typer, console: Console) -> None:
                 interval = (
                     f"ci=[{verdict.ci_lower:+.4f}, {verdict.ci_upper:+.4f}]"
                 )
-            console.print(
-                f"[{color}]{tag}[/] {escape(metric)} delta_mean="
-                f"{verdict.delta_mean:+.4f} {interval}"
-            )
+            console.print(Text.assemble(
+                (tag, color),
+                " ",
+                strip_control(metric),
+                f" delta_mean={verdict.delta_mean:+.4f} {interval}",
+            ))
         raise typer.Exit(EXIT_GATE_FAILED if verdict.regressed else EXIT_OK)
 
     @app.command(name="gate-install")
