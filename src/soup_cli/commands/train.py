@@ -1944,12 +1944,14 @@ def train(
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
         from soup_cli.config.eval_gate_support import eval_gate_refusal
+        from soup_cli.config.loader import print_config_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
 
         refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
         if refusal is not None:
-            console.print(f"[red]{for_terminal(refusal)}[/]")
+            # The lines the same gate gets when it is set in the config file.
+            print_config_refusal(refusal)
             raise typer.Exit(1)
 
         try:
