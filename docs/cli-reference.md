@@ -3588,7 +3588,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank` | text |  |  | Path to a VeRA / VB-LoRA vector bank (JSON). Multi-tenant LoRA serving at MB-per-user: the per-token delta is v_u ⊙ Px, routed by the X-User-Id request header. Requires --backend transformers. (v0.71.12 #221) |
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
-| `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
+| `--kv-cache-type` | text |  |  | KV-cache type for decoding, on --backend transformers only: q8_0 (8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is refused on every backend, Hopper GPUs included, and every other backend refuses this option. v0.71.14 (#140). |
 | `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`

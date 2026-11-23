@@ -318,10 +318,10 @@ def serve(
         None,
         "--kv-cache-type",
         help=(
-            "KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / "
-            "bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers "
-            "backend only — vLLM / SGLang routing is in the blocked tail. "
-            "v0.71.14 (#140)."
+            "KV-cache type for decoding, on --backend transformers only: q8_0 "
+            "(8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is "
+            "refused on every backend, Hopper GPUs included, and every other "
+            "backend refuses this option. v0.71.14 (#140)."
         ),
     ),
     tool_auth_token: Optional[str] = typer.Option(
