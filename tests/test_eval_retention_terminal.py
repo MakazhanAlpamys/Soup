@@ -23,9 +23,9 @@ import sys
 from pathlib import Path
 
 import pytest
+import typer
 from rich.console import Console
 
-from soup_cli.cli import app
 from soup_cli.commands import _eval_retention as command
 from soup_cli.utils import retention_ledger as rl
 from tests._windows_filenames import skip_colon_on_windows
@@ -69,8 +69,6 @@ CPU_NUMERICS = rl.Numerics(
     dtype="float32", device="cpu", quantization=None, chat_template_kwargs=None
 )
 _BOX = re.compile("[│┃|]")
-#: The real ``_run``, before any test swaps the console it is handed.
-_RUN = command._run
 
 
 def _shown(value: str) -> str:
@@ -105,15 +103,13 @@ def _console(**kwargs) -> Console:
     return Console(width=1000, height=100, **kwargs)
 
 
-def _swap_console(monkeypatch, console: Console) -> None:
-    """``register`` hands the eval app's console to ``_run``; hand it this one instead."""
-    monkeypatch.setattr(command, "_run", lambda _console, **kwargs: _RUN(console, **kwargs))
+#: A console that emits ANSI colour whatever the environment says.
+_COLOUR = {"force_terminal": True, "color_system": "standard", "no_color": False}
 
 
 @pytest.fixture(autouse=True)
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _swap_console(monkeypatch, _console())
     return tmp_path
 
 
@@ -150,11 +146,22 @@ def _ledger_with_earlier(label: str) -> None:
     rl.save_ledger(rl.Ledger((task,), (version,)), "retention.json")
 
 
-def _retention(label: str, *args: str):
+def _retention(label: str, *args: str, coloured: bool = False):
+    """Invoke ``retention`` registered on a fresh app, its console writing to the runner.
+
+    The console has no ``file``, so it prints to the ``sys.stdout`` the runner swaps in
+    and the lines land in ``result.output``.
+    """
+    eval_app = typer.Typer()
+
+    @eval_app.callback()
+    def _root() -> None:
+        """Keep ``retention`` a named subcommand, as under ``soup eval``."""
+
+    command.register(eval_app, _console(**(_COLOUR if coloured else {})))
     return make_cli_runner().invoke(
-        app,
-        ["eval", "retention", "--model", "base-model", "--device", "cpu", "--label", label,
-         *args],
+        eval_app,
+        ["retention", "--model", "base-model", "--device", "cpu", "--label", label, *args],
     )
 
 
@@ -257,7 +264,12 @@ def test_a_task_name_is_shown_in_its_lines_and_cells(correct):
 
 @pytest.mark.parametrize("value", VALUES)
 def test_the_report_shows_a_task_name_that_bypassed_validation_as_typed(value):
-    """The renderer does not rely on the loader: the name cell and the regression list."""
+    """The renderer does not rely on the loader: the name cell and the regression list.
+
+    This bypasses the CLI on purpose: ``--add-task`` and the ledger both validate a
+    task name to ``[A-Za-z0-9][A-Za-z0-9_.-]*``, so no value here but ``plain`` can
+    reach these lines through real input.
+    """
     row = rl.TaskRetention(
         name=value, scores={"v1": 0.9}, current=0.75, first=0.9, best_previous=0.9,
         drop=0.15, status=rl.STATUS_REGRESSED, examples=20,
@@ -357,25 +369,17 @@ def test_a_report_path_is_shown_as_typed(correct, value):
 RED, GREEN, DIM, ITALIC, RESET = "\x1b[31m", "\x1b[32m", "\x1b[2m", "\x1b[3m", "\x1b[0m"
 
 
-@pytest.fixture
-def colour(monkeypatch):
-    _swap_console(
-        monkeypatch,
-        _console(force_terminal=True, color_system="standard", no_color=False),
-    )
-
-
-def test_the_error_label_is_red_and_the_message_plain(correct, colour):
-    result = _retention("v1", "--add-task", "x[red]n")
+def test_the_error_label_is_red_and_the_message_plain(correct):
+    result = _retention("v1", "--add-task", "x[red]n", coloured=True)
     assert result.exit_code == 3, result.output
     # ansi-ok: asserts the colour codes themselves, on a console pinned to colour
     assert f"{RED}Error:{RESET} --add-task expects NAME=PATH, got 'x[red]n'\n" in result.output
 
 
-def test_the_table_title_stays_italic(correct, colour):
+def test_the_table_title_stays_italic(correct):
     correct["alpha"] = 18
     _task_file("alpha")
-    result = _retention("x[red]n", "--add-task", "alpha=alpha.jsonl")
+    result = _retention("x[red]n", "--add-task", "alpha=alpha.jsonl", coloured=True)
     assert result.exit_code == 0, result.output
     # The title is centred over the table; the padding is italic too.
     title = re.escape("Retention: x[red]n vs 0 earlier version(s)")
@@ -384,10 +388,12 @@ def test_the_table_title_stays_italic(correct, colour):
     )
 
 
-def test_the_progress_lines_are_dim(correct, colour):
+def test_the_progress_lines_are_dim(correct):
     correct["alpha"] = 18
     _task_file("alpha")
-    result = _retention("v1", "--ledger", "x[red]n.json", "--add-task", "alpha=alpha.jsonl")
+    result = _retention(
+        "v1", "--ledger", "x[red]n.json", "--add-task", "alpha=alpha.jsonl", coloured=True
+    )
     assert result.exit_code == 0, result.output
     for line in (
         "No ledger at x[red]n.json; starting a new one.",
@@ -398,23 +404,24 @@ def test_the_progress_lines_are_dim(correct, colour):
         assert f"{DIM}{line}{RESET}\n" in result.output, (line, result.output)
 
 
-def test_recorded_and_wrote_report_are_green_labels(correct, colour):
+def test_recorded_and_wrote_report_are_green_labels(correct):
     correct["alpha"] = 18
     _task_file("alpha")
     result = _retention(
-        "x[red]n", "--add-task", "alpha=alpha.jsonl", "--record", "--output", "[b]rep.json"
+        "x[red]n", "--add-task", "alpha=alpha.jsonl", "--record", "--output", "[b]rep.json",
+        coloured=True,
     )
     assert result.exit_code == 0, result.output
     assert f"{GREEN}Recorded{RESET} version x[red]n in retention.json\n" in result.output
     assert f"{GREEN}Wrote report{RESET} [b]rep.json\n" in result.output
 
 
-def test_the_regression_label_is_red_and_the_names_plain(correct, colour):
+def test_the_regression_label_is_red_and_the_names_plain(correct):
     correct["alpha"] = 18
     _task_file("alpha")
     assert _retention("v1", "--add-task", "alpha=alpha.jsonl", "--record").exit_code == 0
     correct["alpha"] = 15
-    result = _retention("v2")
+    result = _retention("v2", coloured=True)
     assert result.exit_code == 2, result.output
     # ansi-ok: asserts the colour codes themselves, on a console pinned to colour
     assert f"{RED}RETENTION REGRESSION:{RESET} alpha (+0.150)\n" in result.output
