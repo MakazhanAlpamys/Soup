@@ -1377,7 +1377,7 @@ def gate_cmd(
 
     try:
         eval_suite = load_suite(suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1410,7 +1410,7 @@ def gate_cmd(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
