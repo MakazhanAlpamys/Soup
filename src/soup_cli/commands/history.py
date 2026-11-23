@@ -11,6 +11,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from soup_cli.registry.store import RegistryStore, validate_name
+from soup_cli.utils.registry import load_registry
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -41,8 +42,7 @@ def history(
             if _name_exists_in_dataset_registry(name):
                 console.print(
                     f"[dim]A dataset named '{escape(name)}' exists in the "
-                    f"local dataset registry — did you mean "
-                    f"`soup data registry` or `soup data inspect {escape(name)}`?[/]"
+                    "local dataset registry. Run `soup data registry` to see its path.[/]"
                 )
             console.print(
                 "[dim]`soup history` queries the *model* registry only.[/]"
@@ -95,11 +95,8 @@ def history(
 
 
 def _name_exists_in_dataset_registry(name: str) -> bool:
-    """v0.40.1 Part D / N6 — check the dataset registry for `name`."""
+    """Look for an optional dataset hint without masking the model lookup result."""
     try:
-        from soup_cli.utils.registry import DatasetRegistry  # type: ignore
-
-        reg = DatasetRegistry()
-        return name in reg.list_names() if hasattr(reg, "list_names") else False
-    except Exception:  # noqa: BLE001 — registry may be missing / unreadable
+        return name in load_registry()
+    except (OSError, RuntimeError, ValueError):
         return False

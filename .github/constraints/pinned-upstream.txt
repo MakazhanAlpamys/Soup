@@ -29,6 +29,6 @@ tokenizers==0.23.3
 huggingface-hub==2.2.0
 safetensors==0.8.0
 trl==0.29.1
-peft==0.21.2
+peft==0.22.0
 accelerate==1.15.0
 datasets==5.1.0

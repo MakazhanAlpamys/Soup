@@ -206,7 +206,7 @@ Usage: `soup adapters bisect [OPTIONS] HISTORY...`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `HISTORY...` | text, any number |  | yes | Ordered checkpoint identifiers (oldest first). At least 2. Example: `soup adapters bisect ckpt-100 ckpt-200 ckpt-300 ckpt-400` |
-| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
+| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Quotes group words on every platform. On Windows a single quote groups when it starts a word ('a b') or when its closing quote ends the word (--opt='a b'); any other ' (don't) is a literal character. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
 | `--plan-only` | flag | off |  | Print the plan and exit without running the bisect |
 | `--output`, `-o` | text |  |  | Write JSON result to path |
 
@@ -515,7 +515,7 @@ Usage: `soup airgap-bundle [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--output`, `-o` | text |  | yes | Output tarball path (cwd-contained) |
+| `--output`, `-o` | text |  | yes | Output path for the uncompressed tar archive (cwd-contained) |
 | `--model` | text |  | yes | Path to model directory |
 | `--dataset` | text, repeatable |  |  | Dataset directory (repeatable) |
 | `--wheel` | text, repeatable |  |  | Wheel directory (repeatable) |
@@ -2733,6 +2733,7 @@ Subcommands:
 - [`canary`](#soup-loop-canary)
 - [`init`](#soup-loop-init)
 - [`pause`](#soup-loop-pause)
+- [`prune`](#soup-loop-prune)
 - [`replay`](#soup-loop-replay)
 - [`resume`](#soup-loop-resume)
 - [`rollback`](#soup-loop-rollback)
@@ -2800,6 +2801,18 @@ Usage: `soup loop pause`
 
 Takes no options or arguments.
 
+### `soup loop prune`
+
+Safely prune loop artifacts. Detects detached daemons only; stop foreground watches first.
+
+Usage: `soup loop prune [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
+| `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
+
 ### `soup loop replay`
 
 Replay a recorded loop iteration manifest.
@@ -2854,7 +2867,7 @@ Usage: `soup loop watch [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--foreground` | flag | off |  | Run in foreground (default). |
+| `--foreground` | flag | off |  | Run in foreground (default); stop this watch before pruning loop artifacts. |
 | `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
@@ -3536,14 +3549,14 @@ Usage: `soup runs replay [OPTIONS] RUN_ID`
 
 ### `soup runs show`
 
-Show detailed info about a specific run, including loss curve.
+Show run details and available loss and training score curves.
 
 Usage: `soup runs show [OPTIONS] RUN_ID`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `RUN_ID` | text |  | yes | Run ID (or prefix) to show |
-| `--plot` / `--no-plot` | flag | on |  | Show loss curve |
+| `--plot` / `--no-plot` | flag | on |  | Show training curves |
 
 ## `soup serve`
 
@@ -3624,6 +3637,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
 | `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
 | `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
+| `--judge-reference` | flag | off |  | Show the judge each task's `expected` answer as a reference (--task-mode judge_score or pairwise; live runs only). |
 
 ## `soup shrink`
 
@@ -3773,7 +3787,7 @@ Usage: `soup train [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--name`, `-n` | text |  |  | Experiment name (auto-generated if not set) |
 | `--dry-run` | flag | off |  | Validate config and data without training |
-| `--resume`, `-r` | text |  |  | Resume from checkpoint: path to checkpoint dir ('auto' for latest); on the MLX backend, a path to a .safetensors adapter file instead. Not supported when training.relora_steps is configured |
+| `--resume`, `-r` | text |  |  | Resume from checkpoint: path to checkpoint dir ('auto' for latest); on the MLX backend, a path to a .safetensors adapter file instead. Not supported when training.relora_steps is configured, for task: unlearn or task: ppo, and on backend: mlx for a full fine-tune (lora.r: 0) or task: grpo |
 | `--wandb` | flag | off |  | Enable Weights &amp; Biases logging |
 | `--tensorboard` | flag | off |  | Enable TensorBoard logging (logs to output_dir/runs/) |
 | `--tracker` | text |  |  | Experiment tracker: mlflow / swanlab / trackio (v0.43.0). Mutually exclusive with --wandb / --tensorboard. |
@@ -3788,7 +3802,7 @@ Usage: `soup train [OPTIONS]`
 | `--gate` | text |  |  | Enable eval-gated training with a suite file (shortcut for training.eval_gate.enabled=true + suite=&lt;path>) |
 | `--push-as` | text |  |  | Auto-push each save_steps checkpoint to HF Hub as 'checkpoint-&lt;step>' branch of the given repo (e.g. user/my-model). A repository created by this flag is private unless --push-public is given; an existing repository is used as it is and its visibility is not changed. |
 | `--push-public` | flag | off |  | Create the --push-as repository public instead of private. Requires --push-as. It does not change the visibility of a repository that already exists. |
-| `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured. |
+| `--hf-resume` | flag | off |  | Download the latest checkpoint branch from the --push-as repo and resume from it. Requires --push-as; not supported when training.relora_steps is configured, for task: unlearn or task: ppo, and on backend: mlx for a full fine-tune (lora.r: 0) or task: grpo. |
 | `--find-lr` | flag | off |  | LR range finder (v0.32.0): run a short geometric LR sweep, write a JSON report with the recommended LR, then exit without training. |
 | `--find-lr-start` | float | `1e-07` |  | LR range finder: starting LR (default 1e-7) |
 | `--find-lr-end` | float | `0.1` |  | LR range finder: ending LR (default 1e-1) |

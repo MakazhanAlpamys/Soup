@@ -274,6 +274,9 @@ smoke generator are unchanged (#1798).
 
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+A task `name` must also be non-empty and free of NUL characters; a suite with
+such a name is refused at load time (`soup eval gate` exits `3`), before any
+model setup or verdict.
 
 Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
@@ -597,6 +600,11 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode reward --reward-fn accuracy
 
+# Reference-guided judging (#2520): the judge also sees each task row's `expected`
+# answer, in both judge modes. Off by default; without it the prompts are unchanged.
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1 --judge-reference
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123
@@ -604,6 +612,36 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 # Offline: decide from pre-computed scores, persist the verdict JSON
 soup ship --evidence evidence.json --output verdict.json
 ```
+
+### Reference-guided judging
+
+By default the judge sees only the prompt and the response(s), so it rewards the
+answer it likes, which may not be the one your task expects. `--judge-reference`
+also shows it the task row's `expected` answer and asks it to judge agreement in
+substance with that reference. It applies to `--task-mode judge_score` and
+`pairwise` on a live run.
+
+- Every task row needs a non-blank string `expected`. A missing, `null`,
+  non-string, empty or whitespace-only `expected` is a usage error (exit 3) that
+  names the field and the file's line number, and it is found before any model
+  loads. A `scoring: "regex"` row is refused too: its `expected` is a pattern,
+  not an answer.
+- `--judge-reference` with `--task-mode metric` or `reward` (from the flag or
+  `eval.ship.task_mode`) or with `--evidence` is a usage error.
+- The reference is shown fenced as data, not as instructions to the judge. In
+  pairwise mode both swap orders get the same reference, and a disagreement
+  between the two orders still scores as a tie.
+- `--noise-floor` judges with the same template as the leg it guards.
+
+The judge prompts are versioned templates in `soup_cli.eval.judge_templates`:
+`judge_score.preference`, `judge_score.reference`, `pairwise.preference` and
+`pairwise.reference`, each with an integer version. In the `--output` verdict
+JSON, a judge-mode `task_win` carries `judge_mode` (`preference` or `reference`)
+and `judge_template` (`{"id", "version"}`); a metric or reward `task_win` carries
+neither. `--emit-evidence` writes the two fields only for a reference-judged leg,
+as `schema_version` 2 fields (a version-1 file that carries them is refused), so
+evidence from a default run is unchanged and older evidence still reads as
+preference judging.
 
 ### Opt-in progress
 
@@ -1803,7 +1841,7 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MINOR` — score drop 2–5% (investigate)
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
+Paths are containment-checked. For `registry://` references, the CLI uses the first artifact by creation time. If the registry entry has multiple artifacts, pass the desired model directory directly. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
 #### Compare generation performance in the same report
 
@@ -1877,6 +1915,11 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
+| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing punctuation and symbols removed (`h2o.` and `(h2o)` are `h2o`; a combining mark such as a vowel sign or an accent written as its own character is part of the word and stays, and a minus sign `-` or U+2212 right before a digit stays, so `(-4).` is `-4`; a dot right before a digit stays too, also after a kept sign, so `(.5).` is `.5` and `-.5` is not `5`); a word that is only punctuation, or only combining marks once its edges are removed, is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
+
+Every word of the output counts toward `semantic`'s union, so a short expected answer
+inside a sentence scores low (`H2O` against `The chemical symbol for water is H2O.` is
+1/7). For a short answer inside a sentence, use `contains` or `answer`.
 
 The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
 strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a

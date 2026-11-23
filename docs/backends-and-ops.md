@@ -208,7 +208,7 @@ embedding matrix in-place:
 - **Artifacts:** Checkpoints save adapter weights in standard `adapters.safetensors` (cleaned
   of new vocabulary weights) alongside `added_tokens.safetensors` and `added_tokens_info.json`.
   Downstream inference (`soup infer`, `soup chat`) and merge (`soup merge`) currently refuse
-  expanded vocabulary MLX checkpoints until consumer loading is unified ([#1986](https://github.com/MakazhanAlpamys/Soup/issues/1986), [#1988](https://github.com/MakazhanAlpamys/Soup/issues/1988)).
+  expanded vocabulary MLX checkpoints until consumer loading is unified ([#3089](https://github.com/MakazhanAlpamys/Soup/issues/3089)).
 
 #### DPO on MLX
 
@@ -844,8 +844,14 @@ the embedded config inside the container, and runs `soup train` on the chosen GP
 Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
 named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
 including after a failed run, the app downloads every file in that directory into your local
-output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
-command that retries the download; that command places the files under `<output dir>/<run name>`.
+output directory. To retry the download, use the Modal CLI's `volume get` subcommand with the
+`soup-outputs` volume, the run directory, your local output directory, and `--force`. A retry
+places the files under your local output directory in a subdirectory named for the run.
+
+The app prints a command on its own line when the output path can be quoted portably. It wraps
+paths with spaces or punctuation in double quotes and uses forward slashes for nested paths on
+Windows. A path that requires shell-specific quoting gets prose instructions with a separate
+path display.
 
 ### RunPod
 
