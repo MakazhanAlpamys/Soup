@@ -592,7 +592,7 @@ def judge(
         raise typer.Exit(1)
 
     items: list[dict] = []
-    with open(target_path, encoding="utf-8") as fh:
+    with open(target_path, encoding="utf-8-sig") as fh:
         for line_num, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
