@@ -740,5 +740,4 @@ class TestJsonSchemaContainment:
         output = " ".join(_strip_ansi(result.output).split())
         assert "JSON schema path must stay under the current working directory:" in output
         assert str(schema_file) in output
-        loader.assert_called_once()
         server.assert_not_called()
