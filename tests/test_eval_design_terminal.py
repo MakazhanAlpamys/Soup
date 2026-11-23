@@ -1,12 +1,13 @@
-"""``soup eval design / discover / lock / coverage / against`` show outside text as typed (#2489).
+"""``soup eval design / discover / lock / coverage / against``: text as typed.
 
-The dataset, output, design and suite paths, the goal, the registry entry and
-run ids, the metric, and the errors raised about them keep ``:name:`` aliases,
-markup and a backslash before a bracket as written, and lose their control and
-bidi characters. A closing tag in ``--output`` no longer crashes ``design``,
+#2489. The dataset, output, design and suite paths, the goal, the
+registry entry and run ids, the metric, and the errors raised about them keep
+``:name:`` aliases, markup and a backslash before a bracket as written, and lose
+their control and bidi characters. A closing tag in ``--output`` no longer crashes ``design``,
 ``discover`` or ``lock``. Exit codes, written files and registry calls are
 unchanged. No test here reaches the user's registry, tracker database or the
-network.
+network. Each test registers the commands on a fresh Typer app with its own
+console, as eval.py does with the shared one.
 """
 
 import hashlib
@@ -15,10 +16,10 @@ import re
 import sys
 
 import pytest
+import typer
 from rich.console import Console
 
-from soup_cli.cli import app
-from soup_cli.commands import eval as eval_command
+from soup_cli.commands import _eval_v0550 as eval_v0550
 from soup_cli.experiment import tracker as tracker_module
 from soup_cli.registry import attach as registry_attach
 from soup_cli.utils import canary_discovery, eval_design, eval_gate_hook, eval_lock_coverage
@@ -77,23 +78,33 @@ def _assert_line(result, exit_code: int, line: str) -> None:
     assert [char for char in DROPPED if char in output] == []
 
 
-def _eval(*args: str):
-    return make_cli_runner().invoke(app, ["eval", *args])
+def _invoke(console: Console, args):
+    """Run a v0.55.0 eval command on a fresh app whose commands print to ``console``.
 
-
-def _swap_console(monkeypatch, console: Console) -> None:
-    """Swap the console the v0.55.0 commands print to.
-
-    ``register`` receives eval.py's console and every command closes over it, so the
-    commands share one closure cell; patching ``eval.console`` would not reach them.
+    ``register`` is handed its console, as eval.py does; the console writes to the
+    runner's stdout, so the text is in ``result.output``.
     """
-    callback = next(
-        command.callback
-        for command in eval_command.app.registered_commands
-        if command.callback.__module__ == "soup_cli.commands._eval_v0550"
+    eval_app = typer.Typer()
+
+    @eval_app.callback()
+    def _root() -> None:
+        """Keep each command a named subcommand, as under ``soup eval``."""
+
+    eval_v0550.register(eval_app, console)
+    return make_cli_runner().invoke(eval_app, list(args))
+
+
+def _eval(*args: str):
+    return _invoke(Console(width=1000, height=100), args)
+
+
+def _eval_coloured(*args: str):
+    return _invoke(
+        Console(
+            width=1000, height=100, force_terminal=True, color_system="standard", no_color=False
+        ),
+        args,
     )
-    cell = callback.__closure__[callback.__code__.co_freevars.index("console")]
-    monkeypatch.setattr(cell, "cell_contents", console)
 
 
 def _raising(error: Exception):
@@ -133,7 +144,6 @@ def _tracker(monkeypatch, **kwargs) -> None:
 @pytest.fixture
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _swap_console(monkeypatch, Console(width=1000, height=100))
     return tmp_path
 
 
@@ -418,22 +428,13 @@ def test_the_verdict_shows_the_metric_as_typed(workdir, monkeypatch, value):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def coloured(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _swap_console(
-        monkeypatch,
-        Console(
-            width=1000, height=100, force_terminal=True, color_system="standard", no_color=False
-        ),
-    )
-    return tmp_path
+# Every test here runs in ``workdir`` and prints through ``_eval_coloured``.
 
 
-def test_a_refusal_label_stays_red(coloured):
+def test_a_refusal_label_stays_red(workdir):
     _empty_dataset()
 
-    result = _eval("design", "data.jsonl", "--goal", "g", "--output", "../out.json")
+    result = _eval_coloured("design", "data.jsonl", "--goal", "g", "--output", "../out.json")
 
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert (
@@ -442,29 +443,29 @@ def test_a_refusal_label_stays_red(coloured):
     )
 
 
-def test_a_skipped_attach_label_stays_yellow(coloured, monkeypatch):
+def test_a_skipped_attach_label_stays_yellow(workdir, monkeypatch):
     _design_file()
     monkeypatch.setattr(registry_attach, "attach_artifact", _raising(ValueError("no entry")))
 
-    result = _eval("lock", "design.json", "--attach-to-registry", "entry")
+    result = _eval_coloured("lock", "design.json", "--attach-to-registry", "entry")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "\x1b[33mRegistry attach skipped:\x1b[0m no entry" in result.output
 
 
-def test_the_design_receipt_stays_green_and_cyan(coloured):
+def test_the_design_receipt_stays_green_and_cyan(workdir):
     _empty_dataset()
 
-    result = _eval("design", "data.jsonl", "--goal", "g")
+    result = _eval_coloured("design", "data.jsonl", "--goal", "g")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "\x1b[32mWrote 1 dimensions\x1b[0m to \x1b[36mevals/design.json\x1b[0m" in result.output
 
 
-def test_the_lock_checksum_stays_dim(coloured):
+def test_the_lock_checksum_stays_dim(workdir):
     _design_file()
 
-    result = _eval("lock", "design.json")
+    result = _eval_coloured("lock", "design.json")
 
     with open("evals/locked.json", "rb") as handle:
         checksum = hashlib.sha256(handle.read()).hexdigest()
@@ -475,10 +476,10 @@ def test_the_lock_checksum_stays_dim(coloured):
     )
 
 
-def test_the_coverage_title_stays_italic_and_the_bullet_dim(coloured):
+def test_the_coverage_title_stays_italic_and_the_bullet_dim(workdir):
     _design_file()
 
-    result = _eval("coverage", "design.json", "--task", "reasoning")
+    result = _eval_coloured("coverage", "design.json", "--task", "reasoning")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     # Rich centres the title inside its own style, so the padding is italic too.
@@ -486,13 +487,14 @@ def test_the_coverage_title_stays_italic_and_the_bullet_dim(coloured):
     assert "\x1b[2m•\x1b[0m task category 'reasoning' benefits from" in result.output
 
 
-def test_an_unavailable_comparison_stays_red(coloured, monkeypatch):
+def test_an_unavailable_comparison_stays_red(workdir, monkeypatch):
     _tracker(monkeypatch, series={"cand": [0.5]})
 
-    result = _eval("against", "base", "--candidate", "cand")
+    result = _eval_coloured("against", "base", "--candidate", "cand")
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
     assert (
         f"\x1b[31mComparison unavailable {DASH} no eval results or tracked metrics for "
         "task_accuracy: baseline base=0, candidate cand=1.\x1b[0m" in result.output
     )
+
