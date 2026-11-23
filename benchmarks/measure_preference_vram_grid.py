@@ -21,15 +21,16 @@ other failure; rows shorter than ``max_length`` are refused before measurement.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,80 @@ def _git_sha(source_tree: Path) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def _resolve_commit(source_tree: Path, revision: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(source_tree), "rev-parse", "--verify", f"{revision}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _is_ancestor(source_tree: Path, ancestor: str, descendant: str) -> bool:
+    return subprocess.run(
+        ["git", "-C", str(source_tree), "merge-base", "--is-ancestor", ancestor, descendant],
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+
+
+def _validate_probe_tree(source_tree: Path) -> None:
+    runtime = source_tree / "src" / "soup_cli" / "utils" / "layer_stream_runtime.py"
+    setup = source_tree / "src" / "soup_cli" / "trainer" / "stream_setup.py"
+    missing = []
+    runtime_defs = (
+        ast.walk(ast.parse(runtime.read_text(encoding="utf-8"))) if runtime.is_file() else ()
+    )
+    setup_defs = ast.walk(ast.parse(setup.read_text(encoding="utf-8"))) if setup.is_file() else ()
+    if not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "measure_loss_step_peak_bytes"
+        for node in runtime_defs
+    ):
+        missing.append("layer_stream_runtime.measure_loss_step_peak_bytes")
+    if not any(
+        isinstance(node, ast.ClassDef)
+        and node.name == "StreamingSetupMixin"
+        and any(
+            isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and method.name == "_finish_stream_vram_probe"
+            for method in node.body
+        )
+        for node in setup_defs
+    ):
+        missing.append("StreamingSetupMixin._finish_stream_vram_probe")
+    if missing:
+        raise RuntimeError(
+            "This harness requires the named #1141 measurement tree; missing API: "
+            + ", ".join(missing)
+        )
+
+
+MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
+
+
+def _model_revision(model_path: Path) -> str:
+    """Read the pinned Hugging Face snapshot revision, including refs/main caches."""
+    parts = model_path.resolve().parts
+    for index, part in enumerate(parts[:-1]):
+        if part == "snapshots":
+            return parts[index + 1]
+        if part == "refs" and parts[index + 1] == "main":
+            ref_file = Path(*parts[: index + 2])
+            return ref_file.read_text(encoding="utf-8").strip()
+    raise ValueError("model path is not a Hugging Face snapshot or refs/main cache path")
+
+
+def _safe_error_message(exc: Exception, *local_paths: Path) -> str:
+    detail = str(exc)
+    for path in local_paths:
+        detail = detail.replace(str(path), "<local-path>")
+    if re.search(r"(?i)(?:\b[A-Z]:[\\/]|(?:^|\s)/(?:[^/\s]+/)+|\\\\[^\\]+\\)", detail):
+        return "failure detail omitted because it contained a local path"
+    return detail
 
 
 def _versions() -> dict[str, str]:
@@ -249,9 +324,39 @@ def _assert_full_batch(
     return summary
 
 
+def _assert_forward_shapes(
+    task: str, shapes: list[list[int]], seq_len: int, batch_size: int
+) -> None:
+    """Refuse a measurement unless actual model forwards consumed full sequences."""
+    if not shapes:
+        raise ValueError("measured forward shapes are missing or empty")
+    allowed_rows = {batch_size, batch_size * 2} if task == "kto" else {batch_size * 2}
+    for shape in shapes:
+        if (
+            len(shape) != 2
+            or shape[0] not in allowed_rows
+            or shape[1] != seq_len
+        ):
+            raise ValueError(
+                f"measured forward shape {shape} does not match a full {seq_len}-token batch"
+            )
+
+
+def _validate_measured_forward(
+    row: dict[str, Any], task: str, shapes: list[list[int]], seq_len: int, batch_size: int
+) -> None:
+    try:
+        _assert_forward_shapes(task, shapes, seq_len, batch_size)
+    except ValueError as exc:
+        row.update(status="failed", error_type=type(exc).__name__, error=str(exc))
+        raise
+
+
 def _install_forward_shape_hook(model, seen: list[list[int]]):
     def record(_module, _args, kwargs):
         value = kwargs.get("input_ids")
+        if value is None and _args:
+            value = _args[0]
         if value is not None and getattr(value, "ndim", 0) == 2:
             seen.append([int(value.shape[0]), int(value.shape[1])])
 
@@ -278,8 +383,8 @@ def _worker(
         "mode": mode,
         "status": "failed",
         "model_id": MODEL_ID,
-        "model_path": str(model_path),
-        "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+        "model_path": model_path.name,
+        "model_revision": MODEL_REVISION,
         "probe_commit": probe_sha,
         "main_commit": main_sha,
         "measurement_tree": tree_sha,
@@ -301,6 +406,13 @@ def _worker(
     original_budget = None
     try:
         import torch
+
+        model_revision = _model_revision(model_path)
+        row["model_revision"] = model_revision
+        if model_revision != MODEL_REVISION:
+            raise ValueError(
+                f"model snapshot revision {model_revision} does not match expected {MODEL_REVISION}"
+            )
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is not available; this grid requires a CUDA GPU")
@@ -361,7 +473,7 @@ def _worker(
                 captured["probe_peak_bytes"] = measured.peak_bytes
                 captured["reserved_peak_bytes"] = measured.reserved_bytes
                 captured["probe_seconds"] = measured.seconds
-                captured["realized_batch"] = {"model_rows": rows, "sequence_length": seq_len}
+                captured["probe_input"] = {"model_rows": rows, "sequence_length": seq_len}
                 return measured
 
             def capture_finish(peak, plan):
@@ -380,6 +492,7 @@ def _worker(
                 wrapper._finish_stream_vram_probe = original_finish
             if "probe_peak_bytes" not in captured:
                 raise RuntimeError("probe path did not produce a measured loss-step peak")
+            _validate_measured_forward(row, task, forward_shapes, seq_len, batch_size)
             row.update(captured)
             row["status"] = "success"
 
@@ -428,6 +541,7 @@ def _worker(
             trainer.train()
             if calls != 1:
                 raise RuntimeError(f"expected exactly one training step, observed {calls}")
+            _validate_measured_forward(row, task, forward_shapes, seq_len, batch_size)
             row.update(captured)
             row.update(measured)
             row["forward_shapes"] = forward_shapes
@@ -440,8 +554,7 @@ def _worker(
         is_oom = "out of memory" in str(exc).lower() or exc.__class__.__name__ == "OutOfMemoryError"
         row["status"] = "oom" if is_oom else "failed"
         row["error_type"] = type(exc).__name__
-        row["error"] = str(exc)
-        row["traceback"] = traceback.format_exc()[-5000:]
+        row["error"] = _safe_error_message(exc, model_path, source_tree, temp_dir)
         row["forward_shapes"] = forward_shapes if "forward_shapes" in locals() else []
         return_code = 0  # Failures are recorded rows; the parent continues the grid.
     finally:
@@ -579,8 +692,17 @@ def _run_task(args: argparse.Namespace) -> int:
     output_dir = args.output_dir.resolve()
     report_path = args.report.resolve()
     source_tree = args.source_tree.resolve()
-    probe_sha = args.probe_sha or _git_sha(source_tree)
-    tree_sha = args.tree_sha or _git_sha(source_tree)
+    _validate_probe_tree(source_tree)
+    head_sha = _git_sha(source_tree)
+    probe_sha = _resolve_commit(source_tree, args.probe_sha)
+    tree_sha = _resolve_commit(source_tree, args.tree_sha)
+    main_sha = _resolve_commit(source_tree, args.main_sha)
+    if tree_sha != head_sha:
+        raise ValueError(f"--tree-sha {tree_sha} does not match measurement tree HEAD {head_sha}")
+    if not _is_ancestor(source_tree, main_sha, tree_sha):
+        raise ValueError("--main-sha must be an ancestor of the measurement tree HEAD")
+    if not _is_ancestor(source_tree, probe_sha, tree_sha):
+        raise ValueError("--probe-sha must be an ancestor of the measurement tree HEAD")
     output_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source_tree / "src") + os.pathsep + env.get("PYTHONPATH", "")
@@ -605,7 +727,7 @@ def _run_task(args: argparse.Namespace) -> int:
                 "--model-path",
                 str(args.model_path.resolve()),
                 "--main-sha",
-                args.main_sha,
+                main_sha,
                 "--probe-sha",
                 probe_sha,
                 "--tree-sha",
@@ -646,7 +768,7 @@ def _run_task(args: argparse.Namespace) -> int:
     _render_report(
         output_dir,
         report_path,
-        main_sha=args.main_sha,
+        main_sha=main_sha,
         probe_sha=probe_sha,
         tree_sha=tree_sha,
     )
@@ -659,8 +781,8 @@ def main() -> int:
     parser.add_argument("--source-tree", type=Path, required=True)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--main-sha", required=True)
-    parser.add_argument("--probe-sha")
-    parser.add_argument("--tree-sha")
+    parser.add_argument("--probe-sha", required=True)
+    parser.add_argument("--tree-sha", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--worker-timeout", type=int, default=3600)
@@ -680,8 +802,8 @@ def main() -> int:
             source_tree=source_tree,
             model_path=args.model_path.resolve(),
             main_sha=args.main_sha,
-            probe_sha=args.probe_sha or _git_sha(source_tree),
-            tree_sha=args.tree_sha or _git_sha(source_tree),
+            probe_sha=args.probe_sha,
+            tree_sha=args.tree_sha,
             output_file=args.output_file.resolve(),
         )
     return _run_task(args)
