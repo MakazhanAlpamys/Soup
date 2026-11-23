@@ -15,13 +15,12 @@ from soup_cli.cli import app
 from tests.conftest import strip_ansi
 
 
-def _plain(text: str) -> str:
-    return "\n".join(" ".join(line.split()).strip(" │") for line in strip_ansi(text).splitlines())
+def _plain(text):
+    return " ".join(strip_ansi(text).split())
 
 
-def _offered_params(output, label, command):
-    line = next(line for line in output.splitlines() if line.startswith(label))
-    offered = line.removeprefix(label).lstrip()
+def _offered_params(output, label, following, command):
+    offered = output.split(label, 1)[1].split(following, 1)[0].strip(" │")
     argv = shlex.split(offered)
     assert argv[:2] == ["soup", command]
     # Use the registered consumers, including their defaults and option names.
@@ -93,8 +92,8 @@ def test_mlx_lora_commands_select_native_consumers(
     complete_training, task, training, quantization, dequantize,
 ):
     output = complete_training(task=task, quantization=quantization, **training)
-    chat = _offered_params(output, "Quick test:", "chat")
-    merge = _offered_params(output, "Merge LoRA:", "merge")
+    chat = _offered_params(output, "Quick test:", "Push to HF:", "chat")
+    merge = _offered_params(output, "Merge LoRA:", "Export GGUF:", "merge")
     assert (chat["backend"], chat["model"]) == ("mlx", "./saved")
     assert (merge["backend"], merge["adapter"]) == ("mlx", "./saved")
     assert merge["dequantize"] is dequantize
@@ -103,7 +102,7 @@ def test_mlx_lora_commands_select_native_consumers(
 @pytest.mark.parametrize("stop_reason", [None, "loss_watchdog"])
 def test_mlx_full_fine_tune_offers_native_chat_and_no_merge(complete_training, stop_reason):
     output = complete_training(lora={"r": 0}, stop_reason=stop_reason)
-    chat = _offered_params(output, "Quick test:", "chat")
+    chat = _offered_params(output, "Quick test:", "Push to HF:", "chat")
     assert (chat["backend"], chat["model"]) == ("mlx", "./saved")
     assert "Full fine-tuning output is a standalone model; no soup merge is needed" in output
     assert "Merge LoRA:" not in output
@@ -111,8 +110,8 @@ def test_mlx_full_fine_tune_offers_native_chat_and_no_merge(complete_training, s
 
 def test_transformers_suggestions_keep_the_default_consumers(complete_training):
     output = complete_training(backend="transformers")
-    chat = _offered_params(output, "Quick test:", "chat")
-    merge = _offered_params(output, "Merge LoRA:", "merge")
+    chat = _offered_params(output, "Quick test:", "Push to HF:", "chat")
+    merge = _offered_params(output, "Merge LoRA:", "Export GGUF:", "merge")
     assert (chat["backend"], chat["model"]) == ("transformers", "./saved")
     assert (merge["backend"], merge["adapter"]) == ("transformers", "./saved")
     assert merge["dequantize"] is False
@@ -121,7 +120,7 @@ def test_transformers_suggestions_keep_the_default_consumers(complete_training):
 
 def test_relora_keeps_dense_guidance_and_default_chat(complete_training):
     output = complete_training(backend="transformers", relora_steps=2)
-    chat = _offered_params(output, "Quick test:", "chat")
+    chat = _offered_params(output, "Quick test:", "Push to HF:", "chat")
     assert (chat["backend"], chat["model"]) == ("transformers", "./saved")
     assert "ReLoRA output is already dense; no soup merge is needed" in output
     assert "Merge LoRA:" not in output
@@ -167,8 +166,32 @@ def test_panel_keeps_generic_prose_without_windows(complete_training, monkeypatc
 
 
 def test_panel_keeps_generic_prose_for_a_control_character(complete_training, monkeypatch):
+    import soup_cli.commands.train as train_mod
+
     # paste_arg refuses control characters on every host; the panel falls back to prose.
     monkeypatch.setattr("soup_cli.utils.run_provenance.write_run_provenance", lambda *_: None)
+    monkeypatch.setattr(train_mod, "_WINDOWS", True, raising=False)
     output = complete_training(output_dir="./runs\nnew\rline")
     assert "Use PowerShell for the commands below." not in output
     assert "Use your shell's quoting rules for the Output path." in output
+
+
+def test_panel_fallback_full_fine_tune_keeps_the_no_merge_note(complete_training, monkeypatch):
+    import soup_cli.commands.train as train_mod
+
+    monkeypatch.setattr(train_mod, "_WINDOWS", True, raising=False)
+    output = complete_training(output_dir="./owner's $adapter", lora={"r": 0})
+    assert "Use PowerShell for the commands below." in output
+    assert "Full fine-tuning output is a standalone model; no soup merge is needed" in output
+    assert "Merge LoRA:" not in output
+
+
+def test_panel_fallback_follows_the_dequantize_hint(complete_training, monkeypatch):
+    import soup_cli.commands.train as train_mod
+
+    monkeypatch.setattr(train_mod, "_WINDOWS", True, raising=False)
+    output = complete_training(output_dir="./owner's $adapter", quantization="4bit")
+    assert (
+        "Merge LoRA: soup merge --backend mlx --adapter './owner''s $adapter' --dequantize"
+        in output
+    )
