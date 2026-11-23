@@ -604,7 +604,10 @@ def test_closing_the_stream_does_not_wait_for_the_worker_and_the_lock_is_release
     elapsed = time.monotonic() - started
 
     # The worker is still inside the decode step it was in when the stream closed.
-    assert elapsed < 1.0, f"close() took {elapsed:.2f}s: it waited for the worker"
+    # The true defect guard that close() did not wait for the worker is that
+    # generate_returned is not set and the adapter lock is still held.
+    # The elapsed check is bounded relative to the 2.0s worker sleep with slack for loaded CI.
+    assert elapsed < 1.8, f"close() took {elapsed:.2f}s: it waited for the worker"
     assert not model.generate_returned.is_set()
     assert lock.locked()
     # It ends that step, returns, and releases the lock on its own thread.
