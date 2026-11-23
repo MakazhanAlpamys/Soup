@@ -1,0 +1,450 @@
+{
+  "000": {
+    "hit5": 7,
+    "mrr10": 0.3833333333333333,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 3
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 3
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 399
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 21
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 12
+      }
+    ]
+  },
+  "001": {
+    "hit5": 8,
+    "mrr10": 0.4083333333333333,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 3
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 3
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 374
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 21
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 4
+      }
+    ]
+  },
+  "010": {
+    "hit5": 8,
+    "mrr10": 0.6166666666666667,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 1
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 1
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 1
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 11
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 12
+      }
+    ]
+  },
+  "011": {
+    "hit5": 9,
+    "mrr10": 0.6416666666666667,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 1
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 1
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 1
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 11
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 4
+      }
+    ]
+  },
+  "100": {
+    "hit5": 7,
+    "mrr10": 0.3833333333333333,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 3
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 3
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 399
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 11
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 12
+      }
+    ]
+  },
+  "101": {
+    "hit5": 8,
+    "mrr10": 0.4083333333333333,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 3
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 3
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 374
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 11
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 4
+      }
+    ]
+  },
+  "110": {
+    "hit5": 8,
+    "mrr10": 0.6309523809523809,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 1
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 1
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 1
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 7
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 12
+      }
+    ]
+  },
+  "111": {
+    "hit5": 9,
+    "mrr10": 0.655952380952381,
+    "rows": [
+      {
+        "id": "D01",
+        "query": "how do I stop training with ctrl+c without losing progress",
+        "rank": 1
+      },
+      {
+        "id": "D02",
+        "query": "continue training from a checkpoint after a crash",
+        "rank": 1
+      },
+      {
+        "id": "D03",
+        "query": "find the biggest batch size that fits my GPU",
+        "rank": 1
+      },
+      {
+        "id": "D04",
+        "query": "preference training without a reference model",
+        "rank": 1
+      },
+      {
+        "id": "D05",
+        "query": "convert my model to GGUF for llama.cpp",
+        "rank": 3
+      },
+      {
+        "id": "D06",
+        "query": "remove near duplicate rows using embeddings",
+        "rank": 2
+      },
+      {
+        "id": "D07",
+        "query": "fine-tune on a Mac without a GPU",
+        "rank": 7
+      },
+      {
+        "id": "D08",
+        "query": "train on a cloud GPU without my own server",
+        "rank": 1
+      },
+      {
+        "id": "D09",
+        "query": "serve my model behind an OpenAI compatible API",
+        "rank": 3
+      },
+      {
+        "id": "D10",
+        "query": "will this model fit in 24GB of VRAM",
+        "rank": 4
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "issue": 3192,
+  "baseline_commit": "bf62781f0dc8cb509e3dae16a3818f8dba28627c",
+  "selection": "Highest development MRR@10 among rule-group combinations tied for highest Hit@5; no fresh queries scored",
+  "gate": "option B: preserve Hit@1, Hit@5, MRR@10, Recall@5 and disclose every first-relevant rank loss",
+  "files": {
+    "src/soup_cli/docs/retriever.py": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a",
+    "src/soup_cli/docs/tokenizer.py": "f5d929939cadbe7da5ec7cefd8f257945c9658aeb97adc661eb2ee106d9203a8",
+    "src/soup_cli/docs/bm25.py": "3dbfbc893babe41374a9d67c2428dde5470eab5915d8a800791362a228484289",
+    "src/soup_cli/docs/chunker.py": "5f3aada4a27491b8744c3c256794cc069e6f5b73d1351f169c2f11fe5edadc47",
+    "scripts/check_docs_search_ranking.py": "0230eb498102f02c031acc5a3d3360420b446e9ff6acafef8f896ce28ac5cd4b",
+    "scripts/ablate_docs_search.py": "ce2c7d9f9ee835b50aaea9d8b4d84aaf29be16c96dad04eaf33e3ef698fb000e",
+    "tests/fixtures/docs_search/maintainer_dev.json": "c5a2b9cc994346f52b72a5ddf0f62a95ea7b909ef916d58300591bd32dbe033b",
+    "tests/fixtures/docs_search/current_sections.json": "d4356d859e495d2faac0b1059db976826e19a9ecd4d635673e9fc6c91743a0c9",
+    "tests/fixtures/docs_search/current_mapping.json": "034b0888ef53502a6ca3421586cda051bb0c7b054aeb2d4894f474e2c4edd787"
+  },
+  "documents": {
+    "README.md": "7b4bee2682a1b873d2c3f7f4530d67cacca51fdd9139911385bffa1ddfc656c5",
+    "adapters-and-governance.md": "f2db40adaa6e3ef307e22cfd439b128ea5fd8470dadadd11442b878b5e75fb64",
+    "autodistill.md": "168415e9c3117c9d9e0f16f0b20c264e56fc3ec1d68fc5255b7c8d51d815f88b",
+    "backends-and-ops.md": "3e8553948085019257bcd16883eb7b6b9182a8f3a8e0f238ddbf8471edf0e75a",
+    "cli-reference.md": "39611b49064396f48d67bc1a59cb5a7b34d809ba280c2a8fea399714ec244dcd",
+    "commands.md": "03861e8f7d53a38ca7112eb34ee982a5b172d730b9db57b04901dfd43d9ef393",
+    "compliance.md": "96df2848b939a0e4c44e1053e9ea2390b47ae2782c42fdd41c41a95022ab74d2",
+    "config-reference.md": "df7c6d040c6f99b4ab47c81fa39d916a7983d43d38750bee18f7a97178b08243",
+    "data.md": "804ede1b804bdf9663441569da4f9751c3cd102c7d29abb0d62d0606f2235ebd",
+    "evaluation.md": "8e2e706ed56b484eeeaf681a65098f4e7b27f943650350b6537568b757fbad16",
+    "issue-difficulty.md": "e8388fc37f04c6fd7a47ba3bd5cac8528d7f242400311a9fcdc8590f37844b10",
+    "loop-formats.md": "ee9c46a9e5fbbf706921f8fa68d25a5487dafe4a826e0a919a41532c94dd76e5",
+    "models.md": "63ebf6143bd7ba6362761895aac89f78867515eacd4ddd251f1ce18b6d00b2d2",
+    "peft-and-efficiency.md": "7fc9c679593eef4df58d24de13cf1441b6df6d84f71a5c3c011f874464b7edbf",
+    "performance-and-quantization.md": "f08b6f09b63970f4e301e6ed8bf9546b43e5b6febd8f5fff997d7fab50793f7d",
+    "serving-and-export.md": "09ba86f2038d651b8f3b752adfb2fa0800866f0971233f19963ef9796701aab3",
+    "training.md": "a26bf6a3dbfdc9734a3ccf96448d39e7c1c7af742c7aa05f8691c1eee1c198d8"
+  },
+  "fresh_status": "Not collected or scored; fresh Hit@5 gain required before a default-change PR",
+  "historical_fixture_status": "Exact local replay passes; two unresolved source passages excluded from committed fixtures"
+}

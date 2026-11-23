@@ -404,6 +404,46 @@ soup --version                                Show version (prints the same text
 soup --verbose <command>                      Full traceback on errors
 ```
 
+### Documentation search ranking
+
+`soup docs search "<query>"` uses offline BM25 in the base install. It needs no
+model download or optional dependency. `--top-k` / `-k` and `--format` / `-f`
+(`table` or `json`) keep their existing behavior. Search results can change for
+the same query; a successful search still exits with code 0.
+
+The literal query keeps its original BM25 contribution, including repeated
+terms. A small set of query-side rules adds lower-weight terms:
+
+| Prose input | Added term and weight | Inactive example |
+| --- | --- | --- |
+| `Mac` or `Macs` | The other form, at 0.70 | `foo/mac`, `--macs`, `C:\\mac` |
+| `Mac`/`Macs` with `train`, `training` or `fine-tune` | `mlx`, at 0.65 | `Mac address` |
+| `continue training` | `resume`, at 0.65 | `--continue training` |
+| `batch size` | `batch-size`, at 0.65 | `--batch size` |
+
+Each inferred term contributes once and is omitted when already present
+literally. Rules inspect whole input tokens before flag/path decomposition.
+Numbers and units such as `24GB`, dotted keys, paths and version strings are
+not rewritten.
+
+The prose phrases `without a reference model`, `without reference model`,
+`no reference model` and `reference-free` add an 8-point bonus to an already
+matching section whose own heading explicitly says `no reference model`,
+`without [a] reference model`, `reference-free` or `reference free`. The rule
+applies to every matching heading; it does not map generic `preference` to
+ORPO. `--no reference model` does not activate the phrase rule.
+
+The section's own heading receives an additional signal from unique literal
+alphabetic prose terms. The bonus is 0.30 times the sum of their positive
+BM25 IDFs, capped at 25% of the section's score. Ancestor breadcrumbs already
+participate in BM25 and receive no separate boost. Scores are combined before
+the result cutoff, with ties still ordered by ascending document ID. Nonpositive
+results remain excluded.
+
+All rules run at query time. Existing version-1 index caches remain valid and
+are not rewritten by a cache hit. JSON results still have exactly `doc_name`,
+`section`, `heading_prefix`, `text` and `score`.
+
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
 `--device` decides where these commands load the model. Without it, the

@@ -1,0 +1,1111 @@
+{
+  "cohort": "original28-frozen-passages-PROVENANCE-PENDING",
+  "corpus_sha256": "d07cdeb3f1c50eb2e8ea5535e06164bdbd32e9574fba8970a0a3d19f802d17ed",
+  "query_count": 28,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": true,
+  "require_hit5_gain": false,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.8214285714285714,
+      "hit5": 0.9642857142857143,
+      "mrr10": 0.8845238095238095,
+      "recall5": 0.7166666666666667
+    },
+    "candidate": {
+      "hit1": 0.8571428571428571,
+      "hit5": 1.0,
+      "mrr10": 0.9166666666666666,
+      "recall5": 0.8
+    }
+  },
+  "rank_losses": [
+    {
+      "id": "soup_v3_023",
+      "query": "find mlx recipes for apple silicon",
+      "old_rank": 2,
+      "new_rank": 3
+    }
+  ],
+  "per_query": [
+    {
+      "id": "soup_v3_001",
+      "query": "how do i stop training when eval drops past baseline?",
+      "targets": [
+        "evaluation::eval-gated-training::sub_000",
+        "evaluation::eval-gated-training::sub_001",
+        "evaluation::eval-gated-training::sub_002"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "peft-and-efficiency::training-intelligence-forgetting-checkpoint-quality::sub_000",
+          "evaluation::pre-push-regression-gate-soup-eval-gate-install::sub_000",
+          "evaluation::eval-gated-training::sub_000",
+          "peft-and-efficiency::training-intelligence-forgetting-checkpoint-quality::sub_001",
+          "training::reasoning-effort-eot-control",
+          "peft-and-efficiency::loss-watchdog",
+          "training::full-fine-tuning-lora-r-0::sub_006",
+          "evaluation::attach-the-report-to-a-model-registry-entry-as-a-first-class-artifact::sub_003",
+          "evaluation::leg-2-via-lm-eval-benchmarks-base-scores-supplied-by-baseline",
+          "training::full-fine-tuning-lora-r-0::sub_005"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "peft-and-efficiency::training-intelligence-forgetting-checkpoint-quality::sub_000",
+          "evaluation::eval-gated-training::sub_000",
+          "evaluation::pre-push-regression-gate-soup-eval-gate-install::sub_000",
+          "evaluation::leg-2-via-lm-eval-benchmarks-base-scores-supplied-by-baseline",
+          "peft-and-efficiency::training-intelligence-forgetting-checkpoint-quality::sub_001",
+          "training::reasoning-effort-eot-control",
+          "adapters-and-governance::show-full-details-config-eval-baseline-artifacts-ancestors",
+          "peft-and-efficiency::loss-watchdog",
+          "training::full-fine-tuning-lora-r-0::sub_006",
+          "evaluation::attach-the-report-to-a-model-registry-entry-as-a-first-class-artifact::sub_003"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_002",
+      "query": "train llama 8b on a 4gb card with layer streaming, what config keys",
+      "targets": [
+        "performance-and-quantization::layer-streaming-beta-v0-72-0-nf4-v0-72-2-disk-wider-archs-v0-72-3-preference-losses-v0-72-4::sub_000",
+        "performance-and-quantization::layer-streaming-beta-v0-72-0-nf4-v0-72-2-disk-wider-archs-v0-72-3-preference-losses-v0-72-4::sub_001",
+        "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_000",
+        "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_001"
+      ],
+      "baseline": {
+        "rank": 10,
+        "top10": [
+          "performance-and-quantization::nf4-streaming-quantization-4bit::sub_012",
+          "performance-and-quantization::fsdp2-full-shard-with-cpu-offload::sub_002",
+          "performance-and-quantization::batch-size-vs-gradient-accumulation::sub_015",
+          "training::training-tasks-methods::sub_001",
+          "training::kto-training-unpaired-preferences",
+          "performance-and-quantization::nf4-streaming-quantization-4bit::sub_011",
+          "peft-and-efficiency::what-lisa-actually-costs-measured-at-3b-and-8b::sub_000",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_005",
+          "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_000"
+        ]
+      },
+      "candidate": {
+        "rank": 3,
+        "top10": [
+          "performance-and-quantization::nf4-streaming-quantization-4bit::sub_012",
+          "performance-and-quantization::fsdp2-full-shard-with-cpu-offload::sub_002",
+          "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_000",
+          "performance-and-quantization::batch-size-vs-gradient-accumulation::sub_015",
+          "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_001",
+          "peft-and-efficiency::what-lisa-actually-costs-measured-at-3b-and-8b::sub_000",
+          "performance-and-quantization::nf4-streaming-quantization-4bit::sub_011",
+          "training::training-tasks-methods::sub_001",
+          "training::kto-training-unpaired-preferences",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_003",
+      "query": "does dpo streaming build a second reference model in vram?",
+      "targets": [
+        "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000",
+        "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_002",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000",
+          "performance-and-quantization::sizing-a-streaming-run-v0-72-3::sub_000",
+          "training::kl-controlled-dpo-variants",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000",
+          "training::orpo-training-no-reference-model",
+          "training::training-tasks-methods::sub_001",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_005",
+          "training::training-tasks-methods::sub_005"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_002",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000",
+          "performance-and-quantization::sizing-a-streaming-run-v0-72-3::sub_000",
+          "training::kl-controlled-dpo-variants",
+          "training::orpo-training-no-reference-model",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_005",
+          "training::training-tasks-methods::sub_001",
+          "performance-and-quantization::nf4-streaming-quantization-4bit::sub_000"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_004",
+      "query": "why does soup data lint flag length bias in my dpo pairs",
+      "targets": [
+        "data::preference-data-linter-soup-data-lint::sub_000",
+        "data::preference-data-linter-soup-data-lint::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::preference-data-linter-soup-data-lint::sub_000",
+          "data::preference-data-linter-soup-data-lint::sub_001",
+          "commands::all-commands::sub_013",
+          "commands::all-commands::sub_057",
+          "training::dpo-with-gdpo-length-normalized",
+          "data::trace-to-preference",
+          "commands::all-commands::sub_059",
+          "evaluation::show-prior-verdicts-newest-first-with-per-choice-counts::sub_001",
+          "commands::all-commands::sub_019",
+          "models::the-extras-table::sub_005"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::preference-data-linter-soup-data-lint::sub_000",
+          "data::preference-data-linter-soup-data-lint::sub_001",
+          "commands::all-commands::sub_013",
+          "training::dpo-with-gdpo-length-normalized",
+          "commands::all-commands::sub_057",
+          "backends-and-ops::soup-why",
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_001",
+          "data::trace-to-preference",
+          "adapters-and-governance::train-a-steering-vector-from-contrastive-positive-negative-prompt-pairs",
+          "commands::all-commands::sub_059"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_005",
+      "query": "semantic dedup threshold 0.8 vs minhash, what should i use",
+      "targets": [
+        "data::semantic-dedup-soup-data-dedup-semantic::sub_000",
+        "data::semantic-dedup-soup-data-dedup-semantic::sub_001",
+        "data::semantic-dedup-soup-data-dedup-semantic::sub_002"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_001",
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_000",
+          "data::it-is-not-a-paraphrase-detector-and-why-the-default-is-0-8::sub_001",
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_002",
+          "data::remove-near-duplicates-requires-pip-install-soup-cli-data",
+          "commands::all-commands::sub_014",
+          "data::data-engineering::sub_002",
+          "commands::all-commands::sub_013",
+          "data::auto-dedup-minhash-requires-pip-install-soup-cli-data",
+          "training::soup-yaml-2"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_001",
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_000",
+          "data::semantic-dedup-soup-data-dedup-semantic::sub_002",
+          "data::it-is-not-a-paraphrase-detector-and-why-the-default-is-0-8::sub_001",
+          "data::remove-near-duplicates-requires-pip-install-soup-cli-data",
+          "data::auto-dedup-minhash-requires-pip-install-soup-cli-data",
+          "commands::all-commands::sub_014",
+          "data::data-engineering::sub_002",
+          "commands::all-commands::sub_013",
+          "training::soup-yaml-2"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_006",
+      "query": "chat template doctor says eos missing in labels",
+      "targets": [
+        "data::collator-path-answer-only-per-message-train-field-raft-span-mask::sub_001",
+        "data::fine-tune-doctor-soup-data-doctor"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::collator-path-answer-only-per-message-train-field-raft-span-mask::sub_001",
+          "data::fine-tune-doctor-soup-data-doctor",
+          "backends-and-ops::wrap-your-fine-tuned-model-in-a-gradio-chat-space-in-one-command",
+          "serving-and-export::cap-the-sequence-length-when-the-kv-cache-does-not-fit",
+          "commands::all-commands::sub_013",
+          "performance-and-quantization::chat-template-hardening",
+          "commands::all-commands::sub_007",
+          "training::classifier-reranker-cross-encoder-training-beta-v0-52-0::sub_001",
+          "training::reasoning-effort-eot-control",
+          "data::data-formats::sub_005"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::collator-path-answer-only-per-message-train-field-raft-span-mask::sub_001",
+          "data::fine-tune-doctor-soup-data-doctor",
+          "backends-and-ops::wrap-your-fine-tuned-model-in-a-gradio-chat-space-in-one-command",
+          "performance-and-quantization::chat-template-hardening",
+          "serving-and-export::cap-the-sequence-length-when-the-kv-cache-does-not-fit",
+          "commands::all-commands::sub_013",
+          "commands::all-commands::sub_007",
+          "data::magpie-synthetic-data-chat-template-prefix-harvest-live-v0-71-6",
+          "training::classifier-reranker-cross-encoder-training-beta-v0-52-0::sub_001",
+          "training::reasoning-effort-eot-control"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_007",
+      "query": "soup ship evidence json with config provenance, how does it replay",
+      "targets": [
+        "evaluation::closing-the-evidence-loop-v0-71-39::sub_000",
+        "evaluation::closing-the-evidence-loop-v0-71-39::sub_001",
+        "evaluation::closing-the-evidence-loop-v0-71-39::sub_002",
+        "evaluation::closing-the-evidence-loop-v0-71-39::sub_003",
+        "evaluation::gate-pr-ci-refuse-evidence-that-doesn-t-match-the-committed-config-comment-the-verdict::sub_000"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "commands::all-commands::sub_026",
+          "evaluation::producer-train-job-compute-or-stamp-scores-bound-to-the-committed-recipe",
+          "evaluation::gate-pr-ci-refuse-evidence-that-doesn-t-match-the-committed-config-comment-the-verdict::sub_000",
+          "commands::all-commands::sub_024",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_002",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_003",
+          "evaluation::offline-decide-from-pre-computed-scores-persist-the-verdict-json::sub_000",
+          "commands::all-commands::sub_001",
+          "compliance::8-gate-future-changes-in-ci",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_002"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "commands::all-commands::sub_026",
+          "evaluation::gate-pr-ci-refuse-evidence-that-doesn-t-match-the-committed-config-comment-the-verdict::sub_000",
+          "evaluation::producer-train-job-compute-or-stamp-scores-bound-to-the-committed-recipe",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_002",
+          "commands::all-commands::sub_024",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_003",
+          "evaluation::offline-decide-from-pre-computed-scores-persist-the-verdict-json::sub_000",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_002",
+          "evaluation::compute-scores-from-a-pre-built-evidence-json",
+          "commands::all-commands::sub_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_008",
+      "query": "what does noise floor do in soup ship on gpu",
+      "targets": [
+        "evaluation::noise-floor-v0-73-2::sub_000",
+        "evaluation::noise-floor-v0-73-2::sub_001",
+        "evaluation::noise-floor-v0-73-2::sub_002",
+        "evaluation::noise-floor-v0-73-2::sub_003"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "evaluation::noise-floor-v0-73-2::sub_000",
+          "evaluation::noise-floor-v0-73-2::sub_005",
+          "evaluation::noise-floor-v0-73-2::sub_002",
+          "evaluation::noise-floor-v0-73-2::sub_001",
+          "evaluation::noise-floor-v0-73-2::sub_006",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_002",
+          "evaluation::noise-floor-v0-73-2::sub_004",
+          "evaluation::noise-floor-v0-73-2::sub_003",
+          "commands::all-commands::sub_027",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "evaluation::noise-floor-v0-73-2::sub_000",
+          "evaluation::noise-floor-v0-73-2::sub_005",
+          "evaluation::noise-floor-v0-73-2::sub_002",
+          "evaluation::noise-floor-v0-73-2::sub_001",
+          "evaluation::noise-floor-v0-73-2::sub_006",
+          "evaluation::noise-floor-v0-73-2::sub_004",
+          "evaluation::noise-floor-v0-73-2::sub_003",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_002",
+          "commands::all-commands::sub_027",
+          "evaluation::closing-the-evidence-loop-v0-71-39::sub_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_009",
+      "query": "hot swap lora adapter on running soup serve",
+      "targets": [
+        "serving-and-export::activate-an-adapter",
+        "serving-and-export::dynamic-lora-hot-swap"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::dynamic-lora-hot-swap",
+          "commands::all-commands::sub_012",
+          "serving-and-export::serve-a-trained-mole-soup-serve-mole",
+          "adapters-and-governance::apply-at-decode-time-via-soup-serve",
+          "adapters-and-governance::adapters-registry-governance::sub_001",
+          "adapters-and-governance::into-one-adapter-arxiv-2212-04089-names-map-to-dirs-via-adapter-name-path",
+          "adapters-and-governance::adapter-management-git-for-lora",
+          "evaluation::base-vs-tuned-per-prompt-swap-debiased-base-0-5-coin-flip-won-winrate-0-5",
+          "training::full-fine-tuning-lora-r-0::sub_001",
+          "commands::all-commands::sub_011"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::dynamic-lora-hot-swap",
+          "commands::all-commands::sub_012",
+          "serving-and-export::serve-a-trained-mole-soup-serve-mole",
+          "adapters-and-governance::apply-at-decode-time-via-soup-serve",
+          "adapters-and-governance::adapter-management-git-for-lora",
+          "evaluation::base-vs-tuned-per-prompt-swap-debiased-base-0-5-coin-flip-won-winrate-0-5",
+          "adapters-and-governance::into-one-adapter-arxiv-2212-04089-names-map-to-dirs-via-adapter-name-path",
+          "backends-and-ops::preview-without-running",
+          "serving-and-export::multi-tenant-vector-bank-soup-serve-bank",
+          "backends-and-ops::validate-without-actually-running-anything"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_010",
+      "query": "vllm install downgraded torch, how do i check env drift",
+      "targets": [
+        "backends-and-ops::compare-current-env-to-the-lock-exit-3-on-abi-sensitive-drift",
+        "backends-and-ops::hermetic-env-lockfile-soup-env"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::compare-current-env-to-the-lock-exit-3-on-abi-sensitive-drift",
+          "serving-and-export::vllm-backend-2-4x-faster-inference",
+          "commands::all-commands::sub_054",
+          "adapters-and-governance::teammates-re-check-the-lock-exit-3-on-drift",
+          "commands::all-commands::sub_047",
+          "serving-and-export::install-vllm-support-in-its-own-environment-not-the-training-one",
+          "models::the-extras-table::sub_001",
+          "evaluation::optional-webhook-on-drift-detected",
+          "backends-and-ops::install-mlx-support::sub_000",
+          "evaluation::evaluation-diagnostics-probes::sub_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::compare-current-env-to-the-lock-exit-3-on-abi-sensitive-drift",
+          "serving-and-export::vllm-backend-2-4x-faster-inference",
+          "commands::all-commands::sub_054",
+          "adapters-and-governance::teammates-re-check-the-lock-exit-3-on-drift",
+          "commands::all-commands::sub_047",
+          "serving-and-export::install-vllm-support-in-its-own-environment-not-the-training-one",
+          "evaluation::optional-webhook-on-drift-detected",
+          "backends-and-ops::install-mlx-support::sub_000",
+          "models::the-extras-table::sub_001",
+          "evaluation::drift-alarm-soup-drift-alarm"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_011",
+      "query": "serve q8_0 kv cache needs hqq, what if missing",
+      "targets": [
+        "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_000",
+          "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type",
+          "commands::all-commands::sub_012",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_001",
+          "serving-and-export::export-with-different-quantizations",
+          "serving-and-export::specify-llama-cpp-path-manually",
+          "performance-and-quantization::performance-quantization::sub_003",
+          "performance-and-quantization::performance-quantization::sub_004",
+          "commands::all-commands::sub_011",
+          "serving-and-export::cap-the-sequence-length-when-the-kv-cache-does-not-fit"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_000",
+          "commands::all-commands::sub_012",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_001",
+          "serving-and-export::export-with-different-quantizations",
+          "serving-and-export::specify-llama-cpp-path-manually",
+          "performance-and-quantization::performance-quantization::sub_003",
+          "serving-and-export::cap-the-sequence-length-when-the-kv-cache-does-not-fit",
+          "performance-and-quantization::performance-quantization::sub_004",
+          "commands::all-commands::sub_011"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_012",
+      "query": "build llama.cpp for quantized gguf export on windows",
+      "targets": [
+        "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000",
+        "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_002"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_001",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_002",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_003",
+          "serving-and-export::export-to-gguf",
+          "serving-and-export::specify-llama-cpp-path-manually",
+          "serving-and-export::llama-cpp-proxy::sub_000",
+          "serving-and-export::llama-cpp-proxy::sub_001",
+          "serving-and-export::bitnet-1-58-tq1-0-gguf-export-live-in-v0-71-20::sub_001",
+          "performance-and-quantization::unsloth-dynamic-2-0-iq-apple-arm-gguf-via-llama-cpp-imatrix"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_001",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_002",
+          "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_003",
+          "serving-and-export::export-to-gguf",
+          "serving-and-export::specify-llama-cpp-path-manually",
+          "serving-and-export::llama-cpp-proxy::sub_000",
+          "serving-and-export::bitnet-1-58-tq1-0-gguf-export-live-in-v0-71-20::sub_001",
+          "performance-and-quantization::unsloth-dynamic-2-0-iq-apple-arm-gguf-via-llama-cpp-imatrix",
+          "serving-and-export::bitnet-1-58-tq1-0-gguf-export-live-in-v0-71-20::sub_000"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_013",
+      "query": "merge adapters with cc-by-nc and apache, override reason gets logged?",
+      "targets": [
+        "adapters-and-governance::license-conflict-matrix-at-merge::sub_000",
+        "adapters-and-governance::license-conflict-matrix-at-merge::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_000",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_002",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_001",
+          "adapters-and-governance::adapter-lifecycle-soup-adapters-merge-pr-bisect-soup-lock",
+          "peft-and-efficiency::multipack-ffd-bin-packing-sampler::sub_003",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_000",
+          "adapters-and-governance::weighted-merge-with-linear-ties-dare-svd-strategies",
+          "adapters-and-governance::adapters-registry-governance::sub_004",
+          "adapters-and-governance::dare-merge-deterministic-via-seed",
+          "commands::all-commands::sub_038"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_000",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_002",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_001",
+          "adapters-and-governance::adapter-lifecycle-soup-adapters-merge-pr-bisect-soup-lock",
+          "peft-and-efficiency::multipack-ffd-bin-packing-sampler::sub_003",
+          "adapters-and-governance::weighted-merge-with-linear-ties-dare-svd-strategies",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_000",
+          "adapters-and-governance::dare-merge-deterministic-via-seed",
+          "adapters-and-governance::adapters-registry-governance::sub_004",
+          "serving-and-export::merge-lora-adapter"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_014",
+      "query": "scan adapter for rank-1 backdoor before merge",
+      "targets": [
+        "adapters-and-governance::adapter-backdoor-scanner-soup-adapters-scan"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::adapter-backdoor-scanner-soup-adapters-scan",
+          "adapters-and-governance::adapters-registry-governance::sub_003",
+          "commands::all-commands::sub_036",
+          "commands::all-commands::sub_038",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_005",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_002",
+          "compliance::5-sign-scan-and-verify-the-artifact",
+          "adapters-and-governance::live-edit-optimises-a-residual-applies-a-rank-1-weight-update-then-saves",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_000",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_003"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::adapter-backdoor-scanner-soup-adapters-scan",
+          "adapters-and-governance::adapters-registry-governance::sub_003",
+          "commands::all-commands::sub_036",
+          "commands::all-commands::sub_038",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_005",
+          "adapters-and-governance::license-conflict-matrix-at-merge::sub_002",
+          "compliance::5-sign-scan-and-verify-the-artifact",
+          "serving-and-export::merge-lora-adapter",
+          "adapters-and-governance::diff-what-the-model-says-before-vs-after-the-edit-live-generation::sub_001",
+          "adapters-and-governance::live-edit-optimises-a-residual-applies-a-rank-1-weight-update-then-saves"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_015",
+      "query": "verify adapter signature against trusted public key",
+      "targets": [
+        "adapters-and-governance::adapter-sign-verify-soup-adapters-sign-verify",
+        "adapters-and-governance::genuine-authentication-require-the-signer-s-key-match-a-trusted-one",
+        "adapters-and-governance::self-consistency-verify-embedded-public-key",
+        "compliance::5-sign-scan-and-verify-the-artifact"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::genuine-authentication-require-the-signer-s-key-match-a-trusted-one",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_001",
+          "commands::all-commands::sub_037",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_002",
+          "adapters-and-governance::self-consistency-verify-embedded-public-key",
+          "commands::all-commands::sub_036",
+          "commands::all-commands::sub_039",
+          "compliance::5-sign-scan-and-verify-the-artifact",
+          "adapters-and-governance::adapter-sign-verify-soup-adapters-sign-verify",
+          "adapters-and-governance::adapters-registry-governance::sub_003"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::genuine-authentication-require-the-signer-s-key-match-a-trusted-one",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_001",
+          "adapters-and-governance::self-consistency-verify-embedded-public-key",
+          "commands::all-commands::sub_037",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_002",
+          "commands::all-commands::sub_036",
+          "compliance::5-sign-scan-and-verify-the-artifact",
+          "adapters-and-governance::adapter-sign-verify-soup-adapters-sign-verify",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::adapters-registry-governance::sub_003"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_016",
+      "query": "show lineage dag for a registry model name",
+      "targets": [
+        "adapters-and-governance::delete-cascades-to-artifacts-lineage-links",
+        "adapters-and-governance::model-registry-lineage"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::delete-cascades-to-artifacts-lineage-links",
+          "commands::all-commands::sub_023",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_003",
+          "commands::all-commands::sub_022",
+          "commands::all-commands::sub_053",
+          "adapters-and-governance::model-registry-lineage",
+          "adapters-and-governance::adapters-registry-governance::sub_001",
+          "adapters-and-governance::show-full-details-config-eval-baseline-artifacts-ancestors",
+          "data::data-recipe-dag::sub_000",
+          "adapters-and-governance::list-entries-filter-by-name-tag-base-model-task"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::delete-cascades-to-artifacts-lineage-links",
+          "commands::all-commands::sub_023",
+          "adapters-and-governance::model-registry-lineage",
+          "adapters-and-governance::list-all-snapshotted-branches::sub_003",
+          "commands::all-commands::sub_022",
+          "commands::all-commands::sub_053",
+          "adapters-and-governance::adapters-registry-governance::sub_001",
+          "data::data-recipe-dag::sub_000",
+          "adapters-and-governance::show-full-details-config-eval-baseline-artifacts-ancestors",
+          "adapters-and-governance::list-entries-filter-by-name-tag-base-model-task"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_017",
+      "query": "pack soup can and embed in-toto attestation",
+      "targets": [
+        "adapters-and-governance::embed-in-toto-attestations-into-the-manifest-v3-cans-repeatable",
+        "adapters-and-governance::soup-cans-shareable-recipes"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::embed-in-toto-attestations-into-the-manifest-v3-cans-repeatable",
+          "commands::all-commands::sub_040",
+          "adapters-and-governance::pack-a-registry-entry-into-a-can",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_000",
+          "commands::all-commands::sub_023",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::fork-with-modifications-dotted-path-overrides-and-re-pack",
+          "compliance::4-register-the-run-then-emit-bom-attestation::sub_000",
+          "adapters-and-governance::registry-lineage-via-pack-cans",
+          "compliance::7-generate-a-documented-model-card"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::embed-in-toto-attestations-into-the-manifest-v3-cans-repeatable",
+          "commands::all-commands::sub_040",
+          "adapters-and-governance::pack-a-registry-entry-into-a-can",
+          "adapters-and-governance::provenance-attestations-soup-attest-emit::sub_000",
+          "adapters-and-governance::fork-with-modifications-dotted-path-overrides-and-re-pack",
+          "compliance::4-register-the-run-then-emit-bom-attestation::sub_000",
+          "commands::all-commands::sub_023",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::registry-lineage-via-pack-cans",
+          "evaluation::5-probe-pack-list-assemble-calibrated-probes-per-base-sleeper-truth-harm-per-base"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_018",
+      "query": "disable audit log for one soup command",
+      "targets": [
+        "adapters-and-governance::audit-log-soup-audit-log::sub_000",
+        "adapters-and-governance::audit-log-soup-audit-log::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::audit-log-soup-audit-log::sub_000",
+          "commands::all-commands::sub_040",
+          "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy",
+          "adapters-and-governance::adapters-registry-governance::sub_002",
+          "commands::all-commands::sub_041",
+          "adapters-and-governance::audit-log-soup-audit-log::sub_001",
+          "compliance::compliance-governance-quickstart::sub_001",
+          "README::soup-documentation::sub_004",
+          "adapters-and-governance::adapters-registry-governance::sub_003",
+          "backends-and-ops::log-level-quiet-normal-verbose-debug"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::audit-log-soup-audit-log::sub_000",
+          "commands::all-commands::sub_040",
+          "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy",
+          "adapters-and-governance::adapters-registry-governance::sub_002",
+          "adapters-and-governance::audit-log-soup-audit-log::sub_001",
+          "commands::all-commands::sub_041",
+          "README::soup-documentation::sub_004",
+          "compliance::compliance-governance-quickstart::sub_001",
+          "backends-and-ops::log-level-quiet-normal-verbose-debug",
+          "adapters-and-governance::adapters-registry-governance::sub_003"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_019",
+      "query": "attach measured energy json to cyclonedx bom",
+      "targets": [
+        "adapters-and-governance::2-attach-it-to-the-bom::sub_000",
+        "adapters-and-governance::2-attach-it-to-the-bom::sub_001",
+        "adapters-and-governance::bill-of-materials-soup-bom-emit",
+        "compliance::4-register-the-run-then-emit-bom-attestation::sub_000"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::2-attach-it-to-the-bom::sub_001",
+          "adapters-and-governance::2-attach-it-to-the-bom::sub_000",
+          "compliance::4-register-the-run-then-emit-bom-attestation::sub_000",
+          "adapters-and-governance::attaching-energy-co-energy",
+          "adapters-and-governance::writes-bom-cdx-json-bom-spdx-json",
+          "adapters-and-governance::energy-co-measurement-track-energy",
+          "adapters-and-governance::1-train-and-persist-the-measured-energy-needs-pip-install-soup-cli-carbon",
+          "commands::all-commands::sub_040",
+          "commands::all-commands::sub_036",
+          "adapters-and-governance::bill-of-materials-soup-bom-emit"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::2-attach-it-to-the-bom::sub_001",
+          "adapters-and-governance::2-attach-it-to-the-bom::sub_000",
+          "compliance::4-register-the-run-then-emit-bom-attestation::sub_000",
+          "adapters-and-governance::attaching-energy-co-energy",
+          "adapters-and-governance::writes-bom-cdx-json-bom-spdx-json",
+          "adapters-and-governance::1-train-and-persist-the-measured-energy-needs-pip-install-soup-cli-carbon",
+          "adapters-and-governance::energy-co-measurement-track-energy",
+          "commands::all-commands::sub_040",
+          "adapters-and-governance::bill-of-materials-soup-bom-emit",
+          "commands::all-commands::sub_036"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_020",
+      "query": "generate eu ai act annex xi from train with track-energy",
+      "targets": [
+        "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_000",
+        "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_001",
+        "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy",
+          "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_000",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::adapters-registry-governance::sub_002",
+          "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_001",
+          "compliance::3-train-with-a-reproducibility-receipt-annex-xi-energy-for-the-eu",
+          "compliance::1-start-from-a-compliance-template",
+          "adapters-and-governance::energy-co-measurement-track-energy",
+          "commands::all-commands::sub_040",
+          "adapters-and-governance::1-train-and-persist-the-measured-energy-needs-pip-install-soup-cli-carbon"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy",
+          "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_000",
+          "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_001",
+          "compliance::3-train-with-a-reproducibility-receipt-annex-xi-energy-for-the-eu",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::adapters-registry-governance::sub_002",
+          "compliance::1-start-from-a-compliance-template",
+          "adapters-and-governance::energy-co-measurement-track-energy",
+          "commands::all-commands::sub_040",
+          "adapters-and-governance::1-train-and-persist-the-measured-energy-needs-pip-install-soup-cli-carbon"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_021",
+      "query": "airgap bundle with repro receipt embedded",
+      "targets": [
+        "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_000",
+        "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_000",
+          "compliance::6-air-gap-transfer-optional",
+          "adapters-and-governance::adapters-registry-governance::sub_004",
+          "commands::all-commands::sub_039",
+          "compliance::compliance-governance-quickstart::sub_001",
+          "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_001",
+          "adapters-and-governance::reproducibility-receipt-soup-train-repro-receipt",
+          "compliance::sr-11-7-soc-2-hipaa-capture-seeds-kernels-gpu-os",
+          "adapters-and-governance::adapters-registry-governance::sub_003",
+          "commands::all-commands::sub_040"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_000",
+          "compliance::6-air-gap-transfer-optional",
+          "adapters-and-governance::adapters-registry-governance::sub_004",
+          "commands::all-commands::sub_039",
+          "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_001",
+          "adapters-and-governance::reproducibility-receipt-soup-train-repro-receipt",
+          "compliance::compliance-governance-quickstart::sub_001",
+          "compliance::sr-11-7-soc-2-hipaa-capture-seeds-kernels-gpu-os",
+          "adapters-and-governance::adapters-registry-governance::sub_003",
+          "compliance::3-train-with-a-reproducibility-receipt-annex-xi-energy-for-the-eu"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_022",
+      "query": "autopilot dry run with 24gb gpu budget",
+      "targets": [
+        "backends-and-ops::autopilot-zero-config",
+        "backends-and-ops::constrain-to-a-gpu-budget-1gb-to-1tb",
+        "backends-and-ops::preview-the-generated-config-without-running"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::constrain-to-a-gpu-budget-1gb-to-1tb",
+          "backends-and-ops::preview-the-generated-config-without-running",
+          "serving-and-export::deploy-autopilot",
+          "commands::all-commands::sub_007",
+          "evaluation::pre-flight-decision-soup-advise",
+          "performance-and-quantization::deploy-autopilot-with-live-quant-lobotomy-measurement::sub_000",
+          "commands::all-commands::sub_035",
+          "backends-and-ops::just-create-files-without-training",
+          "backends-and-ops::backends-platform-ops::sub_001",
+          "adapters-and-governance::leave-one-out-ablation-plan-against-a-4-hour-wall-clock-budget"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::constrain-to-a-gpu-budget-1gb-to-1tb",
+          "backends-and-ops::preview-the-generated-config-without-running",
+          "serving-and-export::deploy-autopilot",
+          "commands::all-commands::sub_007",
+          "performance-and-quantization::deploy-autopilot-with-live-quant-lobotomy-measurement::sub_000",
+          "evaluation::pre-flight-decision-soup-advise",
+          "evaluation::dry-run-a-sweep-across-a-subset",
+          "adapters-and-governance::leave-one-out-ablation-plan-against-a-4-hour-wall-clock-budget",
+          "commands::all-commands::sub_035",
+          "backends-and-ops::just-create-files-without-training"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_023",
+      "query": "find mlx recipes for apple silicon",
+      "targets": [
+        "backends-and-ops::install-mlx-support::sub_002"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "backends-and-ops::install-mlx-support::sub_001",
+          "backends-and-ops::install-mlx-support::sub_002",
+          "backends-and-ops::apple-silicon-mlx-backend",
+          "backends-and-ops::backends-platform-ops::sub_001",
+          "models::the-extras-table::sub_002",
+          "backends-and-ops::search-by-task-or-keyword::sub_003",
+          "commands::all-commands::sub_056",
+          "backends-and-ops::gpu-live-monitor",
+          "peft-and-efficiency::lr-range-finder",
+          "performance-and-quantization::fp8-scaling-recipes-v0-28-1::sub_001"
+        ]
+      },
+      "candidate": {
+        "rank": 3,
+        "top10": [
+          "backends-and-ops::apple-silicon-mlx-backend",
+          "backends-and-ops::install-mlx-support::sub_001",
+          "backends-and-ops::install-mlx-support::sub_002",
+          "backends-and-ops::backends-platform-ops::sub_001",
+          "models::the-extras-table::sub_002",
+          "backends-and-ops::search-by-task-or-keyword::sub_003",
+          "commands::all-commands::sub_056",
+          "backends-and-ops::gpu-live-monitor",
+          "performance-and-quantization::fp8-scaling-recipes-v0-28-1::sub_001",
+          "peft-and-efficiency::lr-range-finder"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_024",
+      "query": "pre-tokenize dataset and reuse tokenized cache",
+      "targets": [
+        "data::aot-tokenization-with-soup-data-preprocess",
+        "data::tokenize-once-reuse-the-cache-across-runs"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::aot-tokenization-with-soup-data-preprocess",
+          "data::tokenize-once-reuse-the-cache-across-runs",
+          "data::data-formats::sub_005",
+          "data::dbt-for-sft-dag-of-dataset-transforms-with-incremental-materialization",
+          "data::tokenized-path-soup-tokenized-16-char-cache-key",
+          "backends-and-ops::alternative-model-hubs-modelscope-modelers::sub_000",
+          "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type",
+          "evaluation::run-your-judge-on-a-calibration-set-with-positions-swapped::sub_001",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_001",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_000"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::aot-tokenization-with-soup-data-preprocess",
+          "data::tokenize-once-reuse-the-cache-across-runs",
+          "data::data-formats::sub_005",
+          "data::tokenized-path-soup-tokenized-16-char-cache-key",
+          "data::dbt-for-sft-dag-of-dataset-transforms-with-incremental-materialization",
+          "backends-and-ops::alternative-model-hubs-modelscope-modelers::sub_000",
+          "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_001",
+          "performance-and-quantization::kv-cache-types-v0-53-0::sub_000",
+          "evaluation::run-your-judge-on-a-calibration-set-with-positions-swapped::sub_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_025",
+      "query": "train from s3 jsonl with streaming and shuffle buffer",
+      "targets": [
+        "data::remote-datasets-s3-gcs-azure-oci::sub_000",
+        "data::remote-datasets-s3-gcs-azure-oci::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::remote-datasets-s3-gcs-azure-oci::sub_000",
+          "data::data-pipeline-pro::sub_000",
+          "performance-and-quantization::sizing-a-streaming-run-v0-72-3::sub_000",
+          "training::raft-rows-pass-the-train-time-shuffle-seed-so-the-golden-id-lines-up",
+          "training::soup-yaml-dapo-with-replay-buffer-and-tis-truncation-masking::sub_002",
+          "serving-and-export::prints-auth-token-to-console::sub_000",
+          "data::merge-multiple-datasets",
+          "evaluation::so-the-golden-doc-n-ids-line-up-with-what-the-model-saw-at-train-time-v0-71-17",
+          "performance-and-quantization::batch-size-vs-gradient-accumulation::sub_002",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::remote-datasets-s3-gcs-azure-oci::sub_000",
+          "training::raft-rows-pass-the-train-time-shuffle-seed-so-the-golden-id-lines-up",
+          "training::soup-yaml-dapo-with-replay-buffer-and-tis-truncation-masking::sub_002",
+          "data::data-pipeline-pro::sub_000",
+          "performance-and-quantization::sizing-a-streaming-run-v0-72-3::sub_000",
+          "training::soup-yaml-dapo-with-replay-buffer-and-tis-truncation-masking::sub_001",
+          "serving-and-export::prints-auth-token-to-console::sub_000",
+          "data::merge-multiple-datasets",
+          "evaluation::so-the-golden-doc-n-ids-line-up-with-what-the-model-saw-at-train-time-v0-71-17",
+          "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_026",
+      "query": "grpo reward hack mitigation kl_control, what settings",
+      "targets": [
+        "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_000",
+        "training::closed-loop-reward-hacking-mitigation-v0-71-26-detect-and-self-correct"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::closed-loop-reward-hacking-mitigation-v0-71-26-detect-and-self-correct",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_005",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_001",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_004",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_002",
+          "commands::all-commands::sub_060",
+          "commands::all-commands::sub_061",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_000",
+          "training::prm-guided-grpo-process-supervised-rl::sub_000",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_003"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::closed-loop-reward-hacking-mitigation-v0-71-26-detect-and-self-correct",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_005",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_001",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_004",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_002",
+          "commands::all-commands::sub_060",
+          "commands::all-commands::sub_061",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_000",
+          "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_003",
+          "training::prm-guided-grpo-process-supervised-rl::sub_000"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_027",
+      "query": "unlearn npo without retain set, why warning",
+      "targets": [
+        "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_000",
+        "training::unlearn-yaml",
+        "training::unlearning-task-unlearn-npo-simnpo-rmu"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::unlearn-yaml",
+          "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_000",
+          "training::run-the-unlearn-loop-validated-on-smollm2-135m-npo-simnpo-drive-forget-loss-down",
+          "commands::all-commands::sub_042",
+          "training::training-tasks-methods::sub_003",
+          "training::unlearning-task-unlearn-npo-simnpo-rmu",
+          "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_001",
+          "performance-and-quantization::fsdp-qlora-set-quant-storage::sub_003",
+          "backends-and-ops::validate-without-actually-running-anything",
+          "backends-and-ops::soup-why"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::unlearn-yaml",
+          "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_000",
+          "training::run-the-unlearn-loop-validated-on-smollm2-135m-npo-simnpo-drive-forget-loss-down",
+          "commands::all-commands::sub_042",
+          "training::unlearning-task-unlearn-npo-simnpo-rmu",
+          "training::training-tasks-methods::sub_003",
+          "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_001",
+          "backends-and-ops::validate-without-actually-running-anything",
+          "performance-and-quantization::fsdp-qlora-set-quant-storage::sub_003",
+          "backends-and-ops::soup-why"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_028",
+      "query": "online dpo with ollama judge, config example",
+      "targets": [
+        "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_000",
+        "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_001",
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_002",
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_000",
+          "evaluation::llm-as-a-judge-score-model-outputs-using-gpt-4o-ollama-etc",
+          "commands::all-commands::sub_059",
+          "data::trace-to-preference-llm-judge-filter::sub_000",
+          "serving-and-export::supported-tools-frozenset-python-bash-web-search::sub_000",
+          "evaluation::eval-gated-training::sub_001",
+          "commands::all-commands::sub_000",
+          "data::pipeline-chunk-docs-judge-active-prune-jsonl-provenance-manifest::sub_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_001",
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_002",
+          "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_000",
+          "evaluation::llm-as-a-judge-score-model-outputs-using-gpt-4o-ollama-etc",
+          "data::trace-to-preference-llm-judge-filter::sub_000",
+          "commands::all-commands::sub_059",
+          "data::pipeline-chunk-docs-judge-active-prune-jsonl-provenance-manifest::sub_001",
+          "data::trace-to-preference-llm-judge-filter::sub_001",
+          "serving-and-export::supported-tools-frozenset-python-bash-web-search::sub_000",
+          "evaluation::eval-gated-training::sub_001"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "0021a3412d6f0bce355e1216f388428f6546ea3c0a0e7f2cb7ee00f43592de39",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}

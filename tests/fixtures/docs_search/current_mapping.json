@@ -1,0 +1,416 @@
+{
+  "evaluation::eval-gated-training::sub_000": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Eval-Gated Training",
+    "current_chunk_id": "463",
+    "reviewed_override": false
+  },
+  "evaluation::eval-gated-training::sub_001": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Eval-Gated Training",
+    "current_chunk_id": "463",
+    "reviewed_override": false
+  },
+  "evaluation::eval-gated-training::sub_002": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Eval-Gated Training",
+    "current_chunk_id": "463",
+    "reviewed_override": false
+  },
+  "performance-and-quantization::layer-streaming-beta-v0-72-0-nf4-v0-72-2-disk-wider-archs-v0-72-3-preference-losses-v0-72-4::sub_000": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)",
+    "current_chunk_id": "565",
+    "reviewed_override": false
+  },
+  "performance-and-quantization::layer-streaming-beta-v0-72-0-nf4-v0-72-2-disk-wider-archs-v0-72-3-preference-losses-v0-72-4::sub_001": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)",
+    "current_chunk_id": "565",
+    "reviewed_override": false
+  },
+  "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_000": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)",
+    "current_chunk_id": "565",
+    "reviewed_override": true
+  },
+  "performance-and-quantization::layer-streaming-is-a-config-key-not-a-cli-flag-just-train-normally::sub_001": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)",
+    "current_chunk_id": "565",
+    "reviewed_override": true
+  },
+  "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_000": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4) > Preference losses over streaming (v0.72.4)",
+    "current_chunk_id": "570",
+    "reviewed_override": false
+  },
+  "performance-and-quantization::preference-losses-over-streaming-v0-72-4::sub_001": {
+    "doc_name": "performance-and-quantization",
+    "heading_prefix": "Performance & Quantization > Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4) > Preference losses over streaming (v0.72.4)",
+    "current_chunk_id": "570",
+    "reviewed_override": false
+  },
+  "data::preference-data-linter-soup-data-lint::sub_000": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Preference-Data Linter (`soup data lint`)",
+    "current_chunk_id": "455",
+    "reviewed_override": false
+  },
+  "data::preference-data-linter-soup-data-lint::sub_001": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Preference-Data Linter (`soup data lint`)",
+    "current_chunk_id": "455",
+    "reviewed_override": false
+  },
+  "data::semantic-dedup-soup-data-dedup-semantic::sub_000": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`)",
+    "current_chunk_id": "417",
+    "reviewed_override": false
+  },
+  "data::semantic-dedup-soup-data-dedup-semantic::sub_001": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`)",
+    "current_chunk_id": "417",
+    "reviewed_override": false
+  },
+  "data::semantic-dedup-soup-data-dedup-semantic::sub_002": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`)",
+    "current_chunk_id": "417",
+    "reviewed_override": false
+  },
+  "data::fine-tune-doctor-soup-data-doctor": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Fine-tune Doctor (`soup data doctor`)",
+    "current_chunk_id": "454",
+    "reviewed_override": false
+  },
+  "data::collator-path-answer-only-per-message-train-field-raft-span-mask::sub_001": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Fine-tune Doctor (`soup data doctor`)",
+    "current_chunk_id": "454",
+    "reviewed_override": true
+  },
+  "evaluation::closing-the-evidence-loop-v0-71-39::sub_000": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Closing the evidence loop (v0.71.39)",
+    "current_chunk_id": "472",
+    "reviewed_override": false
+  },
+  "evaluation::closing-the-evidence-loop-v0-71-39::sub_001": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Closing the evidence loop (v0.71.39)",
+    "current_chunk_id": "472",
+    "reviewed_override": false
+  },
+  "evaluation::closing-the-evidence-loop-v0-71-39::sub_002": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Closing the evidence loop (v0.71.39)",
+    "current_chunk_id": "472",
+    "reviewed_override": false
+  },
+  "evaluation::closing-the-evidence-loop-v0-71-39::sub_003": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Closing the evidence loop (v0.71.39)",
+    "current_chunk_id": "472",
+    "reviewed_override": false
+  },
+  "evaluation::gate-pr-ci-refuse-evidence-that-doesn-t-match-the-committed-config-comment-the-verdict::sub_000": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Closing the evidence loop (v0.71.39)",
+    "current_chunk_id": "472",
+    "reviewed_override": true
+  },
+  "evaluation::noise-floor-v0-73-2::sub_000": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Noise Floor (v0.73.2)",
+    "current_chunk_id": "471",
+    "reviewed_override": false
+  },
+  "evaluation::noise-floor-v0-73-2::sub_001": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Noise Floor (v0.73.2)",
+    "current_chunk_id": "471",
+    "reviewed_override": false
+  },
+  "evaluation::noise-floor-v0-73-2::sub_002": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Noise Floor (v0.73.2)",
+    "current_chunk_id": "471",
+    "reviewed_override": false
+  },
+  "evaluation::noise-floor-v0-73-2::sub_003": {
+    "doc_name": "evaluation",
+    "heading_prefix": "Evaluation, Diagnostics & Probes > Ship Verdict (`soup ship`) > Noise Floor (v0.73.2)",
+    "current_chunk_id": "471",
+    "reviewed_override": false
+  },
+  "serving-and-export::dynamic-lora-hot-swap": {
+    "doc_name": "serving-and-export",
+    "heading_prefix": "Serving, Inference & Export > Inference Server > Dynamic LoRA Hot-Swap",
+    "current_chunk_id": "620",
+    "reviewed_override": false
+  },
+  "serving-and-export::activate-an-adapter": {
+    "doc_name": "serving-and-export",
+    "heading_prefix": "Serving, Inference & Export > Inference Server > Dynamic LoRA Hot-Swap",
+    "current_chunk_id": "620",
+    "reviewed_override": true
+  },
+  "backends-and-ops::hermetic-env-lockfile-soup-env": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Hermetic Env Lockfile (`soup env`)",
+    "current_chunk_id": "117",
+    "reviewed_override": false
+  },
+  "backends-and-ops::compare-current-env-to-the-lock-exit-3-on-abi-sensitive-drift": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Hermetic Env Lockfile (`soup env`)",
+    "current_chunk_id": "117",
+    "reviewed_override": true
+  },
+  "serving-and-export::kv-cache-quantization-soup-serve-kv-cache-type": {
+    "doc_name": "serving-and-export",
+    "heading_prefix": "Serving, Inference & Export > Inference Server > KV Cache Quantization (`soup serve --kv-cache-type`)",
+    "current_chunk_id": "613",
+    "reviewed_override": false
+  },
+  "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_000": {
+    "doc_name": "serving-and-export",
+    "heading_prefix": "Serving, Inference & Export > Export to GGUF > Building llama.cpp (required for quantized GGUF)",
+    "current_chunk_id": "601",
+    "reviewed_override": false
+  },
+  "serving-and-export::building-llama-cpp-required-for-quantized-gguf::sub_002": {
+    "doc_name": "serving-and-export",
+    "heading_prefix": "Serving, Inference & Export > Export to GGUF > Building llama.cpp (required for quantized GGUF)",
+    "current_chunk_id": "601",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::license-conflict-matrix-at-merge::sub_000": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > License-Conflict Matrix at Merge",
+    "current_chunk_id": "24",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::license-conflict-matrix-at-merge::sub_001": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > License-Conflict Matrix at Merge",
+    "current_chunk_id": "24",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::adapter-backdoor-scanner-soup-adapters-scan": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Adapter Backdoor Scanner (`soup adapters scan`)",
+    "current_chunk_id": "19",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::adapter-sign-verify-soup-adapters-sign-verify": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Adapter Sign + Verify (`soup adapters sign` / `verify`)",
+    "current_chunk_id": "20",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::self-consistency-verify-embedded-public-key": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Adapter Sign + Verify (`soup adapters sign` / `verify`)",
+    "current_chunk_id": "20",
+    "reviewed_override": true
+  },
+  "adapters-and-governance::genuine-authentication-require-the-signer-s-key-match-a-trusted-one": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Adapter Sign + Verify (`soup adapters sign` / `verify`)",
+    "current_chunk_id": "20",
+    "reviewed_override": true
+  },
+  "compliance::5-sign-scan-and-verify-the-artifact": {
+    "doc_name": "compliance",
+    "heading_prefix": "Compliance & governance quickstart > 5. Sign, scan, and verify the artifact",
+    "current_chunk_id": "403",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::model-registry-lineage": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Model Registry & Lineage",
+    "current_chunk_id": "8",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::delete-cascades-to-artifacts-lineage-links": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Model Registry & Lineage",
+    "current_chunk_id": "8",
+    "reviewed_override": true
+  },
+  "adapters-and-governance::soup-cans-shareable-recipes": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Soup Cans (Shareable Recipes)",
+    "current_chunk_id": "10",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::embed-in-toto-attestations-into-the-manifest-v3-cans-repeatable": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Soup Cans (Shareable Recipes)",
+    "current_chunk_id": "10",
+    "reviewed_override": true
+  },
+  "adapters-and-governance::audit-log-soup-audit-log::sub_000": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Audit Log (`soup audit-log`)",
+    "current_chunk_id": "16",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::audit-log-soup-audit-log::sub_001": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Audit Log (`soup audit-log`)",
+    "current_chunk_id": "16",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::bill-of-materials-soup-bom-emit": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Bill of Materials (`soup bom emit`)",
+    "current_chunk_id": "11",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::2-attach-it-to-the-bom::sub_000": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Bill of Materials (`soup bom emit`) > Attaching energy + CO₂ (`--energy`)",
+    "current_chunk_id": "12",
+    "reviewed_override": true
+  },
+  "adapters-and-governance::2-attach-it-to-the-bom::sub_001": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Bill of Materials (`soup bom emit`) > Attaching energy + CO₂ (`--energy`)",
+    "current_chunk_id": "12",
+    "reviewed_override": true
+  },
+  "compliance::4-register-the-run-then-emit-bom-attestation::sub_000": {
+    "doc_name": "compliance",
+    "heading_prefix": "Compliance & governance quickstart > 4. Register the run, then emit BOM + attestation",
+    "current_chunk_id": "402",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_000": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)",
+    "current_chunk_id": "14",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::eu-ai-act-annex-xi-xii-auto-doc-soup-train-annex-xi::sub_001": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)",
+    "current_chunk_id": "14",
+    "reviewed_override": false
+  },
+  "compliance::eu-ai-act-auto-generate-the-annex-xi-xii-documentation-measure-energy": {
+    "doc_name": "compliance",
+    "heading_prefix": "Compliance & governance quickstart > 3. Train with a reproducibility receipt (+ Annex XI / energy for the EU)",
+    "current_chunk_id": "401",
+    "reviewed_override": true
+  },
+  "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_000": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Airgap Bundle (`soup airgap-bundle`)",
+    "current_chunk_id": "25",
+    "reviewed_override": false
+  },
+  "adapters-and-governance::airgap-bundle-soup-airgap-bundle::sub_001": {
+    "doc_name": "adapters-and-governance",
+    "heading_prefix": "Adapters, Registry & Governance > Airgap Bundle (`soup airgap-bundle`)",
+    "current_chunk_id": "25",
+    "reviewed_override": false
+  },
+  "backends-and-ops::autopilot-zero-config": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Autopilot (Zero-Config)",
+    "current_chunk_id": "52",
+    "reviewed_override": false
+  },
+  "backends-and-ops::constrain-to-a-gpu-budget-1gb-to-1tb": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Autopilot (Zero-Config)",
+    "current_chunk_id": "52",
+    "reviewed_override": true
+  },
+  "backends-and-ops::preview-the-generated-config-without-running": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Autopilot (Zero-Config)",
+    "current_chunk_id": "52",
+    "reviewed_override": true
+  },
+  "backends-and-ops::install-mlx-support::sub_002": {
+    "doc_name": "backends-and-ops",
+    "heading_prefix": "Backends, Platform & Ops > Apple Silicon (MLX Backend)",
+    "current_chunk_id": "53",
+    "reviewed_override": true
+  },
+  "data::aot-tokenization-with-soup-data-preprocess": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > AOT Tokenization with `soup data preprocess`",
+    "current_chunk_id": "452",
+    "reviewed_override": false
+  },
+  "data::tokenize-once-reuse-the-cache-across-runs": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Data Pipeline Pro",
+    "current_chunk_id": "443",
+    "reviewed_override": true
+  },
+  "data::remote-datasets-s3-gcs-azure-oci::sub_000": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Remote Datasets (S3 / GCS / Azure / OCI)",
+    "current_chunk_id": "449",
+    "reviewed_override": false
+  },
+  "data::remote-datasets-s3-gcs-azure-oci::sub_001": {
+    "doc_name": "data",
+    "heading_prefix": "Data Engineering > Remote Datasets (S3 / GCS / Azure / OCI)",
+    "current_chunk_id": "449",
+    "reviewed_override": false
+  },
+  "training::closed-loop-reward-hacking-auto-mitigation-v0-71-26::sub_000": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Loop Hardening > Closed-loop reward-hacking auto-mitigation (v0.71.26)",
+    "current_chunk_id": "654",
+    "reviewed_override": false
+  },
+  "training::closed-loop-reward-hacking-mitigation-v0-71-26-detect-and-self-correct": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Loop Hardening",
+    "current_chunk_id": "652",
+    "reviewed_override": true
+  },
+  "training::unlearning-task-unlearn-npo-simnpo-rmu": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)",
+    "current_chunk_id": "655",
+    "reviewed_override": false
+  },
+  "training::unlearn-yaml": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)",
+    "current_chunk_id": "655",
+    "reviewed_override": true
+  },
+  "training::score-the-run-on-tofu-muse-wmdp-ok-minor-major-verdict::sub_000": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)",
+    "current_chunk_id": "655",
+    "reviewed_override": true
+  },
+  "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_000": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Online DPO (`task='online_dpo'`) — judge in the loop (v0.71.31)",
+    "current_chunk_id": "665",
+    "reviewed_override": false
+  },
+  "training::online-dpo-task-online-dpo-judge-in-the-loop-v0-71-31::sub_001": {
+    "doc_name": "training",
+    "heading_prefix": "Training Tasks & Methods > Online DPO (`task='online_dpo'`) — judge in the loop (v0.71.31)",
+    "current_chunk_id": "665",
+    "reviewed_override": false
+  }
+}

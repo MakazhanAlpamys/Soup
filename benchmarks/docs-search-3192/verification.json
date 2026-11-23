@@ -1,0 +1,23 @@
+{
+  "status": "CANDIDATE_ONLY_NOT_READY_FOR_DEFAULT_CHANGE",
+  "base": "bf62781f0dc8cb509e3dae16a3818f8dba28627c",
+  "checks": {
+    "baseline_docs_tests": "27 passed before source changes",
+    "latest_docs_tests_python312": "64 passed",
+    "affected_suite_python312": "364 passed, 3 skipped",
+    "docs_tests_python311": "64 passed",
+    "docs_tests_python313": "64 passed",
+    "mutations": "All six retained components caught by failing focused tests when removed",
+    "lint": "ruff check src/soup_cli/ scripts/ tests/ benchmarks/ passed",
+    "wheel": "Built; 17 guides exactly once; base-only offline search and five-field JSON verified",
+    "cache": "Existing bytes and mtime unchanged on cache hit; no build/write allowed by test",
+    "original28_numerical_gate": "PASS locally, all four metrics preserved or improved; one individual loss disclosed",
+    "current28_section_gate": "PASS; pinned docs/chunks/baseline/mappings; no individual loss"
+  },
+  "pending": {
+    "historical_fixture": "Two passages lack established Soup docs source; bodies not committed",
+    "fresh_set": "Original ten are development data; no new set collected or scored",
+    "pull_request": "Not opened before fresh Hit@5 gain and fixture provenance are resolved",
+    "changelog": "3192.changed.md uses issue number temporarily; rename to actual PR number when allocated"
+  }
+}

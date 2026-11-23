@@ -1,0 +1,38 @@
+{
+  "inflection": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_each_query_rule_changes_retrieval[Mac-sections0-bodies0-0]"
+    ]
+  },
+  "resume_alias": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_each_query_rule_changes_retrieval[continue training-sections1-bodies1-0]"
+    ]
+  },
+  "batch_alias": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_each_query_rule_changes_retrieval[batch size-sections2-bodies2-0]"
+    ]
+  },
+  "mac_training_alias": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_each_query_rule_changes_retrieval[fine-tune on a Mac-sections3-bodies3-0]"
+    ]
+  },
+  "reference_phrase": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_each_query_rule_changes_retrieval[preference training without a reference model-sections4-bodies4-0]"
+    ]
+  },
+  "heading_weight": {
+    "detected": true,
+    "failing_tests": [
+      "FAILED tests/test_docs_search.py::test_heading_boost_ranks_before_top_k_and_is_bounded"
+    ]
+  }
+}

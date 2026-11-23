@@ -1,0 +1,7 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "cpu": "Apple M4",
+  "memory_bytes": 17179869184,
+  "python": "3.12.13"
+}
