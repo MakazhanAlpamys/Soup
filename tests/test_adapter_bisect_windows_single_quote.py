@@ -58,6 +58,9 @@ def test_a_quote_inside_a_word_groups_when_its_closing_quote_ends_the_word(comma
         (r"C:\Users\O'Brien\tool.bat {ckpt}", [r"C:\Users\O'Brien\tool.bat", "{ckpt}"]),
         # The next ' is inside a later double-quoted argument, so it closes nothing.
         ("tool don't \"James' file.txt\"", ["tool", "don't", "James' file.txt"]),
+        # A ' that ends a word opens no group, even when a later ' also ends one.
+        ("tool dogs' and cats' x", ["tool", "dogs'", "and", "cats'", "x"]),
+        ("tool --opt=' a'", ["tool", "--opt='", "a'"]),
     ],
 )
 def test_any_other_quote_is_a_literal_character_as_before(command, expected):
