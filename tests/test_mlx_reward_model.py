@@ -441,18 +441,33 @@ def test_base_extra_shard_and_duplicate_keys(trained):
 
 
 @pytest.mark.usefixtures("native_stack")
-def test_checkpoint_gradients_and_no_global_class_change(monkeypatch):
-    from unittest.mock import Mock
+def test_checkpoint_gradients_and_no_global_class_change():
+    # MLX-LM's checkpoint helper patches all instances of a layer class. The
+    # native smoke suite also runs trainers that use that helper.
+    result = subprocess.run(
+        [
+            sys.executable, "-c",
+            "from tests.test_mlx_reward_model import _check_checkpoint_gradients; "
+            "_check_checkpoint_gradients()",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
-    checkpoint = Mock(wraps=mx.checkpoint)
-    monkeypatch.setattr(mx, "checkpoint", checkpoint)
-    plain = tiny_model()
-    original = type(plain.backbone.layers[0]).__call__
-    checkpointed = make_reward_model(tiny_model().backbone, 42, gradient_checkpointing=True)
-    loss1, g1 = accumulated_gradients(plain, [pairs()], 2)
-    checkpoint.assert_not_called()
-    loss2, g2 = accumulated_gradients(checkpointed, [pairs()], 2)
-    assert checkpoint.called
+
+def _check_checkpoint_gradients():
+    from unittest.mock import patch
+
+    _bind_native_stack()
+    with patch.object(mx, "checkpoint", wraps=mx.checkpoint) as checkpoint:
+        plain = tiny_model()
+        original = type(plain.backbone.layers[0]).__call__
+        checkpointed = make_reward_model(tiny_model().backbone, 42, gradient_checkpointing=True)
+        loss1, g1 = accumulated_gradients(plain, [pairs()], 2)
+        checkpoint.assert_not_called()
+        loss2, g2 = accumulated_gradients(checkpointed, [pairs()], 2)
+        assert checkpoint.called
     assert abs(loss1 - loss2) < 1e-6
     for key, value in flat(g1).items():
         assert mx.allclose(value, flat(g2)[key], atol=1e-6).item(), key
@@ -514,6 +529,10 @@ def test_diagnostic_labels_escape_markup_controls_and_bound():
 @pytest.fixture
 def native_stack():
     """No model downloads; native tests alone skip on non-MLX hosts."""
+    _bind_native_stack()
+
+
+def _bind_native_stack():
     import importlib
 
     mx = pytest.importorskip("mlx.core")
