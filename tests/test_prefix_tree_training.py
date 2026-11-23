@@ -36,13 +36,18 @@ def _plain(text: str) -> str:
 # --------------------------------------------------------------------------
 # the config key
 # --------------------------------------------------------------------------
+#: LoRA dropout (0.05 by default) is refused beside prefix_tree; every config
+#: below that means to be accepted turns it off.
+_NO_DROPOUT = "  lora:\n    dropout: 0.0\n"
+
+
 def _config(training: str = "", data: str = "", top: str = "task: sft\n") -> Any:
     from soup_cli.config.loader import load_config_from_string
 
     return load_config_from_string(
         f"base: some/model\n{top}backend: transformers\n"
         f"data:\n  train: data.jsonl\n{data}"
-        f"training:\n  prefix_tree: true\n{training}"
+        f"training:\n  prefix_tree: true\n{_NO_DROPOUT}{training}"
     )
 
 
@@ -90,7 +95,7 @@ class TestConfig:
             load_config_from_string(
                 "base: some/model\ntask: sft\nbackend: transformers\n"
                 "data:\n  train: [a.jsonl, b.jsonl]\n  interleave: concat\n"
-                "training:\n  prefix_tree: true\n"
+                "training:\n  prefix_tree: true\n" + _NO_DROPOUT
             )
 
     @pytest.mark.parametrize("backend", ["mlx", "unsloth"])
@@ -102,7 +107,7 @@ class TestConfig:
         with pytest.raises(ValueError, match="backend='transformers' only") as exc:
             load_config_from_string(
                 f"base: some/model\ntask: sft\nbackend: {backend}\n"
-                "data:\n  train: data.jsonl\ntraining:\n  prefix_tree: true\n"
+                "data:\n  train: data.jsonl\ntraining:\n  prefix_tree: true\n" + _NO_DROPOUT
             )
         assert f"backend='{backend}'" in str(exc.value)
         assert "set prefix_tree: false" in str(exc.value)
@@ -130,6 +135,35 @@ class TestConfig:
                 "base: some/model\ntask: sft\ndata:\n  train: d.jsonl\n"
                 f"training:\n  prefix_tree: {value}\n"
             )
+
+    @pytest.mark.parametrize("lora", ["", "  lora:\n    dropout: 0.1\n"], ids=["default", "0.1"])
+    def test_refused_beside_a_lora_dropout(self, lora):
+        """In an ordinary batch each example draws its own dropout mask over a
+        shared beginning; a prefix-tree row computes that beginning once, so in
+        train mode the loss would differ by more than rounding. The default
+        0.05 is refused too."""
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="cannot be combined with a LoRA dropout") as exc:
+            load_config_from_string(
+                "base: some/model\ntask: sft\nbackend: transformers\n"
+                "data:\n  train: data.jsonl\n"
+                f"training:\n  prefix_tree: true\n{lora}"
+            )
+        assert str(exc.value).rstrip().endswith(
+            "Set training.lora.dropout: 0 or training.prefix_tree: false."
+        )
+
+    def test_a_full_fine_tune_needs_no_dropout_setting(self):
+        """Without an adapter the LoRA dropout is never applied (lora.r 0)."""
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            "base: some/model\ntask: sft\nbackend: transformers\n"
+            "data:\n  train: data.jsonl\n"
+            "training:\n  prefix_tree: true\n  quantization: none\n  lora:\n    r: 0\n"
+        )
+        assert cfg.training.prefix_tree and cfg.training.lora.dropout == 0.05
 
     def test_refused_with_curriculum(self):
         """The sampler decides the order of the examples; a curriculum order
@@ -453,6 +487,36 @@ class TestModelCheck:
         ]
 
 
+def test_the_check_row_stays_within_the_budget_when_no_planned_row_holds_two():
+    """The first two examples each fill ``max_tokens`` and share no beginning,
+    so no planned row holds two (``batch_size: 1`` plans one per row) and the
+    fallback pair is used. Packed whole it would be one row of twice the
+    budget; the check gets shorter copies whose row fits, and still a row of
+    two trees."""
+    from soup_cli.utils.prefix_tree import pack_prefix_tree
+    from soup_cli.utils.prefix_tree_trainer import verification_examples
+
+    max_tokens = 64
+    first = ([3 + k % 40 for k in range(max_tokens)], [X] * 32 + [5] * 32)
+    second = ([50 + k % 40 for k in range(max_tokens)], [X] * 32 + [6] * 32)
+    rows = [(0,), (1,)]
+    whole = pack_prefix_tree([first, second], max_tokens=2 * max_tokens)
+    assert len(whole) == 1 and len(whole[0].input_ids) == 2 * max_tokens, "the defect"
+
+    chosen = verification_examples([first, second], rows, max_tokens=max_tokens)
+    assert len(chosen) == 2
+    for (ids, labels), (full_ids, full_labels) in zip(chosen, [first, second]):
+        assert ids == full_ids[: len(ids)] and labels == full_labels[: len(labels)]
+    total = sum(len(ids) for ids, _ in chosen)
+    assert total <= max_tokens
+    (row,) = pack_prefix_tree(chosen, max_tokens=total)
+    assert len(row.input_ids) <= max_tokens and len(row.paths) == 2
+    # Members of a planned row are used as they are.
+    assert verification_examples([first, second], [(0, 1)], max_tokens=max_tokens) == [
+        first, second
+    ]
+
+
 def test_the_rewind_notice_names_prefix_tree():
     from soup_cli.trainer.sft import rewind_skip_reason
 
@@ -615,6 +679,88 @@ def test_setup_warns_when_the_examples_share_nothing(tmp_path):
         _wrapper(tmp_path, monkeypatch, stream=False, responses_only=False)
     said = _plain(buffer.getvalue())
     assert "these examples share almost no untrained beginning" in said, said
+
+
+class TestDropoutInModel:
+    def test_a_model_without_dropout_has_none(self):
+        from soup_cli.utils.prefix_tree_trainer import dropout_in_model
+        from tests.test_prefix_tree import _tiny_model
+
+        assert dropout_in_model(_tiny_model("llama")) == []
+        assert dropout_in_model(_tiny_model("gpt2")) == []
+
+    def test_dropout_modules_and_config_rates_are_found(self):
+        import transformers
+
+        from soup_cli.utils.prefix_tree_trainer import dropout_in_model
+
+        gpt2 = transformers.GPT2LMHeadModel(
+            transformers.GPT2Config(n_layer=1, n_embd=16, n_head=2, vocab_size=32)
+        )
+        found = dropout_in_model(gpt2)
+        assert any("attn_dropout (p=0.1)" in item for item in found), found
+        llama = transformers.LlamaForCausalLM(
+            transformers.LlamaConfig(
+                hidden_size=16, intermediate_size=32, num_hidden_layers=1,
+                num_attention_heads=2, num_key_value_heads=2, vocab_size=32,
+                attention_dropout=0.1,
+            )
+        )
+        assert dropout_in_model(llama) == ["config.attention_dropout=0.1"]
+
+
+def test_setup_refuses_a_model_that_applies_dropout(tmp_path):
+    """The schema refuses LoRA dropout; a model whose own config drops
+    activations in training is refused by the setup, before any step."""
+    pytest.importorskip("torch")
+    import transformers
+
+    from tests.test_stream_resume_exact import _cpu_only
+
+    real_init = transformers.LlamaForCausalLM.__init__
+
+    def init(self, config, *args, **kwargs):
+        config.attention_dropout = 0.1
+        real_init(self, config, *args, **kwargs)
+
+    with _cpu_only() as monkeypatch:
+        monkeypatch.setattr(transformers.LlamaForCausalLM, "__init__", init)
+        with pytest.raises(ValueError, match="applies no dropout in training") as exc:
+            _wrapper(tmp_path, monkeypatch, stream=False)
+    assert "config.attention_dropout=0.1" in str(exc.value)
+    assert str(exc.value).endswith("set training.prefix_tree: false.")
+
+
+def test_setup_checks_the_model_within_data_max_length(tmp_path):
+    """Examples that each fill ``data.max_length`` and share no beginning
+    (trained on every token): every planned row holds one, so the setup checks
+    the model on the fallback pair, which must fit one row of the budget."""
+    pytest.importorskip("torch")
+    import soup_cli.utils.prefix_tree_trainer as trainer_module
+    from soup_cli.utils.prefix_tree_trainer import prefix_tree_state
+    from tests.test_stream_resume_exact import _cpu_only
+
+    words = ("hello", "world", "the", "cat", "sat", "on", "mat", "hi", "yo")
+    turns = tuple(
+        (words[k], " ".join(words[(k + j) % len(words)] for j in range(80)))
+        for k in range(4)
+    )
+    seen: list = []
+    real_check = trainer_module.check_prefix_tree_model
+
+    def spy(model, *, pad_token_id, examples):
+        seen.append([list(ids) for ids, _ in examples])
+        return real_check(model, pad_token_id=pad_token_id, examples=examples)
+
+    with _cpu_only() as monkeypatch:
+        monkeypatch.setattr(trainer_module, "check_prefix_tree_model", spy)
+        wrapper = _wrapper(tmp_path, monkeypatch, stream=False, turns=turns, responses_only=False)
+        state = prefix_tree_state(wrapper.trainer)
+    max_length = 64
+    assert all(len(row) == 1 for row in state.sampler.rows), "vacuous: a row holds two"
+    (checked,) = seen
+    assert len(checked) == 2
+    assert sum(len(ids) for ids in checked) <= max_length, [len(ids) for ids in checked]
 
 
 def test_setup_refuses_a_model_that_cannot_before_any_step(tmp_path):

@@ -4233,8 +4233,10 @@ class TrainingConfig(BaseModel):
             "task='sft' on the transformers backend only (refused on mlx "
             "and unsloth); works with "
             "stream_layers. Mutually exclusive with packing, multipack, "
-            "stream_loss_chunk, neftune_alpha and curriculum. A bool only: "
-            "1 or 'yes' is refused."
+            "stream_loss_chunk, neftune_alpha, curriculum and a non-zero "
+            "lora.dropout (0.05 by default; set it to 0); a model that applies "
+            "dropout in training is refused at setup. A bool only: 1 or 'yes' "
+            "is refused."
         ),
     )
     # NEFTune — noisy embeddings for better fine-tuning
@@ -4554,6 +4556,19 @@ class TrainingConfig(BaseModel):
                 "prefix-tree sampler orders the examples by their shared beginnings and "
                 "shuffles its rows every epoch, which would drop the curriculum order "
                 "without a word. Remove one of the two."
+            )
+        # The same test as trainer/sft.py's is_full_finetune (not imported: the
+        # trainer module imports this one). Without an adapter, lora.dropout is
+        # never applied.
+        full_finetune = bool(self.unfrozen_parameters or self.lisa_enabled or self.lora.r == 0)
+        if not full_finetune and self.lora.dropout:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with a LoRA dropout "
+                f"(training.lora.dropout={self.lora.dropout!r}, 0.05 by default): an "
+                "ordinary batch draws a dropout mask per example over a shared "
+                "beginning, a prefix-tree row draws one for every example that shares "
+                "it, so the loss would no longer be the ordinary batch's. Set "
+                "training.lora.dropout: 0 or training.prefix_tree: false."
             )
         return self
 

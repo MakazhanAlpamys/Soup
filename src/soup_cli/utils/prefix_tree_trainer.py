@@ -268,6 +268,34 @@ def make_prefix_tree_trainer_class(base_cls: type) -> type:
     return PrefixTreeTrainer
 
 
+#: Model config fields that attention / MLP code reads as a functional dropout
+#: rate in train mode (Llama, Mistral, Qwen2 and others read
+#: ``attention_dropout``); dropout done by modules is found by walking them.
+_FUNCTIONAL_DROPOUT_FIELDS = ("attention_dropout", "hidden_dropout")
+
+
+def dropout_in_model(model: Any) -> List[str]:
+    """Where ``model`` drops activations in train mode: dropout modules with a
+    rate above 0 (LoRA's own included) and the functional rates of its config.
+
+    A prefix-tree row computes a shared beginning once, so a mask drawn on it
+    would be shared by every example; the ordinary batch draws one per example.
+    The model check runs in eval mode and cannot see this.
+    """
+    import torch
+
+    found: List[str] = []
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.modules.dropout._DropoutNd) and module.p > 0:
+            found.append(f"{name or type(module).__name__} (p={module.p:g})")
+    config = getattr(model, "config", None)
+    for field in _FUNCTIONAL_DROPOUT_FIELDS:
+        value = getattr(config, field, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            found.append(f"config.{field}={value:g}")
+    return found
+
+
 def _model_float_dtype(model: Any) -> Any:
     import torch
 
@@ -284,18 +312,36 @@ def verification_examples(
     rows: Sequence[Sequence[int]],
     *,
     limit: int = 3,
+    max_tokens: Optional[int] = None,
 ) -> List[Tuple[List[int], List[int]]]:
     """Real examples to check the model on: the first planned row that holds at
     least two, else the first two of the dataset (packed together they are two
-    trees in one row, which exercises the mask and the positions as well)."""
+    trees in one row, which exercises the mask and the positions as well).
+
+    The check packs its examples into one row, which must fit the row budget
+    the sampler plans with (``max_tokens``, ``data.max_length``). Members of a
+    planned row do by construction. The fallback pair may not (two unrelated
+    examples of ``max_tokens`` each), so it is cut to its first
+    ``max_tokens // 2`` tokens each: shorter copies of the same real text,
+    used only by the check; training sees the examples whole.
+    """
     chosen: List[int] = []
     for row in rows:
         if len(row) >= 2:
             chosen = list(row[:limit])
             break
+    planned = bool(chosen)
     if not chosen:
         chosen = list(range(min(2, len(examples))))
-    return [(list(examples[index][0]), list(examples[index][1])) for index in chosen]
+    picked = [(list(examples[index][0]), list(examples[index][1])) for index in chosen]
+    if (
+        not planned
+        and max_tokens is not None
+        and sum(len(ids) for ids, _ in picked) > max_tokens
+    ):
+        keep = max_tokens // 2
+        picked = [(ids[:keep], labels[:keep]) for ids, labels in picked]
+    return picked
 
 
 def check_prefix_tree_model(

@@ -1624,11 +1624,24 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             _model_float_dtype,
             attach_prefix_tree_state,
             check_prefix_tree_model,
+            dropout_in_model,
             examples_from_dataset,
             planning_notice,
             verification_examples,
         )
 
+        dropped = dropout_in_model(self.model)
+        if dropped:
+            shown = ", ".join(dropped[:4])
+            if len(dropped) > 4:
+                shown += f" and {len(dropped) - 4} more"
+            raise ValueError(
+                f"training.prefix_tree needs a model that applies no dropout in training; "
+                f"this one does: {shown}. A prefix-tree row computes a shared beginning "
+                "once, so one dropout mask would serve every example that shares it and "
+                "the loss would no longer be the ordinary batch's. Set those rates to 0 "
+                "in the model's config or set training.prefix_tree: false."
+            )
         trainer = self.trainer
         collator = trainer.data_collator
         pad_token_id = getattr(collator, "pad_token_id", None)
@@ -1658,7 +1671,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         verdict = check_prefix_tree_model(
             self.model,
             pad_token_id=int(pad_token_id),
-            examples=verification_examples(examples, state.sampler.rows),
+            examples=verification_examples(
+                examples, state.sampler.rows, max_tokens=int(max_length)
+            ),
         )
         if verdict.mask == "additive":
             state.additive_dtype = _model_float_dtype(self.model)

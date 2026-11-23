@@ -175,6 +175,8 @@ the continuations after it.
 training:
   prefix_tree: true
   batch_size: 1          # a step is still at most batch_size rows ...
+  lora:
+    dropout: 0.0         # required: the default 0.05 is refused (see below)
 data:
   max_length: 512        # ... of at most max_length tokens
 ```
@@ -185,7 +187,12 @@ ancestors in the tree) and `position_ids` equal to the depth in the tree, so eve
 exactly the context it had in its own example. The loss and its gradient are those of the
 ordinary batch holding the same examples, to rounding: logits equal to float64 rounding on CPU for Llama,
 Mistral, Qwen2 and GPT-2 (exact with one thread; 1.7e-16 with 24, which is also what the
-ordinary batch differs by from the same examples run one at a time).
+ordinary batch differs by from the same examples run one at a time). This holds for a
+forward without dropout: an ordinary batch draws a dropout mask per example over a shared
+beginning, a prefix-tree row one for all the examples that share it. So a non-zero
+`training.lora.dropout` (0.05 by default) is refused, and so is a model that applies dropout
+in training (a dropout module above 0, or `attention_dropout` / `hidden_dropout` in its
+config); the model check runs in eval mode and would not see it.
 
 **What is shared.** Only tokens that are not trained on, so a trained token is still counted
 once per example in the loss. With `data.train_on_responses_only` (the default) that is the
@@ -229,8 +236,11 @@ on `mlx` and `unsloth`). Refused beside
 `packing`, `multipack`, `stream_loss_chunk`, `data.format: raft`, `data.replay` and
 `data.interleave`; beside `training.neftune_alpha` (its noise is scaled by the row length and
 drawn once per shared token, so the loss would no longer be the ordinary batch's) and
-`training.curriculum` (the sampler sets the order, so the curriculum would be dropped). A
-dataset must have a length (no `data.streaming`). The 4D mask keeps attention off its flash
+`training.curriculum` (the sampler sets the order, so the curriculum would be dropped); beside a
+non-zero `training.lora.dropout` and with a model that applies dropout in training (see above).
+The model check runs on two or three real examples packed into one row within
+`data.max_length`; when no planned row holds two, it uses the first `data.max_length / 2`
+tokens of the first two examples. A dataset must have a length (no `data.streaming`). The 4D mask keeps attention off its flash
 path.
 
 **Planning cost.** Before the first step the whole training set is read through the collator
