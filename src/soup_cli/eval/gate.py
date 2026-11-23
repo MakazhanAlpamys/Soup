@@ -156,7 +156,12 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
             f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
         )
     names: set[str] = set()
-    for task in suite.tasks:
+    for index, task in enumerate(suite.tasks):
+        if not task.name or "\x00" in task.name:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} field tasks[{index}].name "
+                "must be non-empty and null-free"
+            )
         if task.name in names:
             raise ValueError(
                 f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"

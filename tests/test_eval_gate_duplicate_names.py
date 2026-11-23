@@ -123,6 +123,35 @@ def test_cli_duplicate_refusal_never_mints_baseline(
     assert not baseline.exists()
 
 
+@pytest.mark.parametrize("bad_name", ["", "draft\x00task"], ids=["empty", "nul"])
+def test_run_gate_refuses_invalid_name_assigned_after_loading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_name: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    suite = gate.load_suite(str(_suite(tmp_path, ("math", "other"))))
+    suite.tasks[1].name = bad_name
+    calls: list[str] = []
+
+    with pytest.raises(ValueError, match=r"tasks\[1\]\.name must be non-empty and null-free"):
+        gate.run_gate(suite, generate_fn=lambda prompt: calls.append(prompt) or "gold")
+    assert calls == []
+
+
+def test_run_gate_scores_valid_names_after_loading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    names = ("math", " another task ")
+    suite = gate.load_suite(str(_suite(tmp_path, names)))
+    calls: list[str] = []
+
+    result = gate.run_gate(suite, generate_fn=lambda prompt: calls.append(prompt) or "gold")
+
+    assert result.passed
+    assert calls == ["0", "1"]
+    assert [(row.name, row.score) for row in result.task_results] == [(name, 1.0) for name in names]
+
+
 @pytest.mark.parametrize("names", DISTINCT)
 def test_exact_distinct_names_preserve_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, names: tuple[str, str],
