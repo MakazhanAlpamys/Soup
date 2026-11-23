@@ -2,6 +2,7 @@ import pytest
 
 from benchmarks.measure_preference_vram_grid import (
     _assert_full_batch,
+    _failed_worker_row,
     _paired_verdict,
     _render_report,
     _safe_error_message,
@@ -50,6 +51,22 @@ def test_paired_verdict_marks_failed_or_incomplete_rows_incomplete():
         "incomplete",
         None,
     )
+
+
+def test_parent_failure_row_keeps_resolved_commit_identifiers():
+    row = _failed_worker_row(
+        task="dpo",
+        seq_len=2048,
+        mode="probe",
+        detail="worker timed out",
+        main_sha="main-resolved",
+        probe_sha="probe-resolved",
+        tree_sha="tree-resolved",
+    )
+
+    assert row["main_commit"] == "main-resolved"
+    assert row["probe_commit"] == "probe-resolved"
+    assert row["measurement_tree"] == "tree-resolved"
     assert _paired_verdict({"status": "success"}, {"status": "success"}) == (
         "incomplete",
         None,

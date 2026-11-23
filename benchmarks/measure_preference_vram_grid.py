@@ -585,6 +585,23 @@ def _row_path(output_dir: Path, task: str, seq_len: int, mode: str) -> Path:
     return output_dir / "rows" / f"{task}-seq{seq_len}-{mode}.json"
 
 
+def _failed_worker_row(
+    *, task: str, seq_len: int, mode: str, detail: str, main_sha: str, probe_sha: str, tree_sha: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "created_utc": datetime.now(UTC).isoformat(),
+        "task": task,
+        "sequence_length": seq_len,
+        "mode": mode,
+        "status": "failed",
+        "error": detail,
+        "probe_commit": probe_sha,
+        "main_commit": main_sha,
+        "measurement_tree": tree_sha,
+    }
+
+
 def _paired_verdict(
     probe: dict[str, Any] | None, step: dict[str, Any] | None
 ) -> tuple[str, float | None]:
@@ -754,16 +771,15 @@ def _run_task(args: argparse.Namespace) -> int:
                 )
                 _write_json(
                     row_file,
-                    {
-                        "schema_version": 1,
-                        "task": args.task,
-                        "sequence_length": seq_len,
-                        "mode": mode,
-                        "status": "failed",
-                        "error": detail,
-                        "probe_commit": probe_sha,
-                        "main_commit": args.main_sha,
-                    },
+                    _failed_worker_row(
+                        task=args.task,
+                        seq_len=seq_len,
+                        mode=mode,
+                        detail=detail,
+                        main_sha=main_sha,
+                        probe_sha=probe_sha,
+                        tree_sha=tree_sha,
+                    ),
                 )
     _render_report(
         output_dir,
