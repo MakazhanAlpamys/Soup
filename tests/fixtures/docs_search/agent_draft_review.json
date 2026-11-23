@@ -1,0 +1,213 @@
+{
+  "cohort": "agent-drafted-user-review-pending",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "authorship": "AI-drafted by the Codex implementation agent who developed and tuned this candidate.",
+  "outside_tuning_authorship": false,
+  "user_review_status": "pending; not yet reviewed or approved by the user",
+  "scoring_status": "UNSCORED; no baseline or candidate ranking has been inspected for these questions",
+  "eligibility": "Does not establish outside-tuning authorship and does not satisfy the confirmed independent fresh-set condition. User review alone does not change that provenance.",
+  "intents": "Five new wordings of known development intents, four additional intents and one technical control; not a representative random sample.",
+  "documents": {
+    "README.md": "7b4bee2682a1b873d2c3f7f4530d67cacca51fdd9139911385bffa1ddfc656c5",
+    "adapters-and-governance.md": "f2db40adaa6e3ef307e22cfd439b128ea5fd8470dadadd11442b878b5e75fb64",
+    "autodistill.md": "168415e9c3117c9d9e0f16f0b20c264e56fc3ec1d68fc5255b7c8d51d815f88b",
+    "backends-and-ops.md": "3e8553948085019257bcd16883eb7b6b9182a8f3a8e0f238ddbf8471edf0e75a",
+    "cli-reference.md": "39611b49064396f48d67bc1a59cb5a7b34d809ba280c2a8fea399714ec244dcd",
+    "commands.md": "03861e8f7d53a38ca7112eb34ee982a5b172d730b9db57b04901dfd43d9ef393",
+    "compliance.md": "96df2848b939a0e4c44e1053e9ea2390b47ae2782c42fdd41c41a95022ab74d2",
+    "config-reference.md": "df7c6d040c6f99b4ab47c81fa39d916a7983d43d38750bee18f7a97178b08243",
+    "data.md": "804ede1b804bdf9663441569da4f9751c3cd102c7d29abb0d62d0606f2235ebd",
+    "evaluation.md": "8e2e706ed56b484eeeaf681a65098f4e7b27f943650350b6537568b757fbad16",
+    "issue-difficulty.md": "e8388fc37f04c6fd7a47ba3bd5cac8528d7f242400311a9fcdc8590f37844b10",
+    "loop-formats.md": "ee9c46a9e5fbbf706921f8fa68d25a5487dafe4a826e0a919a41532c94dd76e5",
+    "models.md": "63ebf6143bd7ba6362761895aac89f78867515eacd4ddd251f1ce18b6d00b2d2",
+    "peft-and-efficiency.md": "7fc9c679593eef4df58d24de13cf1441b6df6d84f71a5c3c011f874464b7edbf",
+    "performance-and-quantization.md": "f08b6f09b63970f4e301e6ed8bf9546b43e5b6febd8f5fff997d7fab50793f7d",
+    "serving-and-export.md": "09ba86f2038d651b8f3b752adfb2fa0800866f0971233f19963ef9796701aab3",
+    "training.md": "a26bf6a3dbfdc9734a3ccf96448d39e7c1c7af742c7aa05f8691c1eee1c198d8"
+  },
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "queries": [
+    {
+      "id": "R01",
+      "query": "Can I do local adapter training on my M2 laptop, or do I need to rent a GPU?",
+      "category": "new wording of development intent",
+      "targets": [
+        "53"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "backends-and-ops",
+          "section": "Apple Silicon (MLX Backend)",
+          "heading_prefix": "Backends, Platform & Ops > Apple Silicon (MLX Backend)",
+          "chunk_id": "53"
+        }
+      ]
+    },
+    {
+      "id": "R02",
+      "query": "The machine rebooted halfway through a run. How do I continue training from the saved state?",
+      "category": "new wording of development intent",
+      "targets": [
+        "71"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "backends-and-ops",
+          "section": "Resume Training",
+          "heading_prefix": "Backends, Platform & Ops > Resume Training",
+          "chunk_id": "71"
+        }
+      ]
+    },
+    {
+      "id": "R03",
+      "query": "Can Soup try different batch sizes and pick the largest one my card can handle?",
+      "category": "new wording of development intent",
+      "targets": [
+        "585",
+        "576"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "performance-and-quantization",
+          "section": "Live CUDA Batch-Size Probe",
+          "heading_prefix": "Performance & Quantization > Live CUDA Batch-Size Probe",
+          "chunk_id": "585"
+        },
+        {
+          "doc_name": "performance-and-quantization",
+          "section": "OOM-probe auto batch size",
+          "heading_prefix": "Performance & Quantization > Correctness First (v0.36.0) > OOM-probe auto batch size",
+          "chunk_id": "576"
+        }
+      ]
+    },
+    {
+      "id": "R04",
+      "query": "I have chosen and rejected answers but cannot fit a second model. Which preference methods avoid a reference model?",
+      "category": "ambiguous development intent with multiple valid sections",
+      "targets": [
+        "686",
+        "687"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "training",
+          "section": "ORPO Training (No Reference Model)",
+          "heading_prefix": "Training Tasks & Methods > ORPO Training (No Reference Model)",
+          "chunk_id": "686"
+        },
+        {
+          "doc_name": "training",
+          "section": "SimPO Training (Simple Preference)",
+          "heading_prefix": "Training Tasks & Methods > SimPO Training (Simple Preference)",
+          "chunk_id": "687"
+        }
+      ]
+    },
+    {
+      "id": "R05",
+      "query": "My training dataset repeats the same instruction with small wording changes. Can I filter those rows by embedding similarity?",
+      "category": "new wording of development intent",
+      "targets": [
+        "417"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "data",
+          "section": "Semantic dedup (`soup data dedup --semantic`)",
+          "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`)",
+          "chunk_id": "417"
+        }
+      ]
+    },
+    {
+      "id": "R06",
+      "query": "I need a checkpoint right now, but I want the running job to keep training afterwards.",
+      "category": "additional intent",
+      "targets": [
+        "105"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "backends-and-ops",
+          "section": "Checkpoint-Now Trigger File",
+          "heading_prefix": "Backends, Platform & Ops > Checkpoint-Now Trigger File",
+          "chunk_id": "105"
+        }
+      ]
+    },
+    {
+      "id": "R07",
+      "query": "Does the merge command check whether the licenses of my adapters are compatible?",
+      "category": "additional intent",
+      "targets": [
+        "24"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "adapters-and-governance",
+          "section": "License-Conflict Matrix at Merge",
+          "heading_prefix": "Adapters, Registry & Governance > License-Conflict Matrix at Merge",
+          "chunk_id": "24"
+        }
+      ]
+    },
+    {
+      "id": "R08",
+      "query": "Can I stop a run automatically if its evaluation falls below the model I started with?",
+      "category": "additional intent",
+      "targets": [
+        "463"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "evaluation",
+          "section": "Eval-Gated Training",
+          "heading_prefix": "Evaluation, Diagnostics & Probes > Eval-Gated Training",
+          "chunk_id": "463"
+        }
+      ]
+    },
+    {
+      "id": "R09",
+      "query": "The server is already running. Can I switch to another LoRA adapter without restarting it?",
+      "category": "additional intent",
+      "targets": [
+        "620"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "serving-and-export",
+          "section": "Dynamic LoRA Hot-Swap",
+          "heading_prefix": "Serving, Inference & Export > Inference Server > Dynamic LoRA Hot-Swap",
+          "chunk_id": "620"
+        }
+      ]
+    },
+    {
+      "id": "R10",
+      "query": "What does soup data dedup --semantic --threshold 0.85 change compared with default deduplication?",
+      "category": "direct technical control",
+      "targets": [
+        "417",
+        "418"
+      ],
+      "target_sections": [
+        {
+          "doc_name": "data",
+          "section": "Semantic dedup (`soup data dedup --semantic`)",
+          "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`)",
+          "chunk_id": "417"
+        },
+        {
+          "doc_name": "data",
+          "section": "It is not a paraphrase detector — and why the default is 0.8",
+          "heading_prefix": "Data Engineering > Semantic dedup (`soup data dedup --semantic`) > It is not a paraphrase detector — and why the default is 0.8",
+          "chunk_id": "418"
+        }
+      ]
+    }
+  ]
+}

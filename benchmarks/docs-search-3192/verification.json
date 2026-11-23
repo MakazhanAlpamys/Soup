@@ -16,8 +16,8 @@
   },
   "pending": {
     "historical_fixture": "Two passages lack established Soup docs source; bodies not committed",
-    "fresh_set": "Original ten are development data; no new set collected or scored",
-    "pull_request": "Not opened before fresh Hit@5 gain and fixture provenance are resolved",
+    "fresh_set": "Ten AI-drafted questions by the implementation agent await user review and remain unscored. They are not authored outside the tuning work; the confirmed fresh-set requirement remains pending.",
+    "pull_request": "Draft for implementation review only; ready-for-review and merge remain blocked on eligible fresh Hit@5 evidence and historical fixture provenance.",
     "changelog": "3192.changed.md uses issue number temporarily; rename to actual PR number when allocated"
   }
 }
