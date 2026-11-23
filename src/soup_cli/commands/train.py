@@ -8,8 +8,6 @@ import json
 import logging
 import os
 import re
-import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -18,7 +16,6 @@ import typer
 from rich.console import Console
 from rich.markup import escape as markup_escape
 from rich.panel import Panel
-from rich.text import Text
 
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import (
@@ -53,12 +50,15 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
 
 logger = logging.getLogger(__name__)
 console = Console()
-_WINDOWS = os.name == "nt"
 
 # The quantizations the pre-flight prices but trains in bf16 (dequantized on
 # load), and how the gate's panel names them. The quantization and optimizer
 # tables live with the shared estimate in utils/hardware_fit.py (#2049).
 _HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
+
+# A Windows host pastes the completion panel's commands into PowerShell in practice;
+# the panel labels a PowerShell spelling where no portable one exists (#3097).
+_WINDOWS = os.name == "nt"
 
 # #1884: the signature test requires an explicit decision for every option.
 REFUSED_CLOUD_FLAGS = frozenset({
@@ -285,26 +285,115 @@ def _format_duration_display(result: dict) -> str:
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
 
-def _quote_completion_path(path: str, *, windows: bool) -> tuple[str, bool]:
-    """Return a shell argument and whether it must be pasted into PowerShell."""
-    if not windows:
-        return shlex.quote(path), False
+def _completion_commands(
+    output_dir: object,
+    merge_note: str | None = None,
+    *,
+    windows_separators: bool | None = None,
+    backend_hint: str = "",
+    dequantize_hint: str = "",
+    unquotable_commands: str | None = None,
+) -> str:
+    """The follow-up commands of the completion panel, as Rich markup.
 
-    # Double quotes don't suppress cmd expansion (% and delayed !), or
-    # PowerShell interpolation, backtick escapes, and curly double quotes.
-    if any(char in path for char in "$`%!\u201c\u201d\u201e"):
-        escaped = re.sub(r"['\u2018-\u201b]", r"\g<0>\g<0>", path)
-        return f"'{escaped}'", True
+    ``output_dir`` is the config's ``output``. The commands are for pasting into a shell of
+    unknown kind, so the path goes through ``paste_arg`` (same text for POSIX shells,
+    PowerShell and cmd.exe). When no such spelling exists, prose refers to the Output path
+    in the panel. ``for_terminal`` keeps Rich markup and control characters in the path
+    from reaching the console. ``merge_note`` replaces the
+    ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
+    this host spells paths with backslashes) writes a nested path with forward slashes.
+    ``backend_hint`` (`` --backend mlx``) follows ``soup chat`` and ``soup merge``, and
+    ``dequantize_hint`` (`` --dequantize``) follows the merge adapter argument; both are
+    fixed flags that the caller derives from the config, not text from it.
+    ``unquotable_commands`` replaces the prose block for a value that has no portable
+    spelling (``soup train``'s panel labels a PowerShell spelling there).
+    """
+    from soup_cli.utils.paths import paste_arg
+    from soup_cli.utils.terminal import for_terminal
 
-    argument = subprocess.list2cmdline([path])
-    if not argument.startswith('"') and any(
-        char.isspace() or char in "\"'[]&^()<>|,;{}@#\u2018\u2019\u201a\u201b" for char in path
-    ):
-        # list2cmdline doesn't wrap unspaced shell punctuation. Use its rule
-        # for trailing backslashes when adding the closing quote ourselves.
-        trailing = "\\" * (len(path) - len(path.rstrip("\\")))
-        argument = f'"{argument}{trailing}"'
-    return argument, False
+    if windows_separators is None:
+        windows_separators = os.sep == "\\"
+    spelled = paste_arg(output_dir, windows_separators=windows_separators)
+    if spelled is None:
+        if unquotable_commands is not None:
+            return unquotable_commands
+        chat_options = f" and add {backend_hint.strip()}" if backend_hint else ""
+        merge_options = " and ".join(
+            option.strip() for option in (backend_hint, dequantize_hint) if option
+        )
+        merge_flags = f" and add {merge_options}" if merge_options else ""
+        return "\n".join((
+            f"Quick test: For soup chat, use the Output path above as --model{chat_options}.",
+            "Push to HF: For soup push, use the Output path above as --model "
+            "and supply the repository ID with --repo.",
+            merge_note if merge_note is not None else (
+                "Merge LoRA: For soup merge, use the Output path above as --adapter"
+                f"{merge_flags}."
+            ),
+            "Export GGUF: For soup export, use the Output path above as --model.",
+            "[dim]Use your shell's quoting rules for the Output path. "
+            "Enter the original value from your config if the display shows escapes.[/]",
+        ))
+
+    shown = for_terminal(spelled)
+    merge_line = (
+        merge_note
+        if merge_note is not None
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {shown}"
+            f"{dequantize_hint}"
+        )
+    )
+    return "\n".join((
+        f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
+        f"Push to HF:  [bold]soup push --model {shown}[/]",
+        merge_line,
+        f"Export GGUF: [bold]soup export --model {shown}[/]",
+    ))
+
+
+def _powershell_fallback_commands(
+    path: object,
+    merge_note: str | None,
+    *,
+    backend_hint: str,
+    dequantize_hint: str,
+) -> str | None:
+    """Copyable panel commands spelled for PowerShell, when no portable form exists.
+
+    ``paste_arg`` returns ``None`` for a value a double-quoted argument cannot carry in
+    every shell (``$``, the backtick, ``%``, ``!``, a literal double quote, a backslash,
+    a control or a typographic character). On Windows the shell a person pastes into is
+    PowerShell in practice, and its single-quoted form carries every one of those but a
+    literal single quote and a control character, which double; typographic quotes are
+    quote characters to PowerShell, so they double too. The block is labelled, because
+    the same lines are not valid in cmd.exe or a POSIX shell. Other hosts, and a value
+    with a control character in it, keep the generic prose.
+    """
+    from soup_cli.utils.terminal import for_terminal
+
+    if not _WINDOWS:
+        return None
+    text = str(path)
+    if not text or any(not char.isprintable() for char in text):
+        return None
+    shown = for_terminal(re.sub(r"['\u2018-\u201b]", r"\g<0>\g<0>", text))
+    merge_line = (
+        merge_note
+        if merge_note is not None
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {shown}"
+            f"{dequantize_hint}"
+        )
+    )
+    return "\n".join((
+        "[dim]Use PowerShell for the commands below.[/]",
+        f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
+        f"Push to HF:  [bold]soup push --model {shown}[/]",
+        merge_line,
+        f"Export GGUF: [bold]soup export --model {shown}[/]",
+    ))
 
 
 def _run_auto_eval_after_training(
@@ -1845,13 +1934,15 @@ def train(
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
+        from soup_cli.utils.terminal import for_terminal as _plan_text
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
-                f"[bold]Run:[/] {markup_escape(plan.run_command)}",
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
+                f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
@@ -2919,24 +3010,32 @@ def train(
         raise
 
     # Report
-    output_dir = result["output_dir"]
-    output_arg, powershell_only = _quote_completion_path(output_dir, windows=_WINDOWS)
-    output_arg = for_terminal(output_arg)
-    shell_hint = "[dim]Use PowerShell for the commands below.[/]\n" if powershell_only else ""
     backend_hint = " --backend mlx" if cfg.backend == "mlx" else ""
     dequantize_hint = (
         " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
     )
-    merge_hint = (
+    merge_note = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else (
-            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {output_arg}"
-            f"{dequantize_hint}"
-        )
+        else None
+    )
+
+    from soup_cli.utils.terminal import for_terminal as _for_terminal
+
+    completion_commands = _completion_commands(
+        result["output_dir"],
+        merge_note,
+        backend_hint=backend_hint,
+        dequantize_hint=dequantize_hint,
+        unquotable_commands=_powershell_fallback_commands(
+            result["output_dir"],
+            merge_note,
+            backend_hint=backend_hint,
+            dequantize_hint=dequantize_hint,
+        ),
     )
 
     if manual_stop.stopped:
@@ -2948,19 +3047,12 @@ def train(
 
     console.print(
         Panel(
-            Text.from_markup(
-                f"{_format_training_complete_loss(result)}\n"
-                f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-                f"Output: [bold]{for_terminal(output_dir)}[/]\n"
-                f"Run ID: [bold]{run_id}[/]\n\n"
-                f"{shell_hint}"
-                f"Quick test:  [bold]soup chat{backend_hint} --model {output_arg}[/]\n"
-                f"Push to HF:  [bold]soup push --model {output_arg}[/]\n"
-                f"{merge_hint}\n"
-                f"Export GGUF: [bold]soup export --model {output_arg}[/]\n"
-                f"Run details: [bold]soup runs show {run_id}[/]",
-                emoji=False,
-            ),
+            f"{_format_training_complete_loss(result)}\n"
+            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
+            f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
+            f"Run ID: [bold]{run_id}[/]\n\n"
+            f"{completion_commands}\n"
+            f"Run details: [bold]soup runs show {run_id}[/]",
             title=title,
         )
     )

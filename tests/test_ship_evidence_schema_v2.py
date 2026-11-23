@@ -321,6 +321,8 @@ def test_the_registry_adds_exactly_the_v2_fields_to_the_0_77_sets():
     }
     assert EVIDENCE_SCHEMA_FIELDS["task"] == _OLD_FIELDS["task"] | {
         "rows", "truncated", "generation_failures", "reward", "paired",
+        # reference judging (see tests/test_ship_judge_reference.py)
+        "judge_mode", "judge_template",
     }
     assert EVIDENCE_SCHEMA_FIELDS["benchmark"] == _OLD_FIELDS["benchmark"]
     assert EVIDENCE_SCHEMA_FIELDS["noise_floor"] == _OLD_FIELDS["noise_floor"]

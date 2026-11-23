@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
+
 MAX_PROMPT_BYTES = 1024 * 1024
 MAX_PROMPTS = 32
 MAX_PROMPT_TOKENS = 512
@@ -51,7 +53,7 @@ def load_validation_prompts(path: Path) -> list[str]:
     except (OSError, UnicodeError) as exc:
         raise OnnxValidationError(f"Cannot read --prompts: {exc}") from exc
     prompts = []
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(jsonl_lines(text), 1):
         if not line.strip():
             continue
         if path.suffix.lower() == ".jsonl":

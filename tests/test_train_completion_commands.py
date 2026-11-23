@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import shlex
 from types import SimpleNamespace
 
 import pytest
 import yaml
-from rich.console import Console
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -47,10 +45,7 @@ def complete_training(tmp_path, monkeypatch):
     monkeypatch.setattr(train_mod, "get_gpu_info", lambda **kw: {"memory_total": "0 GB"})
     (tmp_path / "base").mkdir()
 
-    def complete(
-        *, backend="mlx", task="sft", stop_reason=None, output_dir="./saved", raw_output=False,
-        **training,
-    ):
+    def complete(*, backend="mlx", task="sft", stop_reason=None, output_dir="./saved", **training):
         row = {"instruction": "Question", "output": "Answer"}
         fmt = "alpaca"
         if task in {"dpo", "orpo", "simpo", "preference"}:
@@ -81,7 +76,7 @@ def complete_training(tmp_path, monkeypatch):
         output = _plain(run.output)
         title = "Training Stopped — Loss watchdog" if stop_reason else "Training Complete!"
         assert title in output
-        return run.output if raw_output else output
+        return output
 
     return complete
 
@@ -133,129 +128,47 @@ def test_relora_keeps_dense_guidance_and_default_chat(complete_training):
     assert "--backend" not in output
 
 
-@pytest.mark.parametrize(
-    "windows, path, argument, powershell_only",
-    [
-        pytest.param(False, "./saved", "./saved", False, id="posix-plain"),
-        pytest.param(False, "./saved adapter", "'./saved adapter'", False, id="posix-space"),
-        pytest.param(False, "./owner's", """'./owner'"'"'s'""", False, id="posix-single-quote"),
-        pytest.param(
-            False, './saved"adapter', """'./saved"adapter'""", False,
-            id="posix-double-quote",
-            marks=pytest.mark.skipif(os.name == "nt", reason='Windows paths cannot contain "'),
-        ),
-        pytest.param(False, "./saved[adapter]", "'./saved[adapter]'", False, id="posix-brackets"),
-        pytest.param(
-            False, "./saved:smile:", "./saved:smile:", False, id="posix-emoji-alias",
-            marks=pytest.mark.skipif(os.name == "nt", reason="colon is reserved on Windows"),
-        ),
-        pytest.param(True, "./saved", "./saved", False, id="windows-plain"),
-        pytest.param(True, "./saved adapter", '"./saved adapter"', False, id="windows-space"),
-        pytest.param(True, "./owner's", '''"./owner's"''', False, id="windows-single-quote"),
-        pytest.param(
-            True, r"parent\[adapter]", r'"parent\[adapter]"', False, id="windows-brackets",
-        ),
-        pytest.param(True, "./left&right", '"./left&right"', False, id="windows-ampersand"),
-        pytest.param(
-            True, "./owner's $adapter", "'./owner''s $adapter'", True, id="windows-dollar",
-        ),
-        pytest.param(True, "./saved`adapter", "'./saved`adapter'", True, id="windows-backtick"),
-        pytest.param(True, "./saved%TEMP%", "'./saved%TEMP%'", True, id="windows-percent"),
-        pytest.param(
-            True, "./saved!TEMP!", "'./saved!TEMP!'", True, id="windows-delayed-expansion",
-        ),
-        pytest.param(
-            True, "./owner’s“adapter”", "'./owner’’s“adapter”'", True, id="windows-smart-quotes",
-        ),
-    ],
-)
-def test_completion_hints_quote_saved_path(
-    complete_training, monkeypatch, windows, path, argument, powershell_only,
+def test_completion_panel_shows_output_on_one_line(complete_training, monkeypatch):
+    # Windows cannot create a directory whose name contains these characters.
+    monkeypatch.setattr("soup_cli.utils.run_provenance.write_run_provenance", lambda *_: None)
+    output = complete_training(output_dir="./runs\nnew\rline\tend")
+
+    assert r"Output: ./runs\nnew\rline\tend" in output
+
+
+@pytest.mark.parametrize("path, argument", [
+    pytest.param("./owner's $adapter", "'./owner''s $adapter'", id="dollar"),
+    pytest.param("./saved`adapter", "'./saved`adapter'", id="backtick"),
+    pytest.param("./saved%TEMP%", "'./saved%TEMP%'", id="percent"),
+    pytest.param("./saved!TEMP!", "'./saved!TEMP!'", id="delayed-expansion"),
+    pytest.param("./owner’s“adapter”", "'./owner’’s“adapter”'", id="smart-quotes"),
+])
+def test_panel_labels_powershell_spelling_when_no_portable_form(
+    complete_training, monkeypatch, path, argument,
 ):
     import soup_cli.commands.train as train_mod
 
-    monkeypatch.setattr(train_mod, "_WINDOWS", windows, raising=False)
-    output = complete_training(output_dir=path, quantization="4bit")
-    lines = output.splitlines()
-    prefixes = ("Quick test:", "Push to HF:", "Merge LoRA:", "Export GGUF:")
-    assert [line for line in lines if line.startswith(prefixes)] == [
-        f"Quick test: soup chat --backend mlx --model {argument}",
-        f"Push to HF: soup push --model {argument}",
-        f"Merge LoRA: soup merge --backend mlx --adapter {argument} --dequantize",
-        f"Export GGUF: soup export --model {argument}",
-    ]
-    assert f"Output: {path}" in lines
-    assert ("Use PowerShell for the commands below." in lines) is powershell_only
+    monkeypatch.setattr(train_mod, "_WINDOWS", True, raising=False)
+    output = complete_training(output_dir=path)
+    assert "Use PowerShell for the commands below." in output
+    assert f"Quick test: soup chat --backend mlx --model {argument}" in output
+    assert f"Merge LoRA: soup merge --backend mlx --adapter {argument}" in output
+    assert "Use your shell's quoting rules" not in output
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows paths cannot contain ESC")
-@pytest.mark.parametrize(
-    "path, displayed_path",
-    [
-        pytest.param("./saved\x1b[31m adapter", "./saved[31m adapter", id="sgr"),
-        pytest.param("./saved\x1b", "./saved", id="escape-only"),
-    ],
-)
-def test_posix_completion_strips_escape_after_quoting(
-    complete_training, monkeypatch, path: str, displayed_path: str,
-) -> None:
+def test_panel_keeps_generic_prose_without_windows(complete_training, monkeypatch):
     import soup_cli.commands.train as train_mod
 
-    # Inspect the actual captured output, without ANSI stripping or Rich's own color.
-    monkeypatch.setattr(
-        train_mod, "console", Console(force_terminal=False, color_system=None, width=240),
-    )
-    output = complete_training(output_dir=path, raw_output=True)
-    assert "\x1b" not in output
-
-    lines = _plain(output).splitlines()
-    assert f"Output: {displayed_path}" in lines
-    line = next(line for line in lines if line.startswith("Quick test:"))
-    # The escape-only case still has quotes: the unsanitized path required them.
-    assert line == f"Quick test: soup chat --backend mlx --model '{displayed_path}'"
-    assert shlex.split(line.removeprefix("Quick test:").lstrip()) == [
-        "soup", "chat", "--backend", "mlx", "--model", displayed_path,
-    ]
+    monkeypatch.setattr(train_mod, "_WINDOWS", False, raising=False)
+    output = complete_training(output_dir="./owner's $adapter")
+    assert "Use PowerShell for the commands below." not in output
+    assert "Use your shell's quoting rules for the Output path." in output
+    assert "'./owner''s $adapter'" not in output
 
 
-@pytest.mark.parametrize(
-    "path, argument",
-    [
-        pytest.param(r"C:\my runs\out", r'"C:\my runs\out"', id="drive-with-space"),
-        pytest.param("C:\\my runs\\out\\", r'"C:\my runs\out\\"', id="space-trailing-backslash"),
-        pytest.param("C:\\out[1]\\", r'"C:\out[1]\\"', id="bracket-trailing-backslash"),
-        ("./out^dir", '"./out^dir"'),
-        ("./out(dir", '"./out(dir"'),
-        ("./out)dir", '"./out)dir"'),
-        ("./out<dir", '"./out<dir"'),
-        ("./out>dir", '"./out>dir"'),
-        ("./out|dir", '"./out|dir"'),
-        ("./out,dir", '"./out,dir"'),
-        ("./out;dir", '"./out;dir"'),
-        ("./out{dir", '"./out{dir"'),
-        ("./out}dir", '"./out}dir"'),
-        ("./out@dir", '"./out@dir"'),
-        ("./out#dir", '"./out#dir"'),
-    ],
-)
-def test_windows_quoting_handles_drive_paths_and_unspaced_punctuation(
-    path: str, argument: str,
-) -> None:
-    from soup_cli.commands.train import _quote_completion_path
-
-    # Test the formatter without touching the drive or creating Windows-invalid names.
-    assert _quote_completion_path(path, windows=True) == (argument, False)
-
-
-@pytest.mark.parametrize(
-    "path, argument, powershell_only",
-    [
-        ('./saved "adapter"', r'"./saved \"adapter\""', False),
-        ('./saved"$adapter', """'./saved"$adapter'""", True),
-    ],
-)
-def test_windows_quoting_handles_synthetic_double_quotes(path, argument, powershell_only):
-    from soup_cli.commands.train import _quote_completion_path
-
-    # A literal double quote isn't a Windows filename character.
-    assert _quote_completion_path(path, windows=True) == (argument, powershell_only)
+def test_panel_keeps_generic_prose_for_a_control_character(complete_training, monkeypatch):
+    # paste_arg refuses control characters on every host; the panel falls back to prose.
+    monkeypatch.setattr("soup_cli.utils.run_provenance.write_run_provenance", lambda *_: None)
+    output = complete_training(output_dir="./runs\nnew\rline")
+    assert "Use PowerShell for the commands below." not in output
+    assert "Use your shell's quoting rules for the Output path." in output
