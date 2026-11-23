@@ -230,11 +230,22 @@ def _is_edge(char: str) -> bool:
 _NUMBER_SIGNS = frozenset({"-", "\u2212"})
 
 
+def _starts_a_number(word: str, index: int, end: int) -> bool:
+    """Whether a number starts at ``word[index]``, so its leading edge is kept.
+
+    That is a digit, a ``.`` and then a digit (``.5``), or a minus sign before
+    either (``-4``, ``-.5``): ``.5``, ``-.5`` and ``5`` are different answers.
+    """
+    if word[index] in _NUMBER_SIGNS:
+        index += 1
+    if index < end and word[index] == ".":
+        index += 1
+    return index < end and word[index].isdigit()
+
+
 def _strip_edges(word: str) -> str:
     start, end = 0, len(word)
-    while start < end and _is_edge(word[start]):
-        if word[start] in _NUMBER_SIGNS and start + 1 < end and word[start + 1].isdigit():
-            break
+    while start < end and _is_edge(word[start]) and not _starts_a_number(word, start, end):
         start += 1
     while end > start and _is_edge(word[end - 1]):
         end -= 1
@@ -251,7 +262,9 @@ def _semantic_words(text: str) -> set[str]:
     ``_is_edge``), so two words that differ only in a final vowel sign or accent
     stay two words; a word that is only combining marks once its edges are removed
     (a symbol followed by the variation selector U+FE0F) is dropped. A minus sign
-    (``-`` or U+2212) right before a digit stays, so ``(-4).`` is ``-4``, not ``4``.
+    (``-`` or U+2212) right before a digit stays, so ``(-4).`` is ``-4``, not ``4``,
+    and so does a ``.`` right before a digit, also after a kept sign: ``(.5).`` is
+    ``.5`` and ``-.5`` is ``-.5``, not ``5``.
     """
     words = (_strip_edges(word) for word in text.lower().split())
     return {word for word in words if word and not _only_combining_marks(word)}
