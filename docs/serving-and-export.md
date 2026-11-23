@@ -664,7 +664,9 @@ soup serve --model ./output --kv-cache-type bf16   # cache in the model compute 
 soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (needs `hqq`)
 ```
 
-`bf16`/`f16` need no extra dependency; `q8_0` requires a quant backend (`hqq` / `optimum-quanto`) or the CLI exits with an install hint; `fp8` is Hopper-only. Full detail and the vLLM/SGLang status live in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
+`bf16` and `f16` need no extra dependency. Install `hqq` for `q8_0`. Soup currently
+refuses `fp8` on every serving backend. See
+[KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530) for details.
 
 ### Native MLX HTTP serving
 

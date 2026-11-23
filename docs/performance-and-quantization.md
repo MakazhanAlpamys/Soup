@@ -1883,7 +1883,10 @@ The `ScatterMoE LoRA:` setup line says which happened: `keeping target_modules '
 
 ## KV Cache Types (v0.53.0)
 
-`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` is recorded in `soup.yaml` only: neither `soup train` nor `soup serve` reads it (`fp8` is refused with `backend: mlx`). To apply a type, pass `soup serve --kv-cache-type <type>` (transformers backend); `fp8` is Hopper-only.
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` records a setting in `soup.yaml`.
+Neither `soup train` nor `soup serve` reads it, and config validation refuses
+`fp8` with `backend: mlx`. On the Transformers backend, pass
+`soup serve --kv-cache-type` with `bf16`, `f16`, or `q8_0`.
 
 The **live serve runtime shipped in v0.71.14** for the transformers backend:
 
@@ -1893,8 +1896,8 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 ```
 
 - `bf16` / `f16` resolve the model compute dtype for the default `DynamicCache` (no extra dependency).
-- `q8_0` wires the transformers quantized KV cache (`cache_implementation="quantized"`, hqq backend). If no quant backend (`hqq` / `optimum-quanto`) is installed, the CLI exits 2 with an install hint rather than crashing.
-- `fp8` is rejected on pre-Hopper GPUs (compute capability < 9.0) with a friendly runtime error naming vLLM as the path on Ampere/Ada.
+- `q8_0` selects the 8-bit Transformers quantized KV cache with the `hqq` backend. Install `hqq` to use it.
+- `soup serve` refuses `--kv-cache-type fp8` on every backend, including on Hopper GPUs.
 - vLLM / SGLang serve wiring is still tracked under [#140](https://github.com/MakazhanAlpamys/Soup/issues/140) (`infra-blocked`).
 
 
