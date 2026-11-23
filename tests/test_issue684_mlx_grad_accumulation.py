@@ -105,6 +105,10 @@ class _FakeMlxModel:
     def freeze(self):
         pass
 
+    def named_modules(self) -> list[tuple[str, object]]:
+        # The explicit-Q metadata control needs one matching native module name.
+        return [("self_attn.q_proj", object())]
+
     def load_weights(self, path, strict=True):
         pass
 

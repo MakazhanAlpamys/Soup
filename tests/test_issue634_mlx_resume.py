@@ -468,7 +468,7 @@ class _FakeMlxModel:
         self.frozen = True
 
     def named_modules(self) -> list[tuple[str, object]]:
-        # The default Q/V request resolves before the fake conversion records
+        # Explicit Q/V requests resolve before the fake conversion records
         # its ordering; this fixture does not emulate native tensor operations.
         return [("self_attn.q_proj", object()), ("self_attn.v_proj", object())]
 

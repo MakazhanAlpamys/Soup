@@ -134,8 +134,8 @@ def test_missing_names_refuse_before_model_mutation_or_adapter_publication(
 
 @pytest.mark.parametrize("task", TASKS)
 @pytest.mark.parametrize(
-    "targets", [["self_attn.q_proj"], ["self_attn.q_proj", "self_attn.v_proj"], "auto"],
-    ids=["valid-only", "all-valid", "auto"],
+    "targets", [["self_attn.q_proj"], ["self_attn.q_proj", "self_attn.v_proj"], "auto", "", []],
+    ids=["valid-only", "all-valid", "auto", "empty-string", "empty-list"],
 )
 def test_valid_target_names_train_save_and_strictly_reload(
     tmp_path: Path, native_base: tuple[Path, bool], task: str, targets: str | list[str],
@@ -153,7 +153,9 @@ def test_valid_target_names_train_save_and_strictly_reload(
     actual = dict(tree_flatten(model.trainable_parameters()))
     # The consumer freezes its base and strictly checks the complete adapter.
     assert actual
-    expected = ["self_attn.q_proj", "self_attn.v_proj"] if targets == "auto" else targets
+    expected = (
+        ["self_attn.q_proj", "self_attn.v_proj"] if targets in ("auto", "", []) else targets
+    )
     for name in actual:
         assert any(key + ".lora_" in name for key in expected), name
     assert all(bool(mx.all(mx.isfinite(value)).item()) for value in actual.values())
@@ -240,7 +242,7 @@ def test_correcting_a_missing_name_on_the_same_trainer_can_train(
     load_native_model(config.output)
 
 
-@pytest.mark.parametrize("targets", ["auto", ["auto"]])
+@pytest.mark.parametrize("targets", ["auto", ["auto"], "", []])
 def test_auto_keeps_existing_default_matching_on_a_partial_model(
     targets: str | list[str],
 ) -> None:
