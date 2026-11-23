@@ -37,7 +37,9 @@ def _serve_help(monkeypatch) -> str:
 def _kv_cache_help(monkeypatch) -> str:
     """The help text of ``--kv-cache-type`` alone: from its flag to the next option's flag."""
     out = _serve_help(monkeypatch)
-    match = re.search(r"--kv-cache-type TEXT (.*?) --tool-auth-token", out)
+    # typer prints the metavar as TEXT up to 0.2x and as <str> from 0.27; the metavar also keeps
+    # this from matching the "--kv-cache-type bf16/f16" mention in the --device help.
+    match = re.search(r"--kv-cache-type (?:TEXT|<str>) (.*?) --tool-auth-token", out)
     assert match, f"--kv-cache-type is not followed by --tool-auth-token in: {out[:300]}"
     return match.group(1)
 
