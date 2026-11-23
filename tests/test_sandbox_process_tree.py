@@ -74,8 +74,8 @@ def _read_pid(path: Path) -> int | None:
 class _Helpers:
     """Pid files the sandboxed code writes, and the cleanup of anything left running."""
 
-    def __init__(self, tmp_path: Path) -> None:
-        self.dir = tmp_path
+    def __init__(self, directory: Path) -> None:
+        self.dir = directory
         self._recorded: list[Path] = []
 
     def pidfile(self, name: str) -> Path:
@@ -97,8 +97,31 @@ class _Helpers:
 
 
 @pytest.fixture()
-def helpers(tmp_path: Path):
-    box = _Helpers(tmp_path)
+def scratch(tmp_path: Path):
+    """A directory the sandboxed code may write to: pid files, and the files it leaves in
+    the sandbox directory itself (which is created below it, see ``sandbox_tmp``).
+
+    On macOS the child runs under ``sandbox-exec`` with ``rewards.MACOS_SANDBOX_PROFILE``,
+    which allows writes only under ``/tmp`` and ``/private/tmp``. ``tmp_path`` lives under
+    ``/private/var/folders``; the profile names ``/var/folders``, a symlink that the sandbox
+    does not match, so there the code's writes are refused with ``PermissionError``. On macOS
+    the directory is therefore made under ``/tmp`` (by its resolved name, ``/private/tmp``);
+    everywhere else ``tmp_path`` is used as it is. What the tests assert about the process
+    tree is the same on every platform.
+    """
+    if sys.platform != "darwin":
+        yield tmp_path
+        return
+    root = Path(os.path.realpath(tempfile.mkdtemp(prefix="soup-pt-", dir="/tmp")))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture()
+def helpers(scratch: Path):
+    box = _Helpers(scratch)
     try:
         yield box
     finally:
@@ -106,9 +129,9 @@ def helpers(tmp_path: Path):
 
 
 @pytest.fixture()
-def sandbox_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def sandbox_tmp(scratch: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Where ``soup-sandbox-*`` directories are created, so leftovers can be listed."""
-    root = tmp_path / "sbx"
+    root = scratch / "sbx"
     root.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(root))
     return root
@@ -556,13 +579,35 @@ class TestRemoveDirectory:
 
         assert seen.get("start_new_session") is True
 
-    def test_launch_failure_is_still_reported(self, sandbox_tmp):
+    def test_launch_failure_is_still_reported(self, sandbox_tmp, monkeypatch):
+        # No ``sandbox-exec`` wrapper here: on macOS the wrapper is what gets launched, and a
+        # missing program is then a failed child (see the macOS row below), not a failed
+        # launch. The row is about ``Popen`` itself failing.
+        monkeypatch.setattr(rewards, "_get_isolation_strategy", lambda: "best-effort")
+
         result = _run_sandboxed_subprocess(
             [str(sandbox_tmp / "no-such-program-here")], None, timeout_seconds=1
         )
 
         assert result.launch_failed is True
         assert result.returncode is None
+        assert _leftover_sandbox_dirs(sandbox_tmp) == []
+
+    @pytest.mark.skipif(
+        sys.platform != "darwin" or not os.access(rewards._MACOS_SANDBOX_EXEC, os.X_OK),
+        reason="the sandbox-exec wrapper launches the child on macOS only",
+    )
+    def test_a_missing_program_under_sandbox_exec_is_a_failed_child_not_a_failed_launch(
+        self, sandbox_tmp
+    ):
+        result = _run_sandboxed_subprocess(
+            [str(sandbox_tmp / "no-such-program-here")], None, timeout_seconds=5
+        )
+
+        assert result.launch_failed is False
+        assert result.returncode not in (0, None)
+        assert "sandbox-exec" in result.stderr
+        assert "no-such-program-here" in result.stderr
         assert _leftover_sandbox_dirs(sandbox_tmp) == []
 
     def test_a_failure_to_set_up_the_tree_does_not_leave_the_child_running(
