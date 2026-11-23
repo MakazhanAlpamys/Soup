@@ -10,7 +10,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -279,6 +279,69 @@ def _format_duration_display(result: dict) -> str:
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
+def _completion_commands(
+    output_dir: object,
+    merge_note: str | None = None,
+    *,
+    windows_separators: bool | None = None,
+    backend_hint: str = "",
+    dequantize_hint: str = "",
+) -> str:
+    """The follow-up commands of the completion panel, as Rich markup.
+
+    ``output_dir`` is the config's ``output``. The commands are for pasting into a shell of
+    unknown kind, so the path goes through ``paste_arg`` (same text for POSIX shells,
+    PowerShell and cmd.exe). When no such spelling exists, prose refers to the Output path
+    in the panel. ``for_terminal`` keeps Rich markup and control characters in the path
+    from reaching the console. ``merge_note`` replaces the
+    ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
+    this host spells paths with backslashes) writes a nested path with forward slashes.
+    ``backend_hint`` (`` --backend mlx``) follows ``soup chat`` and ``soup merge``, and
+    ``dequantize_hint`` (`` --dequantize``) follows the merge adapter argument; both are
+    fixed flags that the caller derives from the config, not text from it.
+    """
+    from soup_cli.utils.paths import paste_arg
+    from soup_cli.utils.terminal import for_terminal
+
+    if windows_separators is None:
+        windows_separators = os.sep == "\\"
+    spelled = paste_arg(output_dir, windows_separators=windows_separators)
+    if spelled is None:
+        chat_options = f" and add {backend_hint.strip()}" if backend_hint else ""
+        merge_options = " and ".join(
+            option.strip() for option in (backend_hint, dequantize_hint) if option
+        )
+        merge_flags = f" and add {merge_options}" if merge_options else ""
+        return "\n".join((
+            f"Quick test: For soup chat, use the Output path above as --model{chat_options}.",
+            "Push to HF: For soup push, use the Output path above as --model "
+            "and supply the repository ID with --repo.",
+            merge_note if merge_note is not None else (
+                "Merge LoRA: For soup merge, use the Output path above as --adapter"
+                f"{merge_flags}."
+            ),
+            "Export GGUF: For soup export, use the Output path above as --model.",
+            "[dim]Use your shell's quoting rules for the Output path. "
+            "Enter the original value from your config if the display shows escapes.[/]",
+        ))
+
+    shown = for_terminal(spelled)
+    merge_line = (
+        merge_note
+        if merge_note is not None
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {shown}"
+            f"{dequantize_hint}"
+        )
+    )
+    return "\n".join((
+        f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
+        f"Push to HF:  [bold]soup push --model {shown}[/]",
+        merge_line,
+        f"Export GGUF: [bold]soup export --model {shown}[/]",
+    ))
 
 
 def _run_auto_eval_after_training(
@@ -1819,13 +1882,15 @@ def train(
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
+        from soup_cli.utils.terminal import for_terminal as _plan_text
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
-                f"[bold]Run:[/] {markup_escape(plan.run_command)}",
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
+                f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
@@ -2803,8 +2868,15 @@ def train(
         _record_run_failure(tracker, run_id, exc)
         raise
 
+    from soup_cli.monitoring.manual_save import capture_manual_stop
+
     try:
-        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
+        with (
+            profiler_ctx as profiler,
+            energy_ctx,
+            base_revision_scope(base_identity),
+            capture_manual_stop() as manual_stop,
+        ):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
 
@@ -2823,19 +2895,23 @@ def train(
         confirm_distributed_base_revision(
             base_identity, model=getattr(trainer_wrapper, "model", None),
         )
+        run_status: Literal["completed", "stopped"] = (
+            "stopped" if manual_stop.stopped else "completed"
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
         # Only the saving rank writes portable metadata beside the final artifact.
         if _should_run_diagnose_gate_on_rank():
             metadata = base_identity.metadata(run_id)
+            if manual_stop.stopped:
+                metadata["status"] = run_status
             recorded_run = tracker.get_run(run_id)
             if isinstance(recorded_run, dict):
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker. A run that observed no loss stores NULL, not
-        # the trainer's 0.0 placeholder (stored_run_losses).
+        # Save the terminal status and summary. An unobserved loss remains NULL.
         initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
@@ -2845,6 +2921,7 @@ def train(
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
             loss_summary_kind=stored_loss_summary_kind(result),
+            status=run_status,
         )
 
         _run_auto_eval_after_training(
@@ -2885,32 +2962,40 @@ def train(
     dequantize_hint = (
         " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
     )
-    merge_hint = (
+    merge_note = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else (
-            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
-            f"{dequantize_hint}"
-        )
+        else None
     )
+
+    from soup_cli.utils.terminal import for_terminal as _for_terminal
+
+    completion_commands = _completion_commands(
+        result["output_dir"],
+        merge_note,
+        backend_hint=backend_hint,
+        dequantize_hint=dequantize_hint,
+    )
+
+    if manual_stop.stopped:
+        title = "[bold yellow]Training Stopped — Ctrl+C[/]"
+    elif result.get("stop_reason") == "loss_watchdog":
+        title = "[bold yellow]Training Stopped — Loss watchdog[/]"
+    else:
+        title = "[bold green]Training Complete![/]"
 
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n"
+            f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat{backend_hint} --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
+            f"{completion_commands}\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
-            title=("[bold yellow]Training Stopped — Loss watchdog[/]"
-                   if result.get("stop_reason") == "loss_watchdog"
-                   else "[bold green]Training Complete![/]"),
+            title=title,
         )
     )
 

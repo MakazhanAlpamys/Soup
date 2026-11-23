@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 
 from soup_cli.cans.schema import CAN_FORMAT_VERSION, Manifest
@@ -19,6 +20,10 @@ from soup_cli.utils.redaction import RedactionReport, redact_config, redact_text
 from soup_cli.utils.terminal import for_terminal
 
 _MAX_CAN_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+#: What ``fork_can`` appends to the source can's name.
+_FORK_SUFFIX = "-fork"
+#: Longest can name ``Manifest`` accepts (``_NAME_RE`` in ``cans/schema.py``).
+_MAX_CAN_NAME_CHARS = 128
 # How many changed key paths are listed on the console; the count covers all of them.
 _MAX_LISTED_PATHS = 20
 
@@ -212,6 +217,34 @@ def _apply_modification(config: dict, mod: str) -> None:
     target[keys[-1]] = value
 
 
+def _fork_refusal(exc: ValidationError, *, author: str, fork_name: str) -> str:
+    """One line per field the forked manifest fails, naming the field and its limit."""
+    reasons: list[str] = []
+    for error in exc.errors():
+        loc = error.get("loc") or ("manifest",)
+        field = str(loc[0])
+        message = str(error.get("msg", "")).removeprefix("Value error, ")
+        if field == "name" and len(fork_name) > _MAX_CAN_NAME_CHARS:
+            longest = _MAX_CAN_NAME_CHARS - len(_FORK_SUFFIX)
+            reasons.append(
+                f"name: the forked name is the source name plus '{_FORK_SUFFIX}', "
+                f"{len(fork_name)} characters, over the {_MAX_CAN_NAME_CHARS}-character "
+                f"limit for a can name; only a can whose name has at most {longest} "
+                "characters can be forked"
+            )
+        elif field == "author" and error.get("type") == "string_too_long":
+            limit = (error.get("ctx") or {}).get("max_length", "the")
+            reasons.append(
+                f"--author: {len(author)} characters, over the {limit}-character limit"
+            )
+        elif field == "author":
+            reasons.append(f"--{message}" if message.startswith("author ") else
+                           f"--author: {message}")
+        else:
+            reasons.append(f"{field}: {message}")
+    return "cannot fork: the new manifest is invalid - " + "; ".join(reasons)
+
+
 def fork_can(
     *, source: str, out_path: str, modifications: list[str],
     author: str = "unknown",
@@ -247,15 +280,29 @@ def fork_can(
     ]
     _announce_redactions(report, console)
 
-    with tarfile.open(out, mode="w:gz") as tar:
-        _add_text(tar, "manifest.yaml", yaml.safe_dump({
+    # Validated before anything is written, as pack_entry does: a raw dict let a
+    # control character or an over-long author or name through, and every reader
+    # (verify / inspect / run) then refused the fork that had reported success (#2728).
+    # The redacted fields are the ones validated, since they are the ones written.
+    fork_name = f"{safe_name}{_FORK_SUFFIX}"
+    try:
+        new_manifest = Manifest(**{
             **manifest.model_dump(),
             "description": safe_description,
             "author": safe_author,
             "tags": safe_tags,
             "created_at": datetime.now().isoformat(timespec="seconds"),
-            "name": f"{safe_name}-fork",
-        }, sort_keys=False))
+            "name": fork_name,
+        })
+    except ValidationError as exc:
+        raise ValueError(
+            _fork_refusal(exc, author=safe_author, fork_name=fork_name)
+        ) from None
+
+    with tarfile.open(out, mode="w:gz") as tar:
+        _add_text(tar, "manifest.yaml", yaml.safe_dump(
+            new_manifest.model_dump(), sort_keys=False,
+        ))
         _add_text(tar, "config.yaml", yaml.safe_dump(config, sort_keys=False))
         _add_text(tar, "data_ref.yaml", yaml.safe_dump(
             {"kind": "local", "note": "forked"},

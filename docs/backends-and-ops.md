@@ -844,8 +844,14 @@ the embedded config inside the container, and runs `soup train` on the chosen GP
 Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
 named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
 including after a failed run, the app downloads every file in that directory into your local
-output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
-command that retries the download; that command places the files under `<output dir>/<run name>`.
+output directory. To retry the download, use the Modal CLI's `volume get` subcommand with the
+`soup-outputs` volume, the run directory, your local output directory, and `--force`. A retry
+places the files under your local output directory in a subdirectory named for the run.
+
+The app prints a command on its own line when the output path can be quoted portably. It wraps
+paths with spaces or punctuation in double quotes and uses forward slashes for nested paths on
+Windows. A path that requires shell-specific quoting gets prose instructions with a separate
+path display.
 
 ### RunPod
 
@@ -1705,7 +1711,20 @@ soup runs delete run_1
 soup runs replay run_1
 ```
 
-Every completed run also stores an estimated cost (`$` per run) computed from the
+For HF Trainer-backed `soup train` runs, `stopped` means the second Ctrl+C
+ended training after a successful checkpoint and before the last planned
+step. The final artifact and run summary are still saved, and the command's
+exit code is unchanged. A normal finish or configured early stop stays
+`completed`. `soup runs`, `soup runs show`, and `soup runs compare` show the
+recorded status; a `completed` filter does not include `stopped`. Existing
+database rows are not reclassified.
+
+The final artifact's `soup_run.json` carries the `stopped` status with it.
+`soup ship` and `soup eval` warn about stopped inputs without refusing them
+or changing evaluation results. Emitted `soup ship` evidence carries the
+notice through offline replay.
+
+Every completed or stopped run also stores an estimated cost (`$` per run) computed from the
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 

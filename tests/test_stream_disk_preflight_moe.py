@@ -152,6 +152,18 @@ def _nf4(numel, double_quant=True):
     return packed + blocks + 4 * -(-blocks // 256) + 4
 
 
+def _router_itemsize(itemsize):
+    from transformers.core_model_loading import build_glob_alternation
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    policy = DeepseekV3PreTrainedModel._keep_in_fp32_modules_strict or ()
+    if policy:
+        pattern, _, _ = build_glob_alternation(list(policy))
+        if pattern.search("model.layers.1.mlp.gate.weight"):
+            return 4
+    return itemsize
+
+
 def _expected(layout, *, nf4, double_quant=True, itemsize=2, n_layers=N_LAYERS):
     """(per-layer payload, other payload) the sharder writes for `_moe_tensors()`."""
 
@@ -159,13 +171,14 @@ def _expected(layout, *, nf4, double_quant=True, itemsize=2, n_layers=N_LAYERS):
         return _nf4(numel, double_quant) if quantised else numel * itemsize
 
     layers = []
+    router_itemsize = _router_itemsize(itemsize)
     for idx in range(n_layers):
         total = 2 * HIDDEN * itemsize  # the two norms stay at the stream dtype
         total += 2 * stored(HIDDEN * HIDDEN, nf4)  # q_proj, o_proj
         if idx == 0:
             total += 3 * stored(DENSE_INTER * HIDDEN, nf4)
         else:
-            total += EXPERTS * HIDDEN * itemsize  # the router weight is not an nn.Linear
+            total += EXPERTS * HIDDEN * router_itemsize
             total += EXPERTS * 4  # e_score_correction_bias is kept at float32
             total += 3 * stored(MOE_INTER * HIDDEN, nf4)  # the shared expert
             if layout == "per_expert":
@@ -277,15 +290,16 @@ class TestEstimateFromHeaders:
         assert (got.layer_bytes, got.other_bytes) == expected
 
     @pytest.mark.parametrize("layout", ["", "per_expert"], ids=["fused", "per_expert"])
-    def test_unquantised_charges_every_tensor_at_the_stream_dtype(self, tmp_path, layout):
+    def test_unquantised_charges_router_weights_at_the_required_dtype(self, tmp_path, layout):
         path = _write_checkpoint(tmp_path / "m", _moe_tensors())
         got = _estimate([path], layout=layout, quant="none")
         assert (got.layer_bytes, got.other_bytes) == _expected("fused", nf4=False)
-        # a bf16 source at the bf16 stream dtype: the payload is the source payload
+        # A strict-policy cache adds only the bytes needed to store its FP32 router weights.
         source_payload = sum(
             math.prod(shape) * _ITEMSIZE[dtype] for dtype, shape in _moe_tensors().values()
         )
-        assert sum(got.layer_bytes) + got.other_bytes == source_payload
+        router_delta = (N_LAYERS - 1) * EXPERTS * HIDDEN * (_router_itemsize(2) - 2)
+        assert sum(got.layer_bytes) + got.other_bytes == source_payload + router_delta
 
     def test_a_float32_source_is_charged_at_the_stream_dtype(self, tmp_path):
         path = _write_checkpoint(tmp_path / "m", _moe_tensors(source_dtype="F32"))
@@ -798,6 +812,20 @@ def _stream_dtype():
 
 
 class TestTheSetupChargesTheEstimate:
+    def test_cache_inspection_receives_the_resolved_architecture(self, tmp_path, monkeypatch):
+        from soup_cli.utils import layer_shard
+
+        real_inspect = layer_shard.inspect_shard_cache
+        architectures = []
+
+        def inspect(*args, **kwargs):
+            architectures.append(kwargs.get("arch"))
+            return real_inspect(*args, **kwargs)
+
+        monkeypatch.setattr(layer_shard, "inspect_shard_cache", inspect)
+        _drive_preflight(tmp_path, monkeypatch, layout="fused")
+        assert architectures == ["deepseek_v3"]
+
     @pytest.mark.parametrize("layout", ["fused", "per_expert"])
     def test_the_preflight_charges_the_header_estimate(self, tmp_path, monkeypatch, layout):
         panels, path, shares_calls = _drive_preflight(tmp_path, monkeypatch, layout=layout)

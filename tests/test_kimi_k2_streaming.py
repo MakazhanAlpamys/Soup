@@ -1360,10 +1360,16 @@ def k2_quant_suffixes(tmp_path_factory):
 def test_the_disk_preflight_sizes_the_real_k2_cache_exactly(
     monkeypatch, k2_quant_suffixes, layout
 ):
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
     from soup_cli.utils.kimi_k2 import load_stream_model_config
     from soup_cli.utils.layer_shard import estimate_shard_cache_bytes
     from soup_cli.utils.layer_stream import stream_arch_of
 
+    # The published byte counts were recorded with the router stored at the stream dtype.
+    monkeypatch.setattr(
+        DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", {"e_score_correction_bias"}
+    )
     folder, suffixes = k2_quant_suffixes
     assert "self_attn.kv_a_proj_with_mqa.weight" in suffixes
     assert "mlp.gate.weight" not in suffixes
