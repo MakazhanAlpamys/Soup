@@ -122,24 +122,24 @@ def test_data_preview_sinks_keep_terminal_sanitizer():
             and node.func.attr == method
         ]
 
-    def sanitized(expression):
+    def sanitized(expression, helper):
         return any(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id == "for_terminal"
+            and node.func.id == helper
             for node in ast.walk(expression)
         )
 
     inspect = functions["inspect"]
     headers = calls(inspect, "sample_table", "add_column")
-    assert len(headers) == 1 and sanitized(headers[0].args[0])
+    assert len(headers) == 1 and sanitized(headers[0].args[0], "terminal_text")
     values = [
         node
         for node in ast.walk(inspect)
         if isinstance(node, ast.ListComp)
         and any(isinstance(child, ast.Name) and child.id == "row" for child in ast.walk(node))
     ]
-    assert len(values) == 1 and sanitized(values[0].elt)
+    assert len(values) == 1 and sanitized(values[0].elt, "terminal_text")
     panels = [
         node
         for node in ast.walk(functions["review_cmd"])
@@ -162,4 +162,4 @@ def test_data_preview_sinks_keep_terminal_sanitizer():
         for call in calls(functions["_show_vision_stats"], "vision_table", "add_row")
         if isinstance(call.args[0], ast.Constant) and call.args[0].value == "Image formats"
     ]
-    assert len(formats) == 1 and sanitized(formats[0].args[1])
+    assert len(formats) == 1 and sanitized(formats[0].args[1], "for_terminal")
