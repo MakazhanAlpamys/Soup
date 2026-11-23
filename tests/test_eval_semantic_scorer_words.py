@@ -103,6 +103,23 @@ def test_the_edges_of_a_signed_number_are_still_removed() -> None:
     assert score_semantic("\u2212(\u22124)", "\u22124") == 1.0
 
 
+# A leading dot before a digit is part of the number, after a kept sign as well.
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [(".5", "5"), ("-.5", "5"), ("-.5", ".5"), ("\u2212.5", ".5"), (".5", "0.5")],
+)
+def test_a_dot_before_a_digit_stays_part_of_the_number(output: str, expected: str) -> None:
+    # ``.5`` against ``0.5`` stays 0.0 as on main: two spellings are two words.
+    assert score_semantic(output, expected) == 0.0
+    assert score_semantic(expected, output) == 0.0
+
+
+def test_the_edges_of_a_number_with_a_leading_dot_are_still_removed() -> None:
+    assert score_semantic("(.5).", ".5") == 1.0
+    assert score_semantic("(-.5).", "-.5") == 1.0
+    assert score_semantic("h2o.", "h2o") == 1.0
+
+
 def test_a_hyphen_before_a_letter_is_still_removed() -> None:
     assert score_semantic("-h2o", "h2o") == 1.0
 
