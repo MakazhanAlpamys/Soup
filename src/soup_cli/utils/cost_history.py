@@ -25,6 +25,28 @@ class RunSettings:
         return ((rows + rows_per_step - 1) // rows_per_step) * epochs
 
 
+def cost_history_eligible(
+    *,
+    task: str,
+    resume_from: str | None,
+    device: str,
+    gpu_count: int | None,
+    distributed: bool,
+    fsdp: str | None,
+    ds_config_path: str | None,
+) -> bool:
+    """Record launch conditions that permit an elapsed-time comparison."""
+    return (
+        task == "sft"
+        and resume_from is None
+        and device == "cuda"
+        and gpu_count == 1
+        and not distributed
+        and not fsdp
+        and ds_config_path is None
+    )
+
+
 def fixed_sft_settings(config: dict) -> RunSettings | None:
     """Identify configurations where a row count can estimate optimizer steps."""
     data = config.get("data")

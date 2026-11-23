@@ -1,6 +1,7 @@
 """Verify history estimates without a GPU or a training run."""
 
 import json
+import sqlite3
 
 import pytest
 
@@ -161,6 +162,86 @@ def test_matching_requires_a_completed_run_with_known_provenance(history_config)
     store.start_run(payload, "cuda", "NVIDIA H100 80GB HBM3", {}, run_id=run_id)
     assert store.get_run(run_id)["cost_history_eligible"] is None
     store.close()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, True),
+        ({"task": "dpo"}, False),
+        ({"resume_from": "output/checkpoint-10"}, False),
+        ({"device": "cpu"}, False),
+        ({"gpu_count": 2}, False),
+        ({"gpu_count": None}, False),
+        ({"distributed": True}, False),
+        ({"fsdp": "full_shard"}, False),
+        ({"ds_config_path": "ds.json"}, False),
+    ],
+    ids=["fresh", "task", "resume", "device", "two-gpus", "unknown-gpus", "ddp", "fsdp", "ds"],
+)
+def test_training_launch_must_be_fresh_and_single_gpu(overrides, expected):
+    from soup_cli.utils.cost_history import cost_history_eligible
+
+    launch = {
+        "task": "sft",
+        "resume_from": None,
+        "device": "cuda",
+        "gpu_count": 1,
+        "distributed": False,
+        "fsdp": None,
+        "ds_config_path": None,
+    }
+    assert cost_history_eligible(**(launch | overrides)) is expected
+
+
+def test_legacy_history_migrates_in_place_and_old_run_does_not_match(history_config):
+    config, history_path = history_config
+    payload = load_config(config).model_dump()
+    settings = fixed_sft_settings(payload)
+    assert settings is not None
+
+    # Create a finished, otherwise comparable row before the eligibility column existed.
+    conn = sqlite3.connect(history_path)
+    try:
+        conn.executescript("""
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                config_json TEXT NOT NULL,
+                device TEXT,
+                total_steps INTEGER,
+                duration_secs REAL,
+                cost_gpu_label TEXT,
+                run_kind TEXT NOT NULL DEFAULT 'train'
+            );
+        """)
+        conn.execute(
+            """INSERT INTO runs (run_id, created_at, status, config_json, device,
+                    total_steps, duration_secs, cost_gpu_label)
+                VALUES ('legacy', '2026-01-01T00:00:00', 'completed', ?, 'cuda', 10, 20, 'H100')""",
+            (json.dumps(payload),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = ExperimentTracker(history_path)
+    try:
+        row = store.get_run("legacy")
+        assert row["cost_history_eligible"] is None
+        assert matching_step_times([row], settings, "H100") == []
+        assert matching_step_times([dict(row, cost_history_eligible=1)], settings, "H100") == [2]
+        schema_version = store._get_conn().execute("PRAGMA schema_version").fetchone()[0]
+    finally:
+        store.close()
+
+    reopened = ExperimentTracker(history_path)
+    try:
+        assert reopened.get_run("legacy") == row
+        assert reopened._get_conn().execute("PRAGMA schema_version").fetchone()[0] == schema_version
+    finally:
+        reopened.close()
 
 
 @pytest.mark.parametrize(
