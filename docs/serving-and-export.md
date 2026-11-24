@@ -1382,7 +1382,7 @@ Pure-Python converters between OpenAI chat-completions and Anthropic Messages pa
 from soup_cli.utils.anthropic_messages import to_anthropic, from_anthropic
 
 anthropic_payload = to_anthropic({
-    "model": "claude-3-5-sonnet",
+    "model": "claude-haiku-5-5",
     "messages": [
         {"role": "system", "content": "you are helpful"},
         {"role": "user", "content": "hi"},
