@@ -263,11 +263,16 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         The parameter count is read without loading weights: the
 #                         safetensors headers of a local model directory (a symlink is
 #                         refused), else the Hub's header-only metadata for a repo id (not
-#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device,
-#                         no torch, or a probe that fails or times out also gives 4bit. The
-#                         iteration's notes say which, for example "sft quantization auto:
+#                         asked when HF_HUB_OFFLINE is set), else what the Hugging Face cache
+#                         holds of the repo: its cached safetensors headers, else its cached
+#                         config.json (an estimate). So offline, a cached base is still
+#                         measured; a size in the repo name is not a count. An unknown count,
+#                         no CUDA device, no torch, or a probe that fails or times out also
+#                         gives 4bit. The iteration's notes and the train line of
+#                         progress.jsonl say which, for example "sft quantization auto:
 #                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
-#                         (parameter count unknown)".
+#                         (parameter count unknown: the Hub is offline and the cache has no
+#                         config.json or weights to count)".
 # The recipe also writes data.max_length from the rows it just built, so that soup train's
 # hardware-fit gate prices the run that will happen and not 2048 tokens per row: the longest row
 # of the dataset in tokens of the BASE model's tokenizer (the chat template applied for sft), plus
@@ -415,6 +420,11 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # own died with exit 3221225786 (0xC000013A, STATUS_CONTROL_C_EXIT) and no message. A child that
 # ends by a signal or an NTSTATUS is named in last_failure (for example "train failed (exit code
 # 3221225786 (STATUS_CONTROL_C_EXIT 0xC000013A: ...)"); POSIX is unchanged.
+# A top-level key that loop.yaml does not support is invalid too: `soup loop status` names the
+# key and, when possible, the closest supported field, and leaves the file untouched. Every
+# `soup loop` command that reads this state exits 2; a running `soup loop watch` stops, and
+# `soup serve` disables canary traffic and logs a warning. Remove or correct the key before
+# resuming the loop; the canary route stays off until then.
 # A training run that failed is not started again on every poll: the same inputs (the dataset,
 # the method, the base model and the recipe) wait 5 minutes after the first failure, 30 minutes
 # after the second, and after the third the loop holds. A held loop trains again when the inputs
@@ -503,7 +513,9 @@ SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" sou
 # Start serve with the candidate loaded, then promote it at 5% traffic. The command refuses an
 # adapter whose last verdict was DON'T SHIP (the latest line of the iteration that trained it in
 # iterations.jsonl, or a verdict file .soup-loops/verdicts/<adapter>.json) and exits 2 naming the
-# adapter; --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
+# adapter. The check also recognises paths to a direct checkpoint directory and spelling variants
+# of the adapter name on a case-insensitive filesystem.
+# --allow-dont-ship canaries it anyway, and the override is recorded in loop.yaml
 # (canary_override), in the canary start line of progress.jsonl and, if the canary is promoted,
 # in the promotion's note and its line in versions.jsonl. An adapter the loop has no verdict for
 # (trained by hand, verified by a hand-run soup ship with another file name) is not checked.
@@ -659,6 +671,29 @@ A canary that kills the serving process never reaches outcome recording: recordi
 happens only after generation returns or raises. Such crashes remain invisible to
 the canary verdict unless external restart monitoring detects them.
 
+
+### Retaining loop artifacts
+
+`.soup-loops/` contains generated runs and append-only logs. Use `soup loop prune` to inspect a
+retention plan; it is a dry run unless `--yes` is supplied. The defaults retain the 20 newest
+iterations and run artifacts, the artifacts needed by the active production/canary state and
+the latest 20 version transitions, and the newest 10,000 lines in each loop log. The version
+log always retains at least those 20 transitions, even when `--keep-log-lines` is lower, so a
+later prune can still preserve the same rollback lineage. Other logs follow `--keep-log-lines`.
+Pair datasets
+are kept when a retained iteration-log entry refers to them; rows for retained iterations
+survive log trimming. Unknown pair, verdict, and adapter filenames are listed and left alone.
+Source traces and feedback are never pruned. Before applying, stop foreground watches yourself;
+the command detects only a detached daemon. Log trimming is best effort and skips a log whose
+size or modification time changed after it was read. Exit status is 0 on success, 1 when one or
+more planned entries fail, and 2 when pruning is refused before deletion. The daemon check is
+the main guard against concurrent writes.
+
+```bash
+soup loop prune
+soup loop prune --keep-runs 40 --keep-log-lines 20000
+soup loop prune --yes
+```
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
 
@@ -851,7 +886,7 @@ soup adapters branches
 | `dare` | Random drop with `density` + rescale `1/density`, then average | Sparse-merge; reduces parameter interference (Yu et al. 2024) |
 | `svd` | Linear-merge → low-rank reconstruction via SVD (`--rank`) | Constrain effective rank of the merged delta |
 
-The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` truncates the merged result and does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
+The inputs must have the same LoRA rank on every module they share. A merge of adapters whose rank differs on any shared module (all of them, or one set through `rank_pattern`), or of adapters that share no tensor at all, is refused with exit 2 before anything is written; the message names the module and each input's rank there. `--strategy svd --rank N` replaces each LoRA module's merged delta `B·A` by its best rank-N approximation, written back as `lora_A` / `lora_B` (or `lora_embedding_A` / `lora_embedding_B`) zero-padded to the input rank, so `r` and `lora_alpha` do not change; tensors that are not LoRA factors, such as a `modules_to_save` head, a `lora_B.bias` or a DoRA magnitude vector, are written as the linear merge gives them, and N at or above the LoRA rank leaves the linear merge as it is. It does not reconcile input ranks. For mixed ranks use `soup adapters arithmetic ... --rank N`, which merges them exactly by concatenation.
 
 **How `--weights` is applied.** Weights are normalised to sum to 1 (`7,3` is `0.7,0.3`;
 the default is equal weights). A LoRA's delta is `ΔW = B·A`, so `linear`, `dare` and `svd`
@@ -890,6 +925,12 @@ factors but still applied `cᵢ` to named factors. Re-merge affected artifacts.
 **v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
 
 **v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override). Mixed-rank inputs, and any run with `--rank N`, take the exact concatenation path (#305); same-rank inputs keep the element-wise path. Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
+
+The concat path folds each input's scalar decode-time scaling into its factors:
+`lora_alpha / r` for ordinary LoRA, or `lora_alpha / sqrt(r)` for rsLoRA. Ordinary and
+rsLoRA inputs can be mixed. The exported concat adapter uses unit scaling
+(`r == lora_alpha`, `use_rslora: false`) and clears inherited per-module rank/alpha
+overrides, so the template adapter cannot scale the result a second time.
 
 
 ## Soup Cans (Shareable Recipes)

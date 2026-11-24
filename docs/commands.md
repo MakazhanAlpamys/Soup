@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -180,6 +181,7 @@ soup adapters checkout <name>                   Restore a snapshotted branch's c
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>] [--base-model <m>] [--trace-dir <dir>] [--verify ship|eval-gate] [--canary-max-wait 24h] [--canary-on-timeout errors-only|rollback|wait] [--min-new-pairs N] [--min-new-edits N] [--min-new-rated N] [--feedback-log <file>] [--train-method sft|dpo|kto] [--sft-target-modules all-linear|auto|a,b] [--sft-lora-r N] [--sft-lora-alpha N] [--sft-lr X] [--sft-epochs N] [--sft-batch-size N] [--sft-grad-accum N] [--sft-seed N] [--sft-quantization 4bit|none|auto] [--paraphraser-endpoint <url> --paraphraser-model <name>]  Create .soup/loop.yaml (data flywheel; --train-method = what the loop trains, sft by default for a new loop (corrected answers and answers rated good; a loop.yaml without the field keeps dpo); the --sft-* flags set the sft training recipe (LoRA target modules, r 1-1024, alpha 1-4096, lr above 0 and at most 1, epochs 1-100, micro-batch 1-1024 (built-in 2), gradient accumulation 1-1024 (built-in 4), seed 0-4294967295 (built-in 42), written into every sft config so none is inherited, quantization 4bit, none or auto = none if the base fits in free VRAM when training starts (parameters x 2 bytes x 5), else 4bit), each stored in loop.yaml only when given and refused (exit 2) for a loop that does not train sft; the built-in recipe is all-linear, LoRA r 64 / alpha 128, lr 2e-4, 8 epochs, quantization auto; kto and sft learn from the thumbs, ratings and edits in --feedback-log, default .soup-loops/feedback.jsonl; an edit wins over thumbs and ratings for every method; --verify = the check before rollout, a soup ship verdict by default; --canary-max-wait / --canary-on-timeout = how long a canary may wait for the ratings its quality verdict needs (30 per side), default 24h, and what then happens: errors-only (the request-error verdict decides; the default; a canary that got no answers at all is withdrawn as `timeout_no_answers` unless `--canary-on-timeout errors-only` is given explicitly, which promotes with no evidence), rollback (withdraw it) or wait (no limit); --min-new-pairs = train only once N rows of that dataset (preference pairs for dpo) are new since the last training run, default 1; an sft loop with a feedback log trains at --min-new-edits N new edits (default 8) or --min-new-rated N new rated answers (default 30), whichever comes first; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs; --base-model = what the train stage starts from; --trace-dir = the `serve --trace-log` directory to harvest, default .soup-loops/traces; --paraphraser-endpoint / --paraphraser-model = the OpenAI-compatible chat model (this machine or LAN, both or neither, stored in loop.yaml) that writes the paraphrases of the corrected prompts the loop's verdict asks the new version: the pre-wired train stage writes them once per edit to .soup-loops/paraphrases.jsonl before it trains, never as training data; without the flags it asks the loop's own serve endpoint with the tool token and `X-Soup-Internal: loop-check`, which `soup serve` answers without a trace line, thumbs, canary routing or canary statistics, and with neither reachable it writes none and says so in the iteration's notes)
 soup loop status                              Counters + status + pre_wired flag + a daemon row (running (pid N) / not running / stale pid file) + for an sft loop an sft_recipe row (the effective recipe and which keys come from loop.yaml) + a waiting row while the loop waits for corrections (Waiting: 4/5 trainable corrections ...) + new_data_since, the cursor of the version in production
+soup loop prune [--yes] [--keep-runs N] [--keep-log-lines N]  Dry-run a safe artifact-retention plan; --yes applies it, and pruning is refused while a detached loop daemon is running
 soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing); --detach writes .soup/loop.pid (JSON: pid, started_at, log), appends the child's output to .soup/loop.log (rotated at 10 MB, one old file kept as .soup/loop.log.1), and is refused (exit 2) while that pid is alive
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
 soup loop set <key> <value>                  Change one setting of an existing loop without `init --force`: base_model, trace_dir or verify
@@ -192,7 +194,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 183 ready-made recipes
+soup recipes list                             List all 184 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
@@ -218,7 +220,7 @@ soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
 soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
-soup runs show <run_id>                       Run details + loss graph + cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
+soup runs show <run_id>                       Run details, loss, mean score and recorded spread where available, and cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup runs clean [<run_id>] [--all]              Clean redundant checkpoint files
@@ -298,7 +300,7 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
-soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--rank <N>] [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank fast path; mixed-rank concat with LoRA/rsLoRA scaling; optional SVD rank cap; scan + same-base gated) (v0.71.34)
 soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
 soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
@@ -402,6 +404,15 @@ soup version [--full] [--json]                Show version (--full: system info,
 soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
 
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
@@ -562,6 +573,12 @@ The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup ev
 `syceval` batteries cannot be scored live and exit `3` with `--base-model`. Omitting the required
 evidence exits `3` and names the JSON input to provide; it never reports a neutral
 pass for a gate that measured nothing.
+
+`soup airgap-bundle` uses its own exit codes outside the gate and verdict scheme.
+It exits `0` after writing the bundle. Exit `1` covers missing paths and
+non-directory paths supplied via `--model`, `--dataset`, `--wheel`, or `--kernel`.
+It exits `2` for an invalid plan, an invalid size cap, or a bundle that exceeds
+the cap.
 
 ### Gate Verdict Drift vs. Operational Drift
 

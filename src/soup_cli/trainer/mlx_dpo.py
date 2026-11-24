@@ -42,6 +42,7 @@ from soup_cli.trainer.mlx_sft import (
     MLXSFTTrainerWrapper,
     _clipping_optimizer,
     build_mlx_adapter_config,
+    mlx_adapter_base,
 )
 from soup_cli.utils.training_output import training_output_dir
 
@@ -622,7 +623,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 f"{meta.get('task')!r}, not {task!r}; start a fresh run or resume "
                 "with the matching task"
             )
-        if str(meta.get("model")) != str(self.config.base):
+        if mlx_adapter_base(str(meta.get("model"))) != mlx_adapter_base(str(self.config.base)):
             raise ValueError(
                 f"MLX {name}: {checkpoint_path} belongs to base {meta.get('model')!r}, "
                 f"not {self.config.base!r}"
@@ -914,7 +915,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             json.dumps(
                 {
                     "fine_tune_type": "lora",
-                    "model": str(cfg.base),
+                    "model": mlx_adapter_base(str(cfg.base)),
                     "num_layers": len(getattr(self.model, "layers", [])),
                     "batch_size": batch_size,
                     "iters": iters,
