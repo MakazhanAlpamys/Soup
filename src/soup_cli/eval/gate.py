@@ -161,7 +161,12 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
             f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
         )
     names: set[str] = set()
-    for task in suite.tasks:
+    for index, task in enumerate(suite.tasks):
+        if not isinstance(task.name, str) or not task.name or "\x00" in task.name:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} field tasks[{index}].name "
+                "must be a non-empty, null-free string"
+            )
         # Same bounds as GateTask, for values assigned after load (#3170).
         threshold = task.threshold
         try:
