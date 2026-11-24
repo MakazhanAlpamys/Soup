@@ -121,6 +121,24 @@ def test_show_names_an_artifact_path_as_typed(name):
     assert _not_shown(text)
 
 
+def test_show_labels_binary_artifact_size_as_mib_and_keeps_small_size_in_bytes():
+    entry_id = _push()
+    large_path = Path("large.bin")
+    small_path = Path("small.bin")
+    large_path.write_bytes(b"x" * 1_572_864)
+    small_path.write_bytes(b"x" * 12)
+    with RegistryStore() as store:
+        store.add_artifact(entry_id=entry_id, kind="onnx", path=str(large_path))
+        store.add_artifact(entry_id=entry_id, kind="config", path=str(small_path))
+
+    result = _registry("show", "demo:v1")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "1.5 MiB" in text
+    assert "12 B" in text
+
+
 @pytest.mark.parametrize("keyword", ["base_model", "task"])
 @pytest.mark.parametrize("value", _VALUES)
 def test_search_shows_the_base_model_and_the_task_as_typed(keyword, value):
