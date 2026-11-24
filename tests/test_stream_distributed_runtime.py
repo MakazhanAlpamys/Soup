@@ -1116,6 +1116,9 @@ class TestRunTracker:
         monkeypatch.setenv("RANK", "1")
         tracker = _open_run_tracker(distributed_stream=True)
         assert type(tracker) is NullTracker and tracker.records_runs is False
+        assert tracker.start_run(
+            {}, "cpu", "CPU", {}, run_id="peer-run", cost_history_eligible=False,
+        ) == "peer-run"
         assert not database.exists(), "a database was opened for a rank that records nothing"
 
     def test_a_launch_that_is_not_streaming_distributed_records_on_every_rank(

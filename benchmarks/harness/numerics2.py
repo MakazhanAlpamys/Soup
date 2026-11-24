@@ -365,6 +365,9 @@ def run_sweep(args) -> dict:
     except ImportError:
         return {"skipped": "bitsandbytes is required", "exit_code": EXIT_SKIP}
 
+    # Read the idle clock BEFORE the sweep loads the card; reading it in the
+    # return dict would report a post-sweep clock as idle (#3205).
+    env = hardware(args.dtype)
     dtype = getattr(torch, args.dtype)
     shapes = [tuple(int(p) for p in s.split("x")) for s in args.shapes.split(",")]
     fixture_shapes = [tuple(int(p) for p in s.split("x")) for s in FIXTURE_SHAPES.split(",")]
@@ -394,7 +397,7 @@ def run_sweep(args) -> dict:
 
     verdict = evaluate(rows)
     return {
-        "env": hardware(args.dtype),
+        "env": env,
         "protocol": {
             "note": (
                 "both arms resident; dequantise+F.linear vs MatMul4Bit; "

@@ -72,7 +72,11 @@ MAX_REMOTE_ROWS = 1_000_000
 
 
 def load_raw_data(
-    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    path: Path,
+    *,
+    issues: list[str] | None = None,
+    skip_non_object: bool = True,
+    diagnostics: Console | None = None,
 ) -> list[dict]:
     """Load file rows, skipping non-objects unless a caller needs the original JSON rows.
 
@@ -87,15 +91,19 @@ def load_raw_data(
         raise ValueError(f"Unsupported file format: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
     if ext == ".jsonl":
-        return _load_jsonl(path, issues=issues, skip_non_object=skip_non_object)
+        return _load_jsonl(
+            path, issues=issues, skip_non_object=skip_non_object, diagnostics=diagnostics,
+        )
     elif ext == ".json":
-        return _load_json(path, issues=issues, skip_non_object=skip_non_object)
+        return _load_json(
+            path, issues=issues, skip_non_object=skip_non_object, diagnostics=diagnostics,
+        )
     elif ext == ".csv":
         return _load_csv(path)
     elif ext == ".parquet":
         return _load_parquet(path)
     elif ext == ".txt":
-        return _load_txt(path)
+        return _load_txt(path, diagnostics=diagnostics)
 
     raise ValueError(f"Unsupported format: {ext}")
 
@@ -126,12 +134,18 @@ class SkipTally:
     """
 
     def __init__(
-        self, summary: str, *, issues: list[str] | None = None, record: bool = False,
+        self,
+        summary: str,
+        *,
+        issues: list[str] | None = None,
+        record: bool = False,
+        diagnostics: Console | None = None,
     ) -> None:
         self.summary = summary
         self.count = 0
         self.issues = issues
         self.record = record
+        self._diagnostics = console if diagnostics is None else diagnostics
 
     def add(self, message: str) -> None:
         self.count += 1
@@ -139,24 +153,33 @@ class SkipTally:
             self.issues.total += 1
         if self.count > _MAX_REASON_SAMPLES:
             return
-        console.print(f"[yellow]Warning: {message}[/]")
+        self._diagnostics.print(f"[yellow]Warning: {message}[/]")
         if self.record and self.issues is not None:
             self.issues.append(message)
 
     def finish(self) -> None:
         extra = self.count - _MAX_REASON_SAMPLES
         if extra > 0:
-            console.print(f"[yellow]Warning: ... and {extra} more {self.summary}[/]")
+            self._diagnostics.print(f"[yellow]Warning: ... and {extra} more {self.summary}[/]")
 
 
 def _load_jsonl(
-    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    path: Path,
+    *,
+    issues: list[str] | None = None,
+    skip_non_object: bool = True,
+    diagnostics: Console | None = None,
 ) -> list[dict]:
     data = []
     non_objects = SkipTally(
-        "lines skipped (JSON values that are not objects)", issues=issues, record=True,
+        "lines skipped (JSON values that are not objects)",
+        issues=issues,
+        record=True,
+        diagnostics=diagnostics,
     )
-    bad_json = SkipTally("lines skipped (invalid JSON)", issues=issues, record=True)
+    bad_json = SkipTally(
+        "lines skipped (invalid JSON)", issues=issues, record=True, diagnostics=diagnostics,
+    )
     # v0.40.1 Part E — auto-strip UTF-8 BOM (Windows users overwhelmingly
     # write JSONL via PowerShell `Out-File -Encoding utf8` which adds BOM).
     # The ``utf-8-sig`` codec consumes the BOM transparently if present.
@@ -179,7 +202,11 @@ def _load_jsonl(
 
 
 def _load_json(
-    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+    path: Path,
+    *,
+    issues: list[str] | None = None,
+    skip_non_object: bool = True,
+    diagnostics: Console | None = None,
 ) -> list[dict]:
     with open(path, encoding="utf-8-sig") as f:
         raw = json.load(f)
@@ -188,7 +215,10 @@ def _load_json(
             return raw
         rows = []
         non_objects = SkipTally(
-            "rows skipped (JSON values that are not objects)", issues=issues, record=True,
+            "rows skipped (JSON values that are not objects)",
+            issues=issues,
+            record=True,
+            diagnostics=diagnostics,
         )
         for position, row in enumerate(raw, start=1):
             if not isinstance(row, dict):
@@ -232,15 +262,16 @@ def _load_parquet(path: Path) -> list[dict]:
     return table.to_pylist()
 
 
-def _load_txt(path: Path) -> list[dict]:
+def _load_txt(path: Path, *, diagnostics: Console | None = None) -> list[dict]:
     """Load a plain text file as a list of {text: ...} dicts.
 
     Each non-empty line is treated as a separate document.
     Empty lines are skipped.
     """
+    output = console if diagnostics is None else diagnostics
     file_size = path.stat().st_size
     if file_size > 500 * 1024 * 1024:  # 500 MB
-        console.print(
+        output.print(
             f"[yellow]Warning: large text file ({file_size / 1024 / 1024:.0f} MB). "
             f"Consider splitting into smaller files or using JSONL format.[/]"
         )
@@ -250,7 +281,8 @@ def _load_txt(path: Path) -> list[dict]:
     # Split by double newline (paragraph/document separator) or treat each line as a doc
     lines = [line.strip() for line in content.split("\n") if line.strip()]
     if not lines:
-        console.print(f"[yellow]Warning: empty text file: {path}[/]")
+        location = f": {path}" if diagnostics is None else ""
+        output.print(f"[yellow]Warning: empty text file{location}[/]")
         return []
 
     return [{"text": line} for line in lines]

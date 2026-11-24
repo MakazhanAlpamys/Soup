@@ -141,7 +141,14 @@ LoRA.
 
 ## Multipack — FFD Bin-Packing Sampler
 
-Soup's largest single throughput win on chat fine-tuning over uneven-length data. Instead of padding every sample to `max_length`, Multipack uses **First-Fit-Decreasing bin packing** to group variable-length samples into bins approaching `batch_size × max_seq_length` — eliminating padding waste.
+Multipack uses **First-Fit-Decreasing bin packing** to group variable-length samples.
+For ordinary padded text SFT and pretraining, Soup splits those bins until each
+collated rectangle fits `batch_size × data.max_length` input positions. The cost is
+the number of rows times the longest prepared row, rounded up using the selected
+TRL language-modeling collator's `pad_to_multiple_of` setting. Soup derives lengths
+from the trainer's `train_dataset`, which the DataLoader reads after TRL prepares
+and truncates rows, rather than from the original cache. Short rows can therefore
+share a batch with more rows than `batch_size`, provided their padded rectangle fits.
 
 ```yaml
 training:
@@ -150,12 +157,35 @@ training:
 ```
 
 **How it composes:**
-- **Multipack** picks WHICH samples go together (FFD packing).
-- Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. `packing_cross_doc_attn_mask` is rejected at config load (it never mapped to a valid TRL `packing_strategy`).
+- **Multipack** picks which rows go together; the ordinary text collator still pads
+  them as separate sequences. This path does not flatten documents together.
+- TRL sample packing is a separate, mutually exclusive option. Its default `bfd`
+  strategy provides document isolation with FlashAttention. `packing_cross_doc_attn_mask`
+  is rejected at config load (it never mapped to a valid TRL `packing_strategy`).
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 
-**Live wiring** — landed. SFT and Pretrain trainer wrappers actually instantiate the multipack subclass when `multipack: true` is set. The factory's `get_train_dataloader` override installs `MultipackBatchSampler(real_batches=False)` (yields a flat `list[int]` per packed sequence — DataLoader-compatible) as the DataLoader's `batch_sampler=`, forwarding `dataloader_drop_last`/`num_workers`/`pin_memory` from `TrainingArguments`. The `_get_train_sampler` override stays as a defensive no-op fallback that always delegates to super, so any HF eval / prediction loop bypassing `get_train_dataloader` still gets the correct `Sampler[int]` shape (no nested-list shape mismatch). Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend get distinct error messages naming the actual reason. Datasets must expose `input_ids` (preferred) or `length` per row; raw text triggers an all-zeros warning.
+**Live wiring** — SFT and pretrain instantiate a trainer subclass whose
+`get_train_dataloader` installs `MultipackBatchSampler(real_batches=False)` as the
+DataLoader's `batch_sampler`. It yields a flat index list per batch. Bounded batches
+are cached before seeded shuffling, and iteration and `len(loader)` use those same
+batches. Existing configs can produce different batch membership, loader lengths
+and optimizer-step counts per epoch after the padded-cost correction. The generic
+sum-based FFD helper retains its previous behavior.
+
+The correction covers TRL's padded `DataCollatorForLanguageModeling` on the two
+ordinary text routes. RAFT (including epoch shuffle), vision and other custom
+collators retain their existing behavior and are outside this padded-budget
+guarantee. Padding-free execution is also unchanged. The position budget is not a
+peak-VRAM guarantee; GPU peak memory and throughput have not been measured for
+this correction.
+
+The loader forwards the existing worker, pin-memory and drop-last settings. Its
+`_get_train_sampler` fallback still delegates to the base trainer. Multipack is
+**sft / pretrain only** on the `transformers` backend; preference / RLHF trainers
+and MLX receive distinct errors naming the unsupported combination. Datasets must
+expose `input_ids` (preferred) or `length` per row; raw text triggers an all-zeros
+warning.
 
 **Multi-GPU sharding (v0.71.19).** Under FSDP / DeepSpeed ZeRO / DDP (`num_processes > 1`) the `get_train_dataloader` override routes the multipack DataLoader through `accelerator.prepare`, so accelerate's `BatchSamplerShard` round-robins whole FFD-packed bins to each rank (preserving the packing; the bin seed is identical across ranks so every rank agrees on the global order before sharding). The single-GPU path returns the raw DataLoader unchanged. Multi-GPU correctness is mocked-tested — a real 2+-GPU validation run is tracked QA.
 
