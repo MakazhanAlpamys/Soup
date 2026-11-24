@@ -157,10 +157,10 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         )
     names: set[str] = set()
     for index, task in enumerate(suite.tasks):
-        if not task.name or "\x00" in task.name:
+        if not isinstance(task.name, str) or not task.name or "\x00" in task.name:
             raise ValueError(
                 f"eval-gate suite {suite.suite!r} field tasks[{index}].name "
-                "must be non-empty and null-free"
+                "must be a non-empty, null-free string"
             )
         if task.name in names:
             raise ValueError(
