@@ -701,6 +701,31 @@ files from runs before this version are not comparable.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
+For replicated DDP with a PEFT policy, RL checkpoint callbacks share rank 0's save status
+and retained checkpoint steps. With `pid_lagrangian`, each rank computes its vote using its
+own detector history, smoothing windows and drift guard. The maximum finite vote drives
+one PID decision on rank 0; every rank receives the controller state, rollback target,
+counters and stop decision and applies the coefficient to its own trainer. Missing or
+non-finite vote inputs stop all ranks. The elevated PID beta and integral are retained
+after rollback.
+
+Recovery requires the policy adapter on every rank and the optimizer state when the
+manifest declares it present and optimizer recovery is enabled. A declared adapter-only
+checkpoint can restore the adapter on every rank. Missing, unreadable, invalid or oversized
+manifests, a declared but missing optimizer file, and asymmetric restore failures stop the
+run before the next update. Manifests are read even when optimizer recovery is disabled.
+Exchanges validate both global step and phase; a mismatch aborts with a named error.
+Communication failures propagate to the launcher; a lost process uses the process-group
+timeout rather than an additional callback timeout. All ranks need access to the same
+checkpoint storage.
+
+Collectives run only with an initialized process group of more than one rank. Single-process
+behavior and the `RANK`/`LOCAL_RANK` fallback without a group are unchanged. FSDP and
+DeepSpeed behavior is unchanged: each rank still keeps its own list of saved steps, as
+before; collective recovery for sharded state is not qualified. The agreement on controller
+decisions and recovery stops covers `pid_lagrangian` only. `kl_control` and independently
+halting detectors remain rank-local.
+
 The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
 - **`log_only`** — observe only. Appends a per-step `mitigation_log.jsonl` under the run's output dir (the InfoRM/ensemble drop, the OK/WARN/HACK verdict, reward mean/std, completion-length trend, repetition) and provably never mutates β. Run this first to *see* hacking before you let a controller act on it.

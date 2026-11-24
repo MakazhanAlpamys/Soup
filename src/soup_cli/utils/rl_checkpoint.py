@@ -40,11 +40,13 @@ import json
 import logging
 import os
 import pickle
+import stat
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 from soup_cli.utils.paths import is_under, quote_path
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from soup_cli.utils.rl_checkpoint import RLCheckpointCallback
@@ -56,6 +58,7 @@ _MIN_KEEP_LAST = 1
 _MAX_KEEP_LAST = 100
 _MAX_DIR_LEN = 4096
 _MAX_SOUP_VERSION_LEN = 32
+_MAX_MANIFEST_BYTES = 64 * 1024
 
 # RL tasks whose mid-epoch checkpoint makes sense. Other tasks already
 # have HF Trainer's per-epoch checkpoint and don't need the rollout
@@ -407,6 +410,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
             soup_version = _v
         self.soup_version = soup_version
         self._saved: list[int] = []
+        self._collective_enabled = False
         self._warned_path = False
 
     def _ckpt_root(self) -> str:
@@ -588,6 +592,63 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         except Exception:  # noqa: BLE001 — rollback must never crash the run
             return False
 
+    def _load_manifest(self, step: int) -> RLCheckpointState:
+        """Read a bounded, contained manifest even for adapter-only recovery."""
+        from soup_cli.utils.paths import open_no_follow
+
+        directory = os.path.join(self._ckpt_root(), f"step-{step}")
+        if not is_under(directory, self.output_dir):
+            raise RLCheckpointLoadError(
+                _outside_run_dir_message(directory, self.output_dir, "nothing was loaded")
+            )
+        path = os.path.join(directory, "manifest.json")
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(open_no_follow(path, flags), "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise RLCheckpointLoadError("RL checkpoint manifest must be a regular file")
+            encoded = handle.read(_MAX_MANIFEST_BYTES + 1)
+        if len(encoded) > _MAX_MANIFEST_BYTES:
+            raise RLCheckpointLoadError("RL checkpoint manifest exceeds 65536 bytes")
+        manifest = RLCheckpointState(**json.loads(encoded))
+        if (manifest.step != step or manifest.task != self.task
+                or os.path.realpath(manifest.checkpoint_dir) != os.path.realpath(directory)):
+            raise RLCheckpointLoadError("RL checkpoint manifest does not match the requested step")
+        if manifest.has_optimizer and not os.path.isfile(os.path.join(directory, "optimizer.pt")):
+            raise RLCheckpointLoadError("RL checkpoint manifest declares a missing optimizer.pt")
+        return manifest
+
+    def _restore_components(self, *, step: int, model, optimizer) -> dict:
+        """Strict collective outcome; keep the public best-effort boolean API intact."""
+        from peft import PeftModel, load_peft_weights, set_peft_model_state_dict
+
+        manifest = self._load_manifest(step)
+        from soup_cli.utils.rl_distributed import peft_policy
+
+        model = peft_policy(model)
+        if not isinstance(model, PeftModel):
+            raise RLCheckpointLoadError("RL collective recovery requires a PEFT policy")
+        directory = os.path.join(self._ckpt_root(), f"step-{step}")
+        candidates = [os.path.join(directory, name) for name in
+                      ("adapter_model.safetensors", "adapter_model.bin")]
+        adapter = next((path for path in candidates if os.path.exists(path)), None)
+        if (adapter is None or os.path.islink(adapter) or not os.path.isfile(adapter)
+                or not is_under(adapter, self.output_dir)):
+            raise RLCheckpointLoadError("RL checkpoint adapter is missing or not a contained file")
+        weights = load_peft_weights(directory, device="cpu", local_files_only=True)
+        # A successful function call with mismatched adapter keys is not a policy restore.
+        from peft import get_peft_model_state_dict
+
+        expected = get_peft_model_state_dict(model)
+        if (expected.keys() != weights.keys()
+                or any(expected[name].shape != weights[name].shape for name in expected)):
+            raise RLCheckpointLoadError("RL checkpoint adapter parameters do not match the policy")
+        set_peft_model_state_dict(model, weights)
+        required = manifest.has_optimizer and self.config.include_optimizer_state
+        restored_optimizer = self._restore_optimizer_state(
+            os.path.join(directory, "optimizer.pt"), optimizer
+        ) if required and optimizer is not None else False
+        return {"adapter": True, "optimizer": restored_optimizer, "required": required}
+
     def _prune(self) -> None:
         """Keep only the ``keep_last`` most-recent step checkpoints."""
         import shutil
@@ -617,6 +678,13 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         """Per-step hook — save a checkpoint on the configured cadence."""
+        from soup_cli.utils.rl_distributed import active_group
+
+        distributed = active_group(self._collective_enabled)
+        if distributed is not None:
+            return self._collective_step(
+                distributed, state, control, model, kwargs.get("optimizer")
+            )
         try:
             step = int(getattr(state, "global_step", 0) or 0)
             if step <= 0 or step % self.config.save_every_steps != 0:
@@ -631,6 +699,39 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                 logger.warning("%s", exc)
         except Exception:  # noqa: BLE001 — checkpoint failure must not crash run
             pass
+        return control
+
+    def _collective_step(self, distributed, state, control, model, optimizer):
+        from soup_cli.utils.rl_distributed import exchange, first_error, peft_policy
+
+        step, preparation = -1, {}
+        try:
+            step = int(state.global_step)
+            preparation["due"] = step > 0 and step % self.config.save_every_steps == 0
+        except Exception as exc:  # noqa: BLE001 — communicate before branching
+            preparation["error"] = f"checkpoint preparation failed: {type(exc).__name__}"
+        prepared = exchange(distributed, step, "checkpoint.prepare", preparation)
+        error = first_error(prepared)
+        if not error and any(entry["due"] != prepared[0]["due"] for entry in prepared):
+            error = "checkpoint cadence differs across ranks"
+        publication = {}
+        if distributed.get_rank() == 0:
+            publication = {"saved": list(self._saved), "error": error}
+            if not error and prepared[0]["due"]:
+                try:
+                    model = peft_policy(model)
+                    if model is None:
+                        raise ValueError("RL checkpoint requires a PEFT policy")
+                    self.save_checkpoint(step=step, model=model, optimizer=optimizer)
+                    publication["saved"] = list(self._saved)
+                except Exception as exc:  # noqa: BLE001 — all ranks learn save failure
+                    publication["error"] = f"checkpoint save failed: {type(exc).__name__}"
+        published = exchange(distributed, step, "checkpoint.saved", publication)[0]
+        self._saved = published["saved"]
+        if published.get("error"):
+            control.should_training_stop = True
+            logger.error("RL collective checkpoint stopped: %s",
+                         strip_control(published["error"], single_line=True))
         return control
 
 
