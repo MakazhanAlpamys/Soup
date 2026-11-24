@@ -1328,7 +1328,8 @@ Usage: `soup data generate [OPTIONS]`
 | `--format`, `-f` | text | `alpaca` |  | Output format: alpaca, sharegpt, chatml |
 | `--provider` | text | `openai` |  | LLM provider: openai, local, server, ollama, anthropic, vllm |
 | `--model`, `-m` | text | `gpt-4o-mini` |  | Model name (OpenAI model ID, Ollama model, or local model path) |
-| `--api-key` | text |  |  | \[deprecated] Use OPENAI_API_KEY env var instead. Env: `OPENAI_API_KEY`. |
+| `--api-key` | text |  |  | \[deprecated] Use OPENAI_API_KEY env var instead |
+| `--api-key-env` | text |  |  | Environment variable holding the API key for a custom --api-base (default: OPENAI_API_KEY) |
 | `--api-base` | text |  |  | Custom API base URL (must use HTTPS for remote APIs) |
 | `--batch-size` | integer | `5` |  | Number of examples per API call |
 | `--temperature`, `-t` | float | `0.8` |  | Sampling temperature for generation |

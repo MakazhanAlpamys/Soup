@@ -514,7 +514,9 @@ With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
 address a server on your network by its hostname. A host written only as numbers that is not a
-valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
+valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well. When `--api-base` points
+at a second endpoint, `--api-key-env NAME` reads the API key from that environment variable
+instead of `OPENAI_API_KEY`; a name that is not a valid environment variable name is refused.
 
 ### Multi-Provider Support
 

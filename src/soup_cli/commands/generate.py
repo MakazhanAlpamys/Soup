@@ -2,12 +2,14 @@
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 logger = logging.getLogger(__name__)
@@ -58,8 +60,18 @@ def generate(
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
+        # No envvar here on purpose: _generate_openai reads OPENAI_API_KEY
+        # itself, so --api-key-env can take precedence over the default
+        # variable instead of Typer filling --api-key from it first.
         help="\\[deprecated] Use OPENAI_API_KEY env var instead",
-        envvar="OPENAI_API_KEY",
+    ),
+    api_key_env: Optional[str] = typer.Option(
+        None,
+        "--api-key-env",
+        help=(
+            "Environment variable holding the API key for a custom --api-base "
+            "(default: OPENAI_API_KEY)"
+        ),
     ),
     api_base: Optional[str] = typer.Option(
         None,
@@ -196,6 +208,13 @@ def generate(
         )
         raise typer.Exit(1)
 
+    if api_key_env is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", api_key_env):
+        console.print(
+            "[red]Invalid --api-key-env: "
+            f"{escape(api_key_env)} is not a valid environment variable name.[/]"
+        )
+        raise typer.Exit(1)
+
     # Validate template
     if template and template not in VALID_TEMPLATES:
         console.print(
@@ -294,6 +313,7 @@ def generate(
                     provider=provider,
                     model_name=model_name,
                     api_key=api_key,
+                    api_key_env=api_key_env,
                     api_base=api_base,
                     temperature=temperature,
                     seed_examples=seed_examples,
@@ -542,6 +562,7 @@ def _generate_batch(
     api_base: Optional[str],
     temperature: float,
     seed_examples: list[dict],
+    api_key_env: Optional[str] = None,
     template: Optional[str] = None,
     template_language: str = "Python",
     template_task_type: str = "function",
@@ -578,6 +599,7 @@ def _generate_batch(
             fmt=fmt,
             model_name=model_name,
             api_key=api_key,
+            api_key_env=api_key_env,
             api_base=api_base,
             temperature=temperature,
             seed_examples=seed_examples,
@@ -733,15 +755,17 @@ def _generate_openai(
     api_base: Optional[str],
     temperature: float,
     seed_examples: list[dict],
+    api_key_env: Optional[str] = None,
     generation_prompt: Optional[str] = None,
 ) -> list[dict]:
     """Generate examples using OpenAI-compatible API."""
     import os
 
-    resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+    env_name = api_key_env or "OPENAI_API_KEY"
+    resolved_key = api_key or os.environ.get(env_name)
     if not resolved_key:
         raise ValueError(
-            "OpenAI API key not found. Set OPENAI_API_KEY env var or pass --api-key."
+            f"OpenAI API key not found. Set {env_name} env var or pass --api-key."
         )
 
     try:
