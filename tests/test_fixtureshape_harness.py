@@ -62,6 +62,18 @@ class TestDispatchAndCounter:
         assert counts["kernel"] == 1 and counts["fallback"] == 1 and counts["dequant"] == 1
 
 
+class TestTheNegativeControl:
+    def test_a_perturbation_is_compared_with_the_same_arm_baseline(self):
+        import torch
+
+        base = torch.tensor([1.0, 2.0, 3.0])
+        assert harness.control_changed(base, base.clone()) is False
+
+        changed = base.clone()
+        changed[1] = 2.5
+        assert harness.control_changed(changed, base) is True
+
+
 class TestWindowsAndGates:
     @staticmethod
     def _rows():

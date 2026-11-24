@@ -200,6 +200,18 @@ def counter(ops_module, functional_module):
         yield counts
 
 
+def control_changed(perturbed, same_arm_baseline) -> bool:
+    """Whether a perturbation changed the output of the SAME arm.
+
+    Comparing the perturbed dequantise+linear output with the fused-kernel arm
+    would report a difference from rounding even when the perturbation did
+    nothing, which is exactly what a negative control must exclude.
+    """
+    import torch
+
+    return not torch.equal(perturbed, same_arm_baseline)
+
+
 def windows(rows: list[dict], set_name: str) -> dict:
     """Per shape, the M values that actually reached each path (a result)."""
     result = {}
@@ -311,7 +323,7 @@ def measure_row(out_features, in_features, rows, dtype, *, set_name):
     with torch.no_grad():
         control_dense = functional.dequantize_4bit(control_packed, control_state).to(dtype)
         control_out = torch_functional.linear(inputs, control_dense)
-    control_detected = not torch.equal(control_out, resident_out.detach())
+    control_detected = control_changed(control_out, variant_out.detach())
 
     result = {
         "set": set_name, "N": out_features, "K": in_features, "M": rows,
