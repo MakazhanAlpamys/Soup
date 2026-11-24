@@ -219,11 +219,11 @@ def after_failure(
     """
     same = isinstance(previous, Mapping) and previous.get("inputs") == fingerprint
     attempts = int(previous["attempts"]) + 1 if same else 1
-    if not hold_after_limit:
-        # A training-only streak never holds, so it has nowhere to go past the
-        # persisted bound. Keep it at the bound instead of emitting an attempts
-        # count that LoopState refuses (#3221).
-        attempts = min(attempts, MAX_FAILED_ATTEMPTS)
+    # A persisted count never goes above the bound, on either branch: a
+    # training-only streak never holds, and a saturated streak followed by a
+    # raised stage must end held at the bound, not at 101 that LoopState
+    # refuses (#3221).
+    attempts = min(attempts, MAX_FAILED_ATTEMPTS)
     held = attempts >= ATTEMPT_LIMIT and hold_after_limit
     wait = timedelta(seconds=RETRY_DELAYS_SEC[min(attempts, len(RETRY_DELAYS_SEC)) - 1])
     return {

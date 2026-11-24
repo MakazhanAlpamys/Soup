@@ -776,3 +776,28 @@ def test_a_training_only_streak_stays_valid_at_the_persisted_limit(cwd):
     assert state.failed_stage["attempts"] == 100
     assert state.failed_stage["has_non_train_failure"] is False
     assert state.failed_stage["held"] is False
+
+
+def test_a_raised_stage_after_a_saturated_training_streak_stays_valid(cwd):
+    """#3221 second read: the raised-stage branch must cap too and end held."""
+    streak = {
+        "inputs": loop_retry.stage_error_fingerprint("train"),
+        "attempts": 100,
+        "last_at": PAST,
+        "retry_after": PAST,
+        "held": False,
+        "reason": "stage error: the train stage failed: train failed",
+        "has_non_train_failure": False,
+    }
+    state = _state(failed_stage=streak)
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 100
+    assert state.failed_stage["held"] is True
+    assert state.failed_stage["has_non_train_failure"] is True
+
+    path = str(cwd / ".soup" / "loop.yaml")
+    write_state(state, path)
+    assert read_state(path).failed_stage["attempts"] == 100
