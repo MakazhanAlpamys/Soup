@@ -206,7 +206,7 @@ Usage: `soup adapters bisect [OPTIONS] HISTORY...`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `HISTORY...` | text, any number |  | yes | Ordered checkpoint identifiers (oldest first). At least 2. Example: `soup adapters bisect ckpt-100 ckpt-200 ckpt-300 ckpt-400` |
-| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
+| `--eval-command` | text |  | yes | Command template (no shell); '{ckpt}' is replaced with each checkpoint id. Exit code 0 means PASS, non-zero means FAIL. Quotes group words on every platform. On Windows a single quote groups when it starts a word ('a b') or when its closing quote ends the word (--opt='a b'); any other ' (don't) is a literal character. Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl' |
 | `--plan-only` | flag | off |  | Print the plan and exit without running the bisect |
 | `--output`, `-o` | text |  |  | Write JSON result to path |
 
@@ -2483,10 +2483,10 @@ Usage: `soup ingest [OPTIONS]`
 | `--source` | text |  | yes | Trace source: langfuse \| langsmith \| helicone \| openpipe \| otel \| openai-stored |
 | `--logs` | text |  |  | Path to JSONL trace export (one event per line). Required unless --pull. |
 | `--output`, `-o` | text |  |  | Output JSONL (default: traces.jsonl in cwd). |
-| `--pull` | flag | off |  | Fetch generations live from the Langfuse API instead of reading --logs (--source langfuse only). Reads LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. |
+| `--pull` | flag | off |  | Fetch live from the vendor's API instead of reading --logs (--source langfuse or langsmith). Langfuse: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. LangSmith: LANGSMITH_API_KEY and LANGSMITH_PROJECT, plus LANGSMITH_ENDPOINT for another region or a self-hosted instance. |
 | `--since` | text |  |  | With --pull: how far back to fetch, e.g. 30m, 24h, 7d (default 7d, max 365d). |
-| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations (default 100). |
-| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST to be a private or loopback address (self-hosted Langfuse). HTTPS is still required. |
+| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations or LLM runs (default 100). |
+| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST or LANGSMITH_ENDPOINT to be a private or loopback address (self-hosted). HTTPS is still required. |
 | `--slack-url` | text |  |  | Optional Slack webhook URL — POSTed on completion. SSRF-validated. |
 | `--discord-url` | text |  |  | Optional Discord webhook URL — POSTed on completion. SSRF-validated. |
 
@@ -3168,6 +3168,7 @@ Usage: `soup prune-layer-cache [OPTIONS]`
 | `--model` | text |  | yes | Base model id whose cache slots to inspect. |
 | `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
 | `--yes` | flag | off |  | Actually remove. Without it: dry run. |
+| `--keep` | text, repeatable |  |  | Protect a lowercase 40-hex commit. Repeat up to 64 times. |
 
 ## `soup prune-prompt`
 

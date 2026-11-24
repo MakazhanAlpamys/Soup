@@ -9,6 +9,7 @@
 - [FlashAttention and Liger measurements](#flashattention-and-liger-measurements)
 - [LongLoRA Forward Override](#longlora-forward-override)
 - [Multipack — FFD Bin-Packing Sampler](#multipack--ffd-bin-packing-sampler)
+- [Prefix-Tree Batches](#prefix-tree-batches)
 - [Long Context — YaRN, Llama 3.1 NTK, LongLoRA](#long-context--yarn-llama-31-ntk-longlora)
 - [LLaMA Pro Block Expansion](#llama-pro-block-expansion)
 - [Optimizer & PEFT Zoo](#optimizer--peft-zoo)
@@ -162,6 +163,93 @@ training:
 
 The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover non-standard `message.<field>` references (`tool_calls`, `name`, `weight`, `train`) — used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of fields beyond `role` / `content`. The analyzer parses templates without rendering them, so a crafted `soup.yaml` cannot trigger SSRF.
 
+
+## Prefix-Tree Batches
+
+When several training examples begin with the same tokens (one system prompt, one tool
+schema, one document asked about several times), an ordinary batch computes that beginning
+once per example. `prefix_tree` lays a batch out as trees instead: the shared beginning once,
+the continuations after it.
+
+```yaml
+training:
+  prefix_tree: true
+  batch_size: 1          # a step is still at most batch_size rows ...
+  lora:
+    dropout: 0.0         # required: the default 0.05 is refused (see below)
+data:
+  max_length: 512        # ... of at most max_length tokens
+```
+
+**Why it is the same training signal.** In a causal model a token's state depends only on the
+tokens before it. Each row gets a 4D attention mask (a token attends to itself and its
+ancestors in the tree) and `position_ids` equal to the depth in the tree, so every token sees
+exactly the context it had in its own example. The loss and its gradient are those of the
+ordinary batch holding the same examples, to rounding: logits equal to float64 rounding on CPU for Llama,
+Mistral, Qwen2 and GPT-2 (exact with one thread; 1.7e-16 with 24, which is also what the
+ordinary batch differs by from the same examples run one at a time). This holds for a
+forward without dropout: an ordinary batch draws a dropout mask per example over a shared
+beginning, a prefix-tree row one for all the examples that share it. So a non-zero
+`training.lora.dropout` (0.05 by default) is refused, and so is a model that applies dropout
+in training (a dropout module above 0, or `attention_dropout` / `hidden_dropout` in its
+config); the model check runs in eval mode and would not see it.
+
+**What is shared.** Only tokens that are not trained on, so a trained token is still counted
+once per example in the loss. With `data.train_on_responses_only` (the default) that is the
+prompt: system message, tool list, user turn. Sharing stops at an example's first trained
+token.
+
+**What it changes about a run.**
+
+- A step runs the trees' tokens instead of the sum of the examples' lengths, and holds as many
+  examples as fit. An epoch therefore has fewer, larger optimizer steps: the same data in less
+  time, and fewer updates. Compare runs by wall time or by examples seen, not by step count,
+  and expect to revisit the learning rate or the number of epochs. Every setting counted in
+  optimizer steps now covers several examples per step: `training.save_steps`,
+  `training.eval_steps`, `training.logging_steps`, warmup steps.
+- Examples that share a long beginning (16 tokens or more beyond what the whole set shares)
+  are batched together; within and across such groups the order is random and seeded by
+  `training.seed`. The rows are planned once. With `batch_size` of 2 or more each epoch draws
+  a new grouping of rows into batches; with `batch_size: 1` a batch is a row, and every epoch
+  runs the same batches in a new order.
+- The trainer's `num_tokens` and `entropy` metrics count every token of every example once,
+  as for the ordinary batch: the batch keeps a 2D mask of how many examples each token belongs
+  to, and the model is handed the 4D mask for its forward only.
+- Rows that share nothing still fill a row together (several short unrelated examples, each
+  isolated by the mask), so the option never runs more tokens than before.
+- Evaluation is untouched.
+
+**Checked before the first step.** The trainer runs two or three of your training examples
+through the model as an ordinary batch and as one prefix-tree row and compares the logits,
+against the model's own layout noise and against two deliberately wrong rows (a plain causal
+mask, positions left at the row index). A model that ignores `position_ids` or the 4D mask is
+refused with the measurement, instead of training on rows it does not compute faithfully.
+The console prints what the check measured and how many tokens an epoch now runs.
+
+**Works with layer streaming.** A step stays within `batch_size` x `max_length` tokens, so the
+streaming VRAM pre-flight holds and `prefix_tree` is allowed beside `stream_layers` (where
+`packing` and `multipack` are refused). A streamed step also pays a cost per sweep of the
+model, which a row of several examples pays once instead of once per example.
+
+**Limits.** `task: sft`, `modality: text`, single process, `backend: transformers` (refused
+on `mlx` and `unsloth`). Refused beside
+`packing`, `multipack`, `stream_loss_chunk`, `data.format: raft`, `data.replay` and
+`data.interleave`; beside `training.neftune_alpha` (its noise is scaled by the row length and
+drawn once per shared token, so the loss would no longer be the ordinary batch's) and
+`training.curriculum` (the sampler sets the order, so the curriculum would be dropped); beside a
+non-zero `training.lora.dropout` and with a model that applies dropout in training (see above).
+The model check runs on two or three real examples packed into one row within
+`data.max_length`; when no planned row holds two, it uses the first `data.max_length / 2`
+tokens of the first two examples. A dataset must have a length (no `data.streaming`). The 4D mask keeps attention off its flash
+path.
+
+**Planning cost.** Before the first step the whole training set is read through the collator
+and the rows are planned, in pure Python on one CPU core. Measured on a laptop CPU, 10,000
+examples of 400 tokens (4,000,000 tokens, 50 system prompts of 300 tokens): 7.5 s, a peak of
+66 MB (about 16 bytes per token; examples are held as 4-byte arrays and released once the rows
+are planned). Above 50,000,000 tokens (examples x `data.max_length`) the trainer prints an
+estimate before it starts. For a million examples at `data.max_length: 400` it prints about
+6.4 GB and 13 min: split such a set, or use `packing` / `multipack` instead.
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 
