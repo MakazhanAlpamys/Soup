@@ -710,7 +710,7 @@ def _run_judge_task(
                 # The decoder sees one stripped line, so its coordinates are
                 # row-local: rebase them onto the physical file position.
                 raise ValueError(
-                    f"judge task {task.name!r} file {task.prompts!r} "
+                    f"invalid JSONL: judge task {task.name!r} file {task.prompts!r} "
                     f"line {line_number} column {indent + exc.colno}: {exc.msg}"
                 ) from exc
             if not isinstance(row, dict):
