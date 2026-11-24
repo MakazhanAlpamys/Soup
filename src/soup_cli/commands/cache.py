@@ -23,6 +23,7 @@ def _notice() -> None:
     console.print(
         "[dim]Kept: the newest complete slot, any slot being written or resharded, any slot "
         "without a readable index.json. The commit a run pins is not known here.[/]"
+        " Use --keep <commit> for each pinned revision to protect explicitly."
     )
 
 
@@ -30,11 +31,31 @@ def prune_layer_cache(
     model: str = _MODEL,
     cache_dir: Optional[str] = _CACHE_DIR,
     yes: bool = typer.Option(False, "--yes", help="Actually remove. Without it: dry run."),
+    keep: Optional[list[str]] = typer.Option(
+        None, "--keep", help="Protect a lowercase 40-hex commit. Repeat up to 64 times."
+    ),
 ) -> None:
     """Remove stale layer-cache slots of a base. Dry run (the listing) unless --yes."""
     from soup_cli.utils.layer_cache_slots import prune_slots
+    from soup_cli.utils.run_provenance import validate_identity
 
-    results = prune_slots(model, cache_dir, _current(model, cache_dir), confirm=yes)
+    try:
+        if len(keep or []) > 64:
+            raise ValueError("at most 64 values are allowed")
+        for revision in keep or []:
+            validate_identity(revision, "hub_commit")
+    except ValueError as exc:
+        console.print(f"Invalid --keep: {for_terminal(str(exc))}", emoji=False)
+        raise typer.Exit(1) from exc
+    revisions = set(keep or [])
+    try:
+        results = prune_slots(
+            model, cache_dir, _current(model, cache_dir), confirm=yes,
+            **({"keep_revisions": revisions} if revisions else {}),
+        )
+    except ValueError as exc:
+        console.print(for_terminal(str(exc)), emoji=False)
+        raise typer.Exit(1) from exc
     if not results:
         console.print("Nothing to prune.")
         _notice()
