@@ -16,10 +16,9 @@ its default" is declared but read by nothing: leave it out, or at its default.
 The guides linked from the [docs index](README.md) explain what the settings do
 together; this page is the lookup table.
 
-For fields directly under `training` and under `training.lora`, booleans
-`true` and `false` (including YAML aliases such as `yes` and `no`) are refused
-for scalar `int` and `float` fields. Write an explicit numeric value instead.
-The `training.lora.r` field requires an integer, not `false`.
+For scalar numeric fields in `data`, `training` (including `training.lora` and
+`training.eval_gate`) and `eval.ship`, booleans `true` and `false` (including YAML
+aliases such as `yes` and `no`) are refused. Write an explicit numeric value instead.
 
 How to read a table:
 
@@ -335,6 +334,7 @@ Sections:
 | `training.stream_disk_kind` | `str \| null` | `null` | one of `"nvme"`, `"ssd"`, `"hdd"` | Override the auto-detected disk media type for the streaming disk overflow tier. Detection classifies a device by a measured sequential read when the kernel's rotational flag is unreliable — virtio and other paravirtual disks report spinning with no media hint, so a fast cloud disk is otherwise refused (#365). Set this for the case where even that is wrong: 'nvme' forces the disk tier on, 'ssd'/'hdd' force it off. The resolved value is printed beside what was detected. |
 | `training.packing` | `bool` | `false` |  | Pack multiple short samples into one sequence for faster training |
 | `training.multipack` | `bool` | `false` |  | Use FFD bin-packing sampler to maximise tokens-per-batch on uneven-length data. Mutually exclusive with packing. Only supported for sft / pretrain tasks (transformers backend). (v0.37.0). |
+| `training.prefix_tree` | `bool` | `false` |  | Lay each training batch out as prefix trees: tokens that several examples begin with (one system prompt, one tool schema, one document) and that are not trained on are held once, with a 4D ancestor attention mask and tree-depth position ids. The loss and its gradient are those of the ordinary batch holding the same examples, to rounding; the step runs the trees' tokens instead of the sum of the examples' lengths. A step is still at most batch_size rows of data.max_length tokens. Needs untrained prompt tokens (e.g. data.train_on_responses_only) to have anything to share. task='sft' on the transformers backend only (refused on mlx and unsloth); works with stream_layers. Mutually exclusive with packing, multipack, stream_loss_chunk, neftune_alpha, curriculum and a non-zero lora.dropout (0.05 by default; set it to 0); a model that applies dropout in training is refused at setup. A bool only: 1 or 'yes' is refused. |
 | `training.neftune_alpha` | `float \| null` | `null` | `>= 0.0`, `<= 50.0` | NEFTune noise alpha (0-50). Adds noise to embeddings for better chat quality. |
 | `training.forgetting_detection` | `bool` | `false` |  | Staged, not enforced during training: enable periodic general-knowledge eval to detect catastrophic forgetting |
 | `training.forgetting_eval_steps` | `int` | `100` | `>= 10`, `<= 10000` | Staged, not enforced during training: run forgetting eval every N steps. Refused at load when set away from its default (v0.77, #808). |

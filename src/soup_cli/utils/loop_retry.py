@@ -107,6 +107,11 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
                 for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
                     digest.update(chunk)
     except OSError:
+        # A failed read may have absorbed one or more chunks already. Start a
+        # fresh digest so the fallback key depends only on the path (and the
+        # identity below), not on the offset where the read happened to fail
+        # (#3222).
+        digest = hashlib.sha256()
         digest.update(f"unreadable:{os.path.abspath(os.path.normpath(data_path))}:".encode())
     recipe = state.effective_sft_recipe() if method == "sft" else None
     identity = {

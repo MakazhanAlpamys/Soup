@@ -575,6 +575,7 @@ def judge(
         JudgeEvaluator,
         JudgeUnavailableError,
         load_rubric,
+        rubric_file_label,
         validate_judge_api_base,
     )
 
@@ -592,7 +593,7 @@ def judge(
         raise typer.Exit(1)
 
     items: list[dict] = []
-    with open(target_path, encoding="utf-8") as fh:
+    with open(target_path, encoding="utf-8-sig") as fh:
         for line_num, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
@@ -616,9 +617,17 @@ def judge(
     if rubric:
         try:
             rubric_data = load_rubric(Path(rubric))
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
             # The message quotes the path it was given.
             console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1)
+        except ValueError as exc:
+            message = str(exc)
+            # An error of reading the file already names it; one of the rubric's shape
+            # gets the prefix the evaluator's refusals below carry.
+            if not message.startswith(rubric_file_label(Path(rubric))):
+                message = f"Cannot use rubric {rubric!r}: {message}"
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -1377,7 +1386,7 @@ def gate_cmd(
 
     try:
         eval_suite = load_suite(suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1410,7 +1419,7 @@ def gate_cmd(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1705,12 +1714,13 @@ def _print_gate_result(result) -> None:
             f"{row.score:.3f}" if row.score is not None
             else "[red]ERROR[/]"
         )
-        verdict = (
-            "[green]PASS[/]" if row.passed
-            else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
-        )
+        if row.passed:
+            verdict = Text("PASS", style="green")
+        else:
+            detail = f"FAIL ({row.error})" if row.error else "FAIL"
+            verdict = terminal_text(detail, style="red")
         table.add_row(
-            row.name,
+            terminal_text(row.name),
             score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",

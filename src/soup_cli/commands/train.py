@@ -1921,6 +1921,21 @@ def train(
         )
         raise typer.Exit(0)
 
+    # --- Layer streaming is single-process (#2585) ---
+    # The earliest point that knows WORLD_SIZE: after the config is loaded and the cloud
+    # hand-off (which runs elsewhere), before the dataset, the Hub resume pull, the run
+    # record and any model work. The trainer setup repeats the check for callers that
+    # never come through this command. Not a config validator: other commands load the
+    # same config in shells where a launcher variable may be left over.
+    if getattr(cfg.training, "stream_layers", False):
+        from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+        try:
+            refuse_if_distributed_launch()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
     # --- --push-as / --hf-resume validation ---
     if push_as:
         from soup_cli.utils.hf import validate_repo_id
@@ -1944,12 +1959,14 @@ def train(
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
         from soup_cli.config.eval_gate_support import eval_gate_refusal
+        from soup_cli.config.loader import print_config_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
 
         refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
         if refusal is not None:
-            console.print(f"[red]{for_terminal(refusal)}[/]")
+            # The lines the same gate gets when it is set in the config file.
+            print_config_refusal(refusal)
             raise typer.Exit(1)
 
         try:
@@ -2636,6 +2653,8 @@ def train(
 
     # Start experiment tracking
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.cost_history import cost_history_eligible
+    from soup_cli.utils.launcher import is_in_distributed
 
     tracker = ExperimentTracker()
     run_base = cfg.base
@@ -2647,6 +2666,15 @@ def train(
         gpu_info=gpu_info,
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
+        cost_history_eligible=cost_history_eligible(
+            task=cfg.task,
+            resume_from=resume_from,
+            device=device,
+            gpu_count=gpu_info.get("gpu_count"),
+            distributed=is_in_distributed(),
+            fsdp=fsdp,
+            ds_config_path=ds_config_path,
+        ),
     )
     # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
     # _reconcile_orphaned_run to ever notice the process is gone — the
