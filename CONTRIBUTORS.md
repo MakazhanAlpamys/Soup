@@ -963,6 +963,7 @@ Listed by first contribution. PR numbers link the work.
   - Moved live iterative-DPO prompt validation ahead of the plan display. CLI cases preserve argument validation order, file checks and the ability to preview without opening the prompts file. ([#3145](https://github.com/MakazhanAlpamys/Soup/pull/3145))
   - Made Ship attempt outputs independently and report file-write failures with the verdict's exit priority. ([#3110](https://github.com/MakazhanAlpamys/Soup/pull/3110))
   - Applied working-directory containment before loading custom eval gate task files and covered the accepted local path. ([#3259](https://github.com/MakazhanAlpamys/Soup/pull/3259))
+  - Revalidated eval gate thresholds and scorers before generation and added boundary and mutation controls. ([#3234](https://github.com/MakazhanAlpamys/Soup/pull/3234))
 
 - **Suyog Verma** ([@commit-msuyog](https://github.com/commit-msuyog))
   - First contribution: A local `.parquet` dataset with list columns loaded 0 training rows for eight formats, because pandas handed every list cell to the converters as a numpy array, and `soup data validate` / `inspect` crashed on the same file. The loader now reads parquet with pyarrow, so rows match the same data in JSONL, and it drops pandas' hidden `__index_level_N__` index column while keeping a named index. The new tests fail 15 of 24 on `main`, and all 5 mutations of the fix fail a test ([#1218](https://github.com/MakazhanAlpamys/Soup/issues/1218), [#1292](https://github.com/MakazhanAlpamys/Soup/pull/1292))
