@@ -274,6 +274,9 @@ smoke generator are unchanged (#1798).
 
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+A task `name` must also be non-empty and free of NUL characters; a suite with
+such a name is refused at load time (`soup eval gate` exits `3`), before any
+model setup or verdict.
 
 Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
@@ -1838,7 +1841,7 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MINOR` — score drop 2–5% (investigate)
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
+Paths are containment-checked. For `registry://` references, the CLI uses the first artifact by creation time. If the registry entry has multiple artifacts, pass the desired model directory directly. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
 #### Compare generation performance in the same report
 
@@ -1912,6 +1915,11 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
+| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing punctuation and symbols removed (`h2o.` and `(h2o)` are `h2o`; a combining mark such as a vowel sign or an accent written as its own character is part of the word and stays, and a minus sign `-` or U+2212 right before a digit stays, so `(-4).` is `-4`; a dot right before a digit stays too, also after a kept sign, so `(.5).` is `.5` and `-.5` is not `5`); a word that is only punctuation, or only combining marks once its edges are removed, is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
+
+Every word of the output counts toward `semantic`'s union, so a short expected answer
+inside a sentence scores low (`H2O` against `The chemical symbol for water is H2O.` is
+1/7). For a short answer inside a sentence, use `contains` or `answer`.
 
 The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
 strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a

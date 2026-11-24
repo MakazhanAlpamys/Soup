@@ -261,6 +261,71 @@ class TestReadStateRetriesAPermissionError:
 
 
 class TestSignalHandlers:
+    def test_a_missing_state_file_at_start_up_raises_and_restores_the_handlers(self, cwd):
+        # #3055 — the start-up `update_state` write must not swallow the errors
+        # it inherited from the plain start-up `read_state`: a gone `loop.yaml`
+        # raises as before, after the signal handlers are back in place.
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        with pytest.raises(FileNotFoundError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    def test_an_invalid_state_file_at_start_up_raises_and_restores_the_handlers(self, cwd):
+        # #3055 — same for an invalid `loop.yaml`: it raises as before, with the
+        # daemon's handlers uninstalled first.
+        path = Path(_path(cwd))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("version: [oops", encoding="utf-8")
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        with pytest.raises(ValueError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    def test_a_lock_timeout_at_start_up_runs_on_and_restores_the_handlers(
+        self, cwd, monkeypatch
+    ):
+        # #3055 — the lock-timeout arm is the one transient case: `watch` runs
+        # on without the promotion instead of raising, still with the
+        # daemon's handlers uninstalled before the first cycle.
+        write_state(_state(), _path(cwd))
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        def locked(mutate, path=None):
+            raise TimeoutError("loop.yaml is locked by another process (pid 1)")
+
+        monkeypatch.setattr(daemon, "update_state", locked)
+
+        state, ran = watch(_config(cwd))
+
+        assert ran == 1
+        assert state.iteration_count == 1
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    def test_a_lock_timeout_at_start_up_on_a_stopped_file_raises(
+        self, cwd, monkeypatch
+    ):
+        # #3055 review — the lock-timeout arm must not run a still-`stopped`
+        # file as a finished watch: the promotion never happened, so the
+        # start-up fails by name (as v0.78.0 did) instead of exiting 0 with
+        # `iterations=0 status=stopped`. A `running` or `paused` file keeps
+        # the transient behaviour tested above.
+        write_state(replace(_state(), status="stopped"), _path(cwd))
+        before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+        def locked(mutate, path=None):
+            raise TimeoutError("loop.yaml is locked by another process (pid 1)")
+
+        monkeypatch.setattr(daemon, "update_state", locked)
+
+        with pytest.raises(TimeoutError):
+            watch(_config(cwd))
+
+        assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
     def test_watch_puts_the_signal_handlers_back(self, cwd):
         write_state(_state(), _path(cwd))
         before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))

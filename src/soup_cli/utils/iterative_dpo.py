@@ -267,6 +267,22 @@ def _messages_to_text(messages: Any) -> str:
     return "\n".join(parts)
 
 
+def validate_iterative_dpo_prompts(plan: IterativeDPOPlan) -> None:
+    """Validate every round's prompts before a live plan is displayed or run."""
+    if not isinstance(plan, IterativeDPOPlan):
+        raise TypeError(
+            f"plan must be IterativeDPOPlan, got {type(plan).__name__}"
+        )
+    validated: set[str] = set()
+    for rnd in plan.rounds:
+        if rnd.prompts_path in validated:
+            continue
+        prompts = _load_prompts(rnd.prompts_path)
+        if not prompts:
+            raise ValueError(f"prompts file {rnd.prompts_path!r} has no usable prompts")
+        validated.add(rnd.prompts_path)
+
+
 def build_pairs_from_scored(
     scored: list[tuple[str, float]],
 ) -> Optional[tuple[str, str]]:

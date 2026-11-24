@@ -22,6 +22,7 @@ from soup_cli.trainer.mlx_sft import (
     mlx_lora_scale,
     resolve_mlx_target_keys,
 )
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 BASE_DOWNLOAD_PATTERNS = (
@@ -53,13 +54,15 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
         )
         from soup_cli.utils.seeding import resolve_training_seed
 
-        validate_output(Path(self.config.output))
+        cfg = self.config
+        validate_output(Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        )))
         require_mlx()
         import mlx.core as mx
 
         from soup_cli.utils.mlx import load_mlx_model
 
-        cfg = self.config
         base = Path(cfg.base)
         if not base.is_dir():
             from huggingface_hub import snapshot_download
@@ -148,7 +151,11 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
         from soup_cli.utils.mlx_reward_native import accumulated_gradients, evaluate_pairs
         from soup_cli.utils.seeding import resolve_training_seed
 
-        tcfg = self.config.training
+        cfg = self.config
+        output_dir = training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        )
+        tcfg = cfg.training
         seed = resolve_training_seed(tcfg)
         data_seed = seed if tcfg.data_seed is None else int(tcfg.data_seed)
         batch_size = _resolved_batch_size(tcfg)
@@ -192,7 +199,7 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
             )
             generations.append(
                 publish_bundle(
-                    Path(self.config.output),
+                    Path(output_dir),
                     self.model,
                     self.tokenizer,
                     contract,
@@ -249,5 +256,5 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
             "evaluations": evaluations,
             "duration_secs": time.monotonic() - started,
             "duration": f"{time.monotonic() - started:.0f}s",
-            "output_dir": str(self.config.output),
+            "output_dir": output_dir,
         }
