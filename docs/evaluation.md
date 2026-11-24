@@ -1245,11 +1245,12 @@ before, is refused for that reason.
 To fix a refused name use a shorter or plainer `--output` name: the stem plus
 `.task-rows.jsonl` must fit in 255 bytes on POSIX or 255 UTF-16 code units on Windows (a stem
 of more than 239 ASCII characters no longer works), with no control character in it and, on
-POSIX, no backslash. If the write fails, the verdict, the evidence and the PR
-comment are written first, then `cannot write the task rows next to --output: ...` is printed:
-a SHIP exits 1, a DON'T SHIP keeps exit 2 (a pipeline that retries on exit 1 must not run a
-finished verdict again). The file is part of the evidence, and the verdict JSON never names a file
-that was not written.
+POSIX, no backslash. After evaluation, Soup attempts each requested file output (the task rows,
+verdict JSON and evidence) and then the best-effort `--push` comment even if another output fails.
+It reports every file-write failure afterward. A SHIP exits 1 if any requested file could not be
+written; a DON'T SHIP keeps exit 2 so a pipeline that retries on exit 1 does not rerun a finished
+verdict. A task-rows file is part of the evidence, and neither the verdict JSON nor the evidence
+names a task-rows file that was not written.
 
 **Reading it back, strictly.** `soup_cli.utils.ship_task_rows.load_task_rows(path, n=, base=,
 tuned=, counts=, mean_tolerance=)` refuses, naming the defect: a blank, over-long or malformed

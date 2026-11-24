@@ -43,7 +43,8 @@ def merge_native_adapter(
 
     if dtype not in ("float16", "bfloat16", "float32"):
         raise ValueError("MLX merge dtype must be float16, bfloat16 or float32")
-    metadata = read_native_adapter(Path(adapter), base)
+    # load_native_model reads again; announce a legacy resolution only once there.
+    metadata = read_native_adapter(Path(adapter), base, announce=False)
     if metadata is None:
         raise ValueError("MLX merge requires a native MLX adapter, not a base-only model")
     destination = Path(output)
