@@ -1897,6 +1897,18 @@ The table, JSON and markdown all include this additional result only when
 Invalid values name the `scoring` field and physical JSONL line, including blank
 lines, before model loading or result writes. `soup eval custom` exits 1 for these errors.
 
+Every row states its `expected`, under every `scoring`. A row whose `expected` is
+missing, `null`, or empty or whitespace-only is refused, naming the line:
+`Line 2: field 'expected' is missing`, `Line 2: field 'expected' is null` or
+`Line 2: field 'expected' is empty or whitespace-only`. Such a row used to load,
+and under `contains` and `regex` it scored 1.0 for every output, an empty one
+included (#3240). A number or a boolean is an answer and loads as its text (`4` as
+`4`, `0` as `0`, `false` as `False`). `soup eval custom` exits 1 for this error,
+`soup eval quant-check` and `soup eval retention` exit 3, and an eval gate task
+fails with the message instead of a score. `soup ship --task-mode judge_score`,
+`pairwise` and `reward` never score `expected`, so a prompt-only file stays valid
+there.
+
 Regex-scored custom tasks reject structurally unsafe patterns before matching
 model output and name `eval.custom.expected` in the error. The diagnose
 `format` probe applies the same check to `regex_pattern` without running a
