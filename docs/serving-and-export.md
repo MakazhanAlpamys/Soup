@@ -995,9 +995,27 @@ curl -X POST http://localhost:8000/v1/adapters/load \
 - **The path must be inside `--adapter-dir`.** A relative path is resolved against the server's working directory; a `..` or a symlink that leaves the directory is refused with 403. At the 16-adapter cap the OLDEST loaded runtime adapter that is not in use is unloaded to make room (never the active one, nor what `loop.yaml` names as production, its rollback target or the canary); when every one is in use the load answers `409 runtime adapter limit reached (16)`. **Known limit:** after a server restart a promoted adapter is not loaded again by the server (`soup loop` does not replay `loop.yaml`), so the stable side is the base model until the loop deploys the next version or the adapter is loaded by hand with `POST /v1/adapters/load`. On Windows a UNC path (`\\host\share\x`) or a drive-relative one (`C:x`) is refused with 403 without being resolved. `--adapter-dir` itself may not be a filesystem root (`/`, a drive root, a share root): the server refuses to start (exit 2, naming the flag), as every path would be inside it. The directory must hold an `adapter_config.json` (400 otherwise). Adapters stored as pickle (`adapter_model.bin`) are refused: use safetensors.
 - **Loading does not activate.** The adapter shows up in `GET /v1/adapters`; select it with `POST /v1/adapters/activate/v2` or the `adapter` field of a request.
 - **Name rules:** the pattern above, at most 64 characters; a name that is already loaded (at startup or at runtime, or the `default` adapter of a `--model` that is itself an adapter) answers 409.
-- **At most 16 adapters** are loaded this way at once per server process (adapters given with `--adapters` do not count). The 17th load unloads the oldest unused one first (see the cap rule under the path check above) and answers 409 only when none can be unloaded: every loaded adapter is the active one, production, its rollback target or the canary, the unload fails, or `loop.yaml` cannot be read.
-- A load that fails answers 400 `adapter could not be loaded` (the cause goes to the server log) and leaves the server as it was.
+- **At most 16 adapters** are loaded this way at once per server process (adapters given with `--adapters` do not count). The 17th load unloads the oldest unused one first (see the cap rule under the path check above) and answers 409 when none can be unloaded: every loaded adapter is reserved by a queued/running request or is the active one, production, its rollback target or the canary, the unload fails, or `loop.yaml` cannot be read. A busy-cache refusal names queued/running reservations; retry after requests finish or keep fewer adapters loaded.
+- A load that fails answers 400 `adapter could not be loaded` (the cause goes to the server log). The failed name is not published; at the cap, an unused victim may already have been evicted. Reserved adapters remain loaded.
 - **Transformers backend only.** `--adapter-dir` with `--backend vllm`, `sglang` or `mii`, or together with `--mole`, is refused at startup (exit 2); on a server started with `--bank` the route answers 409.
+
+Each request captures its adapter once, including an automatic canary or active-adapter
+choice. Runtime adapters remain reserved through queuing and generation, so subsequent
+activation or canary changes apply to later requests. The internal stable-base sentinel
+reserves nothing; an omitted or empty public `adapter` field keeps normal routing.
+Startup `--adapters` names are never runtime eviction candidates.
+
+If the captured adapter is unavailable, the server refuses before generation: HTTP 409
+before headers, or an SSE error after streaming headers, with
+`Selected adapter is no longer available; retry with a loaded adapter`. OpenAI streams
+close without `[DONE]`; Anthropic streams send an `error` event without `message_stop`.
+No conversation record or canary outcome is written for this refusal. Retry with an
+adapter listed by `GET /v1/adapters`. Other generation errors retain their existing
+`Internal server error` message. A token-stream disconnect preserves its partial
+conversation record only if generation started, and keeps the reservation until the
+worker exits; cancelling before generation starts leaves no conversation record.
+Activation is ordered with eviction: activation that completes first protects the name;
+activation after its eviction receives the existing unknown-adapter 404.
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
@@ -1382,7 +1400,7 @@ Pure-Python converters between OpenAI chat-completions and Anthropic Messages pa
 from soup_cli.utils.anthropic_messages import to_anthropic, from_anthropic
 
 anthropic_payload = to_anthropic({
-    "model": "claude-3-5-sonnet",
+    "model": "claude-haiku-5-5",
     "messages": [
         {"role": "system", "content": "you are helpful"},
         {"role": "user", "content": "hi"},

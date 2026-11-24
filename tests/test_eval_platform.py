@@ -192,7 +192,7 @@ class TestLoadEvalTasks:
 
     def test_max_tasks_exceeded(self, tmp_path):
         path = tmp_path / "tasks.jsonl"
-        lines = '{"prompt": "q"}\n' * (MAX_EVAL_TASKS + 1)
+        lines = '{"prompt": "q", "expected": "a"}\n' * (MAX_EVAL_TASKS + 1)
         path.write_text(lines, encoding="utf-8")
         with pytest.raises(ValueError, match="exceeds maximum"):
             load_eval_tasks(path)
@@ -1313,7 +1313,7 @@ class TestSecurity:
     def test_custom_eval_task_cap(self, tmp_path):
         """Ensure eval tasks are capped at MAX_EVAL_TASKS."""
         path = tmp_path / "tasks.jsonl"
-        lines = '{"prompt": "q"}\n' * (MAX_EVAL_TASKS + 1)
+        lines = '{"prompt": "q", "expected": "a"}\n' * (MAX_EVAL_TASKS + 1)
         path.write_text(lines, encoding="utf-8")
         with pytest.raises(ValueError, match="exceeds maximum"):
             load_eval_tasks(path)

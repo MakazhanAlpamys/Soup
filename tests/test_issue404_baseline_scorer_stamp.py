@@ -276,7 +276,7 @@ class TestWriteBaselineCli:
         )
         if tasks:
             (tmp_path / "tasks.jsonl").write_text(
-                json.dumps({"prompt": "hi", "expected": ""}) + "\n",
+                json.dumps({"prompt": "hi", "expected": "hello"}) + "\n",
                 encoding="utf-8",
             )
 
@@ -418,11 +418,11 @@ class TestCliWarnPlumbing:
             yaml.safe_dump(suite), encoding="utf-8"
         )
         (tmp_path / "tasks.jsonl").write_text(
-            json.dumps({"prompt": "hi", "expected": ""}) + "\n",
+            json.dumps({"prompt": "hi", "expected": "hello"}) + "\n",
             encoding="utf-8",
         )
         (tmp_path / "old_baseline.json").write_text(
-            json.dumps({"exact_task": 0.9}), encoding="utf-8"
+            json.dumps({"exact_task": 0.0}), encoding="utf-8"
         )
         result = runner.invoke(
             app,

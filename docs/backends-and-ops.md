@@ -2525,3 +2525,8 @@ soup doctor    # GPU, system resources, dependencies, and version in one place
   wheel is CPU-only. Reinstall a CUDA build; `soup doctor` prints the
   `pip install` command for the wheel your driver can run.
 - **`soup version` ≠ `pip show soup-cli`** — multiple Python installs; use a virtualenv.
+
+A core CLI installation can run `soup doctor` and `soup init` with PyTorch absent.
+Use [the training extra](models.md#optional-extras) when you are ready to train.
+The chat template creates `soup.yaml` with `data.train: ./data/train.jsonl`.
+Provide that dataset or update `data.train` to an existing source before training.

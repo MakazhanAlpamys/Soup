@@ -593,7 +593,7 @@ def judge(
         raise typer.Exit(1)
 
     items: list[dict] = []
-    with open(target_path, encoding="utf-8") as fh:
+    with open(target_path, encoding="utf-8-sig") as fh:
         for line_num, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
@@ -1386,7 +1386,7 @@ def gate_cmd(
 
     try:
         eval_suite = load_suite(suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1419,7 +1419,7 @@ def gate_cmd(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
