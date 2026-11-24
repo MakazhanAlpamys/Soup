@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import io
-import warnings
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 from rich.console import Console
 
 from soup_cli.config.backend_support import (
@@ -17,8 +17,9 @@ from soup_cli.config.backend_support import (
     unsupported_for,
 )
 from soup_cli.config.loader import load_config, load_config_from_string
-from soup_cli.config.schema import resolve_mlx_task
+from soup_cli.config.schema import SoupConfig, TrainingConfig, resolve_mlx_task
 from soup_cli.recipes.catalog import RECIPES
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_limited
 from tests.conftest import strip_ansi
 
 #: Combinations a shipped recipe uses and nobody has reviewed yet, in the order the
@@ -41,7 +42,7 @@ NOT_YET_REVIEWED = frozenset({
     ("dpo", "transformers", "vision"),
 })
 
-_SFT_TEXT_KNOBS = {
+SFT_TEXT_KNOBS = {
     "training.dpo_beta": 0.05,
     "training.kto_beta": 0.2,
     "training.orpo_beta": 0.2,
@@ -64,18 +65,41 @@ _SFT_TEXT_KNOBS = {
 }
 
 
+def _recipe_combination(name: str, source: str) -> tuple[str, str, str]:
+    """Validate the fields that select a trainer without resolving the base model."""
+    what = f"Recipe {name!r}"
+    raw = load_yaml_limited(source, what, max_bytes=MAX_CONFIG_BYTES)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{what} must be a YAML mapping")
+    training = raw.get("training", {})
+    if not isinstance(training, dict):
+        raise ValueError(f"{what} training must be a mapping")
+
+    fields = SoupConfig.model_fields
+    preference = TrainingConfig.model_fields["preference_loss"]
+    try:
+        task, backend, modality = (
+            TypeAdapter(fields[field].annotation).validate_python(
+                raw.get(field, fields[field].default)
+            )
+            for field in ("task", "backend", "modality")
+        )
+        loss = TypeAdapter(preference.annotation).validate_python(
+            training.get("preference_loss", preference.default)
+        )
+    except ValidationError as exc:
+        raise ValueError(f"{what} has an invalid trainer identity: {exc}") from exc
+    if backend == "mlx":
+        task = resolve_mlx_task(task, loss)
+    return task, backend, modality
+
+
 @pytest.fixture(scope="module")
 def recipe_combinations() -> dict[tuple[str, str, str], str]:
-    """Every (task, backend, modality) a shipped recipe uses -> one recipe that uses it."""
+    """Every shipped recipe's review key, including recipes marked unavailable."""
     found: dict[tuple[str, str, str], str] = {}
     for name, meta in sorted(RECIPES.items()):
-        with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            cfg = load_config_from_string(meta.yaml_str)
-        task = cfg.task
-        if cfg.backend == "mlx":
-            task = resolve_mlx_task(task, cfg.training.preference_loss)
-        found.setdefault((task, cfg.backend, cfg.modality), name)
+        found.setdefault(_recipe_combination(name, meta.yaml_str), name)
     return found
 
 
@@ -182,11 +206,11 @@ def write_config(tmp_path):
 
 def test_the_sft_text_table_holds_only_ignored_other_task_knobs():
     fields = [entry.field for entry in REGISTRY[("sft", "transformers", "text")]]
-    assert sorted(fields) == sorted(_SFT_TEXT_KNOBS)
+    assert sorted(fields) == sorted(SFT_TEXT_KNOBS)
     assert {entry.status for entry in REGISTRY[("sft", "transformers", "text")]} == {IGNORED}
 
 
-@pytest.mark.parametrize(("field", "value"), _SFT_TEXT_KNOBS.items())
+@pytest.mark.parametrize(("field", "value"), SFT_TEXT_KNOBS.items())
 def test_an_other_task_knob_set_on_sft_is_reported(field, value):
     name = field.split(".", 1)[1]
     with contextlib.redirect_stdout(io.StringIO()):
