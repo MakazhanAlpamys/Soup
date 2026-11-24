@@ -48,9 +48,7 @@ def _rewrite(cfg, path: Path, **data) -> None:
     """Write `cfg` back with `data` overridden — the only handle tests need."""
     for key, value in data.items():
         setattr(cfg.data, key, value)
-    path.write_text(
-        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
-    )
+    path.write_text(yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8")
 
 
 @pytest.fixture
@@ -78,16 +76,18 @@ def test_a_local_data_file_is_shipped_in_the_plan(chat_config, cloud):
     """Local training data is shipped by supported backends only."""
     result = _plan(cloud)
 
+    output = " ".join(strip_ansi(result.output).split())
+
     if cloud == "runpod":
         assert result.exit_code == 2
-        assert "--cloud runpod does not ship local data.train files" in result.output
+        assert "--cloud runpod does not ship local data.train files" in output
         assert not Path("soup_runpod_app.py").exists()
         return
 
-    assert result.exit_code == 0, result.output
-    assert "Inputs:" in result.output, result.output
-    assert "inputs/train-0.jsonl" in result.output, result.output
-    assert "bytes" in result.output, result.output
+    assert result.exit_code == 0, output
+    assert "Inputs:" in output
+    assert "inputs/train-0.jsonl" in output
+    assert "bytes" in output
 
     stub = Path(f"soup_{cloud}_app.py")
     assert stub.exists()
@@ -248,8 +248,7 @@ def test_an_override_the_schema_refuses_stops_the_plan_before_a_stub(chat_config
     assert "Cloud plan failed" in output, output
     assert "would be refused on the remote machine" in output, output
     assert (
-        "reward_hack_signals contains 'info_rm', but the active detector is 'rm_ensemble'"
-        in output
+        "reward_hack_signals contains 'info_rm', but the active detector is 'rm_ensemble'" in output
     ), output
     assert not Path(f"soup_{cloud}_app.py").exists(), "a stub was rendered anyway"
 
@@ -271,8 +270,9 @@ def test_a_detector_on_a_task_the_schema_refuses_stops_the_plan(chat_config, clo
 @pytest.mark.parametrize("cloud", CLOUDS)
 def test_an_unsupported_local_field_is_named_too(chat_config, cloud):
     """Not just data.train: anything the loader opens locally is named."""
-    _rewrite(load_config(chat_config), chat_config,
-             train="teknium/OpenHermes-2.5", image_dir="./images")
+    _rewrite(
+        load_config(chat_config), chat_config, train="teknium/OpenHermes-2.5", image_dir="./images"
+    )
 
     result = _plan(cloud)
 
@@ -498,6 +498,7 @@ class TestUnshippedInputs:
 
         refuse_unshipped_inputs(self._cfg("./data/train.jsonl"))
 
+
 class TestDataTrainDirectory:
     """A data.train with no data suffix is a Hub id OR a local dataset directory."""
 
@@ -505,8 +506,7 @@ class TestDataTrainDirectory:
         from soup_cli.config.loader import load_config_from_string
 
         return load_config_from_string(
-            "base: HuggingFaceTB/SmolLM2-135M\ntask: sft\n"
-            f"data:\n  train: {train}\noutput: ./out\n"
+            f"base: HuggingFaceTB/SmolLM2-135M\ntask: sft\ndata:\n  train: {train}\noutput: ./out\n"
         )
 
     @pytest.mark.parametrize(
@@ -648,9 +648,7 @@ def test_runpod_still_reads_the_file_when_no_config_text_is_given(tmp_path, monk
     on_disk = "base: public/model\ndata: {train: public/dataset}\noutput: out\n"
     (tmp_path / "soup.yaml").write_text(on_disk, encoding="utf-8")
 
-    plan = runpod.plan_runpod_run(
-        "soup.yaml", gpu="a100", output_dir="out", soup_version="0.77.2"
-    )
+    plan = runpod.plan_runpod_run("soup.yaml", gpu="a100", output_dir="out", soup_version="0.77.2")
 
     assert _shipped_configs(Path(runpod.write_stub(plan))) == [on_disk]
 
@@ -663,9 +661,7 @@ def test_local_train_input_rejects_missing_file(chat_config):
         prepare_local_train_inputs(cfg)
 
 
-def test_local_train_input_rejects_file_outside_working_directory(
-    chat_config, tmp_path
-):
+def test_local_train_input_rejects_file_outside_working_directory(chat_config, tmp_path):
     cfg = load_config(chat_config)
     outside = tmp_path.parent / "outside.jsonl"
     outside.write_text('{"text": "outside"}\n', encoding="utf-8")
@@ -679,9 +675,7 @@ def test_local_train_input_enforces_fixed_256_mib_limit():
     assert _MAX_LOCAL_TRAIN_INPUT_BYTES == 256 * 1024 * 1024
 
 
-def test_local_train_input_accepts_file_at_exact_size_limit(
-    chat_config, monkeypatch, tmp_path
-):
+def test_local_train_input_accepts_file_at_exact_size_limit(chat_config, monkeypatch, tmp_path):
     from soup_cli.cloud import _local_inputs
 
     limit = 10
@@ -701,9 +695,7 @@ def test_local_train_input_accepts_file_at_exact_size_limit(
     assert manifest[0].size_bytes == limit
 
 
-def test_local_train_input_rejects_individual_file_over_limit(
-    chat_config, monkeypatch, tmp_path
-):
+def test_local_train_input_rejects_individual_file_over_limit(chat_config, monkeypatch, tmp_path):
     from soup_cli.cloud import _local_inputs
 
     limit = 10
@@ -724,9 +716,7 @@ def test_local_train_input_rejects_individual_file_over_limit(
         prepare_local_train_inputs(cfg, cwd=str(tmp_path))
 
 
-def test_local_train_input_rejects_aggregate_size_over_limit(
-    chat_config, monkeypatch, tmp_path
-):
+def test_local_train_input_rejects_aggregate_size_over_limit(chat_config, monkeypatch, tmp_path):
     from soup_cli.cloud import _local_inputs
 
     monkeypatch.setattr(_local_inputs, "_MAX_LOCAL_TRAIN_INPUT_BYTES", 10)
@@ -771,9 +761,7 @@ def test_local_train_inputs_get_deterministic_remote_paths(chat_config):
         ["data/second.jsonl", "data/first.jsonl"],
     ],
 )
-def test_local_train_inputs_assign_distinct_remote_paths(
-    chat_config, entries
-):
+def test_local_train_inputs_assign_distinct_remote_paths(chat_config, entries):
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
     (data_dir / "first.jsonl").write_text('{"text": "first"}\n')
@@ -792,9 +780,7 @@ def test_local_train_inputs_assign_distinct_remote_paths(
     ]
 
 
-def test_local_train_input_rejects_directory_with_data_file_suffix(
-    chat_config, tmp_path
-):
+def test_local_train_input_rejects_directory_with_data_file_suffix(chat_config, tmp_path):
     (tmp_path / "dataset.jsonl").mkdir()
 
     cfg = load_config(chat_config)

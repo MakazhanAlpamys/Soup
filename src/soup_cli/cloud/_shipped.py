@@ -63,13 +63,13 @@ _HUB_MODEL_FIELDS: frozenset[str] = frozenset(
 _LOCAL_ESCAPE_PREFIXES: Tuple[str, ...] = (
     "./",
     "../",
-    "~/",        # home
-    "/",         # absolute path
-    ".\\",       # Windows: current directory
-    "..\\",      # Windows: parent directory
-    "~\\",       # Windows: home
-    "\\\\",      # Windows UNC
-    "\\",        # Windows root-relative
+    "~/",  # home
+    "/",  # absolute path
+    ".\\",  # Windows: current directory
+    "..\\",  # Windows: parent directory
+    "~\\",  # Windows: home
+    "\\\\",  # Windows UNC
+    "\\",  # Windows root-relative
 )
 
 #: Fields whose remote form is a Hugging Face Hub *dataset* id. ``data.train`` is
@@ -86,9 +86,7 @@ _HUB_DATASET_FIELDS: frozenset[str] = frozenset(
 #: suffix or a path spelling says "local" for these.
 _PY_FILE_FIELDS: frozenset[str] = frozenset({"training.reward_fn"})
 
-_COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset(
-    {"training.reward_fn"}
-)
+_COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset({"training.reward_fn"})
 
 
 def _resolve_plan_input(cfg: "SoupConfig", dotted: str) -> object:
@@ -207,13 +205,11 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
                     found.append(dotted)
             continue
 
-        if any(
-            _path_field_is_local(str(entry), py_file_only=py_file_only)
-            for entry in entries
-        ):
+        if any(_path_field_is_local(str(entry), py_file_only=py_file_only) for entry in entries):
             found.append(dotted)
 
     return sorted(set(found))
+
 
 def _escape_hatch(fields: List[str]) -> str:
     """The sentence naming what the remote run can resolve in place of a local path.
@@ -245,7 +241,7 @@ def refuse_unshipped_inputs(cfg: "SoupConfig") -> None:
         return
     listed = ", ".join(fields)
     raise ValueError(
-        f"--cloud ships only the config: {listed} would leave local files behind, "
-        f"so the remote run would fail after the instance boots. {_escape_hatch(fields)} "
+        f"--cloud does not ship these local inputs: {listed}. "
+        f"The remote run would fail after the instance boots. {_escape_hatch(fields)} "
         "See issue #1430."
     )
