@@ -10,7 +10,32 @@ same rule before any generator call.
 import pytest
 from pydantic import ValidationError
 
-from soup_cli.eval.gate import EvalSuite, GateTask, _require_gate_tasks
+from soup_cli.eval.gate import EvalSuite, GateTask, _require_gate_tasks, run_gate
+
+
+def test_run_gate_refuses_suite_before_any_generation_when_judge_model_assigned_after_load():
+    """The public preflight must fire before the task loop, not inside it."""
+    calls: list[str] = []
+
+    def generate_fn(prompt: str) -> str:  # offline stub
+        calls.append(prompt)
+        return "ok"
+
+    suite = EvalSuite(
+        suite="s",
+        tasks=[
+            # An ordinary task sits first: if the preflight were dropped or
+            # moved into the task loop, this one would be generated before
+            # the invalid judge task refused the suite.
+            GateTask(type="custom", name="ordinary", threshold=1.0, scorer="exact"),
+            GateTask(type="judge", name="judge", threshold=1.0, judge_model="ollama://m"),
+        ],
+    )
+    suite.tasks[1].judge_model = "https://169.254.169.254/model"
+
+    with pytest.raises(ValueError, match="judge_model URL"):
+        run_gate(suite, generate_fn=generate_fn)
+    assert calls == []
 
 
 def _suite_with_judge(judge_model: str) -> EvalSuite:
