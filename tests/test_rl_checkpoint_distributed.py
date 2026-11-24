@@ -13,7 +13,10 @@ pytestmark = pytest.mark.timeout(120)
 
 
 @pytest.fixture(autouse=True)
-def training_dependencies():
+def training_dependencies(monkeypatch):
+    # Hosted macOS stalls at Gloo group creation without an explicit local interface.
+    if sys.platform == "darwin":
+        monkeypatch.setenv("GLOO_SOCKET_IFNAME", os.environ.get("GLOO_SOCKET_IFNAME", "lo0"))
     for module in ("torch", "peft", "transformers"):
         pytest.importorskip(module, reason=f"RL recovery tests require {module}")
 
