@@ -800,25 +800,53 @@ def create_app(
 
     @app.delete("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def delete_run(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        """Delete the run that ``run_id`` names, as ``soup runs delete`` does.
+
+        A unique prefix resolves to its run; an unknown id or a prefix that
+        matches several runs answers 404 and deletes nothing.
+        """
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
-            deleted = tracker.delete_run(run_id)
-            if not deleted:
+            run = tracker.get_run(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
+            resolved_id = run["run_id"]
+            # Another request may have removed the run since ``get_run`` found it.
+            if not tracker.delete_run(resolved_id):
                 raise HTTPException(status_code=404, detail="Run not found")
-            return {"deleted": True, "run_id": run_id}
+            return {"deleted": True, "run_id": resolved_id}
         finally:
             tracker.close()
 
     @app.get("/api/runs/{run_id}/eval", dependencies=[Depends(_verify_token)])
     def get_run_eval(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        """The eval results of the run that ``run_id`` names, newest first.
+
+        The id resolves as in ``GET /api/runs/{run_id}``; an unknown id or an
+        ambiguous prefix answers 404. A run with no eval rows answers an empty list.
+        """
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
-            results = tracker.get_eval_results(run_id=run_id)
-            return {"run_id": run_id, "eval_results": results}
+            run = tracker.get_run(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
+            resolved_id = run["run_id"]
+            results = tracker.get_eval_results(run_id=resolved_id)
+            return {"run_id": resolved_id, "eval_results": results}
         finally:
             tracker.close()
 

@@ -220,9 +220,23 @@ aggregate preservation on this fresh set. Its utility exit status and the
 maintainer's fresh Hit@5 condition are both reported, with all metrics and
 every first-relevant-rank loss retained:
 
+The command must run in the exact scored checkout, `d6422869d54e624b6b0e7cd8fe5fd7fbe245e82c`,
+whose docs match the frozen 17-guide hashes. Current main and this branch after
+merging main contain newer guides and are intentionally rejected by the runner.
+From an up-to-date clone of this PR branch, create an isolated checkout so the
+working branch is not changed:
+
 ```bash
-python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/friend30.json --require-hit5-gain
+git worktree add --detach ../soup-3242-friend30 d6422869d54e624b6b0e7cd8fe5fd7fbe245e82c
+cd ../soup-3242-friend30
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/friend30.json --require-hit5-gain
 ```
+
+On Windows, use `.venv\Scripts\python.exe` for the virtualenv commands. The
+existing result and pre-scoring lock remain the evidence for the scored
+snapshot; merging main does not relabel or rescore these questions.
 
 The first declared run returned exit code 0. All four aggregates are preserved
 and the strict fresh Hit@5 gain is satisfied:

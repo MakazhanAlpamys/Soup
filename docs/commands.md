@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -299,7 +300,7 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
-soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--rank <N>] [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank fast path; mixed-rank concat with LoRA/rsLoRA scaling; optional SVD rank cap; scan + same-base gated) (v0.71.34)
 soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
 soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
@@ -443,6 +444,15 @@ results remain excluded.
 All rules run at query time. Existing version-1 index caches remain valid and
 are not rewritten by a cache hit. JSON results still have exactly `doc_name`,
 `section`, `heading_prefix`, `text` and `score`.
+
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
 
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
