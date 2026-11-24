@@ -586,6 +586,40 @@ class TestJudgeModelValidation:
         assert strip_ansi(str(caught.value)) == message
 
     @pytest.mark.parametrize(
+        ("url", "shown"),
+        [
+            ("http://user:secret@judge.example.com/m", "http://judge.example.com/m"),
+            ("ftp://user:secret@judge.example.com/m", "ftp://judge.example.com/m"),
+            ("http://localhost@judge.example.com/m", "http://judge.example.com/m"),
+            ("user:secret@judge.example.com/m", "judge.example.com/m"),
+            ("https://user:se@cret@judge.example.com/", "https://judge.example.com/"),
+        ],
+    )
+    def test_refusal_shows_the_url_without_its_userinfo_part(self, url, shown):
+        """A refusal names the URL it refuses; the part before ``@`` is left out of the echo."""
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        message = strip_ansi(str(caught.value))
+        assert f"judge_model '{shown}' " in message
+        assert "secret" not in message
+        assert "se@cret" not in message
+
+    def test_a_url_without_userinfo_is_shown_unchanged(self):
+        from soup_cli.eval.gate import _shown_judge_url
+
+        for url in (
+            "http://judge.example.com/m",
+            "https://judge.example.com/path/with@sign",
+            "ollama://llama3.1",
+            "judge.example.com/m",
+            "",
+        ):
+            assert _shown_judge_url(url) == url
+
+    @pytest.mark.parametrize(
         ("url", "parsed"),
         [
             ("http://localhost:8000/m", ("server", "m", "http://localhost:8000")),

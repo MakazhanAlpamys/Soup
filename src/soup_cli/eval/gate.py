@@ -586,6 +586,22 @@ def resolve_baseline(
     return scores
 
 
+def _shown_judge_url(judge_model: str) -> str:
+    """The URL as a refusal message shows it: without a userinfo part.
+
+    ``https://user:secret@host/m`` is shown as ``https://host/m``. A refusal is printed to the
+    terminal and lands in logs, and whatever sits before ``@`` is not needed to say why the URL
+    was refused. The value itself is never changed, only its echo.
+    """
+    head, sep, rest = judge_model.partition("//")
+    if not sep:
+        head, rest = "", judge_model
+    authority, slash, path = rest.partition("/")
+    if "@" not in authority:
+        return judge_model
+    return f"{head}{sep}{authority.rsplit('@', 1)[1]}{slash}{path}"
+
+
 def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     """Split a ``judge_model`` URL into ``(provider, model, api_base)``.
 
@@ -597,6 +613,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     """
 
     parsed = urlparse(judge_model)
+    shown = _shown_judge_url(judge_model)
 
     if parsed.scheme == "ollama":
         return ("ollama", judge_model[len("ollama://"):], None)
@@ -621,13 +638,13 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     elif parsed.scheme == "http":
         # #2190 — http itself is accepted; what is refused is cleartext to a remote host.
         raise ValueError(
-            f"judge_model '{judge_model}' uses http to a host that is not loopback; "
+            f"judge_model '{shown}' uses http to a host that is not loopback; "
             f"http is accepted for a loopback host only ({', '.join(sorted(LOOPBACK_HOSTS))}). "
             "Use https://, ollama:// or a loopback http:// URL instead"
         )
     else:
         raise ValueError(
-            f"judge_model '{judge_model}' uses unsupported scheme '{parsed.scheme}'; "
+            f"judge_model '{shown}' uses unsupported scheme '{parsed.scheme}'; "
             "accepted: https://, ollama:// or http:// to a loopback host"
         )
 
@@ -635,12 +652,12 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
         base, model = judge_model.rsplit("/", 1)
     except ValueError as exc:
         raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
+            f"judge_model '{shown}' missing model id"
         ) from exc
 
     if not model:
         raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
+            f"judge_model '{shown}' missing model id"
         )
 
     return (default_provider, model, base)
