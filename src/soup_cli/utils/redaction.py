@@ -84,19 +84,22 @@ def _mask_params(raw: str) -> str:
 
 
 _URL_DISPLAY_PREFIX = re.compile(
-    r"^[\x00-\x20]*(?:[A-Za-z][A-Za-z0-9+.-]*:/{1,2}|(?:https?|ollama):|//)",
+    r"^[\x00-\x20]*(?:[A-Za-z][A-Za-z0-9+.-]*:/{1,2}|https?:|//)",
     re.IGNORECASE,
 )
+_OLLAMA_MODEL_PREFIX = re.compile(r"^[\x00-\x20]*ollama:", re.IGNORECASE)
 _URL_AUTHORITY_END = re.compile(r"[/?#]")
 _URL_IGNORED_FORMATTING = str.maketrans("", "", "\t\r\n")
 
 
 def url_without_userinfo(url: str) -> str:
-    """Remove authority userinfo for display, preserving the host and URL suffix."""
+    """Remove authority userinfo for display, keeping Ollama model references intact."""
     if "@" not in url:
         return url
     # urllib ignores these characters even inside a scheme or authority.
     display = url.translate(_URL_IGNORED_FORMATTING)
+    if _OLLAMA_MODEL_PREFIX.match(display):
+        return url
     prefix = _URL_DISPLAY_PREFIX.match(display)
     start = prefix.end() if prefix is not None else 0
     suffix = _URL_AUTHORITY_END.search(display, start)
@@ -110,8 +113,7 @@ def parse_url_with_safe_error(url: str, *, label: str = "judge_model") -> ParseR
     try:
         return urlparse(url)
     except ValueError:
-        shown = url_without_userinfo(url)
-        raise ValueError(f"{label} {shown!r} is not a valid URL") from None
+        raise ValueError(f"{label} is not a valid URL") from None
 
 
 def redact_url(url: str, *, keep_query: bool = False) -> str:

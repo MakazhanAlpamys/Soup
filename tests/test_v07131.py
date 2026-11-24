@@ -1350,6 +1350,20 @@ class TestBestOfNCli:
         assert "sample-user" not in output
         assert "sample-pass" not in output
 
+    def test_plan_only_strips_escape_byte_from_judge(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch,
+            tmp_path,
+            "--base",
+            "local-model",
+            judge_url="https://judge.example.invalid/mo\x1bdel",
+        )
+
+        assert result.exit_code == 0
+        output = _plain(result.output)
+        assert "Judge: https://judge.example.invalid/model" in output
+        assert "\x1b" not in output
+
     def test_prompt_loader_fails_closed_with_line_number(self, monkeypatch, tmp_path):
         from typer.testing import CliRunner
 

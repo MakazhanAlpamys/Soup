@@ -4265,7 +4265,7 @@ def best_of_n(
             f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
             f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
-            f"Judge:        [bold]{_escape(judge_label)}[/]\n"
+            f"Judge:        [bold]{for_terminal(judge_label)}[/]\n"
             f"Checkpoint:   [bold]"
             f"{_escape(os.path.relpath(checkpoint_path)) if checkpoint_path else '-'}[/]",
             title="soup data best-of-n — plan",
