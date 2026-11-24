@@ -42,6 +42,28 @@ def test_zero_vectors_remain_distinct_at_one():
     assert report.kept == (0, 1) and report.pairs == ()
 
 
+@pytest.mark.parametrize("threshold", [1e-6, 1e-7])
+@pytest.mark.parametrize("vectors", [
+    [[1.0, 0.0], [0.0, 0.0]],  # zero after a kept nonzero row
+    [[0.0, 0.0], [0.0, 0.0]],  # zero after a kept zero row
+    [[1.0, 0.0], [0.0, 1.0]],  # orthogonal row
+])
+def test_positive_low_threshold_keeps_exact_zero_similarity(threshold, vectors):
+    report = greedy_semdedup(np.asarray(vectors, dtype=np.float32), threshold=threshold)
+    assert report.kept == (0, 1)
+    assert report.dropped == ()
+    assert report.pairs == ()
+
+
+def test_zero_threshold_keeps_inclusive_zero_similarity_match():
+    report = greedy_semdedup(
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32), threshold=0.0
+    )
+    assert report.kept == (0,)
+    assert report.dropped == (1,)
+    assert report.pairs == ((1, 0, 0.0),)
+
+
 @pytest.mark.parametrize("threshold", ["1.0", "0.9999"])
 @pytest.mark.parametrize("duplicate", ["same", ""])
 def test_cli_removes_identical_rows_without_model_download(

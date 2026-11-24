@@ -95,7 +95,13 @@ def greedy_semdedup(
         sims = arr[kept] @ arr[idx]
         best = int(np.argmax(sims))
         best_sim = float(sims[best])
-        if best_sim >= thresh - _FLOAT32_SLACK:
+        if thresh == 0.0:
+            matches = best_sim >= thresh
+        else:
+            # The tolerance must not lower a positive threshold to zero: exact
+            # zero similarity is a distinct row unless the user chose threshold 0.
+            matches = best_sim > 0.0 and best_sim >= thresh - _FLOAT32_SLACK
+        if matches:
             dropped.append(idx)
             pairs.append((idx, kept[best], best_sim))
         else:
