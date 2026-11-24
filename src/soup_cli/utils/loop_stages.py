@@ -1772,11 +1772,18 @@ def deploy_to_canary(
         }
     raw_endpoint = os.environ.get("SOUP_LOOP_SERVE_ENDPOINT")
     if not raw_endpoint:
-        return {
+        missing: dict[str, object] = {
             "deployed": False,
             "canary_verdict": None,
             "notes": "no SOUP_LOOP_SERVE_ENDPOINT configured",
         }
+        if state.pending_deploy is not None:
+            missing.update(
+                deferred=True,
+                notes="deploy waiting: no SOUP_LOOP_SERVE_ENDPOINT configured; "
+                "restore it to retry the saved candidate",
+            )
+        return missing
     from soup_cli.utils.drift_alarm import validate_webhook_url
 
     try:
