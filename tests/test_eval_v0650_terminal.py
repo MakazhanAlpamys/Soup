@@ -18,16 +18,13 @@ import soup_cli.utils.irt as irt
 from soup_cli.commands._eval_v0650 import register
 from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
 from soup_cli.utils.paths import quote_path
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 _CONTROLS = "\x9b\u202e"
 
-# A colon is not a legal file-name character on Windows, and "n:" there is a drive.
-_NO_COLON_ON_WINDOWS = pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not valid in a Windows name"
-)
 # A backslash separates directories on Windows, so a name that holds one cannot be a file there.
 _NO_BACKSLASH_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="a backslash separates directories on Windows"
@@ -48,7 +45,7 @@ _VALUES = [
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
-    pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("n:warning:", marks=skip_colon_on_windows, id="emoji-code"),
     pytest.param("x\\[n", marks=_NO_BACKSLASH_ON_WINDOWS, id="backslash-bracket"),
     pytest.param("n\\\\", marks=_NO_BACKSLASH_ON_WINDOWS, id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
