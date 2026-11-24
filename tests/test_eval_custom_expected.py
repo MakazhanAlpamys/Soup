@@ -1,15 +1,18 @@
 """A custom eval task row must state its ``expected`` (#3240).
 
 A row with no ``expected``, a ``null`` one, or an empty or whitespace-only one used to
-load: ``contains`` then matched every output (``score_contains`` is True for an empty
-needle) and ``regex`` matched an empty pattern anywhere, so the row scored 1.0 for
-any answer, an empty one included, and an eval gate built on it could never regress.
-``null`` loaded as the string ``"None"``.
+load (``answer`` already refused a blank one). With no ``expected`` or an empty one,
+``contains`` matched every output (``score_contains`` is True for an empty needle) and
+``regex`` matched an empty pattern anywhere, so the row scored 1.0 for any answer, an
+empty one included, and an eval gate built on it could never regress; ``contains``
+also stripped a whitespace-only one to nothing. ``null`` loaded as the string
+``"None"`` and matched any output containing that word.
 
 The loader now refuses such a row under every ``scoring``, naming the line, for every
 caller that scores ``expected``. ``soup ship --task-mode judge_score``, ``pairwise``
-and ``reward`` never score it, so a prompt-only file stays valid there
-(``require_expected=False``). Values that are answers (``0``, ``false``, ``"0"``,
+and ``reward`` accept a prompt-only file (``require_expected=False``): the judge modes
+take a separately validated reference, and the reward function receives ``expected``
+as ``answer``, ``""`` when the row has none. Values that are answers (``0``, ``false``, ``"0"``,
 ``4``) keep loading as ``str()`` of the value, as before.
 """
 
@@ -365,7 +368,7 @@ def test_the_loop_verify_ship_check_refuses_the_file(in_tmp: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# soup ship judge_score, pairwise and reward never score ``expected``
+# soup ship judge_score, pairwise and reward accept a prompt-only file
 # ---------------------------------------------------------------------------
 
 class _LoadedError(Exception):
