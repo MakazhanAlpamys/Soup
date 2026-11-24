@@ -297,16 +297,14 @@ def test_artifact_path_resolves_under_the_reporting_root(tmp_path: Path) -> None
     assert artifact.resolve_under(tmp_path).samefile(path)
 
 
+@pytest.mark.requires_symlink
 def test_artifact_path_rejects_a_link_to_another_output_directory(tmp_path: Path) -> None:
     root = tmp_path / "reports"
     root.mkdir()
     other = tmp_path / "reports-other"
     other.mkdir()
     (other / "model").touch()
-    try:
-        (root / "export").symlink_to(other, target_is_directory=True)
-    except (NotImplementedError, OSError):
-        pytest.skip("creating a directory symlink requires local OS support")
+    (root / "export").symlink_to(other, target_is_directory=True)
     artifact = ArtifactRef(kind="export", relative_path="export/model")
     with pytest.raises(ValueError, match="reporting root"):
         artifact.resolve_under(root)
