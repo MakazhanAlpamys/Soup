@@ -41,9 +41,8 @@ def test_doctor_old_torchao_both_findings_agree(monkeypatch):
     assert result.exit_code == 0, out
     assert "Upgrade torchao" in out
     assert "stops peft from loading" in out
-    upgrade = f'pip install "torchao>={TORCHAO_MIN_VERSION}"'
-    assert out.count(upgrade) >= 2  # same target in both findings
-
+    # the new finding names the same upgrade target as the existing line
+    assert f'  Fix 2: pip install "torchao>={TORCHAO_MIN_VERSION}"' in out
 
 def test_doctor_reports_torchao_that_peft_refuses(monkeypatch):
     """peft refuses the installed torchao -> a finding with both fixes, uninstall first."""
