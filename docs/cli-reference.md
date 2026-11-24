@@ -3168,6 +3168,7 @@ Usage: `soup prune-layer-cache [OPTIONS]`
 | `--model` | text |  | yes | Base model id whose cache slots to inspect. |
 | `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
 | `--yes` | flag | off |  | Actually remove. Without it: dry run. |
+| `--keep` | text, repeatable |  |  | Protect a lowercase 40-hex commit. Repeat up to 64 times. |
 
 ## `soup prune-prompt`
 

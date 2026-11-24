@@ -350,7 +350,9 @@ def build_prune_plan(*, keep_runs: int = DEFAULT_KEEP_RUNS,
             keep_run_ids.add(Path(pending_adapter.rstrip("/\\")).name)
     adapters = root_path / "adapters"
     adapter_dirs = [p for p in _regular_children(adapters) if p.is_dir()]
-    adapter_dirs.sort(key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    # Newest first by mtime; equal mtimes (a coarse filesystem clock stamps back-to-back
+    # creations alike) fall back to the name, so the plan never depends on listing order.
+    adapter_dirs.sort(key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
     keep_run_ids.update(p.name for p in adapter_dirs[:keep_runs])
     if history_uncertain or manifest_uncertain:
         keep_run_ids.update(p.name for p in adapter_dirs)
