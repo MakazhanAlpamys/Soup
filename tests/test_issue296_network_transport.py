@@ -342,8 +342,8 @@ async def _describe_session(read_stream, write_stream):
 
     async with ClientSession(read_stream, write_stream) as client:
         await client.initialize()
-        description = await client.call_tool("soup.engine.describe")
-        bad = await client.call_tool("soup.engine.describe", {"sensitive-key": "sensitive-value"})
+        description = await client.call_tool("engine_describe")
+        bad = await client.call_tool("engine_describe", {"sensitive-key": "sensitive-value"})
         listing = await client.list_tools()
     return description, bad, listing
 

@@ -86,7 +86,7 @@ LEVEL_READ = "read"
 LEVEL_PLAN = "plan"
 LEVEL_EXECUTE = "execute"
 LEVELS = (LEVEL_READ, LEVEL_PLAN, LEVEL_EXECUTE)
-ENGINE_DESCRIBE = "soup.engine.describe"
+ENGINE_DESCRIBE = "engine_describe"
 TOOL_CONTRACT_VERSION = 1
 
 # ANNOTATIONS are MCP hints about side effects, with MCP's meaning: ``readOnlyHint`` true
@@ -1492,6 +1492,8 @@ def build_registry(
     specs = _readonly_specs() + _mutating_specs(
         allow_mutating=allow_mutating, allow_execute=allow_execute, execution=execution,
     )
+    if any(spec.name == ENGINE_DESCRIBE for spec in specs):
+        raise ValueError(f"{ENGINE_DESCRIBE!r} is reserved for engine discovery.")
     specs.append(_engine_describe_spec(
         specs, allow_mutating=allow_mutating, allow_execute=allow_execute, transport=transport,
     ))

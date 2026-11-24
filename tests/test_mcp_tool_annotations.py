@@ -86,7 +86,7 @@ TABLE = {
     ),
     "diagnose_evidence": ("read", _RO, "reads one evidence JSON and builds a report in memory"),
     "ship_evidence": ("read", _RO, "reads one evidence JSON and computes a verdict in memory"),
-    "soup.engine.describe": ("read", _RO, "returns read-only startup metadata in memory"),
+    "engine_describe": ("read", _RO, "returns read-only startup metadata in memory"),
     "train_start": (
         "plan",
         _PLAN,
@@ -200,7 +200,7 @@ class TestReadOnlyHintIsTruthful:
             "profile",
             "diagnose_evidence",
             "ship_evidence",
-            "soup.engine.describe",
+            "engine_describe",
         }
 
     def test_a_tool_with_a_write_path_is_never_advertised_read_only(self):

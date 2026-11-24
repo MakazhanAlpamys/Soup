@@ -359,7 +359,7 @@ _EXPECTED_READONLY = {
     "profile",
     "diagnose_evidence",
     "ship_evidence",
-    "soup.engine.describe",
+    "engine_describe",
 }
 
 
@@ -651,7 +651,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.server import build_server
 
         server = build_server(reg.build_registry(allow_mutating=False))
-        result = _roundtrip(server, "soup.engine.describe", arguments)
+        result = _roundtrip(server, "engine_describe", arguments)
         assert not is_error(result)
         description = json.loads(result.content[0].text)
         assert description["contract_version"] == 1
@@ -662,7 +662,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.server import build_server
 
         server = build_server(reg.build_registry(allow_mutating=True))
-        result = _roundtrip(server, "soup.engine.describe", {"sensitive-key": "sensitive-value"})
+        result = _roundtrip(server, "engine_describe", {"sensitive-key": "sensitive-value"})
         assert is_error(result)
         message = result.content[0].text
         assert message.startswith("soup.engine.invalid_arguments")
@@ -691,7 +691,7 @@ class TestServerRoundTrip:
             async with stdio_client(server) as (read, write):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
-                    return await client.call_tool("soup.engine.describe")
+                    return await client.call_tool("engine_describe")
 
         result = _run(asyncio.wait_for(connect(), timeout=20))
         assert not is_error(result)

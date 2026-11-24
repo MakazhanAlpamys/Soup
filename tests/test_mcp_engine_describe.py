@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import os
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -13,7 +14,7 @@ import pytest
 from soup_cli import __version__
 from soup_cli.mcp_server import registry as reg
 
-_DESCRIBE = "soup.engine.describe"
+_DESCRIBE = "engine_describe"
 _INVALID_ARGUMENTS = "soup.engine.invalid_arguments"
 _PRIVATE = "private-engine-input"
 _READ_NAMES = (
@@ -23,6 +24,7 @@ _READ_NAMES = (
     "data_score",
     "data_validate",
     "diagnose_evidence",
+    "engine_describe",
     "profile",
     "recipes_search",
     "recipes_show",
@@ -31,10 +33,17 @@ _READ_NAMES = (
     "runs_list",
     "runs_show",
     "ship_evidence",
-    "soup.engine.describe",
 )
 _PLAN_NAMES = ("export", "train_start")
 _EXECUTE_NAMES = ("export_execute", "train_execute")
+
+
+def test_registered_tool_names_match_client_constraints():
+    names = [spec.name for spec in reg.build_registry(allow_mutating=True, allow_execute=True)]
+
+    for name in names:
+        assert re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name), name
+    assert "engine_describe" in names
 
 
 @pytest.mark.parametrize(
@@ -169,6 +178,18 @@ def _probe_spec(handler, name="probe"):
         level="read",
         annotations={"readOnlyHint": True},
     )
+
+
+@pytest.mark.parametrize(
+    "declare", ["_readonly_specs", "_mutating_specs"], ids=["read", "mutating"],
+)
+def test_registry_rejects_reserved_engine_describe_collision(monkeypatch, declare):
+    original = getattr(reg, declare)
+    collision = _probe_spec(lambda _: {}, name="engine_describe")
+    monkeypatch.setattr(reg, declare, lambda **kwargs: [*original(**kwargs), collision])
+
+    with pytest.raises(ValueError, match="'engine_describe' is reserved"):
+        reg.build_registry(allow_mutating=True, allow_execute=True)
 
 
 def test_manifest_snapshots_the_shared_tool_declaration_at_build_time(monkeypatch):
