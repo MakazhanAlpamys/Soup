@@ -95,7 +95,11 @@ LEVELS = (LEVEL_READ, LEVEL_PLAN, LEVEL_EXECUTE)
 # * A read-level tool that writes nothing:        readOnlyHint true.
 # * A read-level tool that can write benign state (``writes=True``): readOnlyHint false,
 #   destructiveHint false (additive state: a database file, a migrated column, a cache
-#   entry). Pass ``idempotent=True`` only when repeating the call changes nothing further.
+#   entry). ``idempotentHint`` is left unset for all six: a repeat call is not guaranteed to
+#   change nothing (``RegistryStore`` re-applies ``os.chmod`` on every construction on
+#   POSIX, a stale run row is reconciled on read, the doctor and the scorer can fetch a
+#   cache entry), so no repeat-call guarantee is declared. Pass ``idempotent=True`` only
+#   when repeating the call provably changes nothing further.
 # * The plan level is NOT read-only even though a plan runs nothing: under
 #   ``--allow-execute`` ``train_start`` creates ``.soup/mcp-runs/<run_id>/config.yaml`` (a run
 #   directory this call creates, the file opened ``O_EXCL``) and both plan tools issue a
@@ -1099,7 +1103,7 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_data_score,
             # Optional presidio-analyzer ([data-pro]) is started per row; its default engine
             # downloads a missing spaCy model (writes the environment, reaches the network).
-            **level_fields(LEVEL_READ, writes=True, idempotent=True, open_world=True),
+            **level_fields(LEVEL_READ, writes=True, open_world=True),
         ),
         ToolSpec(
             name="data_doctor",
@@ -1129,7 +1133,7 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_data_doctor,
             # AutoTokenizer.from_pretrained downloads the tokenizer of a client-chosen model id
             # into the Hugging Face cache.
-            **level_fields(LEVEL_READ, writes=True, idempotent=True, open_world=True),
+            **level_fields(LEVEL_READ, writes=True, open_world=True),
         ),
         ToolSpec(
             name="recipes_search",
@@ -1172,8 +1176,9 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_runs_list,
             # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
             # reading a run also rewrites a stale 'running' row whose process is gone
-            # to 'terminated' (idempotent).
-            **level_fields(LEVEL_READ, writes=True, idempotent=True),
+            # to 'terminated'. No idempotentHint: a repeat call is not promised to change
+            # nothing (the reconcile step may write again).
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="runs_show",
@@ -1188,8 +1193,9 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_runs_show,
             # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
             # reading a run also rewrites a stale 'running' row whose process is gone
-            # to 'terminated' (idempotent).
-            **level_fields(LEVEL_READ, writes=True, idempotent=True),
+            # to 'terminated'. No idempotentHint: a repeat call is not promised to change
+            # nothing (the reconcile step may write again).
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="registry_list",
@@ -1209,7 +1215,9 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_registry_list,
             # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
             # it to WAL and tightens its file permissions; the read itself writes nothing.
-            **level_fields(LEVEL_READ, writes=True, idempotent=True),
+            # No idempotentHint: every construction re-applies os.chmod (POSIX), so a repeat
+            # call still changes file metadata.
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="registry_show",
@@ -1224,7 +1232,9 @@ def _readonly_specs() -> list[ToolSpec]:
             handler=tool_registry_show,
             # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
             # it to WAL and tightens its file permissions; the read itself writes nothing.
-            **level_fields(LEVEL_READ, writes=True, idempotent=True),
+            # No idempotentHint: every construction re-applies os.chmod (POSIX), so a repeat
+            # call still changes file metadata.
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="profile",

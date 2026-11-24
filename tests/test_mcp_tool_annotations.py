@@ -19,6 +19,7 @@ path that settles its ``readOnlyHint``.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -26,9 +27,12 @@ from dataclasses import replace
 import pytest
 
 import soup_cli.mcp_server.registry as reg
+from soup_cli.registry.store import RegistryStore
 
 _RO = {"readOnlyHint": True}
-_WRITES = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
+# No idempotentHint on any of them: a repeated call is not promised to change nothing
+# (a registry read re-applies file permissions), so no repeat-call guarantee is declared.
+_WRITES = {"readOnlyHint": False, "destructiveHint": False}
 _PLAN = {"readOnlyHint": False, "destructiveHint": False}
 _EXECUTE = {"readOnlyHint": False, "destructiveHint": True}
 
@@ -212,12 +216,25 @@ class TestReadOnlyHintIsTruthful:
         }
         assert in_table == WRITE_CAPABLE_READ_TOOLS
 
-    def test_idempotent_hint_appears_only_on_the_write_capable_read_tools(self):
+    def test_no_tool_declares_an_idempotent_hint(self):
+        # A repeated registry read re-applies file permissions (RegistryStore._tighten_perms
+        # runs os.chmod on every construction), a run read reconciles stale rows, and the
+        # doctor / scorer can fill a cache: none of them can promise that a repeat call
+        # changes nothing, so the hint is OMITTED (not set to false) for all of them.
         by_name = {spec.name: spec for spec in _specs()}
         carrying = {name for name, spec in by_name.items() if "idempotentHint" in spec.annotations}
-        assert carrying == WRITE_CAPABLE_READ_TOOLS
-        for name in carrying:
-            assert by_name[name].annotations["idempotentHint"] is True, name
+        assert carrying == set(), carrying
+        for name in WRITE_CAPABLE_READ_TOOLS:
+            assert by_name[name].annotations["readOnlyHint"] is False, name
+            assert by_name[name].annotations["destructiveHint"] is False, name
+
+    def test_registry_reads_declare_no_repeat_call_guarantee_because_they_reapply_perms(self):
+        by_name = {spec.name: spec for spec in _specs()}
+        for name in ("registry_list", "registry_show"):
+            assert "idempotentHint" not in by_name[name].annotations, name
+        # The reason, pinned to the code: every construction runs _tighten_perms, which chmods.
+        assert "self._tighten_perms()" in inspect.getsource(RegistryStore.__init__)
+        assert "os.chmod(" in inspect.getsource(RegistryStore._tighten_perms)
 
     def test_read_only_tools_carry_no_destructive_or_idempotent_hint(self):
         # MCP defines both as meaningful only when readOnlyHint is false.
