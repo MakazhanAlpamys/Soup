@@ -544,14 +544,11 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "vllm": mock_vllm,
-                "vllm.lora": MagicMock(),
-                "vllm.lora.request": MagicMock(),
-            },
-        ):
+        with patch.dict("sys.modules", {
+            "vllm": mock_vllm,
+            "vllm.lora": MagicMock(),
+            "vllm.lora.request": MagicMock(),
+        }):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -578,14 +575,11 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "vllm": mock_vllm,
-                "vllm.lora": MagicMock(),
-                "vllm.lora.request": MagicMock(),
-            },
-        ):
+        with patch.dict("sys.modules", {
+            "vllm": mock_vllm,
+            "vllm.lora": MagicMock(),
+            "vllm.lora.request": MagicMock(),
+        }):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -615,14 +609,11 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "vllm": mock_vllm,
-                "vllm.lora": MagicMock(),
-                "vllm.lora.request": MagicMock(),
-            },
-        ):
+        with patch.dict("sys.modules", {
+            "vllm": mock_vllm,
+            "vllm.lora": MagicMock(),
+            "vllm.lora.request": MagicMock(),
+        }):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -655,14 +646,11 @@ class TestCreateVllmApp:
         mock_vllm = MagicMock()
         mock_vllm.SamplingParams = MagicMock()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "vllm": mock_vllm,
-                "vllm.lora": MagicMock(),
-                "vllm.lora.request": MagicMock(),
-            },
-        ):
+        with patch.dict("sys.modules", {
+            "vllm": mock_vllm,
+            "vllm.lora": MagicMock(),
+            "vllm.lora.request": MagicMock(),
+        }):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -704,16 +692,13 @@ class TestServeVllmIntegration:
         mock_engine = MagicMock()
         mock_app = MagicMock()
 
-        with (
-            patch(
-                "soup_cli.utils.vllm.create_vllm_engine",
-                return_value=(mock_engine, "base-model"),
-            ) as mock_create_engine,
-            patch(
-                "soup_cli.utils.vllm.create_vllm_app",
-                return_value=mock_app,
-            ) as mock_create_app,
-        ):
+        with patch(
+            "soup_cli.utils.vllm.create_vllm_engine",
+            return_value=(mock_engine, "base-model"),
+        ) as mock_create_engine, patch(
+            "soup_cli.utils.vllm.create_vllm_app",
+            return_value=mock_app,
+        ) as mock_create_app:
             from soup_cli.commands.serve import _serve_vllm
 
             model_path = tmp_path / "model"
@@ -953,16 +938,13 @@ class TestServeVllmIntegration:
         mock_engine = MagicMock()
         mock_app = MagicMock()
 
-        with (
-            patch(
-                "soup_cli.utils.vllm.create_vllm_engine",
-                return_value=(mock_engine, "base-model"),
-            ),
-            patch(
-                "soup_cli.utils.vllm.create_vllm_app",
-                return_value=mock_app,
-            ) as mock_create_app,
-        ):
+        with patch(
+            "soup_cli.utils.vllm.create_vllm_engine",
+            return_value=(mock_engine, "base-model"),
+        ), patch(
+            "soup_cli.utils.vllm.create_vllm_app",
+            return_value=mock_app,
+        ) as mock_create_app:
             from soup_cli.commands.serve import _serve_vllm
 
             model_path = tmp_path / "adapter"

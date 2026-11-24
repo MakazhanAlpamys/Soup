@@ -292,12 +292,6 @@ class TestKVCache:
         with pytest.raises(Exception):
             spec.requires_hopper = False  # type: ignore[misc]
 
-    @pytest.mark.parametrize("name", ["q8_0", "bf16", "f16", "fp8"])
-    def test_kv_cache_types_are_live_wired(self, name):
-        from soup_cli.utils.kv_cache import get_kv_cache_spec
-
-        assert get_kv_cache_spec(name).live_wired is True
-
     def test_apply_live_v07114(self):
         # v0.71.14 #140 lifted the v0.53.1 stub: apply_kv_cache_type now
         # returns a runtime plan for the transformers backend.

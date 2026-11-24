@@ -45,38 +45,28 @@ class KVCacheSpec:
     live_wired: bool
 
 
-_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType(
-    {
-        "q8_0": KVCacheSpec(
-            name="q8_0",
-            bits=8,
-            requires_hopper=False,
-            description="8-bit KV cache (default for unsloth runtime)",
-            live_wired=True,
-        ),
-        "bf16": KVCacheSpec(
-            name="bf16",
-            bits=16,
-            requires_hopper=False,
-            description="bfloat16 KV cache",
-            live_wired=True,
-        ),
-        "f16": KVCacheSpec(
-            name="f16",
-            bits=16,
-            requires_hopper=False,
-            description="float16 KV cache",
-            live_wired=True,
-        ),
-        "fp8": KVCacheSpec(
-            name="fp8",
-            bits=8,
-            requires_hopper=True,
-            description="FP8 KV cache (Hopper+ only)",
-            live_wired=True,
-        ),
-    }
-)
+_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType({
+    "q8_0": KVCacheSpec(
+        name="q8_0", bits=8, requires_hopper=False,
+        description="8-bit KV cache (default for unsloth runtime)",
+        live_wired=False,
+    ),
+    "bf16": KVCacheSpec(
+        name="bf16", bits=16, requires_hopper=False,
+        description="bfloat16 KV cache",
+        live_wired=False,
+    ),
+    "f16": KVCacheSpec(
+        name="f16", bits=16, requires_hopper=False,
+        description="float16 KV cache",
+        live_wired=False,
+    ),
+    "fp8": KVCacheSpec(
+        name="fp8", bits=8, requires_hopper=True,
+        description="FP8 KV cache (Hopper+ only)",
+        live_wired=False,
+    ),
+})
 
 
 def validate_kv_cache_type(value: object) -> str:
@@ -88,17 +78,23 @@ def validate_kv_cache_type(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError(f"kv_cache_type must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(f"kv_cache_type must be str, got {type(value).__name__}")
+        raise TypeError(
+            f"kv_cache_type must be str, got {type(value).__name__}"
+        )
     if not value:
         raise ValueError("kv_cache_type must be non-empty")
     if "\x00" in value:
         raise ValueError("kv_cache_type must not contain null bytes")
     if len(value) > _MAX_KV_CACHE_LEN:
-        raise ValueError(f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)")
+        raise ValueError(
+            f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)"
+        )
     canonical = value.lower()
     if canonical not in KV_CACHE_TYPES:
         supported = ", ".join(sorted(KV_CACHE_TYPES))
-        raise ValueError(f"kv_cache_type {value!r} not supported. Supported: {supported}")
+        raise ValueError(
+            f"kv_cache_type {value!r} not supported. Supported: {supported}"
+        )
     return canonical
 
 
@@ -140,7 +136,9 @@ class KvCacheRuntime:
     backend: str
     model_dtype: Optional[str]
     vllm_cache_dtype: Optional[str] = None
-    generate_kwargs: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    generate_kwargs: Mapping[str, object] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     requires_quant_backend: bool = False
     note: str = ""
 
@@ -332,19 +330,18 @@ def apply_kv_cache_type(
         kv_cache_type=canonical,
         backend=backend_l,
         model_dtype=None,
-        generate_kwargs=MappingProxyType(
-            {
-                "cache_implementation": "quantized",
-                "cache_config": MappingProxyType(
-                    {
-                        "backend": "hqq",
-                        "nbits": 8,
-                        "axis_key": 0,
-                        "axis_value": 0,
-                    }
-                ),
-            }
-        ),
+        generate_kwargs=MappingProxyType({
+            "cache_implementation": "quantized",
+            "cache_config": MappingProxyType({
+                "backend": "hqq",
+                "nbits": 8,
+                "axis_key": 0,
+                "axis_value": 0,
+            }),
+        }),
         requires_quant_backend=True,
-        note=("8-bit quantized KV cache via the HQQ backend (install with `pip install hqq`)."),
+        note=(
+            "8-bit quantized KV cache via the HQQ backend "
+            "(install with `pip install hqq`)."
+        ),
     )

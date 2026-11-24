@@ -83,7 +83,8 @@ def _render_chat_prompt(
             if not fallback_on_error:
                 raise
             logger.warning(
-                "chat template failed to render; falling back to the legacy role-prefixed prompt",
+                "chat template failed to render; falling back to the legacy "
+                "role-prefixed prompt",
                 exc_info=True,
             )
         else:
@@ -139,11 +140,15 @@ def encode_chat_prompt(
     serves the legacy prompt when a template fails to render, while the CLI
     commands surface the template's own error.
     """
-    text, templated = _render_chat_prompt(messages, tokenizer, fallback_on_error=fallback_on_error)
+    text, templated = _render_chat_prompt(
+        messages, tokenizer, fallback_on_error=fallback_on_error
+    )
     return encode_rendered_prompt(tokenizer, text, templated=templated, **tokenizer_kwargs)
 
 
-def build_engine_prompt(messages: Any, tokenizer: Any = None) -> tuple[str, Optional[list[int]]]:
+def build_engine_prompt(
+    messages: Any, tokenizer: Any = None
+) -> tuple[str, Optional[list[int]]]:
     """Render chat messages for a backend that tokenizes the prompt itself (#785).
 
     The vLLM, SGLang and MII backends hand the engine a prompt STRING, and the
@@ -548,7 +553,9 @@ def create_vllm_app(
                             },
                             # #333 — was hardcoded "stop", so a length
                             # truncation looked like a natural stop.
-                            "finish_reason": resolve_finish_reason(output, max_tokens),
+                            "finish_reason": resolve_finish_reason(
+                                output, max_tokens
+                            ),
                         }
                     ],
                     "usage": {
@@ -592,7 +599,7 @@ def create_vllm_app(
                 async for request_output in results_generator:
                     output = request_output.outputs[0]
                     last_output = output
-                    new_text = output.text[len(previous_text) :]
+                    new_text = output.text[len(previous_text):]
                     previous_text = output.text
 
                     if new_text:

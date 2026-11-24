@@ -380,13 +380,17 @@ class TestApplyKvCacheType:
         from soup_cli.utils.kv_cache import apply_kv_cache_type
 
         with pytest.raises(RuntimeError, match="Hopper"):
-            apply_kv_cache_type("fp8", backend="transformers", compute_capability=(8, 6))
+            apply_kv_cache_type(
+                "fp8", backend="transformers", compute_capability=(8, 6)
+            )
 
     def test_fp8_hopper_still_unsupported_on_transformers(self):
         from soup_cli.utils.kv_cache import apply_kv_cache_type
 
         with pytest.raises(RuntimeError, match="vLLM"):
-            apply_kv_cache_type("fp8", backend="transformers", compute_capability=(9, 0))
+            apply_kv_cache_type(
+                "fp8", backend="transformers", compute_capability=(9, 0)
+            )
 
     def test_fp8_unknown_cc_raises(self):
         from soup_cli.utils.kv_cache import apply_kv_cache_type
@@ -753,7 +757,11 @@ class TestPatchInvariants:
 
     def test_no_top_level_torch_in_kv_cache(self):
         src = (
-            Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "kv_cache.py"
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "kv_cache.py"
         ).read_text(encoding="utf-8")
         for line in src.splitlines():
             assert not line.startswith("import torch")
