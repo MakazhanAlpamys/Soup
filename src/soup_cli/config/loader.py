@@ -163,6 +163,22 @@ def _print_refusal_lines(message: str) -> None:
         console.print(Text.assemble("  ", terminal_text(line, "red")))
 
 
+def _print_config_error_header() -> None:
+    console.print("[red bold]Config validation error:[/]\n")
+
+
+def print_config_refusal(message: str) -> None:
+    """Print ``message`` as a refused config is printed; the caller exits.
+
+    ``Config validation error:``, a blank line, then every line of ``message``
+    indented (:func:`_print_refusal_lines`). ``soup train --gate`` prints its
+    refusal with it, so a gate refused from the flag reads the same as the same
+    gate refused from the config file.
+    """
+    _print_config_error_header()
+    _print_refusal_lines(message)
+
+
 #: What Pydantic puts in front of the text of a ``ValueError`` raised in a validator.
 _PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
 
@@ -334,14 +350,13 @@ def validate_config_mapping(raw: dict) -> SoupConfig:
     """
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
-        console.print("[red bold]Config validation error:[/]\n")
-        _print_refusal_lines(unknown_error)
+        print_config_refusal(unknown_error)
         raise SystemExit(1)
 
     try:
         config = _build_config(raw)
     except ValidationError as e:
-        console.print("[red bold]Config validation error:[/]\n")
+        _print_config_error_header()
         staged_first = _staged_refusal_after_failed_build(raw, e)
         if staged_first is None:
             _print_validation_errors(e.errors())
@@ -353,8 +368,7 @@ def validate_config_mapping(raw: dict) -> SoupConfig:
 
     staged_error = _report_staged_fields(raw, config=config)
     if staged_error is not None:
-        console.print("[red bold]Config validation error:[/]\n")
-        _print_refusal_lines(staged_error)
+        print_config_refusal(staged_error)
         raise SystemExit(1)
 
     return config

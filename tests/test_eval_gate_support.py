@@ -218,7 +218,8 @@ def test_unsupported_shortcut_is_refused_before_suite_loading(train_cli):
 
     assert calls == []
     assert result.exit_code == 1
-    assert _MLX_REFUSAL in strip_ansi(result.stdout).splitlines()
+    # Indented under ``Config validation error:``, as the same gate in the config file (#3088).
+    assert _MLX_REFUSAL in [line.strip() for line in strip_ansi(result.stdout).splitlines()]
     assert "Invalid --gate suite:" not in result.stdout
 
 

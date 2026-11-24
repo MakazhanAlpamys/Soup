@@ -433,9 +433,10 @@ def test_frozen_boundary_export_is_independent_and_conflicting_base_is_refused(
         runtime.close()
 
 
-# PEFT's _set_trainable wraps every module whose name ends with an entry, so
-# the suffixes "head" and "_tokens" name the boundaries as surely as the full
-# names do (#2548).
+# PEFT's _set_trainable matches modules_to_save by whole module name since 0.22
+# (before, by plain suffix). Soup's refusal keeps the wider suffix rule, so the
+# suffixes "head" and "_tokens" name the boundaries as surely as the full names
+# do (#2548) -- refusing too much stays safe.
 @pytest.mark.parametrize(
     ("target", "refused"),
     [
@@ -548,7 +549,10 @@ def test_a_tied_checkpoint_still_builds_with_a_suffix_modules_to_save(tmp_path: 
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     assert not tuple(getattr(index, "large_keys", ()) or ())
     lora = _lora(["q_proj"])
-    lora.modules_to_save = ["head"]
+    # The whole name: peft matches modules_to_save by module name since 0.22
+    # (pull 3824), so a suffix entry no longer wraps the head. Soup's own,
+    # wider suffix rule is covered by the refusal tests above.
+    lora.modules_to_save = ["lm_head"]
     model, runtime = build_streamed_model(
         model_id=weights,
         shard_dir=shards,

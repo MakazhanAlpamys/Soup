@@ -52,18 +52,21 @@ _INVISIBLE_FORMAT_CODES = (
 )
 _CONTROL_STRIP_TABLE.update(dict.fromkeys(_INVISIBLE_FORMAT_CODES))
 
+_SINGLE_LINE_TABLE = _CONTROL_STRIP_TABLE | {0x09: r"\t", 0x0A: r"\n", 0x0D: r"\r"}
 
-def strip_control(text: object) -> str:
+
+def strip_control(text: object, *, single_line: bool = False) -> str:
     """Strip C0 (except TAB/LF/CR), DEL, C1 and bidi/invisible format characters.
 
+    With ``single_line=True``, show TAB, LF and CR as printable escape sequences.
     ZWJ and ZWNJ are kept. Rich markup is left alone.
     """
-    return str(text).translate(_CONTROL_STRIP_TABLE)
+    return str(text).translate(_SINGLE_LINE_TABLE if single_line else _CONTROL_STRIP_TABLE)
 
 
-def for_terminal(text: object) -> str:
-    """Strip control characters, then escape Rich markup, in that order."""
-    return _escape_markup(strip_control(text))
+def for_terminal(text: object, *, single_line: bool = False) -> str:
+    """Apply :func:`strip_control`, then escape Rich markup."""
+    return _escape_markup(strip_control(text, single_line=single_line))
 
 
 def terminal_text(value: object, style: Optional[Union[str, Style]] = None) -> Text:

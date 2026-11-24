@@ -29,7 +29,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
-from soup_cli.utils.paths import quote_path
+from soup_cli.utils.paths import paste_arg, quote_path
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
@@ -752,8 +752,24 @@ def _render_stream_disk_preflight(
         if len(other_slots) > 20:
             lines.append(f"  +{len(other_slots) - 20} more")
         lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
-        cmd = f"soup prune-layer-cache --model {for_terminal(base)} --yes"
-        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        # Use prose when the base model needs shell-specific quoting.
+        spelled = paste_arg(base, windows_separators=os.sep == "\\")
+        if spelled is not None:
+            cmd = f"soup prune-layer-cache --model {for_terminal(spelled)} --yes"
+            lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        else:
+            lines.append("Remove unreferenced slots (opt-in):")
+            if base:
+                lines.extend((
+                    "  For soup prune-layer-cache, use the base model below as --model.",
+                    "  Quote it for your shell and add --yes.",
+                    f"  Base model: {for_terminal(base, single_line=True)}",
+                ))
+            else:
+                lines.append(
+                    "  Set a base model in your configuration before pruning with "
+                    "soup prune-layer-cache."
+                )
         stale_hint = " Stale cache slots can be removed with `soup prune-layer-cache`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
@@ -781,6 +797,19 @@ def _render_stream_disk_preflight(
     console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 
 
+#: Layer streaming across processes is tracked here. The refusal below names it, so a
+#: refused user finds the status, and a change that lifts the guard has one number to close.
+DISTRIBUTED_STREAM_ISSUE = 2585
+
+
+def _world_size() -> int:
+    """``WORLD_SIZE`` as an int; 1 when it is unset, empty or malformed."""
+    try:
+        return int(os.environ.get("WORLD_SIZE", "1") or "1")
+    except (TypeError, ValueError):
+        return 1
+
+
 def _distributed_launch() -> bool:
     """True when the process was launched by torchrun / accelerate / deepspeed.
 
@@ -789,10 +818,34 @@ def _distributed_launch() -> bool:
     A malformed value is treated as non-distributed: refusing with a clear
     message beats proceeding into a raw torch error.
     """
-    try:
-        return int(os.environ.get("WORLD_SIZE", "1") or "1") > 1
-    except (TypeError, ValueError):
-        return False
+    return _world_size() > 1
+
+
+def refuse_if_distributed_launch() -> None:
+    """Refuse layer streaming in a process that is one rank of a multi-process launch (#2585).
+
+    ``refuse_if_data_parallel`` steps aside under torchrun / accelerate / deepspeed,
+    because DataParallel is never applied there. Nothing else in the streaming path
+    supports more than one process, so stepping aside let the run go on to fail late
+    or to train something other than what was asked: the decoder's base weights stay
+    on ``meta`` by design while ``DistributedDataParallel`` requires one device type,
+    and where the launcher creates no process group each process would train its own
+    unsynchronised copy without an error.
+
+    This is checked first, before any download, shard or copy. It is a runtime check
+    and not a config validator on purpose: the same config is loaded by commands that
+    run fine in a shell with a launcher variable left over. The same ``WORLD_SIZE``
+    reading as ``_distributed_launch`` applies, so unset, ``1`` and malformed values
+    are not refused.
+    """
+    world_size = _world_size()
+    if world_size <= 1:
+        return
+    raise ValueError(
+        f"training.stream_layers=true under a distributed launch (WORLD_SIZE={world_size}): "
+        f"distributed layer streaming is not supported yet, see #{DISTRIBUTED_STREAM_ISSUE}. "
+        "Run on one process (no torchrun/accelerate launch), or set stream_layers: false."
+    )
 
 
 def refuse_if_data_parallel(device) -> None:
@@ -951,6 +1004,11 @@ class StreamingSetupMixin:
         decoder layer from CPU RAM into a small pool of pre-allocated VRAM
         buffers. Peak VRAM becomes the size of ONE layer instead of the model.
         """
+        # FIRST, ahead of every import and every other check: this configuration is not
+        # supported across processes (#2585), and a refusal must not cost a tokenizer
+        # load, a weight resolve or a shard write.
+        refuse_if_distributed_launch()
+
         from dataclasses import replace
 
         from peft import TaskType
@@ -1259,6 +1317,7 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                     expert_layout=expert_layout,
+                    arch=arch,
                 )
             cached_bytes = None
             if cached is not None:

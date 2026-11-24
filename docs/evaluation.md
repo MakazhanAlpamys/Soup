@@ -274,6 +274,9 @@ smoke generator are unchanged (#1798).
 
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+A task `name` must also be non-empty and free of NUL characters; a suite with
+such a name is refused at load time (`soup eval gate` exits `3`), before any
+model setup or verdict.
 
 Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
@@ -464,6 +467,12 @@ Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
+An output may not replace one of the run's inputs: `--output` and `--emit-evidence` are refused
+(exit 3, before any model loads and before anything is read beyond the config and the gate's files) when either is the
+same file, by real path, as `--evidence`, `--task-eval`, `--config`, `--corrections`,
+`--held-out`, a `--baseline` or `--reward-fn` file, the training file that `--config` names in
+`data.train` (each entry of a list), or the other output.
+
 With a local `--adapter`, ship reads the adapter weights before loading either model. If every
 `lora_B` tensor is zero (an untrained adapter, or a DPO run's `ref/` folder) and no other saved
 tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
@@ -505,7 +514,7 @@ Both files are read under the working directory (no symlink, at most 16 MiB, at 
 text fields at most 20,000 characters, `edit_id` unique per file). A bad row is exit code 3 and the
 message names the file, the line and the problem, for example
 ``--corrections 'c.jsonl' line 7: "paraphrases" must be a list of 1 to 20 non-empty strings``. A
-missing or empty file is "no rows", not an error.
+missing file is refused with exit code 3; an empty file is "no rows", not an error, as is omitting the flag.
 
 **Scoring, `added_recall`.** The *added words* of a correction are its content words (lowercased,
 punctuation stripped, stop words removed; negations and numbers are content) that the answer it
@@ -591,6 +600,11 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode reward --reward-fn accuracy
 
+# Reference-guided judging (#2520): the judge also sees each task row's `expected`
+# answer, in both judge modes. Off by default; without it the prompts are unchanged.
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1 --judge-reference
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123
@@ -598,6 +612,36 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 # Offline: decide from pre-computed scores, persist the verdict JSON
 soup ship --evidence evidence.json --output verdict.json
 ```
+
+### Reference-guided judging
+
+By default the judge sees only the prompt and the response(s), so it rewards the
+answer it likes, which may not be the one your task expects. `--judge-reference`
+also shows it the task row's `expected` answer and asks it to judge agreement in
+substance with that reference. It applies to `--task-mode judge_score` and
+`pairwise` on a live run.
+
+- Every task row needs a non-blank string `expected`. A missing, `null`,
+  non-string, empty or whitespace-only `expected` is a usage error (exit 3) that
+  names the field and the file's line number, and it is found before any model
+  loads. A `scoring: "regex"` row is refused too: its `expected` is a pattern,
+  not an answer.
+- `--judge-reference` with `--task-mode metric` or `reward` (from the flag or
+  `eval.ship.task_mode`) or with `--evidence` is a usage error.
+- The reference is shown fenced as data, not as instructions to the judge. In
+  pairwise mode both swap orders get the same reference, and a disagreement
+  between the two orders still scores as a tie.
+- `--noise-floor` judges with the same template as the leg it guards.
+
+The judge prompts are versioned templates in `soup_cli.eval.judge_templates`:
+`judge_score.preference`, `judge_score.reference`, `pairwise.preference` and
+`pairwise.reference`, each with an integer version. In the `--output` verdict
+JSON, a judge-mode `task_win` carries `judge_mode` (`preference` or `reference`)
+and `judge_template` (`{"id", "version"}`); a metric or reward `task_win` carries
+neither. `--emit-evidence` writes the two fields only for a reference-judged leg,
+as `schema_version` 2 fields (a version-1 file that carries them is refused), so
+evidence from a default run is unchanged and older evidence still reads as
+preference judging.
 
 ### Opt-in progress
 
@@ -1062,7 +1106,7 @@ The `--output` JSON carries the same facts. Every key of 0.77.x stays; none is r
 | `task_win.rows` | `{"better", "worse", "same", "n"}`, or `null` when per-row scores are not available (`--task-mode pairwise`, an adapter that changes nothing, a replay of version-1 evidence). A row is better iff `tuned > base + 1e-9`, worse iff `tuned < base - 1e-9`, else the same; `better + worse + same == n`. Metric rows are scored by `matched` (1 / 0), the number the accuracy counts, not by a fractional `semantic` similarity; judge rows by the judge's per-row score rescaled to [0, 1] on its rubric scale (not clamped). |
 | `task_win.truncated` | `{"base", "tuned", "n", "max_new_tokens", "warning"}`, or `null`. A count is the number of answers that hit the new-token cap and did not stop on their own, read from the generator's token ids, never from the length of the text. A count is `null`, never `0`, when it was not measured: the generator returned plain text with no token information, or a row's generation failed. `max_new_tokens` is the cap the built-in generator uses for the task leg (`BEHAVIOURAL_MAX_NEW_TOKENS`, 256). It is a constant written into the verdict, not read back from the generator, so a generator you supply yourself may use another cap. |
 | `task_win.generation_failures` | `{"base", "tuned", "n"}` for `--task-mode metric`, else `null`. A generation that raises is scored as a wrong answer, which made a model that could not generate at all look like one that scored 0; this counts those rows. An empty answer is an answer, not a failure. |
-| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is reserved and always `null` in this release. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
+| `judged` | `{"base", "adapter", "tuned", "base_adapter", "checkpoint_step"}`: the strings exactly as given on the command line (an empty `--adapter` or `--tuned` is absent, so `null`); `base_adapter` is the `--base-adapter` path as given on the command line, or `null` when no `--base-adapter` is passed. `checkpoint_step` is `N` iff the last path component of `--adapter` is exactly `checkpoint-N`, else `null`; it is never guessed. `null` for a replay of version-1 evidence. In the PR comment that `--push` posts, a local path (absolute, or existing on this machine) is cut to its last component and a Hub id such as `org/name` stays whole; the terminal, the JSON and the evidence keep the value as given. |
 | `task_rows` | The bare name of the per-row file written next to `--output` (see "The per-row file" below), or `null` when this run wrote none (`--task-mode pairwise`, an adapter that changes nothing, a replay of evidence, or no `--output`). |
 
 **A side whose every generation failed is refused** (exit 1): that is a failed measurement, not a
@@ -1197,11 +1241,12 @@ before, is refused for that reason.
 To fix a refused name use a shorter or plainer `--output` name: the stem plus
 `.task-rows.jsonl` must fit in 255 bytes on POSIX or 255 UTF-16 code units on Windows (a stem
 of more than 239 ASCII characters no longer works), with no control character in it and, on
-POSIX, no backslash. If the write fails, the verdict, the evidence and the PR
-comment are written first, then `cannot write the task rows next to --output: ...` is printed:
-a SHIP exits 1, a DON'T SHIP keeps exit 2 (a pipeline that retries on exit 1 must not run a
-finished verdict again). The file is part of the evidence, and the verdict JSON never names a file
-that was not written.
+POSIX, no backslash. After evaluation, Soup attempts each requested file output (the task rows,
+verdict JSON and evidence) and then the best-effort `--push` comment even if another output fails.
+It reports every file-write failure afterward. A SHIP exits 1 if any requested file could not be
+written; a DON'T SHIP keeps exit 2 so a pipeline that retries on exit 1 does not rerun a finished
+verdict. A task-rows file is part of the evidence, and neither the verdict JSON nor the evidence
+names a task-rows file that was not written.
 
 **Reading it back, strictly.** `soup_cli.utils.ship_task_rows.load_task_rows(path, n=, base=,
 tuned=, counts=, mean_tolerance=)` refuses, naming the defect: a blank, over-long or malformed
@@ -1797,7 +1842,7 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MINOR` — score drop 2–5% (investigate)
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
+Paths are containment-checked. For `registry://` references, the CLI uses the first artifact by creation time. If the registry entry has multiple artifacts, pass the desired model directory directly. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
 #### Compare generation performance in the same report
 
@@ -1871,6 +1916,11 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
+| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing punctuation and symbols removed (`h2o.` and `(h2o)` are `h2o`; a combining mark such as a vowel sign or an accent written as its own character is part of the word and stays, and a minus sign `-` or U+2212 right before a digit stays, so `(-4).` is `-4`; a dot right before a digit stays too, also after a kept sign, so `(.5).` is `.5` and `-.5` is not `5`); a word that is only punctuation, or only combining marks once its edges are removed, is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
+
+Every word of the output counts toward `semantic`'s union, so a short expected answer
+inside a sentence scores low (`H2O` against `The chemical symbol for water is H2O.` is
+1/7). For a short answer inside a sentence, use `contains` or `answer`.
 
 The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
 strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a
