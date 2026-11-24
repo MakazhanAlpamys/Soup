@@ -4,7 +4,7 @@ Two separate things, kept separate on purpose:
 
 * **Level** (``read`` | ``plan`` | ``execute``) is the gate class: ``read`` always runs,
   ``plan`` is gated by ``--allow-mutating``, ``execute`` by ``--allow-execute``. It is a
-  field on ``ToolSpec`` and decides ``ToolSpec.mutating``. The 14 / 2 / 2 split is pinned.
+  field on ``ToolSpec`` and decides ``ToolSpec.mutating``. The 15 / 2 / 2 split is pinned.
 * **Annotations** are MCP hints about side effects, with MCP's own meaning: ``readOnlyHint``
   true says the tool does not modify its environment. So a read-LEVEL tool whose code path
   can write (open a database, migrate a schema, reconcile a stale row, fill a cache) is
@@ -86,6 +86,7 @@ TABLE = {
     ),
     "diagnose_evidence": ("read", _RO, "reads one evidence JSON and builds a report in memory"),
     "ship_evidence": ("read", _RO, "reads one evidence JSON and computes a verdict in memory"),
+    "engine_describe": ("read", _RO, "returns read-only startup metadata in memory"),
     "train_start": (
         "plan",
         _PLAN,
@@ -141,11 +142,11 @@ class TestPinnedTable:
             sorted(built ^ set(TABLE)),
         )
 
-    def test_the_levels_split_fourteen_two_two(self):
-        assert len(_names_at("read")) == 14
+    def test_the_levels_split_fifteen_two_two(self):
+        assert len(_names_at("read")) == 15
         assert len(_names_at("plan")) == 2
         assert len(_names_at("execute")) == 2
-        assert len(TABLE) == 18
+        assert len(TABLE) == 19
 
     def test_every_tool_has_a_one_line_reason(self):
         for name, (_, _, reason) in TABLE.items():
@@ -199,6 +200,7 @@ class TestReadOnlyHintIsTruthful:
             "profile",
             "diagnose_evidence",
             "ship_evidence",
+            "engine_describe",
         }
 
     def test_a_tool_with_a_write_path_is_never_advertised_read_only(self):
@@ -607,9 +609,9 @@ class TestGatingIsUnchanged:
                 "allow_mutating=True to enable it."
             )
 
-    def test_the_registry_is_still_eighteen_tools_in_every_gate_setting(self):
+    def test_the_registry_is_still_nineteen_tools_in_every_gate_setting(self):
         for allow_mutating, allow_execute in ((False, False), (True, False), (True, True)):
-            assert len(_specs(allow_mutating, allow_execute)) == 18
+            assert len(_specs(allow_mutating, allow_execute)) == 19
 
 
 class TestAnnotationsReachTheClient:
