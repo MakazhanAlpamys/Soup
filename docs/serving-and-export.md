@@ -634,6 +634,15 @@ sent afterwards, and so is a request to a model whose generation config sets bea
 `"stream": true` follows the same rules (see [Anthropic Messages Endpoint](#anthropic-messages-endpoint)).
 Use `--backend vllm` for token streaming with speculative decoding.
 
+When serving a LoRA adapter with `--backend vllm`, Soup uses the `hub_commit`
+in the adapter's `soup_run.json` if its base ID matches the selected Hugging Face
+base and `adapter_config.json` has no conflicting revision. The commit pins
+the engine's model and tokenizer and Soup's base-tokenizer
+fallback for chat templates. An adapter-local tokenizer still has priority for
+the chat template. For an older adapter with no matching recorded commit, a local
+base, a different `--base` override, or a ModelScope base, startup reports the
+base revision as unknown and uses the existing loaders.
+
 Compatible with OpenAI SDK:
 ```python
 from openai import OpenAI

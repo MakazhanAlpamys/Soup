@@ -1341,6 +1341,23 @@ def _serve_vllm(
     """
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
 
+    base_revision = None
+    if is_adapter and base_model:
+        from soup_cli.utils.run_provenance import recorded_adapter_base, recorded_base_kwargs
+
+        adapter = str(model_path)
+        if recorded_adapter_base(adapter) == base_model:
+            base_revision = recorded_base_kwargs(adapter, base_model).get("revision")
+        if base_revision is not None:
+            from vllm import envs
+
+            if envs.VLLM_USE_MODELSCOPE:
+                base_revision = None
+        if base_revision is not None:
+            console.print(f"[dim]Base revision: {base_revision} (recorded run)[/]")
+        else:
+            console.print("[dim]Base revision: unknown (no matching Hub commit)[/]")
+
     console.print("[dim]Initializing vLLM engine...[/]")
     engine, engine_model_name = create_vllm_engine(
         model_path=str(model_path),
@@ -1354,6 +1371,7 @@ def _serve_vllm(
         quantization=quantization,
         trust_remote_code=trust_remote_code,
         max_model_len=max_model_len,
+        base_revision=base_revision,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -1367,6 +1385,7 @@ def _serve_vllm(
         model_path=model_path,
         base_model=base_model,
         trust_remote_code=trust_remote_code,
+        base_revision=base_revision,
     )
     if tokenizer is None:
         console.print(
@@ -1400,6 +1419,8 @@ def _load_serve_tokenizer(
     model_path: Path,
     base_model: Optional[str],
     trust_remote_code: bool = False,
+    *,
+    base_revision: Optional[str] = None,
 ):
     """Load the tokenizer whose chat template the vLLM backend applies (#332).
 
@@ -1414,8 +1435,12 @@ def _load_serve_tokenizer(
 
     for candidate in candidates:
         try:
+            revision_kwargs = (
+                {"revision": base_revision}
+                if base_revision is not None and candidate != str(model_path) else {}
+            )
             return AutoTokenizer.from_pretrained(
-                candidate, trust_remote_code=trust_remote_code
+                candidate, trust_remote_code=trust_remote_code, **revision_kwargs
             )
         except Exception as exc:  # noqa: BLE001 — any load failure is a fallback
             logger.debug("tokenizer load failed for %s: %s", candidate, exc)

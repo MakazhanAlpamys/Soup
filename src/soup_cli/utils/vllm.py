@@ -273,6 +273,7 @@ def create_vllm_engine(
     quantization: Optional[str] = None,
     sleep_mode: bool = False,
     trust_remote_code: bool = False,
+    base_revision: Optional[str] = None,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -292,6 +293,7 @@ def create_vllm_engine(
             False — the caller (``serve``) resolves this through the shared
             v0.36.0 ``resolve_trust_remote_code`` gate (flag + warning panel)
             so an untrusted HF repo never runs code silently.
+        base_revision: Recorded Hub commit for the LoRA base and its tokenizer.
 
     Returns:
         (engine, engine_model_name) tuple.
@@ -300,6 +302,10 @@ def create_vllm_engine(
 
     # For LoRA adapters, load the base model and apply LoRA at request time
     if is_adapter and base_model:
+        revision_kwargs = (
+            {"revision": base_revision, "tokenizer_revision": base_revision}
+            if base_revision else {}
+        )
         engine_args = AsyncEngineArgs(
             model=base_model,
             enable_lora=True,
@@ -309,6 +315,7 @@ def create_vllm_engine(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
+            **revision_kwargs,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
