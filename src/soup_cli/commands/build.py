@@ -14,6 +14,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -46,14 +49,15 @@ def build_cmd(
     try:
         plan = load_build_yaml(config)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
 
     rendered = render_plan_table(plan)
     console.print(
         Panel(
-            escape(rendered),
-            title=f"soup build — {escape(config)}",
+            Text(strip_control(rendered)),
+            title=Text(f"soup build \u2014 {strip_control(config)}"),
         )
     )
 
@@ -63,10 +67,12 @@ def build_cmd(
     try:
         result = run_build(plan, output_dir=output_dir)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
 
-    table = Table(title=f"Materialised — {escape(result.output_dir)}")
+    table = Table(
+        title=Text(f"Materialised \u2014 {strip_control(result.output_dir)}", style="table.title")
+    )
     table.add_column("Model", style="bold")
     table.add_column("Kind")
     table.add_column("Rows in", justify="right")
