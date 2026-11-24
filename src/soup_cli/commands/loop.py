@@ -1491,10 +1491,24 @@ def replay_cmd(
     ),
     extract: Optional[str] = typer.Option(
         None, "--extract",
-        help="Extract the iteration's .can to this directory for a what-if re-run (v0.71.4).",
+        help=(
+            "Extract the given iteration's .can to this directory for a what-if re-run "
+            "(needs the iteration ID; v0.71.4)."
+        ),
     ),
 ) -> None:
     """Replay a recorded loop iteration manifest."""
+    if iteration_id is None and extract is not None:
+        # #3274: the listing branch below never reads --extract, so it used to list,
+        # exit 0 and write nothing. The archive to extract is found by the ID.
+        hint = (
+            " Run 'soup loop replay' to list the recorded IDs." if list_iterations() else ""
+        )
+        console.print(
+            "[red]--extract needs an iteration ID:[/] "
+            f"soup loop replay <iteration-id> --extract <dir>.{hint}"
+        )
+        raise typer.Exit(code=2)
     if iteration_id is None:
         ids = list_iterations()
         if not ids:
