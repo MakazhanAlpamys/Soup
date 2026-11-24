@@ -557,6 +557,22 @@ class TestJudgeModelValidation:
                 "judge_model 'ftp://judge.example.com/m' uses unsupported scheme 'ftp'; "
                 "accepted: https://, ollama:// or http:// to a loopback host",
             ),
+            (
+                "HTTP://judge.example.com/m",
+                "judge_model 'HTTP://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "judge.example.com/m",
+                "judge_model 'judge.example.com/m' uses unsupported scheme ''; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+            (
+                "localhost:8000/m",
+                "judge_model 'localhost:8000/m' uses unsupported scheme 'localhost'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
         ],
     )
     def test_refusal_says_why_and_what_to_use(self, url, message):
