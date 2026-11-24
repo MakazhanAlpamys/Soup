@@ -2824,7 +2824,7 @@ Usage: `soup loop replay [OPTIONS] [ITERATION_ID]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `ITERATION_ID` | text |  |  | Iteration id (omit to list all). |
-| `--extract` | text |  |  | Extract the iteration's .can to this directory for a what-if re-run (v0.71.4). |
+| `--extract` | text |  |  | Extract the given iteration's .can to this directory for a what-if re-run (needs the iteration ID; v0.71.4). |
 
 ### `soup loop resume`
 
