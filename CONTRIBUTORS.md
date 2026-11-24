@@ -1678,6 +1678,9 @@ Listed by first contribution. PR numbers link the work.
 - **iQuantum** ([@AyhamJo7](https://github.com/AyhamJo7))
   - Updated the remote augmentation model default and aligned the provider constant and usage examples. ([#3203](https://github.com/MakazhanAlpamys/Soup/pull/3203))
 
+- **Badri Vishal Pandey** ([@badrisatyam1-ctrl](https://github.com/badrisatyam1-ctrl))
+  - Fixed the duplicate final section in capped Markdown ingest and covered the exact-boundary behavior. ([#3277](https://github.com/MakazhanAlpamys/Soup/pull/3277))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
