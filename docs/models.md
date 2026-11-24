@@ -35,13 +35,6 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
 
-`soup recipes use glm-5-grpo` selects `zai-org/GLM-5` for text reasoning
-data in `./data/reasoning_train.jsonl`. It inherits the GLM-5.1 GRPO
-settings, including LoRA rank 32 / alpha 64 with zero dropout, four
-generations and the `accuracy` reward. The CLI and config loader are covered
-by CPU tests. Full model loading, NF4 execution, training and memory fit
-remain unmeasured.
-
 **Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
 
 **Resident Kimi K2 trains natively for `sft` and `grpo` on Kimi-K2-Base and
