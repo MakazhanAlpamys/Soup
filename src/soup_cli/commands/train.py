@@ -167,6 +167,49 @@ def _confirm_start_training() -> None:
         raise typer.Exit()
 
 
+# Final artifacts a fresh SFT save writes into the output directory. A fresh
+# run over a directory that already holds them replaces them (#3299).
+_FINAL_ADAPTER_FILES = (
+    "adapter_model.safetensors",
+    "adapter_config.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "training_args.bin",
+    "soup_run.json",
+)
+
+
+def _warn_existing_output_files(
+    cfg: "SoupConfig", *, resume: str | None, hf_resume: bool
+) -> None:
+    """Warn when a fresh SFT run would replace files already in its output dir.
+
+    Only the fresh path warns: a resumed run is expected to pick up where the
+    previous run left off. The destination is resolved exactly as the SFT
+    setup resolves it, so the notice names the directory the save will use.
+    """
+    if cfg.task != "sft" or cfg.backend != "transformers":
+        return
+    if resume is not None or hf_resume:
+        return
+    from soup_cli.utils.training_output import training_output_dir
+
+    destination = training_output_dir(cfg.output, cfg.experiment_name)
+    existing = [
+        name for name in _FINAL_ADAPTER_FILES if Path(destination, name).is_file()
+    ]
+    if not existing:
+        return
+    if len(existing) == 1:
+        names = existing[0]
+    else:
+        names = ", ".join(existing[:-1]) + f" and {existing[-1]}"
+    console.print(
+        f"[yellow]Warning:[/] {destination} already has {names}. "
+        "This run may replace them."
+    )
+
+
 def _preflight_config_eval_gate(cfg: "SoupConfig") -> None:
     """Refuse a ``training.eval_gate.suite`` that cannot load, before any data is read.
 
@@ -2997,6 +3040,7 @@ def train(
         base_identity = _base_identity_for_run(run_base, binding_supported, fit_identity)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
+            _warn_existing_output_files(cfg, resume=resume, hf_resume=hf_resume)
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
             trainer_wrapper.setup(dataset)
         confirm_distributed_base_revision(
