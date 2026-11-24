@@ -9,7 +9,10 @@ The recipe constant is final (candidate B in bf16, fit runs, 2026-11-06) and its
 - CUDA available and need <= free: ``quantization: none``; anything else: ``quantization: 4bit``;
 - ``4bit`` and ``none`` in the recipe are explicit and never overridden;
 - the parameter count is read without loading weights: the safetensors headers of a local model
-  directory, else the Hub's header-only metadata (skipped offline), else unknown (so 4bit);
+  directory, else the Hub's header-only metadata (skipped offline), else the Hugging Face cache
+  (cached safetensors headers, else the cached config.json; a size guessed from the repo name is
+  not a count), else unknown (so 4bit, and the note says why);
+- the train stage's progress line (what a person watching reads) carries the decision too;
 - the decision is a note of the train stage.
 
 Nothing here touches a GPU or the network: the VRAM and parameter-count functions are replaced,
@@ -49,6 +52,8 @@ _REAL_FREE_VRAM = lq.free_vram_bytes
 _REAL_HUB_PARAM_COUNT = model_shape._hub_param_count
 
 GIB = 1024**3
+#: Why the ``decide`` fixture's count is unknown.
+NO_COUNT = "no count in this test"
 
 
 def _state(**kwargs) -> LoopState:
@@ -87,13 +92,13 @@ def decide(monkeypatch):
     def install(params, free):
         def fake_params(base):
             calls["params"] += 1
-            return params
+            return params, "" if params is not None else NO_COUNT
 
         def fake_free():
             calls["free"] += 1
             return free
 
-        monkeypatch.setattr(lq, "parameter_count", fake_params)
+        monkeypatch.setattr(lq, "count_parameters", fake_params)
         monkeypatch.setattr(lq, "free_vram_bytes", fake_free)
 
     def run(params, free, setting="auto"):
@@ -149,7 +154,7 @@ class TestRule:
         value, note = decide(None, 100 * GIB)
 
         assert value == "4bit"
-        assert note == "sft quantization auto: 4bit (parameter count unknown)"
+        assert note == f"sft quantization auto: 4bit (parameter count unknown: {NO_COUNT})"
         assert decide.calls["free"] == 0
 
     @pytest.mark.parametrize("setting", ["4bit", "none"])
@@ -536,6 +541,297 @@ class TestHubCount:
             release.set()
 
 
+#: SmolLM2-135M's config.json (the fields the count reads): 134,515,008 parameters by
+#: ``params_from_config``, so need = 1.3 GB.
+SMOL_135M = {
+    "model_type": "llama", "hidden_size": 576, "intermediate_size": 1536,
+    "num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3,
+    "vocab_size": 49152, "tie_word_embeddings": True,
+}
+CACHED_CONFIG_NOTE = (
+    "sft quantization auto: none (need 1.3 GB, free 8.0 GB; "
+    "count from the cached config.json, an estimate without biases)"
+)
+OFFLINE_UNKNOWN_NOTE = (
+    "sft quantization auto: 4bit (parameter count unknown: "
+    "the Hub is offline and the cache has no config.json or weights to count)"
+)
+
+
+@pytest.fixture
+def cache(monkeypatch):
+    """The Hugging Face cache, faked: ``cache(config, snapshot)`` is what ``_hub_lookup``
+    returns; ``cache.calls`` records each lookup's ``allow_network``. The Hub is offline and
+    free VRAM is 8 GiB unless a test says otherwise."""
+    calls: list = []
+
+    def install(config=None, snapshot=None):
+        def lookup(repo, *, allow_network):
+            calls.append(allow_network)
+            return config, snapshot
+
+        monkeypatch.setattr(model_shape, "_hub_lookup", lookup)
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(model_shape, "_hub_param_count", _REAL_HUB_PARAM_COUNT)
+    monkeypatch.setattr(lq, "free_vram_bytes", lambda: 8 * GIB)
+    install.calls = calls
+    return install
+
+
+class TestOfflineCache:
+    def test_a_cached_config_gives_the_count_and_says_so(self, cache):
+        cache(SMOL_135M)
+
+        assert lq.count_parameters("HuggingFaceTB/SmolLM2-135M") == (
+            134_515_008, "count from the cached config.json, an estimate without biases"
+        )
+        assert cache.calls == [False]  # the cache only, never the network
+
+    def test_a_cached_135m_base_that_fits_trains_without_quantization(self, cache):
+        cache(SMOL_135M)
+
+        assert lq.resolve_sft_quantization("auto", "HuggingFaceTB/SmolLM2-135M") == (
+            "none", CACHED_CONFIG_NOTE
+        )
+
+    def test_the_cached_count_still_has_to_fit(self, cache, monkeypatch):
+        cache(SMOL_135M)
+        monkeypatch.setattr(lq, "free_vram_bytes", lambda: GIB)
+
+        value, note = lq.resolve_sft_quantization("auto", "HuggingFaceTB/SmolLM2-135M")
+
+        assert value == "4bit"
+        assert note.startswith("sft quantization auto: 4bit (need 1.3 GB, free 1.0 GB; count ")
+
+    def test_cached_weights_are_counted_from_their_headers_first(self, cache, tmp_path):
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        total = _write_safetensors(snapshot / "model.safetensors", {"a": [300, 200]})
+        cache(SMOL_135M, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            total, "count from the cached safetensors headers"
+        )
+
+    @staticmethod
+    def _two_shard_snapshot(tmp_path, *, with_index, present=(1,)):
+        """A snapshot of a two-shard checkpoint holding only the shards in ``present``."""
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        names = {n: f"model-0000{n}-of-00002.safetensors" for n in (1, 2)}
+        if with_index:
+            index = {"weight_map": {"a": names[1], "b": names[2]}}
+            (snapshot / "model.safetensors.index.json").write_text(json.dumps(index))
+        total = 0
+        for n in present:
+            total += _write_safetensors(snapshot / names[n], {"ab"[n - 1]: [300, 200]})
+        return snapshot, total
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_with_one_of_two_shards_is_not_counted_from_its_headers(
+        self, cache, tmp_path, monkeypatch, with_index
+    ):
+        """The shard on disk would fit, the whole model does not: the subtotal must not win."""
+        snapshot, subtotal = self._two_shard_snapshot(tmp_path, with_index=with_index)
+        cache(SMOL_135M, str(snapshot))
+        free = 100 * 1024**2
+        monkeypatch.setattr(lq, "free_vram_bytes", lambda: free)
+        assert lq.estimated_need_bytes(subtotal) <= free  # control: the subtotal fits
+        assert model_shape.read_model_shape("org/base", allow_network=False).params == subtotal
+
+        value, note = lq.resolve_sft_quantization("auto", "org/base")
+
+        assert value == "4bit"
+        assert note == (
+            "sft quantization auto: 4bit (need 1.3 GB, free 0.1 GB; count from the cached "
+            "config.json, an estimate without biases; the cache holds only part of the "
+            "safetensors weights)"
+        )
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_partial_cache_with_a_config_it_cannot_count_is_unknown(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, _ = self._two_shard_snapshot(tmp_path, with_index=with_index)
+        cache({"model_type": "unknown-arch"}, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            None, "the cache holds only part of the safetensors weights"
+        )
+        assert lq.resolve_sft_quantization("auto", "org/base") == (
+            "4bit",
+            "sft quantization auto: 4bit (parameter count unknown: "
+            "the cache holds only part of the safetensors weights)",
+        )
+
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_with_every_shard_is_counted_from_its_headers(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, total = self._two_shard_snapshot(
+            tmp_path, with_index=with_index, present=(1, 2)
+        )
+        cache(SMOL_135M, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            total, "count from the cached safetensors headers"
+        )
+
+    @staticmethod
+    def _symlinked_two_shard_snapshot(tmp_path, *, with_index):
+        """A two-shard snapshot laid out as the Hub cache does: shard names that are symlinks
+        into ``blobs/``. Returns the snapshot, the full count and the second shard's blob."""
+        blobs = tmp_path / "blobs"
+        blobs.mkdir()
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        names = {n: f"model-0000{n}-of-00002.safetensors" for n in (1, 2)}
+        if with_index:
+            index = {"weight_map": {"a": names[1], "b": names[2]}}
+            (snapshot / "model.safetensors.index.json").write_text(json.dumps(index))
+        total = 0
+        for n in (1, 2):
+            blob = blobs / f"blob{n}"
+            total += _write_safetensors(blob, {"ab"[n - 1]: [300, 200]})
+            (snapshot / names[n]).symlink_to(blob)
+        return snapshot, total, blobs / "blob2"
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_symlink_whose_blob_is_gone_is_not_counted_from_its_headers(
+        self, cache, tmp_path, monkeypatch, with_index
+    ):
+        """The name is still listed and numbered, but only one shard's headers can be read."""
+        snapshot, total, second_blob = self._symlinked_two_shard_snapshot(
+            tmp_path, with_index=with_index
+        )
+        second_blob.unlink()
+        cache(SMOL_135M, str(snapshot))
+        free = 100 * 1024**2
+        monkeypatch.setattr(lq, "free_vram_bytes", lambda: free)
+        subtotal = model_shape.read_model_shape("org/base", allow_network=False).params
+        assert 0 < subtotal < total  # control: the headers alone give the surviving shard
+        assert lq.estimated_need_bytes(subtotal) <= free  # control: the subtotal fits
+
+        value, note = lq.resolve_sft_quantization("auto", "org/base")
+
+        assert value == "4bit"
+        assert note == (
+            "sft quantization auto: 4bit (need 1.3 GB, free 0.1 GB; count from the cached "
+            "config.json, an estimate without biases; the cache holds only part of the "
+            "safetensors weights)"
+        )
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_symlink_whose_blob_is_gone_with_no_countable_config_is_unknown(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, _, second_blob = self._symlinked_two_shard_snapshot(
+            tmp_path, with_index=with_index
+        )
+        second_blob.unlink()
+        cache({"model_type": "unknown-arch"}, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            None, "the cache holds only part of the safetensors weights"
+        )
+        assert lq.resolve_sft_quantization("auto", "org/base")[0] == "4bit"
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_cache_symlinks_with_every_blob_are_counted_from_their_headers(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, total, _ = self._symlinked_two_shard_snapshot(tmp_path, with_index=with_index)
+        cache(SMOL_135M, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            total, "count from the cached safetensors headers"
+        )
+
+    @pytest.mark.parametrize(
+        ("names", "complete"),
+        [
+            (["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"], True),
+            (["model-00002-of-00002.safetensors"], False),
+            (["model-00001-of-00002.safetensors", "model-00003-of-00002.safetensors"], False),
+            (["model-00001-of-00002.safetensors", "model-00002-of-00003.safetensors"], False),
+        ],
+    )
+    def test_numbered_shards_are_complete_only_with_1_to_n(self, tmp_path, names, complete):
+        for name in names:
+            _write_safetensors(tmp_path / name, {"a": [2, 2]})
+
+        assert lq._holds_every_weight_file(str(tmp_path)) is complete
+
+    def test_nothing_cached_stays_4bit_and_says_why(self, cache):
+        cache()
+
+        assert lq.resolve_sft_quantization("auto", "org/base") == ("4bit", OFFLINE_UNKNOWN_NOTE)
+
+    def test_a_size_in_the_repo_name_is_a_guess_not_a_count(self, cache):
+        """``read_model_shape`` guesses 135M from the name; ``auto`` does not take a guess."""
+        cache()
+        shape = model_shape.read_model_shape("HuggingFaceTB/SmolLM2-135M", allow_network=False)
+        assert shape.params_source == "name" and shape.params > 0  # control: there is a guess
+
+        value, note = lq.resolve_sft_quantization("auto", "HuggingFaceTB/SmolLM2-135M")
+
+        assert (value, note) == ("4bit", OFFLINE_UNKNOWN_NOTE)
+
+    def test_a_cached_config_it_cannot_count_is_unknown(self, cache):
+        cache({"model_type": "unknown-arch"})
+
+        assert lq.count_parameters("org/base") == (
+            None, "the Hub is offline and the cache has no config.json or weights to count"
+        )
+
+    def test_online_the_hub_count_comes_first_and_the_cache_is_not_read(
+        self, cache, monkeypatch
+    ):
+        cache(SMOL_135M)
+        monkeypatch.delenv("HF_HUB_OFFLINE")
+        monkeypatch.setattr(
+            "soup_cli.utils.hf.get_hf_api",
+            lambda *a, **k: SimpleNamespace(
+                get_safetensors_metadata=lambda repo, **kw: SimpleNamespace(
+                    parameter_count={"BF16": 360_000_000}
+                )
+            ),
+        )
+
+        assert lq.count_parameters("org/base") == (360_000_000, "")
+        assert cache.calls == []
+
+    def test_online_with_no_hub_count_the_cache_is_read(self, cache, monkeypatch):
+        cache(SMOL_135M)
+        monkeypatch.delenv("HF_HUB_OFFLINE")
+        monkeypatch.setattr(
+            "soup_cli.utils.hf.get_hf_api", lambda *a, **k: SimpleNamespace()  # an old hub
+        )
+
+        assert lq.count_parameters("org/base")[0] == 134_515_008
+        assert cache.calls == [False]
+
+    def test_online_with_nothing_cached_says_the_hub_gave_no_count(self, cache, monkeypatch):
+        cache()
+        monkeypatch.delenv("HF_HUB_OFFLINE")
+        monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda *a, **k: SimpleNamespace())
+
+        assert lq.count_parameters("org/base") == (
+            None, "the Hub gave no count and the cache has no config.json or weights to count"
+        )
+
+    def test_a_local_directory_is_never_looked_up_in_the_cache(self, cache, tmp_path):
+        model = tmp_path / "base"
+        model.mkdir()
+
+        assert lq.count_parameters(str(model)) == (None, "no safetensors weights could be read")
+        assert cache.calls == []
+
+
 # ---------------------------------------------------------------------------
 # The rendered config and the train stage
 # ---------------------------------------------------------------------------
@@ -584,7 +880,9 @@ class TestRender:
         rendered = _render(_state(), notes)
 
         assert rendered["training"]["quantization"] == "4bit"
-        assert notes == ["sft quantization auto: 4bit (parameter count unknown)", UNMEASURED]
+        assert notes == [
+            f"sft quantization auto: 4bit (parameter count unknown: {NO_COUNT})", UNMEASURED
+        ]
 
     def test_the_rendered_config_never_says_auto(self, cwd, decide):
         decide.install(500_000_000, 8 * GIB)
@@ -691,6 +989,76 @@ class TestTrainStage:
 
         assert out["notes"] == UNMEASURED  # no quantization note: the value was explicit
         assert configs[0]["training"]["quantization"] == "4bit"
+
+
+class TestWatchShowsTheChoice:
+    """``soup loop watch`` writes each stage to ``.soup-loops/progress.jsonl`` (what a person
+    watching reads); the train line now says how ``auto`` was decided. The Hub is offline."""
+
+    def _watch(self, cwd, monkeypatch, *, returncode=0):
+        from soup_cli.utils.loop_daemon import WatchConfig, watch
+        from soup_cli.utils.loop_state import write_state
+
+        monkeypatch.setattr(ls, "_TRAIN_RUNNER", lambda argv, **kw: SimpleNamespace(
+            returncode=returncode
+        ))
+        (cwd / "rows.jsonl").write_text('{"messages": []}\n', "utf-8")
+        state_path = str(cwd / ".soup" / "loop.yaml")
+        write_state(_state(base_model="HuggingFaceTB/SmolLM2-135M", status="running"), state_path)
+        watch(WatchConfig(
+            poll_interval_sec=1.0, max_iterations=1, state_path=state_path,
+            iteration_dir=str(cwd / ".soup-loops"),
+            harvest_fn=lambda state: {
+                "pairs_harvested": 4, "new_pairs": 4, "pairs_path": "rows.jsonl",
+                "traces_collected": 4, "cursor_ts": 100.0,
+            },
+            train_fn=ls.train_dpo_from_pairs,
+            gate_fn=lambda state, train_out: {"gate_verdict": "SKIPPED", "notes": "stub"},
+            cost_fn=lambda state: 0.0,
+        ))
+        lines = (cwd / ".soup-loops" / "progress.jsonl").read_text("utf-8").splitlines()
+        return [
+            line for line in map(json.loads, lines)
+            if line["stage"] == "train" and line["event"] in ("end", "error")
+        ]
+
+    def test_a_cached_base_that_fits_is_on_the_train_line(self, cwd, monkeypatch, cache):
+        cache(SMOL_135M)
+
+        (line,) = self._watch(cwd, monkeypatch)
+
+        assert line["event"] == "end"
+        assert line["message"].startswith("trained loop-train-")
+        assert line["message"].endswith(f"; {CACHED_CONFIG_NOTE}")
+
+    def test_an_unknown_count_and_its_reason_are_on_the_train_line(
+        self, cwd, monkeypatch, cache
+    ):
+        cache()
+
+        (line,) = self._watch(cwd, monkeypatch)
+
+        assert line["message"].endswith(f"; {OFFLINE_UNKNOWN_NOTE}")
+
+    def test_a_failed_run_says_what_it_was_given(self, cwd, monkeypatch, cache):
+        cache(SMOL_135M)
+
+        (line,) = self._watch(cwd, monkeypatch, returncode=1)
+
+        assert (line["event"], line["error"]) == ("error", "train_failed")
+        assert line["message"] == f"training failed; {CACHED_CONFIG_NOTE}"
+
+    def test_a_run_without_a_quantization_note_keeps_its_line(self):
+        """An explicit ``4bit``/``none``, dpo and kto, and a custom train stage give no note."""
+        from soup_cli.utils.loop_daemon import _emit_train_end
+
+        emitted: list = []
+        events = SimpleNamespace(emit=lambda *a, **kw: emitted.append((a, kw)))
+
+        _emit_train_end(events, {"run_id": "r1", "notes": "x"}, True)
+        _emit_train_end(events, {"run_id": "r1", "quantization_note": None}, True)
+
+        assert emitted == [(("train", "end"), {"message": "trained r1"})] * 2
 
 
 # ---------------------------------------------------------------------------

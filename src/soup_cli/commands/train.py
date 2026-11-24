@@ -2653,6 +2653,8 @@ def train(
 
     # Start experiment tracking
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.cost_history import cost_history_eligible
+    from soup_cli.utils.launcher import is_in_distributed
 
     tracker = ExperimentTracker()
     run_base = cfg.base
@@ -2664,6 +2666,15 @@ def train(
         gpu_info=gpu_info,
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
+        cost_history_eligible=cost_history_eligible(
+            task=cfg.task,
+            resume_from=resume_from,
+            device=device,
+            gpu_count=gpu_info.get("gpu_count"),
+            distributed=is_in_distributed(),
+            fsdp=fsdp,
+            ds_config_path=ds_config_path,
+        ),
     )
     # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
     # _reconcile_orphaned_run to ever notice the process is gone — the

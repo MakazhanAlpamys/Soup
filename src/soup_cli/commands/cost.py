@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 from rich.console import Console
@@ -18,6 +19,9 @@ from soup_cli.utils.profiler import (
     estimate_training_time,
 )
 from soup_cli.utils.terminal import for_terminal
+
+if TYPE_CHECKING:
+    from soup_cli.config.schema import SoupConfig
 
 console = Console()
 err_console = Console(stderr=True)
@@ -34,6 +38,7 @@ GPU_PRICING = [
 ]
 
 _DEFAULT_DATASET_SIZE = 10000
+_HISTORY_GPU_LABELS = {"A100 40G": "A100 40GB", "A100 80G": "A100 80GB"}
 
 
 def _get_dataset_size(cfg) -> tuple[int, bool]:
@@ -96,6 +101,48 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     return _DEFAULT_DATASET_SIZE, True
 
 
+def _estimate_from_history(
+    cfg: SoupConfig,
+    gpu_labels: set[str],
+    dataset_size: int | None,
+) -> tuple[dict | None, str | None]:
+    from soup_cli.utils.cost_history import (
+        MIN_MATCHES,
+        estimate_from_step_times,
+        fixed_sft_settings,
+        matching_step_times,
+    )
+
+    if len(gpu_labels) != 1:
+        return None, "Select a single GPU model with --gpu to use history."
+    if cfg.task != "sft":
+        return None, "History is available for SFT only."
+    settings = fixed_sft_settings(cfg.model_dump())
+    if settings is None:
+        return None, (
+            "History requires text SFT on Transformers or Unsloth, with fixed batch size "
+            "and accumulation, "
+            "and without packing, streaming, interleaving or replay."
+        )
+    if dataset_size is None or dataset_size < 1:
+        return None, "The training row count is unavailable."
+    gpu_label = next(iter(gpu_labels))
+    recorded_label = _HISTORY_GPU_LABELS.get(gpu_label, gpu_label)
+
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    try:
+        with contextlib.closing(ExperimentTracker()) as tracker:
+            times = matching_step_times(tracker.list_runs(limit=-1), settings, recorded_label)
+    except (OSError, sqlite3.Error):
+        return None, "The local run history could not be read."
+    planned_steps = settings.planned_steps(dataset_size, cfg.training.epochs)
+    estimate = estimate_from_step_times(times, planned_steps)
+    if estimate is None:
+        return None, f"Found {len(times)} matching runs for {gpu_label}; need {MIN_MATCHES}."
+    return estimate, None
+
+
 def cost(
     config: str = typer.Option(
         "soup.yaml", "--config", "-c", help="Path to soup.yaml config file"
@@ -106,6 +153,9 @@ def cost(
     ),
     json_output: bool = typer.Option(
         False, "--json", help="Output as JSON for scripting"
+    ),
+    history: bool = typer.Option(
+        False, "--history", help="Use comparable local SFT runs with one GPU selected by --gpu."
     ),
 ) -> None:
     """Estimate training cost in USD across cloud providers."""
@@ -177,6 +227,27 @@ def cost(
         )
         raise typer.Exit(1)
 
+    history_estimate = None
+    fallback = None
+    if history:
+        history_estimate, fallback = _estimate_from_history(
+            cfg,
+            {result["gpu"] for result in results} if gpu else set(),
+            dataset_size if not is_estimated else None,
+        )
+        for result in results:
+            if history_estimate is not None:
+                duration_hrs = (
+                    history_estimate["median_seconds_per_step"]
+                    * history_estimate["optimizer_steps"] / 3600
+                )
+                result.update(
+                    estimate_source="history", history=history_estimate,
+                    duration_hrs=duration_hrs, total_cost=duration_hrs * result["cost_per_hr"],
+                )
+            else:
+                result.update(estimate_source="model", estimate_reason=fallback)
+
     if json_output:
         # Plain stdout, not console.print: Rich folds a document wider than the
         # console (80 columns when piped) and reads "[...]" as markup, so a long
@@ -205,6 +276,22 @@ def cost(
         )
 
     console.print(table)
+    if history_estimate is not None:
+        console.print(
+            f"History estimate from {history_estimate['matches']} matching runs. "
+            f"Median {history_estimate['median_seconds_per_step']:.2f} s/step, "
+            f"observed range {history_estimate['min_seconds_per_step']:.2f} to "
+            f"{history_estimate['max_seconds_per_step']:.2f} s/step, "
+            f"relative spread {history_estimate['relative_spread']:.1%}, "
+            f"confidence {history_estimate['confidence']}."
+        )
+        console.print(
+            f"For {history_estimate['optimizer_steps']} estimated optimizer steps, "
+            f"the range is {60 * history_estimate['min_duration_hrs']:.2f} to "
+            f"{60 * history_estimate['max_duration_hrs']:.2f} min."
+        )
+    elif fallback is not None:
+        console.print(f"Model-based estimate. {fallback}")
     console.print(
         "[dim]Note: estimates are approximate; actual costs can vary +/- 30% "
         "depending on region, spot/on-demand pricing, and workload variance.[/dim]"

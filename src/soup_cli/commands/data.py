@@ -2047,7 +2047,7 @@ class _AugmentProvider:
 
 _AUGMENT_DEFAULT_MODELS = {
     "ollama": "llama3.1",
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-haiku-5-5",
     "vllm": "local",
 }
 
