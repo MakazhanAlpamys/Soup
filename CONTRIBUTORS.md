@@ -1682,6 +1682,9 @@ Listed by first contribution. PR numbers link the work.
 - **Badri Vishal Pandey** ([@badrisatyam1-ctrl](https://github.com/badrisatyam1-ctrl))
   - Fixed the duplicate final section in capped Markdown ingest and covered the exact-boundary behavior. ([#3277](https://github.com/MakazhanAlpamys/Soup/pull/3277))
 
+- **Marouane Achbari** ([@ma7bor](https://github.com/ma7bor))
+  - Explained why judge URLs are refused and which forms are accepted, preserving the existing URL policy and carrying over #2253. Reported by @MakazhanAlpamys in #2190. ([#3295](https://github.com/MakazhanAlpamys/Soup/pull/3295))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
