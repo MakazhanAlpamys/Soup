@@ -1292,6 +1292,16 @@ def split_data(
                 f"[red]Split sizes ({val_count} + {test_count}) >= dataset size ({total}).[/]"
             )
             raise typer.Exit(1)
+        for option, percentage, count, split_name in (
+            ("--val", val, val_count, "validation"),
+            ("--test", test, test_count, "test"),
+        ):
+            if percentage and count == 0:
+                console.print(
+                    f"[yellow]Warning: {option} {percentage}% rounds to 0 rows; "
+                    f"no {split_name} split file will be written. Use a larger percentage "
+                    "or --absolute with a valid count.[/]"
+                )
 
     # Perform split
     if stratify:
