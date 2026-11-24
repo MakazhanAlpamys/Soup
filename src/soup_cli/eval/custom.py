@@ -89,11 +89,14 @@ def load_eval_tasks(
     """Load eval tasks from a JSONL file with schema validation.
 
     Each line must be a JSON object with a 'prompt' field and, by default, an
-    'expected' that is not missing, null, empty or whitespace-only (#3240): such a
-    row scored 1.0 for every output under 'contains' and 'regex'. Optional:
-    'category', 'scoring'. ``require_expected=False`` is for the callers that never
-    score 'expected' (``soup ship --task-mode judge_score``, ``pairwise`` and
-    ``reward``), where a prompt-only file is valid; ``expected`` then loads as ``""``.
+    'expected' that is not missing, null, empty or whitespace-only (#3240). Before,
+    a missing or empty 'expected' scored 1.0 for every output under 'contains' and
+    'regex', and a whitespace-only one did under 'contains'. Optional: 'category',
+    'scoring'. ``require_expected=False`` is for ``soup ship --task-mode
+    judge_score``, ``pairwise`` and ``reward``, which accept a prompt-only file:
+    the judge modes take their reference from ``--judge-reference``, validated on
+    its own, and the reward function receives 'expected' as ``answer`` (``""`` when
+    the row has none).
     """
     path = Path(path)
     if not path.exists():
