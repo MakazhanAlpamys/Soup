@@ -396,3 +396,93 @@ def test_installed_wheel_command_result_schema(tmp_path: Path) -> None:
         cwd=tmp_path, capture_output=True, text=True, timeout=30, check=False,
     )
     assert check.returncode == 0, check.stderr
+
+
+def _train_preflight_data() -> dict:
+    return {
+        "dry_run": True,
+        "training_rows": 4,
+        "validation_rows": 1,
+        "vram": {
+            "estimated_peak_gb": 8.0, "available_gb": 10.0,
+            "margin_fraction": 0.1, "required_gb": 8.8,
+        },
+        "disk": {"estimated_output_gb": None, "estimated_checkpoints_gb": None},
+        "estimated_wall_time_s": None,
+        "estimate_basis": {
+            "vram": "analytical_model", "disk": "unavailable", "wall_time": "unavailable",
+        },
+        "resolved": {
+            "base_model": "org/model", "task": "sft", "backend": "transformers",
+            "device_name": "Test CUDA", "max_steps": None, "batch_size_per_device": 2,
+            "effective_batch_size": 8, "context_length": 512, "adapter_rank": 8, "epochs": 2.0,
+        },
+        "input_digests": {"config_sha256": None, "data_sha256": "a" * 64},
+    }
+
+
+def test_train_preflight_wire_roundtrip() -> None:
+    data = _train_preflight_data()
+    model = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="ok", exit_code=0, data=data,
+    )
+    wire = encode_command_result(model)
+    assert json.loads(wire)["data"] == data
+    assert CommandResult.model_validate_json(wire) == model
+    schema = CommandResult.model_json_schema(by_alias=True)
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.Draft202012Validator(schema).validate(json.loads(wire))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (("training_rows",), True),
+        (("vram", "estimated_peak_gb"), float("inf")),
+        (("estimate_basis", "vram"), "unavailable"),
+        (("resolved", "base_model"), "/private/model"),
+        (("resolved", "base_model"), "C:/private/model"),
+        (("resolved", "base_model"), "../model"),
+        (("resolved", "adapter_rank"), 0),
+        (("input_digests", "data_sha256"), "A" * 64),
+    ],
+)
+def test_train_preflight_wire_rejects_invalid_fields(field: tuple[str, ...], value: object) -> None:
+    data = _train_preflight_data()
+    target = data if len(field) == 1 else data[field[0]]
+    target[field[-1]] = value
+    with pytest.raises(ValidationError):
+        CommandResult(
+            **_IDENTITY, command="train", phase="preflight", status="ok", exit_code=0, data=data,
+        )
+
+
+def test_train_identifier_survives_serializer_fallback() -> None:
+    result = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="refused", exit_code=7,
+    )
+    broken = result.model_copy(update={"duration_s": float("inf")})
+    wire = json.loads(encode_command_result(broken))
+    assert (wire["command"], wire["phase"], wire["status"], wire["exit_code"]) == (
+        "train", "preflight", "failed", 7,
+    )
+    assert wire["reasons"][0]["code"] == "soup.cli.result_serialization_failed"
+
+
+def test_train_config_error_details_are_bounded_with_pointer() -> None:
+    errors = [
+        {"loc": ["training", "batch_size", index], "type": "float_type"}
+        for index in range(33)
+    ]
+    result = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="refused", exit_code=1,
+        reasons=[{
+            "code": "soup.config.invalid",
+            "message": "The configuration could not be loaded.",
+            "fix": "Check the fields listed in the result.",
+            "details": {"errors": errors},
+        }],
+    )
+    data = json.loads(encode_command_result(result))
+    assert data["reasons"][0]["details"]["errors"] == errors[:32]
+    assert data["truncated"] == {"/reasons/0/details/errors": 1}
