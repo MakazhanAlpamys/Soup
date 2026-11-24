@@ -46,10 +46,10 @@ from soup_cli.cli import app
 from soup_cli.experiment.tracker import ExperimentTracker
 from soup_cli.monitoring.callback import SoupTrainerCallback
 from soup_cli.utils.eval_schedule import validation_metric
+from tests.conftest import strip_ansi
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 DOCS = Path(__file__).resolve().parent.parent / "docs"
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 runner = CliRunner()
 
 _NAN = float("nan")
@@ -58,14 +58,14 @@ _INF = float("inf")
 # The metrics table as 0.77.2 wrote it, in column order (CREATE TABLE of a fresh database).
 _COLUMNS_0772 = [
     "id", "run_id", "step", "epoch", "loss", "val_loss", "val_reward", "lr", "grad_norm",
-    "speed", "gpu_mem", "kind", "timestamp",
+    "speed", "gpu_mem", "timestamp",
 ]
 _NEW_COLUMNS = ["reward", "reward_std"]
 
 
 def _plain_lines(text: str) -> str:
     """Strip colour escapes (they differ per OS) and collapse whitespace within each line."""
-    return "\n".join(" ".join(line.split()) for line in _ANSI_RE.sub("", text).splitlines())
+    return "\n".join(" ".join(line.split()) for line in strip_ansi(text).splitlines())
 
 
 @pytest.fixture(autouse=True)
@@ -294,7 +294,7 @@ def test_reward_from_logs_says_which_columns_the_event_measured():
 def test_a_fresh_database_has_the_columns_after_every_existing_one(tmp_path):
     db = tmp_path / "fresh.db"
     ExperimentTracker(db_path=db).close()
-    assert _columns(db) == [*_COLUMNS_0772, *_NEW_COLUMNS]
+    assert _columns(db) == [*_COLUMNS_0772, "kind", *_NEW_COLUMNS]
 
 
 def _legacy_db(path: Path) -> None:
@@ -306,8 +306,8 @@ def _legacy_db(path: Path) -> None:
         Path(tracker_module.__file__).read_text(encoding="utf-8"), re.S,
     ).group(1)
     legacy = live.replace(
-        "    timestamp TEXT NOT NULL,\n    reward REAL,\n    reward_std REAL\n);",
-        "    timestamp TEXT NOT NULL\n);",
+        ",\n    reward REAL,\n    reward_std REAL\n);",
+        "\n);",
     )
     assert "reward_std" not in legacy and "\n    reward REAL" not in legacy, (
         "the fixture must genuinely predate both columns"
@@ -375,8 +375,8 @@ def test_log_metrics_keeps_its_positional_signature_and_appends_the_new_argument
 
 def test_a_database_written_by_this_version_is_readable_by_0772_statements(tmp_path):
     """0.77.2's reader is ``SELECT * ... ORDER BY step`` + ``dict(row)``, its writer an
-    INSERT that names its twelve columns, its migration a per-column ``PRAGMA table_info``
-    gate: none of them breaks on two extra nullable columns. (The real 0.77.2 module was
+    INSERT that names its eleven columns, its migration a per-column ``PRAGMA table_info``
+    gate: none of them breaks on three extra nullable columns. (The real 0.77.2 module was
     run against such a file when this change was made: see the report.)"""
     db = tmp_path / "new.db"
     store = ExperimentTracker(db_path=db)
@@ -390,9 +390,9 @@ def test_a_database_written_by_this_version_is_readable_by_0772_statements(tmp_p
     conn.execute(
         """INSERT INTO metrics
            (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-            gpu_mem, kind, timestamp)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (run_id, 2, 0.0, 0.2, None, None, 1e-4, None, None, "", "train", "2026-01-01"),
+            gpu_mem, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (run_id, 2, 0.0, 0.2, None, None, 1e-4, None, None, "", "2026-01-01"),
     )
     rows = [dict(row) for row in conn.execute(
         "SELECT * FROM metrics WHERE run_id = ? ORDER BY step", (run_id,)
@@ -874,6 +874,58 @@ def test_soup_runs_show_prints_a_single_reward_once(tracker, monkeypatch):
     tracker.close()
     text = _run_cli(["runs", "show", "run_one", "--no-plot"], monkeypatch)
     assert "│ Reward: 0.5000 (1 step) │" in text.splitlines()
+
+
+@pytest.mark.parametrize("command", ["show", "replay"])
+def test_soup_runs_plot_training_scores_at_logged_steps(tracker, monkeypatch, command):
+    run_id = _start(tracker, "run_grpo_plots", task="grpo")
+    tracker.log_metrics(run_id, step=30, loss=1.0, reward=-0.25, kind="train")
+    tracker.log_metrics(run_id, step=10, loss=2.0, reward=0.0, reward_std=0.0, kind="train")
+    tracker.log_metrics(run_id, step=15, loss=1.5, kind="train")
+    tracker.log_metrics(run_id, step=17, reward_std=0.3, kind="train")
+    tracker.log_metrics(run_id, step=20, reward=0.9, reward_std=0.4, kind="eval")
+    tracker.log_metrics(run_id, step=40, reward=0.8, reward_std=0.2, kind="summary")
+    tracker.close()
+
+    def record_line(_plotext, steps, values, *, console, title, **_options):
+        console.print(f"Chart {title}: {steps!s} {values!s}", markup=False)
+
+    monkeypatch.setattr("soup_cli.utils.plotext_compat.render_line", record_line)
+    text = _run_cli(["runs", command, run_id], monkeypatch)
+
+    expected = ["Chart Training Loss: [10, 15, 30] [2.0, 1.5, 1.0]"]
+    if command == "show":
+        expected += [
+            "Chart Training mean score: [10, 30] [0.0, -0.25]",
+            "Chart Training recorded spread: [10] [0.0]",
+        ]
+    assert [line for line in text.splitlines() if line.startswith("Chart ")] == expected
+
+
+@pytest.mark.parametrize(
+    ("task", "reward", "flags", "expect_mean"),
+    [
+        ("grpo", 0.0, [], True),
+        ("grpo", 0.0, ["--no-plot"], False),
+        ("grpo", None, [], False),
+        ("ppo", 0.0, [], True),
+        ("online_dpo", 0.0, [], True),
+        ("sft", None, [], False),
+    ],
+)
+def test_soup_runs_show_omits_unavailable_training_score_curves(
+    tracker, monkeypatch, task, reward, flags, expect_mean
+):
+    run_id = _start(tracker, "run_reward_visibility", task=task)
+    loss = None if task in ("ppo", "online_dpo") else 0.5
+    tracker.log_metrics(run_id, step=10, loss=loss, reward=reward, kind="train")
+    tracker.close()
+
+    text = _run_cli(["runs", "show", run_id, *flags], monkeypatch)
+
+    assert ("Training Loss" in text) == (not flags and loss is not None)
+    assert ("Training mean score" in text) == expect_mean
+    assert "Training recorded spread" not in text
 
 
 def test_soup_runs_compare_adds_reward_rows_when_either_run_has_a_reward(tracker, monkeypatch):

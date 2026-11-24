@@ -188,27 +188,79 @@ def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
 
     assert result.exit_code == 2
     text = _plain(result)
-    assert "apply failed: cannot build this value: day is out of range for month" in text
+    assert (
+        'apply failed: cannot build this value: day is out of range for month in "r.yaml"' in text
+    )
     assert line.replace(bidi, "") in text
     assert _not_shown(text)
 
 
-def test_apply_reports_recipe_yaml_syntax_error():
-    Path("r.yaml").write_text("data: [unfinished\n", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        pytest.param(
+            "r.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser",
+        ),
+        pytest.param(
+            "nested/invalid [red] recipe.yaml",
+            "data:\n\ttrain: []\n",
+            r"while scanning for the next token found character '\t' that cannot start any token "
+            'in "{path}", line 2, column 1: train: [] ^',
+            id="scanner-nested-space-markup",
+        ),
+        pytest.param(
+            f"invalid{_CONTROLS}.yaml",
+            "data: [unfinished\n",
+            'while parsing a flow sequence in "{path}", line 1, column 7: '
+            "data: [unfinished ^ expected ',' or ']', but got '<stream end>' "
+            'in "{path}", line 2, column 1: ^',
+            id="parser-bidi",
+        ),
+        pytest.param(
+            "reader.yaml",
+            "data: \x01\n",
+            'unacceptable character #x0001: special characters are not allowed '
+            'in "{path}", position 6',
+            id="reader",
+        ),
+    ],
+)
+def test_apply_reports_recipe_yaml_syntax_error(name, source, expected):
+    recipe = Path(name)
+    recipe.parent.mkdir(exist_ok=True)
+    recipe.write_text(source, encoding="utf-8")
 
-    result = _mix("--apply", "r.yaml")
+    result = _mix("--apply", name)
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
     text = _plain(result)
-    assert "apply failed: while parsing a flow sequence" in text
-    assert "data: [unfinished" in text
+    assert text == "apply failed: " + expected.format(path=_shown(name))
     assert "Loaded recipe:" not in text
+    assert _not_shown(text)
 
 
 @pytest.mark.parametrize(
     "probs",
-    ["[0.5, pending]", "0.5", "[" + "9" * 310 + "]"],
-    ids=["nonnumeric-weight", "scalar", "overflow"],
+    [
+        pytest.param("[0.5, pending]", id="nonnumeric-weight"),
+        pytest.param("0.5", id="scalar"),
+        pytest.param("[" + "9" * 310 + "]", id="overflow"),
+        pytest.param('"12"', id="quoted-scalar"),
+        pytest.param("{0: ignored, 1: ignored}", id="mapping"),
+        pytest.param('["0.5", "0.5"]', id="quoted-weight"),
+        pytest.param("[true, 0.5]", id="boolean-weight"),
+        pytest.param("[0.5, null]", id="null-weight"),
+        pytest.param("[0.5, [0.5]]", id="nested-list"),
+        pytest.param("[0.5, .nan]", id="nan"),
+        pytest.param("[0.5, .inf]", id="infinity"),
+        pytest.param("[0.5, -.inf]", id="negative-infinity"),
+        pytest.param("[0.5, -0.5]", id="negative"),
+    ],
 )
 def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
     recipe = Path("r.yaml")
@@ -225,3 +277,28 @@ def test_apply_reports_invalid_weights_before_printing_a_snippet(probs):
     assert "apply failed: invalid data.interleave.probs in r.yaml" in text
     assert "Loaded recipe:" not in text
     assert "\ndata:\n" not in strip_ansi(result.stdout)
+
+
+@pytest.mark.parametrize(
+    ("probs", "rendered_weights"),
+    [
+        pytest.param("[0.5, 0.5]", ["0.500000", "0.500000"], id="floats"),
+        pytest.param("[1, 2]", ["1.000000", "2.000000"], id="integers"),
+        pytest.param("[0, 1.0]", ["0.000000", "1.000000"], id="zero"),
+        pytest.param(None, [], id="absent"),
+    ],
+)
+def test_apply_preserves_valid_weights(probs, rendered_weights):
+    recipe = Path("r.yaml")
+    source = (
+        "data:\n  train: [a.jsonl, b.jsonl]\n  interleave:\n    strategy: probs\n"
+    )
+    if probs is not None:
+        source += f"    probs: {probs}\n"
+    recipe.write_text(source, encoding="utf-8")
+
+    result = _mix("--apply", recipe.name)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    weight_lines = "".join(f"      - {weight}\n" for weight in rendered_weights)
+    assert f"\n    probs:\n{weight_lines}  train:\n" in strip_ansi(result.stdout)

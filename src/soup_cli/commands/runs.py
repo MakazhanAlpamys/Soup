@@ -174,9 +174,9 @@ def list_runs(
 @app.command()
 def show(
     run_id: str = typer.Argument(..., help="Run ID (or prefix) to show"),
-    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
+    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show training curves"),
 ):
-    """Show detailed info about a specific run, including loss curve."""
+    """Show run details and available loss and training score curves."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
@@ -196,6 +196,8 @@ def show(
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "stopped":
+        status_str = "[yellow]stopped[/]"
     elif status == "terminated":
         status_str = "[red]terminated[/]"
     elif status == "launching":
@@ -281,11 +283,11 @@ def show(
             )
         console.print(eval_table)
 
-    # Loss curve
     if plot:
         metrics = tracker.get_metrics(run["run_id"])
         if metrics:
             _plot_loss_curve(metrics)
+            _plot_training_score_curves(metrics)
 
 
 @app.command(short_help="Compare two local training runs side by side.")
@@ -800,6 +802,39 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     )
 
 
+def _plot_training_score_curves(metrics: list[dict]) -> None:
+    """Plot score summaries over their logging windows, ending at each step."""
+    try:
+        import plotext as plt
+    except ImportError:
+        # The loss curve already prints the installation hint.
+        return
+
+    from soup_cli.experiment.reward_columns import finite_reward
+    from soup_cli.utils.plotext_compat import render_line
+
+    train = [
+        row for row in metrics
+        if row.get("kind") == "train" and finite_reward(row.get("reward")) is not None
+    ]
+    for key, label, title in (
+        ("reward", "Mean score", "Training mean score"),
+        ("reward_std", "Recorded spread", "Training recorded spread"),
+    ):
+        steps = []
+        values = []
+        for row in train:
+            value = finite_reward(row.get(key))
+            if value is not None:
+                steps.append(row["step"])
+                values.append(value)
+        if steps:
+            render_line(
+                plt, steps, values, console=console, label=label, title=title,
+                xlabel="Step", ylabel=label,
+            )
+
+
 @app.command(name="curriculum-curve")
 def curriculum_curve(
     run_id: str = typer.Argument(..., help="Run ID (or prefix)."),
@@ -870,7 +905,7 @@ def curriculum_curve(
 
     rows = []
     max_lines = 100_000
-    with open(real, "r", encoding="utf-8") as fh:
+    with open(real, "r", encoding="utf-8-sig") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:

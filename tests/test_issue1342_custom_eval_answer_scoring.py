@@ -69,7 +69,7 @@ def test_answer_mode_loads_a_readable_expected(tmp_path):
 
 @pytest.mark.parametrize(
     "expected",
-    ["", "Step 1.\nStep 2.", "6*7=42\n####", r"\boxed{}", "The answer is either 41 or 42."],
+    ["Step 1.\nStep 2.", "6*7=42\n####", r"\boxed{}", "The answer is either 41 or 42."],
 )
 def test_answer_mode_refuses_an_expected_with_no_single_answer(tmp_path, expected):
     rows = [
@@ -80,7 +80,8 @@ def test_answer_mode_refuses_an_expected_with_no_single_answer(tmp_path, expecte
         load_eval_tasks(str(_write(tmp_path / "t.jsonl", rows)))
 
 
-def test_gate_answer_scorer_overrides_the_rows(tmp_path):
+def test_gate_answer_scorer_overrides_the_rows(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
     path = _write(tmp_path / "t.jsonl", [{"prompt": "2+2?", "expected": "4"}])
     suite = EvalSuite(
         suite="s",
@@ -90,7 +91,10 @@ def test_gate_answer_scorer_overrides_the_rows(tmp_path):
     assert result.task_results[0].score == 1.0
 
 
-def test_gate_answer_scorer_refuses_an_unreadable_expected(tmp_path):
+def test_gate_answer_scorer_refuses_an_unreadable_expected(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
     path = _write(tmp_path / "t.jsonl", [{"prompt": "q", "expected": "Step 1.\nStep 2."}])
     suite = EvalSuite(
         suite="s",

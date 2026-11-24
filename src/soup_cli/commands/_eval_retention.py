@@ -36,6 +36,7 @@ from soup_cli.utils.exit_codes import (
     GateCommand,
 )
 from soup_cli.utils.retention_ledger import DEFAULT_LEDGER_PATH, DEFAULT_THRESHOLD
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 from soup_cli.utils.terminal import for_terminal
 
 #: Earlier versions shown as table columns; the JSON report always has all of them.
@@ -413,6 +414,8 @@ def _run(
     # 5. ONE model in memory, scored on every task. A failed generation is not a wrong
     #    answer: the first task with one stops the run, and nothing is recorded.
     from soup_cli.eval.custom import run_eval
+
+    warn_stopped_inputs(model, adapter)
 
     scores: Dict[str, float] = {}
     counts: Dict[str, int] = {}

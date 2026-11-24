@@ -55,6 +55,11 @@ class GateResult:
     task_results: list[GateTaskResult]
 
 
+_THRESHOLD_MIN = 0.0
+_THRESHOLD_MAX = 1000.0
+_VALID_SCORERS = ("exact", "contains", "answer", "regex", "semantic")
+
+
 class GateTask(BaseModel):
     """One gate task — e.g. a custom eval + threshold."""
 
@@ -63,14 +68,14 @@ class GateTask(BaseModel):
     )
     name: str = Field(description="Task name (used as baseline key)")
     threshold: float = Field(
-        ge=0.0, le=1000.0,
+        ge=_THRESHOLD_MIN, le=_THRESHOLD_MAX,
         description="Minimum score to pass (scale depends on scorer)",
     )
     # type=custom
     tasks: Optional[str] = Field(
         default=None, description="JSONL file of custom eval tasks",
     )
-    scorer: Optional[Literal["exact", "contains", "answer", "regex", "semantic"]] = Field(
+    scorer: Optional[Literal[*_VALID_SCORERS]] = Field(
         default=None, description="Scorer for type=custom",
     )
     # type=judge
@@ -90,6 +95,16 @@ class GateTask(BaseModel):
     def _numeric_threshold(cls, value: object) -> object:
         if isinstance(value, bool):
             raise ValueError("threshold must be a number, not a boolean")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, value: str) -> str:
+        # Same rule as the baseline writer (stamp_baseline_scores) so a
+        # suite that could never be stored under --write-baseline is
+        # refused at load time, before any model setup (#3122).
+        if not value or "\x00" in value:
+            raise ValueError("task name must be non-empty and null-free")
         return value
 
     @field_validator("tasks", "prompts")
@@ -147,6 +162,29 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         )
     names: set[str] = set()
     for task in suite.tasks:
+        # Same bounds as GateTask, for values assigned after load (#3170).
+        threshold = task.threshold
+        try:
+            finite = not isinstance(threshold, bool) and math.isfinite(threshold)
+        except (TypeError, OverflowError):
+            finite = False
+        if not finite or not _THRESHOLD_MIN <= threshold <= _THRESHOLD_MAX:
+            try:
+                shown = repr(threshold)
+            except ValueError:
+                # repr of a very large int refuses past 4300 digits.
+                shown = f"<{type(threshold).__name__} too large to display>"
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} task {task.name!r} threshold "
+                f"{shown} must be a finite number within "
+                f"{_THRESHOLD_MIN}-{_THRESHOLD_MAX}"
+            )
+        if task.scorer is not None and task.scorer not in _VALID_SCORERS:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} task {task.name!r} scorer "
+                f"{task.scorer!r} must be one of "
+                + ", ".join(repr(name) for name in _VALID_SCORERS)
+            )
         if task.name in names:
             raise ValueError(
                 f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
@@ -580,9 +618,17 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
         and parsed.hostname in LOOPBACK_HOSTS
     ):
         default_provider = "server"
+    elif parsed.scheme == "http":
+        # #2190 — http itself is accepted; what is refused is cleartext to a remote host.
+        raise ValueError(
+            f"judge_model '{judge_model}' uses http to a host that is not loopback; "
+            f"http is accepted for a loopback host only ({', '.join(sorted(LOOPBACK_HOSTS))}). "
+            "Use https://, ollama:// or a loopback http:// URL instead"
+        )
     else:
         raise ValueError(
-            f"judge_model '{judge_model}' uses unsupported scheme"
+            f"judge_model '{judge_model}' uses unsupported scheme '{parsed.scheme}'; "
+            "accepted: https://, ollama:// or http:// to a loopback host"
         )
 
     try:
@@ -648,6 +694,11 @@ def _run_judge_task(
                     f"field 'prompt' must be a string, got {type(prompt).__name__}"
                 )
             category = row.get("category", "default")
+            if not isinstance(category, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'category' must be a string, got {type(category).__name__}"
+                )
             validated_rows.append((prompt, category))
 
     if not validated_rows:
@@ -713,6 +764,15 @@ def _run_custom_task(
 
     if not task.tasks:
         raise ValueError(f"task '{task.name}' is type=custom but 'tasks' is missing")
+    # #3189: same containment rule as the suite file, baseline and judge
+    # prompts — a custom tasks file outside the working directory is refused
+    # here, at run time, so a value assigned after load is refused too.
+    tasks_path = Path(task.tasks)
+    if not is_under_cwd(tasks_path):
+        raise ValueError(
+            f"task '{task.name}' tasks file '{task.tasks}' "
+            "is outside cwd - refusing to load"
+        )
     tasks = load_eval_tasks(task.tasks)
     if not tasks:
         return 0.0

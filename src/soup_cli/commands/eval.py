@@ -19,6 +19,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
@@ -136,6 +137,17 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
+            from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            if revision_kwargs:
+                revision = revision_kwargs["revision"]
+                model_arg = f"{model_arg},revision={revision}"
+                console.print(f"[dim]Base revision: {revision} (recorded run)[/]")
+            else:
+                console.print(
+                    "[dim]Base revision: unknown (legacy, local source or base override)[/]"
+                )
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
@@ -143,6 +155,7 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+    warn_stopped_inputs(model_path)
 
     if trust_remote_code:
         # Appended only from the resolved --trust-remote-code flag, never
@@ -457,6 +470,7 @@ def custom(
     results_list = []
     from soup_cli.eval.custom import _create_default_generator, score_task
 
+    warn_stopped_inputs(model_path)
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
         str(model_path), trust_remote_code=trust_remote_code,
@@ -561,6 +575,7 @@ def judge(
         JudgeEvaluator,
         JudgeUnavailableError,
         load_rubric,
+        rubric_file_label,
         validate_judge_api_base,
     )
 
@@ -578,7 +593,7 @@ def judge(
         raise typer.Exit(1)
 
     items: list[dict] = []
-    with open(target_path, encoding="utf-8") as fh:
+    with open(target_path, encoding="utf-8-sig") as fh:
         for line_num, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
@@ -602,9 +617,17 @@ def judge(
     if rubric:
         try:
             rubric_data = load_rubric(Path(rubric))
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
             # The message quotes the path it was given.
             console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1)
+        except ValueError as exc:
+            message = str(exc)
+            # An error of reading the file already names it; one of the rubric's shape
+            # gets the prefix the evaluator's refusals below carry.
+            if not message.startswith(rubric_file_label(Path(rubric))):
+                message = f"Cannot use rubric {rubric!r}: {message}"
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -1025,20 +1048,23 @@ def human(
     try:
         prompts = load_prompts(Path(prompts_file))
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
+            console.print(terminal_text(f"Model not found: {mpath}", "red"))
             raise typer.Exit(1)
 
+    warn_stopped_inputs(model_a, model_b)
+
     console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {for_terminal(model_a)}\n"
-        f"Model B: {for_terminal(model_b)}",
+        Text.assemble(
+            ("Human Evaluation", "bold"),
+            f"\nPrompts: {len(prompts)}\nModel A: ", terminal_text(model_a),
+            "\nModel B: ", terminal_text(model_b),
+        ),
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1058,10 +1084,14 @@ def human(
         resp_b = gen_b(prompt_text)
 
         # Display for human judgment
-        console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
-        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
-        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
+        heading = console.render_str(
+            f"--- Prompt {idx + 1}/{len(prompts)} ---", markup=False, emoji=False,
+        )
+        heading.stylize_before("bold")
+        console.print(Text.assemble("\n", heading))
+        console.print(Panel(terminal_text(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(terminal_text(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(terminal_text(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1092,7 +1122,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
+    console.print(Text.assemble("\n", terminal_text(f"Results saved to {output}", "green")))
 
 
 # ─── Helper functions ───
@@ -1289,7 +1319,7 @@ def _display_elo_ratings(results: object) -> None:
         reverse=True,
     ):
         table.add_row(
-            _short_model_name(name),
+            terminal_text(_short_model_name(name, markup=False)),
             f"{rating.rating:.0f}",
             str(rating.wins),
             str(rating.losses),
@@ -1356,7 +1386,7 @@ def gate_cmd(
 
     try:
         eval_suite = load_suite(suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1389,7 +1419,7 @@ def gate_cmd(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -1409,6 +1439,7 @@ def gate_cmd(
     else:
         from soup_cli.eval.quant_check import make_model_generator
 
+        warn_stopped_inputs(model)
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
@@ -1585,6 +1616,8 @@ def quant_check_cmd(
         )
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    warn_stopped_inputs(before_path, after_path)
+
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
@@ -1681,12 +1714,13 @@ def _print_gate_result(result) -> None:
             f"{row.score:.3f}" if row.score is not None
             else "[red]ERROR[/]"
         )
-        verdict = (
-            "[green]PASS[/]" if row.passed
-            else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
-        )
+        if row.passed:
+            verdict = Text("PASS", style="green")
+        else:
+            detail = f"FAIL ({row.error})" if row.error else "FAIL"
+            verdict = terminal_text(detail, style="red")
         table.add_row(
-            row.name,
+            terminal_text(row.name),
             score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",

@@ -258,6 +258,42 @@ move the last digits. For bit-exact reruns you also need
 
 ---
 
+## Checkpoints (`training.save_strategy`)
+
+By default a run writes `<output>/checkpoint-N` folders as it trains: one every
+`training.save_steps` steps (default 100), and one more at the **last step**, because
+transformers saves there whenever the strategy is `steps`. The last three are kept
+(`save_total_limit: 3`). The final adapter or model is written separately, after training.
+
+```yaml
+training:
+  save_strategy: "no"      # steps (default) | epoch | no  -- quote it, see below
+```
+
+| `save_strategy` | Writes `checkpoint-N` | Use it for |
+|---|---|---|
+| `steps` (default) | every `save_steps` steps and at the last step | long runs you may need to resume |
+| `epoch` | at the end of every epoch | runs where an epoch is the natural unit |
+| `no` | never | short or throwaway runs, e.g. a loop that trains many of them and would pay the checkpoint size on every one |
+
+- **The final adapter is always saved**, whatever the strategy: `adapter_model.safetensors`
+  (or the full model) and the tokenizer are written after `train()`, as before.
+- **`no` leaves nothing to resume from.** `soup train --resume`, `--push-as`
+  (it pushes each `checkpoint-N`) and `soup runs` checkpoint pruning have no checkpoint to
+  work with. A Ctrl-C still asks the trainer to write one, because that save is requested
+  explicitly.
+- **Quote the value.** YAML reads an unquoted `no` as a boolean, so `save_strategy: no` is
+  refused with a message that says to write `save_strategy: "no"`.
+- **`save_steps` and `save_strategy` go together.** `save_steps` only counts under
+  `save_strategy: steps`. A non-default `save_steps` beside `epoch` or `no` is refused at load
+  rather than ignored.
+- **Backend and task limits.** MLX uses `save_steps` as an iteration interval.
+  Adapter training writes numbered adapter files. Native MLX full SFT writes
+  standalone model snapshots at optimizer boundaries in zero-padded directories
+  such as `checkpoint-0000200`. MLX and `task: unlearn` both refuse `epoch` and `no`.
+  Unlearning writes no intermediate checkpoints. PPO accepts `steps` and `no` because
+  its trainer does not emit epoch-end callbacks.
+
 ## Rewind — which row spiked the loss (`soup rewind`)
 
 While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
@@ -1654,6 +1690,12 @@ the row until the next valid measurement and breaks the warning streak. More tha
 a diagnostic heuristic, not a quality threshold: it neither stops training nor
 changes rewards or gradients. Evaluation/summary logs do not count as new
 measurements. MLX's existing logging is unchanged.
+
+Use `soup runs show <run_id>` to chart the mean score over the logging window
+that ends at each step. GRPO also charts the recorded spread, the mean of the
+per-batch standard deviations over that window. Runs with only a mean score,
+such as PPO or online DPO with a scorer, get one score chart. Pass `--no-plot`
+for run details without the charts.
 
 ```bash
 # Create a reasoning config

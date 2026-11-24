@@ -19,6 +19,7 @@ import stat
 import struct
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -38,6 +39,65 @@ def quote_path(path: str) -> str:
         for ch in path
     )
     return f"'{escaped}'"
+
+
+#: ASCII characters, besides letters and digits, that need no quoting in any shell a
+#: person might paste into (POSIX shells, PowerShell, cmd.exe).
+_PASTE_BARE_PUNCTUATION = "_./:+-"
+#: ASCII characters that keep a special meaning INSIDE double quotes in at least one of
+#: those shells: ``"`` closes the quote; ``$`` and the backtick expand or escape in POSIX
+#: shells and PowerShell; ``\`` escapes in POSIX shells (and before a closing quote
+#: elsewhere); ``%`` expands in cmd.exe; ``!`` expands in interactive bash and in cmd.exe
+#: with delayed expansion.
+_PASTE_NEVER_QUOTED = '"$`\\%!'
+
+
+def paste_arg(value: object, *, windows_separators: bool = False) -> Optional[str]:
+    """Spell ``value`` as ONE argument of a command line that a person will paste.
+
+    Soup prints follow-up commands (``modal volume get ... <dir>``, ``soup chat --model
+    <dir>``) with a path taken from the configuration. The shell the line is pasted into
+    is not known here, and a name with shell syntax in it must be read as a name in every
+    shell: ``shlex.quote`` suits POSIX shells only (cmd.exe does not treat single quotes
+    as quotes) and ``subprocess.list2cmdline`` leaves ``&`` bare. So the result reads the
+    same in every shell, or is ``None``:
+
+    * letters, digits and combining marks (of any script) and ``_ . / : + -``: returned
+      as is;
+    * those plus a space or any other printable ASCII except ``" $ ` \\ % !``: wrapped in
+      double quotes, inside which none of them is special in any of those shells;
+    * anything else (a control character, ``"``, ``$``, the backtick, a backslash,
+      ``%``, ``!``, or non-ASCII punctuation such as the typographic quotes and dashes
+      that PowerShell reads as quotes and dashes): ``None``. The caller gives
+      instructions in prose.
+
+    A value starting with ``-`` gets ``./`` in front so the program cannot read it as an
+    option. An empty value gives ``None``. With ``windows_separators`` (a Windows host,
+    where ``str(Path(...))`` spells a nested path with backslashes) every ``\\`` is
+    written as ``/`` first: every Windows shell accepts it in an argument, and it is not
+    special in any of them; on other hosts a backslash is a name character and stays a
+    reason to give instructions in prose.
+    """
+    text = str(value)
+    if windows_separators:
+        text = text.replace("\\", "/")
+    if not text:
+        return None
+    if text.startswith("-"):
+        text = "./" + text
+    bare = True
+    for char in text:
+        if char.isascii():
+            if char.isalnum() or char in _PASTE_BARE_PUNCTUATION:
+                continue
+            if " " <= char <= "~" and char not in _PASTE_NEVER_QUOTED:
+                bare = False
+                continue
+            return None
+        if char.isalnum() or unicodedata.category(char).startswith("M"):
+            continue
+        return None
+    return text if bare else f'"{text}"'
 
 
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:

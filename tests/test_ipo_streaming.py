@@ -245,7 +245,9 @@ def test_wrapper_rejects_empty_streamed_adapter(checkpoint, monkeypatch, where):
     ],
 )
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "resident"])
-def test_cuda_first_applied_update(checkpoint, dispatched, quant, initial_scale, stream):
+def test_cuda_first_applied_update(
+    checkpoint, monkeypatch, dispatched, quant, initial_scale, stream
+):
     import json
     import math
     import os
@@ -255,6 +257,10 @@ def test_cuda_first_applied_update(checkpoint, dispatched, quant, initial_scale,
     from peft import PeftModel, get_peft_model_state_dict
     from safetensors.torch import load_file
     from transformers import AutoModelForCausalLM, TrainerCallback
+
+    # Without bf16 hardware Soup trains in fp16 with a GradScaler, the path this test checks;
+    # report no bf16 support so a bf16 card runs that path too (#3079).
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: False)
 
     torch.cuda.reset_peak_memory_stats()
     wrapper, inner = _build(

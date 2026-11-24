@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable
 from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from soup_cli.experiment.reward_columns import finite_reward
 from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS runs (
     log_path        TEXT,
     exit_code       INTEGER,
     loss_summary_kind TEXT,
-    error_message   TEXT
+    error_message   TEXT,
+    cost_history_eligible INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -95,8 +96,8 @@ CREATE TABLE IF NOT EXISTS metrics (
     grad_norm REAL,
     speed     REAL,
     gpu_mem   TEXT,
-    kind      TEXT,
     timestamp TEXT NOT NULL,
+    kind      TEXT,
     reward REAL,
     reward_std REAL
 );
@@ -246,6 +247,9 @@ class ExperimentTracker:
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
             ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
             ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
+            # NULL on old rows means the launch conditions were not recorded.
+            ("runs", "cost_history_eligible",
+             "ALTER TABLE runs ADD COLUMN cost_history_eligible INTEGER"),
             # Deliberately nullable with no default: a row written before this
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
@@ -261,10 +265,11 @@ class ExperimentTracker:
              "ALTER TABLE runs ADD COLUMN loss_summary_kind TEXT"),
             # A reinforcement-style run's per-step training reward and its spread
             # (experiment/reward_columns.py). Nullable with no default and never
-            # backfilled, like the columns above: NULL is "not measured". Appended
-            # after every existing column here and in _SCHEMA_SQL, so in a fresh and
-            # in an upgraded database alike they are the last two columns and no
-            # existing one moves: a reader that indexes a row by position keeps working.
+            # backfilled, like the columns above: NULL is "not measured". Fresh
+            # tables follow the upgrade order from 0.77.2: timestamp, kind, then these
+            # two fields. Existing tables keep their order, which can differ for
+            # older upgrades and databases created by v0.78.0. get_metrics reads
+            # columns by name, so both orders work without rebuilding any table.
             ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
             ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
         ):
@@ -296,6 +301,8 @@ class ExperimentTracker:
         gpu_info: dict,
         experiment_name: Optional[str] = None,
         run_id: Optional[str] = None,
+        *,
+        cost_history_eligible: bool | None = None,
     ) -> str:
         """Insert a new run and return its run_id."""
         run_id = run_id or generate_run_id()
@@ -313,11 +320,11 @@ class ExperimentTracker:
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
                    base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL,
-                   code_commit = NULL, code_dirty = NULL
+                   code_commit = NULL, code_dirty = NULL, cost_history_eligible = ?
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
-                    run_id,
+                    cost_history_eligible, run_id,
                 ),
             )
             conn.commit()
@@ -325,11 +332,12 @@ class ExperimentTracker:
         conn.execute(
             """INSERT INTO runs
                (run_id, experiment_name, created_at, status, config_json,
-                device, device_name, gpu_memory, base_model, task)
-               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)""",
+                device, device_name, gpu_memory, base_model, task, cost_history_eligible)
+               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, experiment_name, now, config_json,
                 device, device_name, gpu_memory, base_model, task,
+                cost_history_eligible,
             ),
         )
         conn.commit()
@@ -408,7 +416,7 @@ class ExperimentTracker:
         conn = self._get_conn()
         conn.execute(
             """UPDATE runs SET status = ?, exit_code = ? WHERE run_id = ?
-               AND status NOT IN ('completed', 'failed')""",
+               AND status NOT IN ('completed', 'failed', 'stopped')""",
             (status, exit_code, run_id),
         )
         conn.commit()
@@ -540,8 +548,10 @@ class ExperimentTracker:
         duration_secs: float,
         output_dir: str,
         loss_summary_kind: Optional[str] = None,
+        *,
+        status: Literal["completed", "stopped"] = "completed",
     ) -> None:
-        """Mark run as completed and fill summary fields.
+        """Record a completed or user-stopped run and fill summary fields.
 
         ``initial_loss`` / ``final_loss`` are ``None`` for a run that observed no
         loss; the columns are NULL then, not 0.0, so a reader can tell "no
@@ -591,12 +601,13 @@ class ExperimentTracker:
                 cost_label = None
         conn.execute(
             """UPDATE runs SET
-               status = 'completed',
+               status = ?,
                initial_loss = ?, final_loss = ?,
                total_steps = ?, duration_secs = ?, output_dir = ?,
                cost_usd = ?, cost_gpu_label = ?, loss_summary_kind = ?
                WHERE run_id = ?""",
             (
+                status,
                 initial_loss, final_loss, total_steps, duration_secs, output_dir,
                 cost_usd, cost_label, loss_summary_kind, run_id,
             ),
@@ -634,8 +645,8 @@ class ExperimentTracker:
         Only MCP-spawned runs carry a pid; a run recorded without one is left
         untouched because its liveness cannot be checked here. A dead pid is
         persisted as _STATUS_TERMINATED with exit_code None (unknown) through
-        finish_execution, whose guard keeps a richer 'completed'/'failed'
-        terminal status intact and makes the rewrite idempotent.
+        finish_execution, whose guard keeps a richer terminal status intact and
+        makes the rewrite idempotent.
         """
         pid = run.get("pid")
         if (

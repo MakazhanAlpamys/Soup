@@ -1,0 +1,221 @@
+"""CPU-only tests for the three STEP 13 / #379 numerics harnesses.
+
+The measurements themselves need a CUDA card (and are recorded in the harness
+JSONs). What can be pinned here, with torch only: the dispatch reader, the
+direct fallback counter, the forced-fused patch on a fake module, the fail-closed
+gates, and that each harness's ``--self-test`` passes and a no-CUDA host is a
+SKIP, not a false pass.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+pytest.importorskip("torch")
+
+_HARNESS = Path(__file__).resolve().parents[1] / "benchmarks" / "harness"
+
+
+def _load(name):
+    private = f"_{name}_step13_test_module"
+    path = _HARNESS / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(private, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[private] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(private, None)
+    return module
+
+
+numerics = _load("numerics")
+numerics2 = _load("numerics2")
+forcecheck = _load("forcecheck")
+
+HARNESSES = (numerics, numerics2, forcecheck)
+
+
+class TestClockProvenance:
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_the_idle_clock_is_read_before_the_first_measurement(self, harness, monkeypatch):
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        order: list[str] = []
+
+        def fake_hardware(*args, **kwargs):
+            order.append("hardware")
+            return {"sm_clock_mhz_idle": 1}
+
+        def fake_measure(*args, **kwargs):
+            order.append("measure")
+            return {
+                "set": "default", "N": 64, "K": 64, "M": 8,
+                "bnb_selected_custom_kernel": False,
+                "resident_fallback_calls": 1, "resident_kernel_calls": 0,
+                "kernel_calls": 0, "fallback_calls": 1, "dequant_wrapper_calls": 0,
+                "control_detected": True,
+                "forward": {"exact": True}, "gradient": {"exact": True},
+            }
+
+        monkeypatch.setattr(harness, "hardware", fake_hardware)
+        monkeypatch.setattr(harness, "measure_row", fake_measure)
+        monkeypatch.setattr(
+            harness, "evaluate", lambda rows: {"verdict": "ok", "exit_code": 0, "reason": "ok"}
+        )
+
+        result = harness.run_sweep(harness._parse_args([]))
+
+        assert order[0] == "hardware", order
+        assert "measure" in order
+        assert result["env"] == {"sm_clock_mhz_idle": 1}
+
+
+class TestSelectedCustom:
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_above_the_row_cap_bitsandbytes_is_not_asked(self, harness):
+        def must_not_run(*args):
+            raise AssertionError("bitsandbytes does not ask past its row cap")
+
+        ops = SimpleNamespace(
+            _gemm_4bit_use_custom_fn=must_not_run, _gemm_4bit_custom_max_m=1536
+        )
+        assert harness.selected_custom(ops, 0, "bf16", 2048, 4096, 4096, 64) is False
+
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_a_misaligned_inner_dimension_falls_back_without_asking(self, harness):
+        def must_not_run(*args):
+            raise AssertionError("misaligned K never reaches the custom kernel")
+
+        ops = SimpleNamespace(
+            _gemm_4bit_use_custom_fn=must_not_run, _gemm_4bit_custom_max_m=1536
+        )
+        assert harness.selected_custom(ops, 0, "bf16", 8, 4096, 4100, 64) is False
+
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_a_build_without_the_private_symbol_is_unknown_not_guessed(self, harness):
+        assert harness.selected_custom(SimpleNamespace(), 0, "bf16", 8, 4096, 4096, 64) is None
+        assert harness.selected_custom(None, 0, "bf16", 8, 4096, 4096, 64) is None
+
+
+class TestCounterAndForcing:
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_the_counter_observes_the_real_hook_not_a_gate(self, harness):
+        ops = SimpleNamespace(
+            _gemm_4bit_kernel_impl=lambda: None, _dequant_linear_fallback=lambda: None
+        )
+        fn = SimpleNamespace(dequantize_4bit=lambda: None)
+        with harness.counter(ops, fn) as counts:
+            ops._dequant_linear_fallback()
+            fn.dequantize_4bit()
+        assert counts["fallback"] == 1
+        assert counts["dequant"] == 1
+        assert counts["kernel"] == 0
+
+    @pytest.mark.parametrize("harness", (numerics2, forcecheck))
+    def test_force_fused_is_scoped_and_restores_the_globals(self, harness):
+        ops = SimpleNamespace(
+            _gemm_4bit_use_custom_fn=lambda *args: False, _gemm_4bit_custom_max_m=1536
+        )
+        assert harness.selected_custom(ops, 0, "bf16", 2048, 4096, 4096, 64) is False
+        with harness.force_fused(ops):
+            assert harness.selected_custom(ops, 0, "bf16", 2048, 4096, 4096, 64) is True
+        assert harness.selected_custom(ops, 0, "bf16", 2048, 4096, 4096, 64) is False
+        assert ops._gemm_4bit_custom_max_m == 1536
+
+
+class TestStats:
+    def test_numerics_stats_counts_bit_differences_in_float32(self):
+        import torch
+
+        left = torch.tensor([60000.0], dtype=torch.float16)
+        right = torch.tensor([-60000.0], dtype=torch.float16)
+        s = numerics.stats(left, right)
+        assert s["exact"] is False
+        assert s["max_abs"] == 120000.0  # a float16 subtraction would overflow to inf
+
+
+class TestGates:
+    def test_numerics_vacuity_gate(self):
+        good = {
+            "M": 2048,
+            "bnb_selected_custom_kernel": False,
+            "resident_fallback_calls": 1,
+            "forward": {"exact": True},
+            "gradient": {"exact": True},
+            "control_detected": True,
+        }
+        assert numerics.evaluate([good])["exit_code"] == 0
+        assert numerics.evaluate([dict(good, bnb_selected_custom_kernel=True)])["exit_code"] == 2
+        assert numerics.evaluate([dict(good, control_detected=False)])["exit_code"] == 3
+        assert numerics.evaluate([dict(good, gradient={"exact": False})])["exit_code"] == 4
+
+    def test_numerics2_gate_reads_counted_kernel_calls_not_the_dispatch_decision(self):
+        def row(**updates):
+            base = {
+                "set": "default", "bnb_selected_custom_kernel": True,
+                "resident_kernel_calls": 1, "resident_fallback_calls": 0,
+                "control_detected": True,
+                "gradient": {"exact": True}, "forward": {"exact": False},
+            }
+            base.update(updates)
+            return base
+
+        forced_ok = row(set="forced", resident_fallback_calls=0)
+        assert numerics2.evaluate([row(), forced_ok])["exit_code"] == 0
+        # forcing sets the decision True on every forced row; a row with that
+        # decision but no counted kernel call must not make the gate pass.
+        assert numerics2.evaluate([row(resident_kernel_calls=0)])["exit_code"] == 2
+        assert numerics2.evaluate([row(), row(set="forced", resident_kernel_calls=0)])[
+            "exit_code"
+        ] == 4
+        fallback = row(
+            resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": True}
+        )
+        assert numerics2.evaluate([row(), forced_ok, fallback])["exit_code"] == 0
+        fallback_diff = row(
+            resident_kernel_calls=0, resident_fallback_calls=1, forward={"exact": False}
+        )
+        assert numerics2.evaluate([row(), forced_ok, fallback_diff])["exit_code"] == 7
+
+    def test_forcecheck_path_control_gate(self):
+        large = {
+            "set": "default", "fallback_calls": 1, "kernel_calls": 0, "dequant_wrapper_calls": 0
+        }
+        small = {
+            "set": "default", "fallback_calls": 0, "kernel_calls": 1, "dequant_wrapper_calls": 0
+        }
+        forced = {
+            "set": "forced", "fallback_calls": 0, "kernel_calls": 1, "dequant_wrapper_calls": 0
+        }
+        assert forcecheck.evaluate([large, small, forced])["exit_code"] == 0
+        assert forcecheck.evaluate([small, forced])["exit_code"] == 2
+        blind = dict(large, dequant_wrapper_calls=2)
+        assert forcecheck.evaluate([blind, small, forced])["exit_code"] == 3
+        # a forced row alone must not satisfy "kernel counted at small M"
+        assert forcecheck.evaluate([large, forced])["exit_code"] == 4
+        assert forcecheck.evaluate([large])["exit_code"] == 4
+        assert forcecheck.evaluate([large, small, dict(forced, fallback_calls=1)])["exit_code"] == 5
+        assert forcecheck.evaluate([large, small, dict(forced, kernel_calls=0)])["exit_code"] == 5
+
+
+class TestSelfTestAndNoCuda:
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_self_test_passes(self, harness, capsys):
+        assert harness.main(["--self-test"]) == 0
+        assert "--self-test: OK" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_no_cuda_is_a_skip_not_a_false_pass(self, harness, monkeypatch, capsys):
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        assert harness.main([]) == 0
+        assert "CUDA is required" in capsys.readouterr().out
