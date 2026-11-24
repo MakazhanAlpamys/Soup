@@ -388,7 +388,8 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --verify ship
 
-# Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
+# Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4). The iteration ID is
+# required: --extract without one exits 2 and creates nothing (plain `soup loop replay` lists IDs).
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
 # Background subprocess (no shell). It writes .soup/loop.pid, next to loop.yaml, as JSON:
